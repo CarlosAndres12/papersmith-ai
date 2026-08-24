@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 FORGE = Path(__file__).resolve().parents[1]
-CLI = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
+CLI = FORGE / "skills/proposal-implementation/scripts/implementation_cli.py"
 sys.path.insert(0, str(CLI.parent))
 import implementation_cli as impl  # noqa: E402  (path set above)
 
@@ -1261,7 +1261,7 @@ import importlib.util  # noqa: E402
 
 _digest_spec = importlib.util.spec_from_file_location(
     "report_digest",
-    FORGE / ".claude/skills/proposal-implementation/assets/kit/nb/report_digest.py",
+    FORGE / "skills/proposal-implementation/assets/kit/nb/report_digest.py",
 )
 report_digest = importlib.util.module_from_spec(_digest_spec)
 _digest_spec.loader.exec_module(report_digest)
@@ -5039,7 +5039,7 @@ class MaterializeBenchmarkDeclarationTests(unittest.TestCase):
     missing.
     """
 
-    KIT = FORGE / ".claude/skills/proposal-implementation/assets/kit"
+    KIT = FORGE / "skills/proposal-implementation/assets/kit"
 
     @classmethod
     def setUpClass(cls):
@@ -5389,9 +5389,9 @@ class SearchDeclarationShapeTests(unittest.TestCase):
     template, so the first target to copy the example it was handed hit it.
     """
 
-    KIT_DECLARATION = (FORGE / ".claude/skills/proposal-implementation"
+    KIT_DECLARATION = (FORGE / "skills/proposal-implementation"
                        / "assets/kit/src_benchmark/__init__.py")
-    DOCTRINE = FORGE / ".claude/skills/proposal-implementation/SKILL.md"
+    DOCTRINE = FORGE / "skills/proposal-implementation/SKILL.md"
 
     MAPPING_SEARCH = {
         "what": "which free scalar this chooses",
@@ -6981,7 +6981,7 @@ class HarnessPlacementTests(unittest.TestCase):
     under `src/<Package>_Benchmark/`.
     """
 
-    SKILL = FORGE / ".claude/skills/proposal-implementation"
+    SKILL = FORGE / "skills/proposal-implementation"
     KIT = SKILL / "assets/kit"
     NAME = "Example-Method"
     PACKAGE = "Example_Method"
@@ -7259,7 +7259,7 @@ class FidelityUndeclaredTests(unittest.TestCase):
     the nested block already uses, so the two say the same thing.
     """
 
-    KIT_DECLARATION = (FORGE / ".claude/skills/proposal-implementation"
+    KIT_DECLARATION = (FORGE / "skills/proposal-implementation"
                        / "assets/kit/src_benchmark/__init__.py")
 
     DECLARED = (
@@ -7412,7 +7412,7 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
     was, which is what keeps every hand-authored family working.
     """
 
-    STORE = (FORGE / ".claude/skills/proposal-deliberation"
+    STORE = (FORGE / "skills/proposal-deliberation"
              / "engine/revision-lifecycle-store.ts")
 
     DECLARATION = (

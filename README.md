@@ -9,9 +9,26 @@ corre **localmente** con [Marker](https://github.com/datalab-to/marker).
 
 ## 1. Instalar las dependencias
 
-Se necesitan tres cosas: **Python 3.10–3.13**, el binario **`llama-server`** (el
-motor de OCR de la ingesta — no es un paquete de pip; es `llama.cpp`, **no
-Ollama**) y los **paquetes de Python**.
+Toda la pila vive en un entorno aislado gestionado por
+[micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html)
+(un solo comando, idéntico en macOS, Linux y Windows). Provisiona **Python 3.12**,
+el binario **`llama-server`** (el motor de OCR de la ingesta — `llama.cpp` desde
+conda-forge, **no** Ollama ni Homebrew) y los **paquetes de Python**.
+
+```bash
+python scripts/setup_env.py install
+```
+
+El script detecta el hardware e instala el build de PyTorch adecuado
+(`pytorch-gpu` si hay una GPU NVIDIA, `pytorch-cpu` si no). Opciones útiles:
+
+- `--cpu` / `--cuda`: forzar la variante de PyTorch.
+- `--no-ingestion`: omitir `marker-pdf` (solo tests).
+- `clean`: `python scripts/setup_env.py clean` borra el entorno; `clean --full`
+  borra también el micromamba descargado.
+
+> **Requisito previo:** solo Python 3.10+ del sistema para correr el provisioner;
+> micromamba se descarga solo si falta.
 
 > **La primera corrida descarga un modelo.** En la primera ingesta, Marker
 > descarga desde Hugging Face los pesos de los modelos de Surya —OCR y layout,
@@ -23,44 +40,23 @@ Ollama**) y los **paquetes de Python**.
 
 ### `llama-server` (motor de OCR, requerido)
 
-| SO | Cómo |
-|----|------|
-| macOS | `brew install llama.cpp` |
-| Windows | Descargar un build `llama-*-bin-win-*.zip` de <https://github.com/ggml-org/llama.cpp/releases>, extraerlo y agregar la carpeta (con `llama-server.exe`) al `PATH`. `winget`/`scoop` también pueden tenerlo. |
-| Linux | `brew install llama.cpp`, el paquete de la distribución, o un build de release. |
+Lo instala el provisioner desde conda-forge (paquete `llama.cpp`) dentro del
+entorno `papersmith` — no hace falta `brew` ni builds manuales. Si preferís un
+llama.cpp externo, definí `LLAMA_CPP_BINARY` con la ruta completa al binario y
+verificá con `llama-server --version` (macOS/Linux) o `where llama-server`
+(Windows).
 
-Si no está en el `PATH`, definir `LLAMA_CPP_BINARY` con la ruta completa al
-binario. Verificar con `llama-server --version` (macOS/Linux) o
-`where llama-server` (Windows).
-
-### Python 3.12
-
-macOS: `brew install python@3.12`. Windows: instalar desde
-<https://www.python.org/downloads/> (marcar "Add to PATH").
-
-## 2. Crear el entorno virtual
-
-El motor vive en un entorno virtual aislado para no tocar el Python del sistema.
-
-**macOS / Linux:**
+## 2. Crear el entorno
 
 ```bash
-python3.12 -m venv .claude/skills/paper-ingestion/.venv
-source .claude/skills/paper-ingestion/.venv/bin/activate
-pip install -r .claude/skills/paper-ingestion/requirements.txt
+python scripts/setup_env.py install
+# en macOS/Linux también sirve: ./skills/paper-ingestion/setup.sh
 ```
 
-**Windows (PowerShell):**
-
-```powershell
-py -3.12 -m venv .claude\skills\paper-ingestion\.venv
-.claude\skills\paper-ingestion\.venv\Scripts\Activate.ps1
-pip install -r .claude\skills\paper-ingestion\requirements.txt
-```
-
-El entorno solo necesita existir: la skill lo usa internamente, no hace falta
-activarlo a mano. (Recordatorio: la primera ingesta descarga los modelos de
-Surya, ~1.5 GB, cacheados a partir de ahí.)
+El entorno solo necesita existir: la skill lo usa internamente a través de
+`micromamba run -n papersmith python ...`, no hace falta activarlo a mano.
+(Recordatorio: la primera ingesta descarga los modelos de Surya, ~1.5 GB,
+cacheados a partir de ahí.)
 
 > Sin `.env` ni claves de API. La ingesta es completamente local y keyless.
 
@@ -227,7 +223,7 @@ consecuencia que conviene entender antes de usarla:
 > irrepetible por diseño. Ingerí primero, deliberá después.
 
 **Qué necesita antes.** Una única preparación por máquina: correr
-`./.claude/skills/paper-ingestion/setup.sh`. Es idempotente y hace dos cosas:
+`./skills/paper-ingestion/setup.sh`. Es idempotente y hace dos cosas:
 instala el binario `llama-server` (el motor de OCR; no es un paquete de pip) y crea
 el entorno virtual con `marker-pdf` adentro. La primera ingesta real descarga los
 modelos (~1,5 GB) y los cachea; de ahí en más funciona offline.
@@ -619,7 +615,7 @@ distinto en cada uno de los dos flujos**. Vale la pena verla entera antes que na
 **De deliberación hacia acá, tres cosas distintas entran:**
 
 1. **Cuál es la revisión vigente.** Paso 1 de **los dos** flujos, sin excepción:
-   `node .claude/skills/proposal-deliberation/engine/cli.mjs '{ "operation": "STATUS" }'`
+   `node skills/proposal-deliberation/engine/cli.mjs '{ "operation": "STATUS" }'`
    → se toma `latest`. La skill **nunca adivina la base y nunca mira `proposals/` a
    ojo**.
 2. **El texto de la revisión.** El motor sí lee el archivo: `revision_source()` lo

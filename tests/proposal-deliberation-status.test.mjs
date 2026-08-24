@@ -24,7 +24,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 const repoRoot = process.cwd();
-const engineDir = path.join(repoRoot, '.claude/skills/proposal-deliberation/engine');
+const engineDir = path.join(repoRoot, 'skills/proposal-deliberation/engine');
 const cliPath = path.join(engineDir, 'cli.mjs');
 
 const MARKER = '<!-- proposal-workspace:artifact:v1 -->\n';

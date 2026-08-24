@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 FORGE = Path(__file__).resolve().parents[1]
-SKILL_ROOT = FORGE / ".claude" / "skills" / "skill-audit"
+SKILL_ROOT = FORGE / "skills" / "skill-audit"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 CLI = SKILL_ROOT / "scripts" / "audit_cli.py"
 USAGE_MD = SKILL_ROOT / "references" / "usage.md"
@@ -606,7 +606,7 @@ if __name__ == "__main__":
 # findings.
 # ==========================================================================
 
-PD = FORGE / ".claude" / "skills" / "proposal-deliberation"
+PD = FORGE / "skills" / "proposal-deliberation"
 PD_SPEC = PROBES / "proposal-deliberation.accepted-operations.json"
 SELF_SPEC = PROBES / "skill-audit.subcommands.json"
 
@@ -1196,7 +1196,7 @@ class NumeralCheckTests(BoxMixin, unittest.TestCase):
         """Move 2, on a real document: a skill that says three above a list of
         more than three, in the repository as it stands."""
         found = audit_cli_module().numeral_mismatches(
-            FORGE / ".claude" / "skills" / "remote-execution" / "SKILL.md")
+            FORGE / "skills" / "remote-execution" / "SKILL.md")
         self.assertEqual(len(found), 1, found)
         finding = found[0]
         self.assertEqual(finding["numeralLine"], 19)

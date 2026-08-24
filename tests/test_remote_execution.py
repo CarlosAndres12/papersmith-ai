@@ -51,21 +51,21 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 # Doctrine, as a path the suite can read. `PinConditionDoctrineTests`
 # holds `SKILL.md`'s pin-condition table to `jobfolder.PIN_CONDITIONS`;
 # prose cannot be held to code, a table can.
-SKILL_MD = REPOSITORY_ROOT / ".claude/skills/remote-execution/SKILL.md"
+SKILL_MD = REPOSITORY_ROOT / "skills/remote-execution/SKILL.md"
 
 # The one file outside the skill this change touches. `DoctrinePinTests`
 # parses its `kaggle==` pin and compares it against what is actually
 # installed -- a pin nothing checks is prose, not a guarantee.
 REQUIREMENTS_TXT = REPOSITORY_ROOT / "requirements.txt"
 
-SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/ledger.py"
+SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/ledger.py"
 SPEC = importlib.util.spec_from_file_location("remote_execution_ledger", SCRIPT)
 assert SPEC and SPEC.loader
 LEDGER = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = LEDGER
 SPEC.loader.exec_module(LEDGER)
 
-ADAPTER_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/adapter.py"
+ADAPTER_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapter.py"
 ADAPTER_SPEC = importlib.util.spec_from_file_location("remote_execution_adapter", ADAPTER_SCRIPT)
 assert ADAPTER_SPEC and ADAPTER_SPEC.loader
 ADAPTER = importlib.util.module_from_spec(ADAPTER_SPEC)
@@ -81,7 +81,7 @@ ADAPTER_SPEC.loader.exec_module(ADAPTER)
 # `isinstance(fake_adapter, PACKER.ADAPTER.Adapter)` agree below — two
 # separately exec'd copies of adapter.py would otherwise define two distinct
 # `Adapter` classes with the same name.
-PACKER_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/packer.py"
+PACKER_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/packer.py"
 PACKER_SPEC = importlib.util.spec_from_file_location("remote_execution_packer", PACKER_SCRIPT)
 assert PACKER_SPEC and PACKER_SPEC.loader
 PACKER = importlib.util.module_from_spec(PACKER_SPEC)
@@ -92,7 +92,7 @@ PACKER_SPEC.loader.exec_module(PACKER)
 # sys.modules-reuse reason documented next to PACKER's own load above:
 # remote_cli.py's `_load_sibling` reuses these exact LEDGER/ADAPTER/PACKER
 # module objects rather than exec'ing any of the three a second time.
-REMOTE_CLI_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/remote_cli.py"
+REMOTE_CLI_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/remote_cli.py"
 REMOTE_CLI_SPEC = importlib.util.spec_from_file_location("remote_execution_cli", REMOTE_CLI_SCRIPT)
 assert REMOTE_CLI_SPEC and REMOTE_CLI_SPEC.loader
 REMOTE_CLI = importlib.util.module_from_spec(REMOTE_CLI_SPEC)
@@ -103,7 +103,7 @@ REMOTE_CLI_SPEC.loader.exec_module(REMOTE_CLI)
 # module's own `isinstance(kaggle_adapter, ADAPTER.Adapter)` checks below
 # have to agree with the exact `Adapter` class every other module in this
 # chain already loaded.
-KAGGLE_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/adapters/kaggle.py"
+KAGGLE_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapters/kaggle.py"
 KAGGLE_SPEC = importlib.util.spec_from_file_location(
     "remote_execution_kaggle_adapter", KAGGLE_SCRIPT
 )
@@ -120,14 +120,14 @@ KAGGLE_SPEC.loader.exec_module(KAGGLE)
 # loads the module itself, lazily, only from the tests that need to call
 # into it.
 KAGGLE_DRIVER_SCRIPT = (
-    REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/adapters/kaggle_driver.py"
+    REPOSITORY_ROOT / "skills/remote-execution/scripts/adapters/kaggle_driver.py"
 )
 
 # Loaded AFTER remote_cli.py above, which already path-imports this exact
 # module under this exact name via its own `_load_sibling` — reused here
 # rather than exec'd a second time, the same idiom every other module in
 # this chain follows.
-JOBFOLDER_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/jobfolder.py"
+JOBFOLDER_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/jobfolder.py"
 JOBFOLDER = sys.modules["remote_execution_jobfolder"]
 
 # The two runner assets — loaded fresh (nothing above the seam execs
@@ -136,7 +136,7 @@ JOBFOLDER = sys.modules["remote_execution_jobfolder"]
 # `__name__` here is the module name below, never `"__main__"`, so this
 # import fires nothing and lets the suite drive `RUNNER_BOOTSTRAP.bootstrap()`
 # / `RUNNER_INVOKE.invoke()` directly against fake configs.
-RUNNER_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/assets/runner_bootstrap.py"
+RUNNER_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/assets/runner_bootstrap.py"
 RUNNER_BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
     "remote_execution_runner_bootstrap", RUNNER_BOOTSTRAP_SCRIPT
 )
@@ -145,7 +145,7 @@ RUNNER_BOOTSTRAP = importlib.util.module_from_spec(RUNNER_BOOTSTRAP_SPEC)
 sys.modules[RUNNER_BOOTSTRAP_SPEC.name] = RUNNER_BOOTSTRAP
 RUNNER_BOOTSTRAP_SPEC.loader.exec_module(RUNNER_BOOTSTRAP)
 
-RUNNER_INVOKE_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/assets/runner_invoke.py"
+RUNNER_INVOKE_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/assets/runner_invoke.py"
 RUNNER_INVOKE_SPEC = importlib.util.spec_from_file_location(
     "remote_execution_runner_invoke", RUNNER_INVOKE_SCRIPT
 )
@@ -154,7 +154,7 @@ RUNNER_INVOKE = importlib.util.module_from_spec(RUNNER_INVOKE_SPEC)
 sys.modules[RUNNER_INVOKE_SPEC.name] = RUNNER_INVOKE
 RUNNER_INVOKE_SPEC.loader.exec_module(RUNNER_INVOKE)
 
-SHARD_IO_SCRIPT = REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/shard_io.py"
+SHARD_IO_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/shard_io.py"
 SHARD_IO_SPEC = importlib.util.spec_from_file_location(
     "remote_execution_shard_io", SHARD_IO_SCRIPT
 )
@@ -1568,7 +1568,7 @@ class RealDigestLoaderTests(unittest.TestCase):
         where the loader expects it, so the failure has to be reachable by
         moving it. A loader that quietly returned something on a missing file
         would make the parity it depends on unverifiable."""
-        kit = (REPOSITORY_ROOT / ".claude/skills/proposal-implementation"
+        kit = (REPOSITORY_ROOT / "skills/proposal-implementation"
                / "assets/kit/nb/report_digest.py")
         self.assertTrue(kit.exists(), "the loader's target moved; update the loader")
         hidden = kit.with_suffix(".py.hidden")
@@ -4310,7 +4310,7 @@ class CredentialSecurityTests(unittest.TestCase):
     ) -> None:
         """C4."""
         scanned = (
-            REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py",
+            REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py",
             REMOTE_CLI_SCRIPT,
             PACKER_SCRIPT,
             SCRIPT,
@@ -4337,7 +4337,7 @@ class CredentialSecurityTests(unittest.TestCase):
         anywhere above the adapter.
         """
         source = (
-            REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py"
+            REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py"
         ).read_text(encoding="utf-8").lower()
         for leaked in ("kaggle", "t4"):
             self.assertNotIn(leaked, source, leaked)
@@ -4475,7 +4475,7 @@ class CredentialValueDeliveryTests(unittest.TestCase):
         access on a handle.
         """
         scripts = (
-            REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py",
+            REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py",
             REMOTE_CLI_SCRIPT,
             PACKER_SCRIPT,
             SCRIPT,
@@ -4701,7 +4701,7 @@ class CredentialTransportDoctrineTests(unittest.TestCase):
             SKILL_MD,
             KAGGLE_SCRIPT,
             ADAPTER_SCRIPT,
-            REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py",
+            REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py",
         ):
             text = path.read_text(encoding="utf-8")
             for claim in retracted:
@@ -13574,7 +13574,7 @@ class FrontDoorRosterTests(unittest.TestCase):
             declared, "no subcommand was recovered from the parser at all; "
             "this test would pass on an empty roster by accident")
         text = (REPOSITORY_ROOT
-                / ".claude/skills/remote-execution/SKILL.md").read_text(
+                / "skills/remote-execution/SKILL.md").read_text(
                     encoding="utf-8")
         description = text.split("---", 2)[1]
         # A command that owns a nested one is written the way a person types
@@ -13637,7 +13637,7 @@ class TargetVocabularyLeakTests(unittest.TestCase):
         ADAPTER_SCRIPT,
         PACKER_SCRIPT,
         REMOTE_CLI_SCRIPT,
-        REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py",
+        REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py",
         JOBFOLDER_SCRIPT,
         KAGGLE_SCRIPT,
         KAGGLE_DRIVER_SCRIPT,
@@ -13837,7 +13837,7 @@ class DoctrinePinTests(unittest.TestCase):
             SKILL_MD,
             KAGGLE_SCRIPT,
             ADAPTER_SCRIPT,
-            REPOSITORY_ROOT / ".claude/skills/remote-execution/scripts/credentials.py",
+            REPOSITORY_ROOT / "skills/remote-execution/scripts/credentials.py",
             KAGGLE_DRIVER_SCRIPT,
         ):
             text = " ".join(path.read_text(encoding="utf-8").lower().split())
