@@ -12,9 +12,13 @@ import sys
 from . import __version__
 from .bridges import deliberation as deliberation_command
 from .bridges import implementation as implementation_command
+from .bridges import audit as audit_command
+from .bridges import remote as remote_command
+from .core import executor as executor_command
 from .core import init as init_command
 from .core import ingest as ingest_command
 from .core import status as status_command
+from .core import target as target_command
 from .core import upgrade as upgrade_command
 from .errors import PapersmithError
 
@@ -39,6 +43,10 @@ _REGISTRY: list = [
     ingest_command.register,
     deliberation_command.register,
     implementation_command.register,
+    executor_command.register,
+    remote_command.register,
+    target_command.register,
+    audit_command.register,
 ]
 
 

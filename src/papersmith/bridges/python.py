@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from ..core.exit_codes import map_child_rc
 from ..errors import ExecutionError, SourceError, UserError
@@ -58,12 +58,12 @@ def run_script(workspace: Path, script: str | Path, args: Sequence[str] = (), *,
         raise ExecutionError(f"could not execute skill command {command[0]}: {exc}") from exc
 
 
-def mapped_returncode(result: subprocess.CompletedProcess[str]) -> int:
+def mapped_returncode(result: subprocess.CompletedProcess[Any]) -> int:
     """Map a child result to the public papersmith exit-code contract."""
     return map_child_rc(result.returncode)
 
 
-def emit_result(result: subprocess.CompletedProcess[str]) -> int:
+def emit_result(result: subprocess.CompletedProcess[Any]) -> int:
     if result.stdout:
         print(result.stdout, end="")
     if result.stderr:
