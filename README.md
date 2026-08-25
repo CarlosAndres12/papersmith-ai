@@ -5,9 +5,31 @@ legible por un agente (ecuaciones en LaTeX, tablas en Markdown, figuras como
 archivos) y luego delibera sobre propuestas de papers matemáticos. La ingesta
 corre **localmente** con [Marker](https://github.com/datalab-to/marker).
 
+> **Punto de entrada recomendado:** usá el binario `papersmith` para inicializar
+> y operar cada workspace. Las skills y sus motores aparecen más abajo como
+> referencia interna o escape hatch avanzado; no son el flujo predeterminado.
+
 ---
 
-## 1. Instalar las dependencias
+## 1. Uso recomendado: CLI
+
+`papersmith` es la interfaz principal para separar el kit del framework del
+trabajo de investigación de cada paper. Instalalo una vez y creá un workspace:
+
+```bash
+pipx install .
+papersmith init ~/papers/sparse-ae \
+  --title "Sparse Autoencoder Audit" \
+  --topic "mechanistic interpretability" \
+  --remote kaggle
+papersmith status ~/papers/sparse-ae --json
+```
+
+El `init` crea la topología completa, copia el kit, genera los archivos de los
+harnesses y deja el workspace listo para los comandos de ingestión,
+deliberación, implementación y ejecución.
+
+### Preparar dependencias para la ingestión
 
 Toda la pila vive en un entorno aislado gestionado por
 [micromamba](https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html)
@@ -46,38 +68,23 @@ llama.cpp externo, definí `LLAMA_CPP_BINARY` con la ruta completa al binario y
 verificá con `llama-server --version` (macOS/Linux) o `where llama-server`
 (Windows).
 
-## 2. Crear el entorno
+### Mantener el entorno local de ingestión
 
 ```bash
-python scripts/setup_env.py install
-# en macOS/Linux también sirve: ./skills/paper-ingestion/setup.sh
+python scripts/setup_env.py status
+python scripts/setup_env.py clean
 ```
 
-El entorno solo necesita existir: la skill lo usa internamente a través de
-`micromamba run -n papersmith python ...`, no hace falta activarlo a mano.
-(Recordatorio: la primera ingesta descarga los modelos de Surya, ~1.5 GB,
-cacheados a partir de ahí.)
+El entorno solo necesita existir: `papersmith ingest` lo usa internamente a
+través de `micromamba run -n papersmith python ...`, no hace falta activarlo a
+mano. La primera ingesta descarga los modelos de Surya (~1,5 GB), que quedan
+cacheados a partir de ahí.
 
 > Sin `.env` ni claves de API. La ingesta es completamente local y keyless.
 
-## 3. Orquestar un workspace con `papersmith`
+## 2. Comandos principales del CLI
 
-`papersmith` separa el kit del framework (skills, agentes y harnesses) del
-trabajo de investigación de cada paper. Se instala como un binario global,
-sin dependencias obligatorias de Python:
-
-```bash
-pipx install .
-papersmith init ~/papers/sparse-ae \
-  --title "Sparse Autoencoder Audit" \
-  --topic "mechanistic interpretability" \
-  --remote kaggle
-papersmith status ~/papers/sparse-ae --json
-```
-
-El `init` crea la topología completa del workspace, copia una instantánea del
-kit, escribe `.papersmith/{version,manifest.json,config.json}`, y proyecta los
-agentes canónicos de `.claude/` a Claude, OpenCode, Pi y Antigravity. El
+Después de `init`, el flujo normal continúa siempre con `papersmith`.
 `upgrade` actualiza solo archivos administrados por el framework; nunca
 sobrescribe `guidance/`, `proposals/`, `implementations/`, `kaggle-inbox/`,
 `journal/`, `DECISIONS.md`, `papersmith.yaml`, `README.md` ni archivos `.env*`.
@@ -104,7 +111,10 @@ PAPERSMITH_KIT_ROOT=/ruta/a/papersmith-ai papersmith upgrade ~/papers/sparse-ae
 
 ---
 
-## Cómo funciona — el orden
+## 3. Cómo funciona — el orden interno
+
+Las secciones siguientes explican qué ejecuta el CLI por debajo. Para el uso
+diario, preferí los comandos de la sección anterior.
 
 ### Paso 1 — Colocar cada PDF en la carpeta según su rol
 
@@ -116,16 +126,17 @@ PAPERSMITH_KIT_ROOT=/ruta/a/papersmith-ai papersmith upgrade ~/papers/sparse-ae
 
 ### Paso 2 — Ingerir los PDFs (PDF → Markdown)
 
-En **Claude Code**, invocar la skill:
+Desde la raíz del workspace, usá el CLI:
 
 ```
-/paper-ingestion
+papersmith ingest guidance/reference-papers/my-paper.pdf .
+papersmith ingest https://arxiv.org/abs/2401.12345 . --ocr
 ```
 
-(o simplemente pedir: *"ingerí los papers"*). Por cada PDF **suelto**, crea una
-carpeta con el nombre del paper, mueve el PDF adentro y escribe un `<nombre>.md`
-liviano (texto + LaTeX + tablas, con la bibliografía quitada) junto con las
-imágenes de las figuras:
+El CLI descarga, clasifica e ingiere cada PDF **suelto**: crea una carpeta con
+el nombre del paper, mueve el PDF adentro y escribe un `<nombre>.md` liviano
+(texto + LaTeX + tablas, con la bibliografía quitada) junto con las imágenes de
+las figuras:
 
 ```
 guidance/reference-papers/computers-13-00176-v2-1/
@@ -141,14 +152,19 @@ vive en `papersmith.yaml` (`source_roots`, `mode`, `strip_references`).
 
 ### Paso 3 — Deliberar sobre una propuesta (`proposal-deliberation`)
 
-En **Claude Code**, invocar la skill:
+Usá el puente del CLI para consultar el estado o crear una primera revisión:
 
 ```
-/proposal-deliberation
+papersmith deliberate . --action status
+papersmith deliberate . --action init \
+  --instruction "A paper proposing a distribution-free calibration test."
 ```
 
-En el primer turno carga automáticamente los Markdown de `guidance/paper-guide/`
-como contexto y actúa como tutor matemático. Desde ahí se puede:
+Para operaciones avanzadas, `papersmith deliberate` también acepta las
+operaciones reales del motor mediante `--request <json>`.
+
+El motor carga automáticamente los Markdown de `guidance/paper-guide/` al crear
+la primera revisión. Desde ahí se puede:
 
 - describir una idea y pedir una primera versión,
 - pedir ediciones a una propuesta gestionada,
@@ -159,10 +175,12 @@ Las propuestas viven en `proposals/`, una por revisión gestionada
 
 ### Paso 4 — Llevar la propuesta a código (`proposal-implementation`)
 
-En **Claude Code**, invocar la skill:
+Usá el puente del CLI y elegí explícitamente la acción del harness:
 
 ```
-/proposal-implementation
+papersmith implement . --action verify \
+  --target implementations/sparse-ae \
+  --name SparseAutoencoder
 ```
 
 Toma la revisión vigente y la materializa en un repositorio destino, que vive en
@@ -204,6 +222,10 @@ Las secciones de arriba cuentan **qué hacés**. Esta cuenta **qué pasa adentro
 Está escrita para alguien que nunca vio el proyecto: cada skill se explica desde
 cero y **entera** —sus pasos, sus piezas, sus conexiones con las demás, sus
 limitaciones conocidas y su diagrama— sin mandarte a otra parte del documento.
+
+> Esta sección es documentación interna del framework. El flujo de usuario
+> soportado empieza en `papersmith`; las invocaciones directas que aparecen acá
+> sirven para depuración, desarrollo de skills o recuperación avanzada.
 
 Antes de entrar, dos cosas.
 
@@ -264,11 +286,14 @@ consecuencia que conviene entender antes de usarla:
 > haber creado la v1 de la propuesta, ese paper ya no entra por esa vía: la carga es
 > irrepetible por diseño. Ingerí primero, deliberá después.
 
-**Qué necesita antes.** Una única preparación por máquina: correr
-`./skills/paper-ingestion/setup.sh`. Es idempotente y hace dos cosas:
+**Qué necesita antes.** Una única preparación por workspace: correr
+`python scripts/setup_env.py install`. Es idempotente y hace dos cosas:
 instala el binario `llama-server` (el motor de OCR; no es un paquete de pip) y crea
 el entorno virtual con `marker-pdf` adentro. La primera ingesta real descarga los
 modelos (~1,5 GB) y los cachea; de ahí en más funciona offline.
+
+`skills/paper-ingestion/setup.sh` sigue disponible como wrapper de bajo nivel
+para desarrollo del framework.
 
 **El flujo, paso a paso.** El punto clave es que **son dos comandos, no uno**, y esa
 división existe para que exista un momento de consentimiento.
@@ -610,7 +635,7 @@ cosas de arriba.
 
 ```mermaid
 flowchart TD
-    A["Usuario invoca /proposal-deliberation"] --> B["Agente pide STATUS al motor"]
+    A["Usuario ejecuta papersmith deliberate"] --> B["El CLI pide STATUS al motor"]
     B --> C{"¿Existe una revisión gestionada?"}
     C -- No --> D["Agente pide la idea"]
     D --> E["Crea la v1: carga paper-guide UNA sola vez"]
@@ -657,7 +682,8 @@ distinto en cada uno de los dos flujos**. Vale la pena verla entera antes que na
 **De deliberación hacia acá, tres cosas distintas entran:**
 
 1. **Cuál es la revisión vigente.** Paso 1 de **los dos** flujos, sin excepción:
-   `node skills/proposal-deliberation/engine/cli.mjs '{ "operation": "STATUS" }'`
+   `papersmith deliberate . --action status`
+   (el CLI delega internamente en `node skills/proposal-deliberation/engine/cli.mjs`)
    → se toma `latest`. La skill **nunca adivina la base y nunca mira `proposals/` a
    ojo**.
 2. **El texto de la revisión.** El motor sí lee el archivo: `revision_source()` lo
@@ -1056,7 +1082,7 @@ de la costura, en el adaptador de `remote-execution` (ver su apartado).
 
 ```mermaid
 flowchart TD
-    A["Usuario invoca la skill"] --> B["list en silencio"]
+    A["Usuario ejecuta papersmith status o remote"] --> B["list en silencio"]
     B --> C{"¿El depósito está vacío?"}
     C -- Sí --> D["Pregunta: sólo validar"]
     C -- No --> E["Pregunta: validar o eliminar"]
