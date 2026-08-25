@@ -1,3 +1,9 @@
+# papersmith CLI build artifacts and the generated kit snapshot
+build/
+dist/
+*.egg-info/
+src/papersmith/_kit/
+
 # Local Pi runtime state
 .atl/
 .DS_Store
