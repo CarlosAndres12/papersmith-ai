@@ -21,7 +21,13 @@ where = ["src"]
 include = ["papersmith*"]
 
 [tool.setuptools.package-data]
-papersmith = ["templates/*.tpl", "_kit/**/*"]
+papersmith = [
+  "templates/*.tpl",
+  "_kit/**/*",
+  "_kit/.claude/agents/*.md",
+  "_kit/guidance/paper-guide/.gitkeep",
+  "_kit/skills/kaggle-accounts/store/.gitignore",
+]
 
 [tool.setuptools.dynamic]
 version = {attr = "papersmith.__version__"}

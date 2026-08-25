@@ -60,6 +60,48 @@ cacheados a partir de ahí.)
 
 > Sin `.env` ni claves de API. La ingesta es completamente local y keyless.
 
+## 3. Orquestar un workspace con `papersmith`
+
+`papersmith` separa el kit del framework (skills, agentes y harnesses) del
+trabajo de investigación de cada paper. Se instala como un binario global,
+sin dependencias obligatorias de Python:
+
+```bash
+pipx install .
+papersmith init ~/papers/sparse-ae \
+  --title "Sparse Autoencoder Audit" \
+  --topic "mechanistic interpretability" \
+  --remote kaggle
+papersmith status ~/papers/sparse-ae --json
+```
+
+El `init` crea la topología completa del workspace, copia una instantánea del
+kit, escribe `.papersmith/{version,manifest.json,config.json}`, y proyecta los
+agentes canónicos de `.claude/` a Claude, OpenCode, Pi y Antigravity. El
+`upgrade` actualiza solo archivos administrados por el framework; nunca
+sobrescribe `guidance/`, `proposals/`, `implementations/`, `kaggle-inbox/`,
+`journal/`, `DECISIONS.md`, `papersmith.yaml`, `README.md` ni archivos `.env*`.
+
+Comandos principales:
+
+| Comando | Uso |
+|---|---|
+| `papersmith init <dir>` | Crear un workspace aislado. |
+| `papersmith upgrade [<dir>]` | Sincronizar el kit preservando la investigación. |
+| `papersmith status [<dir>] --json` | Consultar versiones, propuestas, ejecuciones e inbox. |
+| `papersmith ingest <pdf-or-url> [<dir>]` | Descargar/ingerir una referencia y refrescar `index.json`. |
+| `papersmith deliberate <dir> --action status` | Consultar el motor de deliberación; también acepta operaciones JSON reales mediante `--request`. |
+| `papersmith implement <dir> --action verify ...` | Delegar al harness de implementación. |
+| `papersmith run <profile> [<dir>] --dry-run` | Resolver un perfil y revisar el dispatch sin ejecutarlo. |
+| `papersmith target list [<dir>]` | Listar y seleccionar targets de cómputo. |
+| `papersmith audit [<dir>] --check-drift` | Auditar estructura y detectar drift generado. |
+
+Para desarrollar contra un checkout del kit sin reinstalar el binario:
+
+```bash
+PAPERSMITH_KIT_ROOT=/ruta/a/papersmith-ai papersmith upgrade ~/papers/sparse-ae
+```
+
 ---
 
 ## Cómo funciona — el orden
