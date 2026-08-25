@@ -11,6 +11,7 @@ import sys
 
 from . import __version__
 from .core import init as init_command
+from .core import upgrade as upgrade_command
 from .errors import PapersmithError
 
 
@@ -27,7 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_REGISTRY: list = [init_command.register]
+_REGISTRY: list = [init_command.register, upgrade_command.register]
 
 
 def command(register):

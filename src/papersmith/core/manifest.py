@@ -159,6 +159,14 @@ def load_manifest(workspace: Path) -> dict | None:
         raise UserError(f"corrupted manifest {path}: {exc}") from None
     if not isinstance(data, dict) or data.get("kind") != "workspace":
         raise UserError(f"corrupted manifest {path}: missing workspace envelope")
+    if data.get("schema") != MANIFEST_SCHEMA or not isinstance(data.get("version"), str):
+        raise UserError(f"corrupted manifest {path}: unsupported schema or version")
+    files = data.get("files")
+    if not isinstance(files, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in files.items()
+    ):
+        raise UserError(f"corrupted manifest {path}: files must be a string-to-string map")
     return data
 
 
@@ -191,6 +199,8 @@ def load_kit_manifest(kit_root: Path) -> dict | None:
         raise UserError(f"corrupted kit manifest {path}: {exc}") from None
     if not isinstance(data, dict) or data.get("kind") != "kit":
         raise UserError(f"corrupted kit manifest {path}: missing kit envelope")
+    if data.get("schema") != MANIFEST_SCHEMA or not isinstance(data.get("version"), str):
+        raise UserError(f"corrupted kit manifest {path}: unsupported schema or version")
     return data
 
 
