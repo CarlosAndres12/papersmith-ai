@@ -10,7 +10,11 @@ import argparse
 import sys
 
 from . import __version__
+from .bridges import deliberation as deliberation_command
+from .bridges import implementation as implementation_command
 from .core import init as init_command
+from .core import ingest as ingest_command
+from .core import status as status_command
 from .core import upgrade as upgrade_command
 from .errors import PapersmithError
 
@@ -28,7 +32,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-_REGISTRY: list = [init_command.register, upgrade_command.register]
+_REGISTRY: list = [
+    init_command.register,
+    upgrade_command.register,
+    status_command.register,
+    ingest_command.register,
+    deliberation_command.register,
+    implementation_command.register,
+]
 
 
 def command(register):

@@ -469,6 +469,10 @@ def main() -> int:
         "--into", metavar="TOPIC",
         help="the topic folder --file moves into, created when it does not exist yet",
     )
+    parser.add_argument(
+        "--mode", choices=VALID_MODES, default=None,
+        help="override papersmith.yaml's conversion mode for this run",
+    )
     args = parser.parse_args()
 
     if bool(args.file) != bool(args.into):
@@ -477,7 +481,7 @@ def main() -> int:
 
     try:
         cfg = load_config()
-        mode = cfg.get("mode")  # None -> Marker auto-selects by device
+        mode = args.mode if args.mode is not None else cfg.get("mode")
         strip_refs = bool(cfg.get("strip_references", True))
         # Filing is not ingestion: it moves one PDF into a topic and loads no model,
         # so it answers and exits before anything here can displace anything else.
