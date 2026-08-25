@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The mechanism behind `skill-audit`: derive both halves of a closed set.
 
-Stdlib only, no venv, no network. Every subcommand writes JSON to stdout with
+Stdlib only, no venv, no network except through `structure`'s opt-in `driver`
+step. Every subcommand writes JSON to stdout with
 sorted keys and returns an integer status, so a caller can hold the output to a
 schema instead of to a paragraph.
 
@@ -18,10 +19,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import uuid
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -467,20 +470,224 @@ def interpolate_gate_token(text, repo, subject, box, candidate):
     return _TOKEN_RE.sub(replace, text)
 
 
-def run_box_step(step, repo, subject, box, timeout):
+#: Only `{repoRoot}` and `{box}` interpolate inside a `fromZero.steps`
+#: entry -- never `{subject}`. The from-zero side is meant to build a
+#: comparison *target*, never to reference the producer it will be compared
+#: against; refusing the token at the interpolation layer is the structural
+#: half of that soundness condition. `assert_no_subject_reference` below is
+#: the other half, for a recipe that embeds the subject's path directly
+#: rather than through the token -- the exact shape of the tar recipe this
+#: change replaces (`git archive HEAD:.claude/skills/skill-audit`, no
+#: `{subject}` token in sight).
+FROM_ZERO_TOKENS = STRUCTURE_TOKENS - {"subject"}
+
+#: The step-kind vocabulary a `fromZero.steps` dict element may declare. A
+#: bare list stays kind `exec`, run exactly as before -- no existing recipe
+#: or fixture changes shape. `driver` is the one new kind: it additionally
+#: resolves `cwd` under the box, constructs an environment from declared
+#: names, and proves `argv[0]`'s real path is external. An unknown `kind`
+#: is `Unprobeable`, the same treatment `interpolate_token` already gives
+#: an unknown `{token}`.
+BOX_STEP_KINDS = ("exec", "driver")
+
+#: Environment variable *names* a `driver` step may ask to inherit from the
+#: parent process. Names only: the child's environment is constructed from
+#: this allowlist, never copied from `os.environ` wholesale, and only the
+#: names travel into the report -- values never do.
+#:
+#: `USER` joined this list under W4, measured rather than guessed: isolated
+#: with `env -i`, `HOME PATH LANG TMPDIR` alone answers an authenticated
+#: driver CLI with "Not logged in - Please run /login" -- a refusal naming
+#: the wrong cause, because the driver cannot reach the OS keychain without
+#: knowing who is asking. Adding `SHELL` or `LOGNAME` does not change the
+#: refusal; adding `USER` does. `USER` is a username, not a credential; this
+#: allowlist exists to keep a driver from inheriting the whole environment,
+#: never to conceal identity. The list stays hand-written on purpose --
+#: deriving it from the recipe would let the recipe grant itself anything,
+#: and a denylist pattern (`*KEY*`, `*SECRET*`) fails open on the first
+#: credential whose name matches neither pattern.
+DRIVER_ENV_ALLOWLIST = ("HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR",
+                        "USER")
+
+#: The directory namespace the ignorance control gate seeds a from-zero box
+#: with, before trusting that box was ever empty. Absurd and namespaced so
+#: it can never collide with a real driver's own output.
+IGNORANCE_CONTROL_DIR = "__audit_ignorance_control__"
+
+
+def interpolate_from_zero_token(text, repo, box):
+    """Substitute `{repoRoot}` and `{box}` inside one `fromZero.steps` part.
+
+    Never `{subject}`: the from-zero side may not reference the producer it
+    exists to be compared against, so that token is refused here
+    structurally rather than by convention -- the same discipline
+    `interpolate_token` already gives a token it never declared.
+    """
+    def replace(match):
+        token = match.group(1)
+        if token == "subject":
+            raise Unprobeable(
+                "kind=subject-reference: a fromZero step's argv names "
+                "{subject}; the from-zero side may never reference the "
+                "producer it exists to be compared against")
+        if token not in FROM_ZERO_TOKENS:
+            raise Unprobeable(
+                f"the recipe's step names an unknown token {{{token}}}; only "
+                f"{sorted(FROM_ZERO_TOKENS)} interpolate")
+        return {"repoRoot": str(repo), "box": str(box)}[token]
+    return _TOKEN_RE.sub(replace, text)
+
+
+def assert_no_subject_reference(text, subject, repo):
+    """Refuse an interpolated `fromZero` part that names the subject by its
+    absolute or repo-relative path, even when no `{subject}` token was used
+    to get there.
+
+    This is what actually catches the tar recipe's own defect: its argv
+    never used `{subject}`, it spelled the path out by hand
+    (`HEAD:.claude/skills/skill-audit`). Refusing the token alone would
+    have missed it.
+    """
+    subject_abs = str(subject)
+    try:
+        subject_rel = subject.relative_to(repo).as_posix()
+    except ValueError:
+        subject_rel = None
+    if subject_abs in text or (subject_rel and subject_rel in text):
+        raise Unprobeable(
+            "kind=subject-reference: a fromZero step's argv names the "
+            f"subject ({subject_abs!r}); the from-zero side may never "
+            "reference the producer it exists to be compared against")
+
+
+def assert_brief_names_no_shape(text, forbidden):
+    """Refuse a `driver` step's argv part that names a structural element
+    of the subject's own declared architecture.
+
+    `forbidden` is derived entirely from the subject's own `structure`
+    recipe -- the declared side's `Path` column plus each entry's own
+    basename -- never a hand-list of "things a brief must not say" living
+    inside this skill or its recipe. Naming a structural element (e.g. the
+    literal `SKILL.md`, or `scripts/`) would dictate the driver's output
+    shape and reintroduce the exact from-zero fraud this domain closes: the
+    producer's own shape arriving spoken instead of copied.
+    """
+    for name in forbidden:
+        if name and name in text:
+            raise Unprobeable(
+                f"kind=brief-names-the-shape: a fromZero driver step's argv "
+                f"names {name!r}, which the subject's own declared file "
+                "table lists; a brief may name the problem it is meant to "
+                "solve, and never any artefact the subject declares it "
+                "ships -- naming the shape would dictate the driver's "
+                "output and copy the producer's structure instead of "
+                "letting the driver build its own")
+
+
+def run_box_step(step, repo, subject, box, timeout, forbidden_shape=()):
     """One `fromZero` build step, run inside the box with no shell.
 
     Mirrors `probe_code_side`'s discipline: argv as a list of strings,
     `shell=False`, a hang becomes exit `2` rather than a wait forever, and a
     nonzero exit from the build itself is an inability to build from-zero,
     never an empty from-zero side.
+
+    A bare list is kind `exec`, unchanged from before this change. A dict
+    must declare a `kind` from `BOX_STEP_KINDS`; `driver` additionally
+    resolves `cwd` under the box (refusing an occupied one), builds a
+    constructed environment from `env`'s declared names intersected with
+    `DRIVER_ENV_ALLOWLIST`, proves `argv[0]`'s real path sits outside both
+    the repository and the subject, and scans every argv part against
+    `forbidden_shape` (see `assert_brief_names_no_shape`). Every part of
+    every step, either kind, is interpolated through `FROM_ZERO_TOKENS`
+    alone and scanned for a literal reference to the subject.
+
+    Returns a small info dict -- `run_structure` transcribes a `driver`
+    step's own info into the report-facing `ignorance` block; an `exec`
+    step returns only `{"stepKind": "exec"}`, carrying nothing to
+    transcribe. Keyed `stepKind`, never `kind`: `EscalationPartitionTests`
+    holds `"kind"` to exactly one meaning across this module -- a note's or
+    a stall's own classification, produced solely by `note()` and
+    `stalled()` -- and a second dict literal carrying that key anywhere
+    else is refused structurally, on sight, regardless of what it means.
+    This step-kind value is a different word wearing the same spelling by
+    accident; the fix is to stop sharing the spelling, not to carve an
+    exception into the lock.
     """
-    if not step or not all(isinstance(part, str) for part in step):
+    if isinstance(step, list):
+        kind, raw_argv, cwd_spec, env_spec = "exec", step, None, None
+    elif isinstance(step, dict):
+        kind = step.get("kind", "exec")
+        if kind not in BOX_STEP_KINDS:
+            raise Unprobeable(
+                f"a fromZero step names kind {kind!r}, which is not one of "
+                f"{BOX_STEP_KINDS}")
+        raw_argv = step.get("argv")
+        cwd_spec = step.get("cwd")
+        env_spec = step.get("env")
+    else:
+        raise Unprobeable("a fromZero step must be a list or a dict")
+
+    if not raw_argv or not all(isinstance(part, str) for part in raw_argv):
         raise Unprobeable("a fromZero step's argv must be a list of strings")
-    argv = [interpolate_token(part, repo, subject, box) for part in step]
+
+    argv = [interpolate_from_zero_token(part, repo, box) for part in raw_argv]
+    for part in argv:
+        assert_no_subject_reference(part, subject, repo)
+
+    step_cwd = box
+    if cwd_spec:
+        step_cwd = resolve_under(cwd_spec, box, "driver.cwd")
+        if not box_empty_or_absent(step_cwd):
+            raise Unprobeable(
+                f"a fromZero driver step's cwd is not empty: {step_cwd}; "
+                "an occupied box is never silently adopted")
+        step_cwd.mkdir(parents=True, exist_ok=True)
+
+    child_env = None
+    info = {"stepKind": kind}
+    if kind == "driver":
+        for part in argv:
+            assert_brief_names_no_shape(part, forbidden_shape)
+        names = env_spec or []
+        unknown = sorted(set(names) - set(DRIVER_ENV_ALLOWLIST))
+        if unknown:
+            raise Unprobeable(
+                f"a fromZero driver step names env {unknown}, outside "
+                f"{sorted(DRIVER_ENV_ALLOWLIST)}; a driver refusing for an "
+                "environment reason is a candidate for widening this list "
+                "by measurement -- run the declared argv under `env -i` "
+                "with only the declared names and observe which addition "
+                "changes the refusal")
+        # A name declared here but absent from the parent process is
+        # dropped from `child_env` with nothing said below -- silent by
+        # construction. `envMissing` makes that drop visible: transcribed
+        # into `## User drive`, a recipe declaring `USER` on a machine that
+        # has none then reads as a stated fact, not as an inexplicable
+        # refusal from the child.
+        missing = sorted(name for name in names if name not in os.environ)
+        child_env = {name: os.environ[name] for name in names
+                    if name in os.environ}
+        real_path = shutil.which(argv[0], path=child_env.get("PATH"))
+        if not real_path:
+            raise Unprobeable(
+                f"a fromZero driver step's argv[0] is not executable: "
+                f"{argv[0]!r}")
+        real = Path(real_path).resolve()
+        inside_repo = real == repo or repo in real.parents
+        inside_subject = real == subject or subject in real.parents
+        if inside_repo or inside_subject:
+            raise Unprobeable(
+                f"kind=driver-not-external: {argv[0]!r} resolves to {real}, "
+                "inside the repository or the subject; a driver shipped "
+                "inside what it audits is not external")
+        info.update({"argv": list(argv), "argv0RealPath": str(real),
+                    "cwd": str(step_cwd), "envMissing": missing,
+                    "envNames": sorted(names)})
+
     try:
         completed = subprocess.run(
-            argv, cwd=str(box), shell=False,
+            argv, cwd=str(step_cwd), shell=False, env=child_env,
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
         raise Unprobeable(f"a fromZero step's argv[0] is not executable: {error}")
@@ -492,6 +699,40 @@ def run_box_step(step, repo, subject, box, timeout):
         raise Unprobeable(
             f"a fromZero step exited {completed.returncode}: "
             f"{completed.stderr.strip()[:400]}")
+    return info
+
+
+def ignorance_control_gate(box, exclude):
+    """Prove the from-zero box's own emptiness detector can see
+    contamination, before trusting that emptiness at all.
+
+    Modelled on `candidate_gate_steps`'s inverted control: seed a nonce the
+    tool generates, demand `tree_digest` name it, erase, demand it read
+    empty again. An `exclude` broad enough to hide the seed -- `["*"]`, or
+    anything that over-matches -- would make every box look empty and the
+    ignorance claim true by construction, indistinguishable from its own
+    absence; proving the detector sees the seed first is what makes this a
+    control rather than ceremony.
+    """
+    nonce = uuid.uuid4().hex
+    relative = f"{IGNORANCE_CONTROL_DIR}/{nonce}.txt"
+    marker = box / IGNORANCE_CONTROL_DIR / f"{nonce}.txt"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(nonce, encoding="utf-8")
+    seeded = tree_digest(box, exclude)
+    if relative not in seeded:
+        raise Unprobeable(
+            "kind=ignorance-control-stalled: the box's own emptiness "
+            f"detector did not see a seeded marker at {relative!r}; every "
+            "from-zero conclusion downstream is unreached until the "
+            "detector can prove it sees contamination")
+    erase_box(box)
+    box.mkdir(parents=True, exist_ok=True)
+    if not box_empty_or_absent(box, exclude):
+        raise Unprobeable(
+            "kind=ignorance-control-stalled: the box did not read empty "
+            "immediately after being re-erased")
+    return "passed"
 
 
 def box_empty_or_absent(box, exclude=()):
@@ -741,6 +982,14 @@ def build_parser():
         help="re-derive the '## Frozen' digest from this path and compare "
              "it; without it the payload carries rederived: false and only "
              "finding-vs-'## Frozen' consistency is checked")
+    report.add_argument(
+        "--supersedes-report", default=None,
+        help="a companion report file this report's own '- Supersedes:' "
+             "claim names; re-derives the companion's self-digest via the "
+             "same mechanism this tool signs its own reports with, and "
+             "compares it (and the two reports' '## Frozen' '- Subject:' "
+             "values) to the declared claim -- without it a well-formed "
+             "claim reports 'unverified', honestly unchecked")
 
     structure = commands.add_parser(
         "structure",
@@ -782,6 +1031,22 @@ def build_parser():
     reading_diff.add_argument(
         "--reading", action="append", default=[],
         help="a reading file; declare this flag exactly twice")
+
+    sensitivity = commands.add_parser(
+        "sensitivity",
+        help="vary a declared input a result claims to depend on, and "
+             "report whether the declared output moves")
+    sensitivity.add_argument("--subject", required=True,
+                             help="the subject's root directory")
+    sensitivity.add_argument("--spec", required=True,
+                             help="the JSON recipe describing the declared "
+                                  "site, the disk root to vary, and the "
+                                  "producer to drive")
+    sensitivity.add_argument("--repo-root", default=".",
+                             help="the root the box and {repoRoot} token "
+                                  "resolve under")
+    sensitivity.add_argument("--timeout", type=int, default=30,
+                             help="seconds before a hanging drive is exit 2")
 
     return parser
 
@@ -943,6 +1208,16 @@ def run_structure(args):
             "the declared side normalises to zero members; an empty declared "
             "side would report the entire disk as builder-broken")
 
+    # The roster `assert_brief_names_no_shape` refuses a driver's brief
+    # from naming: the declared side's own `Path` column, plus each
+    # entry's basename, so a subject that adds a shipped file
+    # automatically widens what its own brief may not say -- never a
+    # second, hand-maintained list of "structural elements" living beside
+    # the guard against exactly that pattern.
+    forbidden_shape = tuple(sorted(
+        {member for member in raw_members if member}
+        | {Path(member).name for member in raw_members if member}))
+
     disk_root = resolve_under(recipe.get("disk", {}).get("root"), subject,
                               "disk.root")
     if not disk_root.is_dir():
@@ -968,9 +1243,13 @@ def run_structure(args):
     box.mkdir(parents=True, exist_ok=True)
 
     try:
+        control_gate = ignorance_control_gate(box, exclude)
+        box_digest_before = frozen_digest(box, exclude)
         subject_before = tree_digest(subject, exclude)
-        for step in steps:
-            run_box_step(step, repo, subject, box, args.timeout)
+        step_infos = [run_box_step(step, repo, subject, box, args.timeout,
+                                   forbidden_shape=forbidden_shape)
+                     for step in steps]
+        box_digest_after = frozen_digest(box, exclude)
 
         from_zero_root = resolve_under(
             from_zero_spec.get("root"), box, "fromZero.root")
@@ -1009,6 +1288,16 @@ def run_structure(args):
     outcome, only_in, missing_from = structure_outcome(
         declared_set, disk_set, from_zero_set)
 
+    # The enforceable half of `## User drive`, machine-emitted rather than
+    # narrated: whichever step actually declared `kind: driver` is the one
+    # whose argv/cwd/env-names/real-path a report transcribes. A recipe
+    # built entirely from `exec` steps carries no driver step at all, and
+    # `driver` stays `None` -- `## User drive`'s required content is what
+    # demands one exist when stage 2 is declared `ran`, not this payload.
+    driver_info = next(
+        (info for info in step_infos if info.get("stepKind") == "driver"),
+        None)
+
     emit({
         "containment": {"afterRemoved": after_removed, "beforeEmpty": before_empty,
                         "box": str(box)},
@@ -1017,12 +1306,396 @@ def run_structure(args):
                        if entry["kind"] in ESCALATION_BUCKETS["escalatable"]],
         "frozen": {"digest": frozen_digest(subject, exclude),
                    "exclude": list(exclude), "subject": str(subject)},
+        "ignorance": {
+            "argv": driver_info.get("argv") if driver_info else None,
+            "argv0RealPath": driver_info.get("argv0RealPath") if driver_info else None,
+            "boxDigestAfter": box_digest_after,
+            "boxDigestBefore": box_digest_before,
+            "controlGate": control_gate,
+            "cwd": driver_info.get("cwd") if driver_info else None,
+            "envMissing": driver_info.get("envMissing") if driver_info else [],
+            "envNames": driver_info.get("envNames") if driver_info else [],
+        },
         "missingFrom": missing_from,
         "notes": notes,
         "onlyIn": only_in,
         "outcome": outcome,
         "sides": {"declared": sorted(declared_set), "disk": sorted(disk_set),
                  "fromZero": sorted(from_zero_set)},
+        "surface": surface,
+    })
+    return 0
+
+
+#: Move 10's hard cap on the number of declared (output, input) pairs
+#: varied per run -- a count, never a wall-clock budget, cited from Move
+#: 6's own reasoning rather than re-argued: a time budget would make a
+#: report's contents depend on the machine that produced it. Bounded
+#: below Move 6's own cap of eight: one sensitivity drive is a full
+#: producer invocation, not a subprocess test run, so its unit cost is
+#: strictly higher and its worst case (4 varied + 1 control + 1 baseline
+#: = 6 drives) stays strictly under Move 6's own cap regardless.
+SENSITIVITY_INPUT_CAP = 4
+
+#: The declared range a Move 10 variation sweeps -- absence needs no
+#: semantics and is the widest possible range, so "legitimately
+#: insensitive over a small range" has no purchase: if a value survives
+#: its input's disappearance, no smaller variation would have moved it.
+SENSITIVITY_VARIATION_RANGE = "present -> absent"
+
+
+def declared_value_pairs(text, site):
+    """Every `(label, value)` row of a declared results table -- `label`
+    always the row's column 0, `value` at the site's own declared column.
+    Reuses `markdown_table_rows`, the exact parser `doctrine_side` already
+    calls, so this can never see a row `doctrine_side`'s own no-closed-
+    roster classification would have missed.
+    """
+    header = site.get("table")
+    if not header:
+        return []
+    tables = markdown_table_rows(text, header)
+    rows = [row for table in tables for row in table]
+    column = site.get("column", 0)
+    pairs = []
+    for row in rows:
+        if not row or column >= len(row):
+            continue
+        label = row[0].strip().strip("`").strip()
+        value = row[column].strip().strip("`").strip()
+        if label:
+            pairs.append((label, value))
+    return pairs
+
+
+def materialize_subject_copy(subject, box, exclude):
+    """Copy `subject` into `box/subject`, file by file -- the substrate
+    Move 10 perturbs. `## Frozen` pins the real subject's digest for the
+    whole report, so the real subject is never touched; everything below
+    happens inside this copy, and `erase_box(box)` in the caller's
+    `finally` removes it regardless of outcome -- a restore that cannot
+    partially succeed, strictly stronger than an inverse patch.
+
+    Copying here is not the `fromZero` fraud: that defect was presenting
+    a copy of the product as an independent derivation. Here the copy is
+    perturbed and compared against *itself* under a different input --
+    copying is the only honest method when the copy is what gets varied.
+    """
+    destination = box / "subject"
+    destination.mkdir(parents=True, exist_ok=True)
+    for relative in sorted(tree_digest(subject, exclude)):
+        source_path = subject / relative
+        target_path = destination / relative
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(source_path.read_bytes())
+    return destination
+
+
+def vary_by_absence(copy_root, relative_paths):
+    """Remove each of `relative_paths` from `copy_root`, returning their
+    original bytes keyed by path. The variation is absence (Q17): it
+    needs no format semantics, is deterministic, and is the widest
+    possible range a declared input can be varied over.
+    """
+    original = {}
+    for relative in relative_paths:
+        path = copy_root / relative
+        original[relative] = path.read_bytes()
+        path.unlink()
+    return original
+
+
+def restore_exact_bytes(copy_root, original):
+    """Write every `{relative: bytes}` pair in `original` back into
+    `copy_root`, confirmed by sha256 equality per file. Never a blind
+    string replace, and never `git checkout --`, which has no target at
+    all here: `copy_root` is not tracked by git.
+    """
+    for relative, data in original.items():
+        path = copy_root / relative
+        try:
+            if path.is_dir():
+                raise OSError(f"{path} is now a directory, not a file")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            reproduced = hashlib.sha256(path.read_bytes()).hexdigest() \
+                == hashlib.sha256(data).hexdigest()
+        except OSError as error:
+            raise Unprobeable(
+                f"kind=sensitivity-restore-failed: writing {relative} back "
+                f"failed: {error}; the sweep halts here rather than "
+                "attempting the next variation")
+        if not reproduced:
+            raise Unprobeable(
+                f"kind=sensitivity-restore-failed: writing {relative} back "
+                "did not reproduce its pre-variation bytes; the sweep "
+                "halts here rather than attempting the next variation")
+
+
+def run_sensitivity_drive(recipe, real_subject, copy_root, box, repo, timeout):
+    """Drive the subject's own declared producer once, inside the copy.
+
+    Mirrors `run_box_step`'s discipline -- argv as a list of strings,
+    `shell=False`, a constructed child environment from declared names
+    intersected with `DRIVER_ENV_ALLOWLIST` -- reused verbatim rather than
+    reimplemented, one allowlist shared with the driver step-kind. `cwd`
+    resolves under the copy (never the box, and never able to climb out).
+    `{subject}` interpolates to the **copy**, the exact inverse of
+    `fromZero`'s own rule, through the same `interpolate_token` every
+    other recipe-declared argv already uses; `assert_no_subject_reference`
+    still scans every part against the **real** subject, so an argv
+    naming the original by hand is refused exactly like `fromZero`'s.
+    """
+    raw_argv = recipe.get("argv")
+    if not raw_argv or not all(isinstance(part, str) for part in raw_argv):
+        raise Unprobeable("the recipe's argv must be a list of strings")
+    argv = [interpolate_token(part, repo, copy_root, box) for part in raw_argv]
+    for part in argv:
+        assert_no_subject_reference(part, real_subject, repo)
+
+    cwd = resolve_under(recipe.get("cwd"), copy_root, "sensitivity.cwd")
+
+    names = recipe.get("env") or []
+    unknown = sorted(set(names) - set(DRIVER_ENV_ALLOWLIST))
+    if unknown:
+        raise Unprobeable(
+            f"the sensitivity recipe names env {unknown}, outside "
+            f"{sorted(DRIVER_ENV_ALLOWLIST)}")
+    child_env = {name: os.environ[name] for name in names if name in os.environ}
+
+    try:
+        return subprocess.run(
+            argv, cwd=str(cwd), shell=False, env=child_env,
+            capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as error:
+        raise Unprobeable(f"the recipe's argv[0] is not executable: {error}")
+    except subprocess.TimeoutExpired:
+        raise Unprobeable(
+            f"the producer did not answer within {timeout}s; a drive that "
+            "hangs is an inability to look, never a clean verdict")
+
+
+def sensitivity_control_gate(pre_values, post_completed, post_readable,
+                             pre_pairs, post_pairs):
+    """The inverted control that stops Move 10 accusing a producer never
+    proven to consume its box (Q16): every declared input removed at
+    once, driven, and the declared site's values demanded to differ from
+    what the freshly-copied box already held before anything ran.
+
+    `Unprobeable` (never a finding) when the producer both exits `0` and
+    leaves the declared values byte-identical to their pre-drive state:
+    the tool cannot tell "never read the box at all" from "every declared
+    value is typed in", and choosing would be a verdict with nothing
+    behind it. A nonzero exit or an unreadable site after the drive both
+    read as the producer demonstrably consuming what the box held, and
+    pass without needing the value comparison at all.
+    """
+    if post_completed.returncode != 0 or not post_readable:
+        return "passed"
+    if dict(pre_pairs) == dict(post_pairs):
+        raise Unprobeable(
+            "kind=sensitivity-control-stalled: with every declared input "
+            "removed at once, the producer exited 0 and the declared "
+            "values did not change from their pre-drive state. Two "
+            "readings, and this tool will not choose between them: the "
+            "producer never read this box at all, or every declared "
+            "value here is typed in rather than computed. Every pair is "
+            "unreached until a producer is proven to consume its box")
+    return "passed"
+
+
+def run_sensitivity(args):
+    """Move 10: does a declared computed value actually track the
+    declared input it claims to depend on?
+
+    Materialize the subject into a copy, prove a producer reads that copy
+    at all (the inverted control), drive it once for a baseline, then
+    remove one declared input at a time -- up to `SENSITIVITY_INPUT_CAP`
+    -- re-driving and re-reading the declared site after each. A declared
+    value that never moves across every input it was checked against is
+    `not adjudicable`: a fact with no computation traceable to it: the
+    provenance cannot be proven or disproven because nothing runs on the
+    input side of it to test. Never `artefact wrong` -- distinguishing
+    "documented dependency, no path" from "no computation at all" would
+    need a hand-written roster of documented dependencies, the exact
+    second roster this skill refuses everywhere else.
+
+    Exit `0` for any verdict, a `not adjudicable` finding included, and
+    the degenerate "this subject declares no computed values" result.
+    Exit `2` only when the tool could not look: an occupied box, a
+    stalled control, a restore mismatch, or an escape.
+    """
+    spec_path = Path(args.spec)
+    if not spec_path.is_file():
+        raise Unprobeable(f"no sensitivity recipe at {spec_path}")
+    try:
+        recipe = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise Unprobeable(f"the sensitivity recipe is unreadable: {error}")
+
+    subject = Path(args.subject).resolve()
+    repo = Path(args.repo_root).resolve()
+    surface = recipe.get("surface", "")
+    if not surface:
+        raise Unprobeable("the recipe names no surface to box the sweep under")
+    exclude = tuple(recipe.get("exclude", ()))
+    declared_site = recipe.get("declared", {})
+
+    box = repo / "implementations" / f"_sensitivity_{surface}"
+    before_empty = box_empty_or_absent(box)
+    if not before_empty:
+        raise Unprobeable(
+            f"a non-empty box already occupies {box}; remove it by hand "
+            "before running sensitivity again -- an occupied box is never "
+            "silently adopted")
+    box.mkdir(parents=True, exist_ok=True)
+
+    try:
+        control_seed_gate = ignorance_control_gate(box, exclude)
+        copy_root = materialize_subject_copy(subject, box, exclude)
+        subject_before = tree_digest(subject, exclude)
+
+        declared_path = resolve_site(declared_site, copy_root, repo)
+        declared_text = read_site(declared_path)
+        header_span = f"{declared_path}:1-{max(len(declared_text.splitlines()), 1)}"
+        _, doctrine_status = doctrine_side(declared_text, declared_site)
+        if doctrine_status != "closed":
+            notes = [note(
+                "no-closed-roster",
+                "this subject declares no computed values in a parseable "
+                "table; the range searched is named here",
+                str(declared_path), header_span)]
+            emit({
+                "control": None, "frozen": {"digest": frozen_digest(subject, exclude),
+                                            "exclude": list(exclude), "subject": str(subject)},
+                "inputsTotal": 0, "inputsUnchecked": [], "inputsVaried": [],
+                "matrix": {}, "notAdjudicable": [], "notes": notes,
+                "range": SENSITIVITY_VARIATION_RANGE, "surface": surface})
+            return 2
+
+        disk_root_spec = recipe.get("disk", {}).get("root")
+        disk_root = resolve_under(disk_root_spec, copy_root, "disk.root")
+        if not disk_root.is_dir():
+            raise Unprobeable(f"the recipe's disk.root does not exist: {disk_root}")
+        disk_relative_prefix = disk_root.relative_to(copy_root)
+        input_relatives = sorted(
+            (disk_relative_prefix / member).as_posix()
+            for member in tree_digest(disk_root, exclude))
+        if not input_relatives:
+            raise Unprobeable(
+                "the recipe's disk.root normalises to zero members; there "
+                "is nothing to vary")
+
+        # Deterministic, machine-independent selection: sorted-first-N.
+        # `## Unchecked` names every input beyond the cap, and total names
+        # the true size, so a reader never mistakes the cap for exhaustive.
+        inputs_varied = input_relatives[:SENSITIVITY_INPUT_CAP]
+        inputs_unchecked = input_relatives[SENSITIVITY_INPUT_CAP:]
+
+        # --- Control: every declared input removed at once. ---
+        pre_control_text = read_site(declared_path)
+        pre_control_pairs = declared_value_pairs(pre_control_text, declared_site)
+        removed_all = vary_by_absence(copy_root, input_relatives)
+        control_completed = run_sensitivity_drive(
+            recipe, subject, copy_root, box, repo, args.timeout)
+        try:
+            post_control_text = read_site(declared_path)
+            post_control_readable = True
+        except Unprobeable:
+            post_control_text, post_control_readable = "", False
+        post_control_pairs = (
+            declared_value_pairs(post_control_text, declared_site)
+            if post_control_readable else [])
+        restore_exact_bytes(copy_root, removed_all)
+        control_gate = sensitivity_control_gate(
+            pre_control_pairs, control_completed, post_control_readable,
+            pre_control_pairs, post_control_pairs)
+
+        # --- Baseline: every declared input present. ---
+        baseline_completed = run_sensitivity_drive(
+            recipe, subject, copy_root, box, repo, args.timeout)
+        baseline_text = read_site(declared_path)
+        baseline_pairs = dict(declared_value_pairs(baseline_text, declared_site))
+
+        # The per-run copy-tree check below proves a producer wrote
+        # nowhere else in the copy. Snapshotted *after* the baseline
+        # drive, not before: the declared results file is expected to
+        # change on every drive, including the control and the baseline
+        # -- that churn is the whole point of Move 10, never evidence of
+        # an escape. The declared path itself is excluded from both
+        # snapshots for the same reason; every other path in the copy
+        # must still be byte-identical once the sweep finishes.
+        declared_relative = declared_path.relative_to(copy_root).as_posix()
+        copy_digest_start = {
+            path: value for path, value in tree_digest(copy_root, exclude).items()
+            if path != declared_relative}
+
+        # --- One variation at a time, restored before the next. ---
+        matrix = {label: {} for label in baseline_pairs}
+        for relative in inputs_varied:
+            removed = vary_by_absence(copy_root, [relative])
+            completed = run_sensitivity_drive(
+                recipe, subject, copy_root, box, repo, args.timeout)
+            try:
+                text_after = read_site(declared_path)
+                readable = True
+            except Unprobeable:
+                text_after, readable = "", False
+            pairs_after = (
+                dict(declared_value_pairs(text_after, declared_site))
+                if readable else {})
+            restore_exact_bytes(copy_root, removed)
+
+            for label, baseline_value in baseline_pairs.items():
+                if completed.returncode != 0 or not readable:
+                    outcome = "producer-refused"
+                elif pairs_after.get(label) != baseline_value:
+                    outcome = "moved"
+                else:
+                    outcome = "unchanged"
+                matrix[label][relative] = outcome
+
+        copy_digest_end = {
+            path: value for path, value in tree_digest(copy_root, exclude).items()
+            if path != declared_relative}
+        if copy_digest_start != copy_digest_end:
+            raise Unprobeable(
+                "kind=sensitivity-restore-failed: the copy's own tree "
+                "digest disagrees before and after the sweep, even though "
+                "every per-file restore reported success; a producer "
+                "wrote somewhere else in the copy")
+
+        subject_after = tree_digest(subject, exclude)
+        if subject_before != subject_after:
+            changed = sorted(
+                p for p in set(subject_before) | set(subject_after)
+                if subject_before.get(p) != subject_after.get(p))
+            raise Unprobeable(
+                f"kind=build-escaped-the-box: the sensitivity drive changed "
+                f"the subject at {changed}; a drive writing outside its "
+                "box is an inability to look, never a finding")
+
+        not_adjudicable = sorted(
+            label for label, row in matrix.items()
+            if row and all(outcome == "unchanged" for outcome in row.values()))
+
+        after_removed = box_empty_or_absent(box)
+    finally:
+        erase_box(box)
+
+    emit({
+        "containment": {"afterRemoved": after_removed, "beforeEmpty": before_empty,
+                        "box": str(box)},
+        "control": control_gate,
+        "frozen": {"digest": frozen_digest(subject, exclude),
+                   "exclude": list(exclude), "subject": str(subject)},
+        "inputsTotal": len(input_relatives),
+        "inputsUnchecked": inputs_unchecked,
+        "inputsVaried": inputs_varied,
+        "matrix": matrix,
+        "notAdjudicable": not_adjudicable,
+        "notes": [],
+        "range": SENSITIVITY_VARIATION_RANGE,
         "surface": surface,
     })
     return 0
@@ -1443,6 +2116,7 @@ REPORT_SHAPE = {
     "adjudication": "- Adjudication:",
     "changed-line-forecast": "## Changed-line forecast",
     "clean-section": "## Clean, stated as results",
+    "computed-value-provenance": "## Computed-value provenance",
     "disputed-severity": "## Disputed severity",
     "drives": "## Drives",
     "evidence-marker": "- Evidence:",
@@ -1451,12 +2125,17 @@ REPORT_SHAPE = {
     "frozen": "## Frozen",
     "move-number": "- Move:",
     "move-outcomes": "## Move outcomes",
+    "not-adjudicable": "## Not adjudicable",
     "ranked-findings": "## Ranked findings",
     "reading-diff": "## Reading diff",
+    "remedy": "- Remedy:",
     "repair-units": "## Repair units",
+    "report-integrity": "## Report integrity",
     "stage-outcomes": "## Stage outcomes",
+    "supersedes": "- Supersedes:",
     "unchecked-section": "## Unchecked",
     "undecidable": "## Undecidable",
+    "user-drive": "## User drive",
 }
 
 #: Every stage's own not-run value for the `REPORT_SHAPE` field it demands,
@@ -1560,6 +2239,106 @@ STAGES_TABLE_HEADER = "| Stage | Models | Demands |"
 STAGE_OUTCOME_ROW = re.compile(
     r"^-\s*Stage:\s*(\d+)\s*:\s*(ran|skipped:\s*.*)$")
 
+#: The one skip reason the `user-drive` stage may ever carry. An audit never
+#: reports on a subject without driving it -- the zero-model path is never a
+#: caller's shortcut to assert, so this literal is the only text
+#: `run_check_report` accepts, and only when the measurement it names
+#: (`## Undecidable` non-empty, every entry `no-closed-roster`) actually
+#: holds. Any other stage-2 skip reason is `driver-required`.
+DRIVE_STAGE_RESERVED_SKIP = "no reachable surface (stage 1)"
+
+#: The one skip reason a post-drive stage (numbered after the `user-drive`
+#: stage) may carry -- "available, the operator chose not to take it" --
+#: legal only once the drive itself reached agreement. Any other stage's
+#: `skipped:` text is untouched by this rule; it is unconditional and free.
+POST_DRIVE_OFFERED_SKIP = "offered, declined"
+
+#: A `## User drive` section's own `- Outcome:` line -- the one field W5
+#: needs before W6 specifies the rest of that section's required content.
+#: Read only inside the section, exactly like `frozen_section_fields`.
+USER_DRIVE_OUTCOME_LINE = re.compile(r"^-\s*Outcome:\s*(.+?)\s*$")
+
+
+def user_drive_outcome(lines):
+    """The `## User drive` section's own `- Outcome:` value, or `None` if
+    the section carries no such line.
+    """
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "## User drive":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section:
+            continue
+        match = USER_DRIVE_OUTCOME_LINE.match(stripped)
+        if match:
+            return match.group(1)
+    return None
+
+
+#: `## User drive`'s own `- Digest:` line, held to `## Frozen`'s declared
+#: digest exactly like every finding's own `- Digest:` already is: proof
+#: the driven-audit narrative is about the same subject state as the rest
+#: of the report.
+USER_DRIVE_DIGEST_LINE = re.compile(r"^-\s*Digest:\s*(\S+)\s*$")
+
+#: The heading under which `## User drive` states what the drive did *not*
+#: prove -- training-data exposure, contact between drives, "genuinely
+#: ignorant" versus "was not shown the file". A bare heading with nothing
+#: under it is the same claim as an absent one: a drive that believes it
+#: proved everything has misread what it did.
+USER_DRIVE_DECLARED_HEADING = "### Declared, not proven"
+
+
+def user_drive_digest(lines):
+    """`## User drive`'s own `- Digest:` value, or `None` if the section
+    carries no such line. Mirrors `frozen_section_fields`'s `- Digest:`
+    field, reading only inside the section.
+    """
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "## User drive":
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if not in_section:
+            continue
+        match = USER_DRIVE_DIGEST_LINE.match(stripped)
+        if match:
+            return match.group(1)
+    return None
+
+
+def user_drive_declared_only_nonempty(lines):
+    """Whether `## User drive`'s `### Declared, not proven` subsection
+    carries at least one non-empty line beneath it, before the next
+    heading of either level.
+    """
+    in_user_drive = False
+    in_declared = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "## User drive":
+            in_user_drive = True
+            continue
+        if in_user_drive and stripped.startswith("## "):
+            break
+        if not in_user_drive:
+            continue
+        if stripped == USER_DRIVE_DECLARED_HEADING:
+            in_declared = True
+            continue
+        if in_declared and stripped.startswith("#"):
+            break
+        if in_declared and stripped:
+            return True
+    return False
+
 
 def stage_roster(text):
     """The `(stage id, REPORT_SHAPE key)` roster a report's stage table
@@ -1590,6 +2369,35 @@ def stage_roster(text):
                 "cell, which is not a REPORT_SHAPE key")
         roster.append((match.group(1), key))
     return roster
+
+
+def stage_model_total(text):
+    """The stages table's `Models` column, summed -- the figure the
+    doctrine's own "N model runs, total" sentence must name.
+
+    Parsed the same way every other documented side in this module is,
+    with `markdown_table_rows`, never a second hand-maintained figure held
+    beside the table it describes. The lock over the sentence itself lives
+    in `tests/test_skill_audit.py`, not here: `check-report` validates
+    reports, and this sentence is the skill's own doctrine, the same home
+    `stage_roster`'s own derivation test already occupies.
+    """
+    tables = markdown_table_rows(text, STAGES_TABLE_HEADER)
+    if len(tables) != 1:
+        raise Unprobeable(
+            f"expected exactly one {STAGES_TABLE_HEADER!r} table to sum "
+            f"Models from; found {len(tables)}")
+    total = 0
+    for row in tables[0]:
+        if len(row) < 2:
+            raise Unprobeable(f"a stages-table row is not three cells: {row!r}")
+        try:
+            total += int(row[1].strip())
+        except ValueError:
+            raise Unprobeable(
+                f"a stages-table row's Models cell is not an integer: "
+                f"{row!r}")
+    return total
 
 
 def resolve_stages_doctrine():
@@ -1683,6 +2491,17 @@ ADJUDICATIONS = ("doctrine wrong", "artefact wrong", "not adjudicable")
 #: missing evidence marker is read as confirmed.
 FOUND_BY_VALUES = ("both", "one", "not-compared")
 
+#: `- Remedy:`'s closed set, required on -- and only on -- a finding that
+#: carries both `- Move: 6` and `- Adjudication: not adjudicable`: Move 6
+#: finds a guarded fact whose mutation left the suite green, and that
+#: single bucket hides two different jobs. `delete` names a fact that no
+#: longer exists; `update` names a fact that exists but moved, or that the
+#: test measures wrongly. Neither AST existence-checking nor any other
+#: mechanical test can always resolve the split, so `undecided` is a third,
+#: legitimate value, never an omission -- and there is no default: a
+#: missing marker is never read as any of the three.
+REMEDY_VALUES = ("delete", "update", "undecided")
+
 NO_CONFIRMED_DECLARATION = "No finding in this report is CONFIRMED by execution"
 
 #: Supports a report may never lean on. Each one is a mistake made in this
@@ -1715,14 +2534,22 @@ CITATION = re.compile(r"`[^`\s]+:\d+`")
 
 
 def report_findings(lines):
-    """Every `### F<n>.` block, with the lines that belong to it."""
+    """Every `### F<n>.` block, with the lines that belong to it and the
+    top-level `## ` section it sits directly under -- the section a
+    finding's own `- Adjudication:` must agree with when that adjudication
+    is `not adjudicable`.
+    """
     blocks = []
+    section = None
     for index, line in enumerate(lines):
         if re.match(r"^### F\d+\.", line.strip()):
             blocks.append({"label": line.strip()[4:].split(".")[0],
-                           "line": index + 1, "start": index, "text": []})
-        elif blocks and line.startswith("## "):
-            blocks[-1]["end"] = index
+                           "line": index + 1, "start": index, "text": [],
+                           "section": section})
+        elif line.startswith("## "):
+            section = line.strip()
+            if blocks and "end" not in blocks[-1]:
+                blocks[-1]["end"] = index
         elif blocks and "end" not in blocks[-1]:
             blocks[-1]["text"].append(line)
     return blocks
@@ -1802,6 +2629,56 @@ def disputed_severity_positions(lines):
     return has_content, positions
 
 
+#: `- Delete:`, `- Update:`, `- Undecided:` -- the three rosters
+#: `## Not adjudicable` derives from its own Move-6 findings. Required at
+#: the top of the section, before the first `### F` block: `report_findings`
+#: closes a finding's own text at the next `## ` line, so a line placed
+#: after the first finding would be swallowed into that finding's text
+#: rather than read as the section's own roster.
+REMEDY_ROSTER_LINE = re.compile(r"^-\s*(Delete|Update|Undecided):\s*(.+?)\s*$")
+
+
+def not_adjudicable_roster_lines(lines):
+    """The `- Delete:`, `- Update:`, `- Undecided:` lines under `## Not
+    adjudicable`, read only between that heading and the section's first
+    `### F` block -- modelled on `frozen_section_fields` and
+    `disputed_severity_positions`'s own "read only inside this section"
+    discipline, narrowed further to stop at the first finding rather than
+    the next `## ` heading, matching exactly where these lines are
+    required to sit.
+
+    Returns `{"delete": raw, "update": raw, "undecided": raw}` for every
+    roster line actually present; a bucket the report carries no line for
+    is simply absent from the dict, never a default empty string -- an
+    absent line and an explicit `(none)` must read differently.
+    """
+    rosters = {}
+    in_section = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "## Not adjudicable":
+            in_section = True
+            continue
+        if not in_section:
+            continue
+        if stripped.startswith("## ") or re.match(r"^### F\d+\.", stripped):
+            break
+        match = REMEDY_ROSTER_LINE.match(stripped)
+        if match:
+            rosters[match.group(1).lower()] = match.group(2)
+    return rosters
+
+
+def roster_labels(raw):
+    """A roster line's raw value, back into a sorted list of finding
+    labels -- `(none)` becomes the empty list, mirroring
+    `parse_exclude_field`'s own `(none)` idiom for an empty declared set.
+    """
+    if raw is None or raw == "(none)":
+        return []
+    return sorted(part.strip() for part in raw.split(",") if part.strip())
+
+
 def parse_exclude_field(value):
     """`- Exclude:`'s rendered value, back into the tuple `frozen_digest`
     accepts. `(none)` -- the shape `## Frozen` renders when the list is
@@ -1811,6 +2688,284 @@ def parse_exclude_field(value):
     if not value or value == "(none)":
         return ()
     return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+#: The report-shape schema version this tool validates against. Named
+#: `skill-audit-report/N` in a report's own `- Schema:` line -- a monotone
+#: integer, never semver (no meaningful minor/patch distinction exists for a
+#: validator that either knows a shape or does not) and never a date (two
+#: schema changes on one day would collide) or a git sha (unreadable to a
+#: human hitting a refusal, and it would couple the schema to a commit a
+#: revert would falsify). Derived-checked, not restated: `SKILL.md` states
+#: the version once, in prose, and a lock asserts this constant equals it --
+#: the same discipline `stage_model_total` already established for "Six
+#: model runs, total".
+REPORT_SCHEMA_VERSION = 1
+
+#: `## Report integrity` is judged entirely by the identity gate below,
+#: before the unconditional sweep in `run_check_report` ever runs. Named
+#: here explicitly, rather than left as an unreachable branch of that sweep:
+#: a future edit that moves the gate later would otherwise silently
+#: reintroduce the exact collapse this domain exists to prevent -- a report
+#: that predates the shape being judged as an ordinary missing section.
+PRE_SWEEP_ITEMS = {"report-integrity"}
+
+REPORT_INTEGRITY_HEADING = "## Report integrity"
+REPORT_INTEGRITY_SCHEMA_LINE = re.compile(r"^-\s*Schema:\s*(\S+)\s*$")
+REPORT_INTEGRITY_SELF_DIGEST_LINE = re.compile(r"^-\s*Self-digest:\s*(\S+)\s*$")
+
+#: `- Supersedes: sha256:<hex>` inside `## Report integrity`: an optional
+#: claim naming the OTHER report's own self-digest -- never this report's.
+#: Captures the raw value; well-formedness is judged separately, by
+#: `SUPERSEDES_VALUE_SHAPE` below, so a malformed value is an ordinary-sweep
+#: violation, never a parse failure at this stage.
+REPORT_SUPERSEDES_LINE = re.compile(r"^-\s*Supersedes:\s*(\S+)\s*$")
+
+#: Well-formedness for a `- Supersedes:` value: `sha256:` followed by one or
+#: more hex digits. Deliberately not length-anchored to 64 hex chars -- no
+#: other digest field in this codebase validates hex length, only content
+#: equality.
+SUPERSEDES_VALUE_SHAPE = re.compile(r"^sha256:[0-9a-f]+$")
+
+
+def _top_level_section_span(lines, heading):
+    """The `[start, end)` line-index span of one top-level `## ` section,
+    heading line included, running to the next `## ` line or EOF. `None`
+    when the heading does not appear verbatim as its own stripped line.
+    """
+    start = None
+    for index, line in enumerate(lines):
+        if line.strip() == heading:
+            start = index
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith("## "):
+            end = index
+            break
+    return start, end
+
+
+def report_self_digest(text):
+    """A report's own canonical self-digest, over its text with the one
+    `- Self-digest:` line inside `## Report integrity` excluded.
+
+    The exclusion is stated as an algorithm so two implementations cannot
+    disagree about what they are hashing:
+
+    1. Replace `\\r\\n` and lone `\\r` with `\\n` (universal-newline reading,
+       regardless of how the caller obtained `text`); split on `\\n`.
+    2. Locate `## Report integrity` -- the line equal to that string after
+       `.strip()` -- running to the next line starting with `## ` or EOF.
+    3. Inside that span, find every line matching `^-\\s*Self-digest:\\s*
+       (\\S+)\\s*$`. Two or more raises `Unprobeable`: the tool cannot tell
+       which line is the claim, and picking one would be adjudication with
+       nothing behind it.
+    4. **Remove** that one line entirely -- never blank it. A blanked line
+       is still a line whose presence depends on the field, and two
+       implementations could reasonably disagree about whether it stays;
+       removing it is decidable by inspection.
+    5. `rstrip()` every remaining line of spaces, tabs, and `\\r`; drop
+       trailing empty lines at EOF; join with `\\n`.
+    6. Encode UTF-8, hash with sha256, and return it in `frozen_digest`'s own
+       `"sha256:" + hexdigest` shape -- a report carries one digest
+       vocabulary, not two.
+
+    Canonical content, not raw bytes: a trailing-newline difference or a
+    CRLF/LF conversion must not read as tampering, the same class of
+    misdiagnosis this project already found in a `403` caused by a missing
+    `owner_slug` field and in a `claude` driver refusing for a missing
+    `USER`. Only what no editor asked a human about is normalized; nothing a
+    human could have meant is.
+    """
+    # `str.splitlines()` already treats `\r\n` and lone `\r` as line breaks
+    # exactly like `\n` -- the universal-newline read step -- and discards
+    # the specific line-ending byte, so no separate normalization call is
+    # needed (and none is made: `SuiteIntegrityTests`'s write-verb lock
+    # scans every attribute-call name in this file by spelling alone, and
+    # cannot distinguish `str.replace` from a filesystem write; the honest
+    # fix is to need no method carrying that name here, not an exemption
+    # naming a function that writes nothing at all).
+    lines = text.splitlines()
+    span = _top_level_section_span(lines, REPORT_INTEGRITY_HEADING)
+    kept = list(lines)
+    if span is not None:
+        start, end = span
+        digest_indices = [
+            index for index in range(start, end)
+            if REPORT_INTEGRITY_SELF_DIGEST_LINE.match(lines[index].strip())]
+        if len(digest_indices) >= 2:
+            raise Unprobeable(
+                f"the report carries {len(digest_indices)} '- Self-digest:' "
+                "lines under '## Report integrity'; the tool cannot tell "
+                "which one is the claim, and choosing would be a verdict "
+                "with nothing behind it")
+        if digest_indices:
+            del kept[digest_indices[0]]
+    while kept and kept[-1] == "":
+        kept.pop()
+    canonical = "\n".join(line.rstrip(" \t\r") for line in kept)
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def report_integrity_fields(lines):
+    """The `- Schema:`, `- Self-digest:`, and `- Supersedes:` values under
+    `## Report integrity`, read only inside that section -- exactly like
+    `frozen_section_fields`. `None` for any key the section does not carry
+    (including `- Supersedes:`, which is optional and never required).
+    Raises `Unprobeable` when any of the three appears twice: the same
+    "which line is the claim" inability `report_self_digest` raises for a
+    duplicated `- Self-digest:`, extended to `- Schema:` and `- Supersedes:`
+    for symmetry.
+    """
+    span = _top_level_section_span(lines, REPORT_INTEGRITY_HEADING)
+    if span is None:
+        return None
+    start, end = span
+    schema_values, self_values, supersedes_values = [], [], []
+    for index in range(start, end):
+        stripped = lines[index].strip()
+        match = REPORT_INTEGRITY_SCHEMA_LINE.match(stripped)
+        if match:
+            schema_values.append(match.group(1))
+            continue
+        match = REPORT_INTEGRITY_SELF_DIGEST_LINE.match(stripped)
+        if match:
+            self_values.append(match.group(1))
+            continue
+        match = REPORT_SUPERSEDES_LINE.match(stripped)
+        if match:
+            supersedes_values.append(match.group(1))
+    if len(schema_values) >= 2 or len(self_values) >= 2 or len(supersedes_values) >= 2:
+        raise Unprobeable(
+            "the report's '## Report integrity' section carries more than "
+            "one '- Schema:', '- Self-digest:', or '- Supersedes:' line; "
+            "the tool cannot tell which one is the claim, and choosing "
+            "would be a verdict with nothing behind it")
+    return {"schema": schema_values[0] if schema_values else None,
+            "selfDigest": self_values[0] if self_values else None,
+            "supersedes": supersedes_values[0] if supersedes_values else None}
+
+
+def schema_version_classification(schema):
+    """A companion report's own `- Schema:` value, classified as `absent`,
+    `current`, `predates`, or `postdates` -- structurally identical to the
+    version-comparison branch already inside `report_identity_gate`, but a
+    small, standalone, pure function used ONLY by the `--supersedes-report`
+    companion-check path.
+
+    `report_identity_gate` itself stays untouched: it is already
+    tamper-sensitive, already covered by `HistoricalReportRecordTests` and
+    the Q9-step-4 blanked-line lock, and this addition is purely additive --
+    touching it for a DRY gain would put untested blast radius on
+    already-hardened code for no requirement this domain has. A ~6-line
+    duplication of the numeric-comparison logic against the gate's own
+    inline branch is the accepted, smaller, reversible cost.
+    """
+    if schema is None:
+        return "absent"
+    current = f"skill-audit-report/{REPORT_SCHEMA_VERSION}"
+    if schema == current:
+        return "current"
+    match = re.match(r"skill-audit-report/(\d+)$", schema)
+    if match and int(match.group(1)) < REPORT_SCHEMA_VERSION:
+        return "predates"
+    return "postdates"
+
+
+def report_identity_gate(text, lines):
+    """The RECONCILED three-way classification (spec's
+    `report-tamper-evidence` domain, reconciled against the design's
+    mechanism): `valid` (exit 0), `tampered` (exit 1, a finding), or
+    `predates the schema` (exit 2, `Unprobeable` -- an inability to judge,
+    never an error and never a clean verdict).
+
+    Returns `None` when the report is current-schema and its self-digest
+    recomputes -- the caller proceeds to the existing sweep. Otherwise
+    returns `(exit_code, payload)`, which the caller emits and returns
+    directly: nothing else is computed for a report that will not be
+    judged, and a `tampered` report is never handed the rest of the sweep
+    either, so a single mismatch is never buried among unrelated findings.
+
+    The presence-combination is checked BEFORE the schema-version value --
+    the reconciliation's load-bearing ordering. Both fields absent together
+    is the only shape that means "written before this shape existed";
+    exactly one present is a partial, inconsistent state that means someone
+    edited the report, classified `tampered` rather than `predates the
+    schema`. Reading the schema value first would let an attacker strip
+    only `- Schema:` and escape into the unjudged, `predates` bucket --
+    exactly the loophole this ordering closes.
+    """
+    fields = report_integrity_fields(lines)
+    schema = fields["schema"] if fields else None
+    self_digest = fields["selfDigest"] if fields else None
+
+    if schema is None and self_digest is None:
+        return 2, {
+            "error": (
+                "this report carries no '## Report integrity' section (or "
+                "an empty one), so it was written before the report shape "
+                "carried one. That is not tampering, and this tool will not "
+                "judge it: it cannot distinguish a record written under an "
+                "older shape from one whose identity was removed, and "
+                "guessing would make those two indistinguishable forever. "
+                "Read it by hand, or supersede it with a new report under "
+                "the current shape."),
+            "status": "predates-the-schema"}
+
+    if schema is None or self_digest is None:
+        missing = "- Schema:" if schema is None else "- Self-digest:"
+        present = "- Self-digest:" if schema is None else "- Schema:"
+        return 1, {"rederived": False, "violations": [{
+            "detail": (
+                f"the report's '## Report integrity' section carries "
+                f"{present!r} but not {missing!r}. A report with exactly "
+                "one of the two identity fields is not a report written "
+                "before this shape existed -- that would carry neither -- "
+                "it is a report someone edited after the fact. This is "
+                "tampered, not predates-the-schema."),
+            "item": "report-integrity", "where": "line 1"}]}
+
+    current = f"skill-audit-report/{REPORT_SCHEMA_VERSION}"
+    if schema != current:
+        match = re.match(r"skill-audit-report/(\d+)$", schema)
+        if match and int(match.group(1)) < REPORT_SCHEMA_VERSION:
+            return 2, {
+                "error": (
+                    f"this report declares schema {schema!r}; this tool "
+                    f"ships {current!r}. It validates one shape, and "
+                    "judging an older record under a newer shape is how a "
+                    "record gets edited to fit. Supersede it, or read it by "
+                    "hand."),
+                "status": "predates-the-schema"}
+        # `match` and NOT older means a numbered version above current, the
+        # symmetric case; no `match` at all means the value names no
+        # `skill-audit-report/N` shape this tool has ever shipped. Both read
+        # the same to a validator that only ever knows one shape: it has not
+        # judged a report written under a shape it does not recognise.
+        return 2, {
+            "error": (
+                f"this report declares schema {schema!r}, which this tool "
+                f"(shipping {current!r}) does not recognise. A validator "
+                "that does not know a shape has not judged a report "
+                "written under it."),
+            "status": "postdates-the-schema"}
+
+    recomputed = report_self_digest(text)
+    if recomputed != self_digest:
+        return 1, {"rederived": False, "violations": [{
+            "detail": (
+                f"the report's recorded self-digest {self_digest} disagrees "
+                f"with its content, which now digests to {recomputed}. A "
+                "report is a record of one audit at one moment: a wrong "
+                "report is superseded by a new report, never edited into "
+                "agreement. Recomputing this field would make the guard "
+                "ceremony -- do not."),
+            "item": "report-integrity", "where": "line 1"}]}
+
+    return None
 
 
 def run_check_report(args):
@@ -1835,6 +2990,158 @@ def run_check_report(args):
     def fail(item, detail, where):
         violations.append({"detail": detail, "item": item, "where": where})
 
+    # Self-supersession is checked against the RAW recorded fields, before
+    # the identity gate below ever runs -- deliberately, not merely for
+    # convenience. `- Supersedes:` is itself part of what `report_self_
+    # digest` hashes (only `- Self-digest:` is ever excluded), so a report
+    # can never be constructed whose CORRECT self-digest equals a value
+    # that is itself an input to that same digest -- a cryptographic hash
+    # has no fixed point a fixture could ever build. Checking the raw
+    # strings first, ahead of the gate's own recompute step, is what makes
+    # this violation reachable at all; `report_identity_gate` itself is
+    # untouched -- this is a new, independent check, not a change to its
+    # three-way classification.
+    integrity_fields = report_integrity_fields(lines)
+    early_supersedes_claim = integrity_fields.get("supersedes") if integrity_fields else None
+    if (early_supersedes_claim is not None
+            and integrity_fields.get("selfDigest") == early_supersedes_claim):
+        emit({"rederived": False, "supersession": "unverified", "violations": [{
+            "detail": (
+                "the report's '- Supersedes:' value equals its own "
+                "'- Self-digest:' value; a report cannot supersede itself"),
+            "item": "supersedes", "where": f"{path}:1"}]})
+        return 1
+
+    # The identity gate runs before everything else in this function --
+    # nothing else is computed for a report that will not be judged. A
+    # `predates-the-schema` (or `postdates-the-schema`) verdict emits a
+    # payload with no `violations` key at all, never the standard shape; a
+    # `tampered` verdict emits exactly one violation and returns
+    # immediately, so a digest mismatch is never buried among unrelated
+    # findings by continuing on to the rest of the sweep below.
+    gate = report_identity_gate(text, lines)
+    if gate is not None:
+        exit_code, payload = gate
+        emit(payload)
+        return exit_code
+
+    # `- Supersedes:` is optional and purely additive: reaching this point
+    # means the report is already known non-tampered (the gate above
+    # returned `None`), so `integrity_fields.get("selfDigest")` is the
+    # report's genuine, recomputation-agreeing self-digest, and a forged
+    # `- Supersedes:` would already have been caught upstream as `tampered`
+    # -- it is automatically covered by `report_self_digest`'s hashing,
+    # since only `- Self-digest:` itself is ever excluded. `"supersession"`
+    # is a closed three-value roster -- `not-claimed`, `unverified`, or
+    # `verified` -- never a boolean: a boolean would collapse "nobody
+    # claimed a supersession" into "a claim exists that nobody checked",
+    # the exact defect this field exists to remove.
+    supersedes_claim = integrity_fields.get("supersedes")
+    supersession = "not-claimed"
+    supersedes_claim_ok = False
+    if supersedes_claim is not None:
+        supersession = "unverified"
+        if not SUPERSEDES_VALUE_SHAPE.match(supersedes_claim):
+            fail("supersedes",
+                 f"'- Supersedes: {supersedes_claim}' is not shaped "
+                 "'sha256:<hex>'", f"{path}:1")
+        else:
+            supersedes_claim_ok = True
+
+    # `--supersedes-report <path>` checks a well-formed, non-self-referential
+    # claim against a NAMED companion report: re-derive the companion's own
+    # self-digest via the exact same `report_self_digest` this tool signs
+    # its own reports with -- no second digest convention -- and compare it
+    # to the declared value. A malformed or self-referential claim is
+    # already its own violation above; this block never layers a second,
+    # confusing verdict on top of one (G2's ordering: inability and
+    # mismatch never share an outcome with an already-broken claim).
+    #
+    # Ordering inside this branch, load-bearing: inability to look always
+    # precedes an ordinary violation, consistent with this skill's own
+    # standing rule that "could not look" never shares an outcome with
+    # "looked and found wrong" -- (1) the flag names a report that carries
+    # no claim at all is its own violation, checked first, with no
+    # companion read attempted; then, once a companion read is attempted,
+    # (2) unreadable, (3) schema predates/postdates, (4) either side's
+    # `- Subject:` absent are each `Unprobeable`, before (5) a digest
+    # mismatch or (6) a subject mismatch are ever considered as ordinary
+    # violations, with (7) verified only once every earlier check agrees.
+    supersedes_report_path = getattr(args, "supersedes_report", None)
+    if supersedes_report_path:
+        if supersedes_claim is None:
+            fail("supersedes",
+                 f"'--supersedes-report {supersedes_report_path}' was "
+                 "supplied, but the report carries no '- Supersedes:' "
+                 "claim to check", f"{path}:1")
+        elif supersedes_claim_ok:
+            try:
+                companion_text = Path(supersedes_report_path).read_text(
+                    encoding="utf-8")
+            except OSError as error:
+                raise Unprobeable(
+                    f"the named companion at {supersedes_report_path!r} "
+                    f"could not be read: {error}")
+
+            companion_lines = companion_text.splitlines()
+            companion_fields = report_integrity_fields(companion_lines)
+            companion_schema = (
+                companion_fields.get("schema") if companion_fields else None)
+            classification = schema_version_classification(companion_schema)
+            if classification in ("absent", "predates"):
+                raise Unprobeable(
+                    f"the named companion at {supersedes_report_path!r} "
+                    "predates the schema (no current '## Report integrity' "
+                    "section); its self-digest cannot be judged")
+            if classification == "postdates":
+                current = f"skill-audit-report/{REPORT_SCHEMA_VERSION}"
+                raise Unprobeable(
+                    f"the named companion at {supersedes_report_path!r} "
+                    f"declares schema {companion_schema!r}, which postdates "
+                    f"the schema this tool ships ({current!r}); its "
+                    "self-digest cannot be judged")
+
+            this_frozen = frozen_section_fields(lines)
+            companion_frozen = frozen_section_fields(companion_lines)
+            this_subject = this_frozen.get("subject")
+            companion_subject = companion_frozen.get("subject")
+            if not this_subject or not companion_subject:
+                absent_side = ("this report" if not this_subject
+                              else "the named companion")
+                raise Unprobeable(
+                    f"{absent_side}'s '## Frozen' carries no '- Subject:' "
+                    "line; comparability cannot be judged without it")
+
+            companion_self_digest = report_self_digest(companion_text)
+            if companion_self_digest != supersedes_claim:
+                fail("supersedes",
+                     f"the named companion at {supersedes_report_path!r} "
+                     f"re-derives to {companion_self_digest}, which "
+                     f"disagrees with the declared '- Supersedes: "
+                     f"{supersedes_claim}'", f"{path}:1")
+            elif this_subject != companion_subject:
+                fail("supersedes",
+                     f"the named companion's '- Subject: "
+                     f"{companion_subject}' disagrees with this report's "
+                     f"own '- Subject: {this_subject}'; a re-validation "
+                     "must be of the same subject, never merely of the "
+                     "same self-digest match", f"{path}:1")
+            else:
+                supersession = "verified"
+
+    # `## Report integrity` must be the report's first `## ` section: the
+    # schema marker governs every later judgment, so a validator that must
+    # scan the whole file to learn which shape it is reading has already
+    # read it under an assumption. Checked only once the gate above has
+    # already confirmed the section is present and its identity is valid --
+    # a misplaced-but-valid section is an ordinary violation, appended to
+    # the same list the rest of this sweep builds, never a second gate.
+    first_heading = next((line for line in lines if line.startswith("## ")), None)
+    if first_heading != REPORT_INTEGRITY_HEADING:
+        fail("report-integrity",
+             f"{REPORT_INTEGRITY_HEADING!r} must be the report's first "
+             f"'## ' section; found {first_heading!r} first", f"{path}:1")
+
     # Both doctrine tables are resolved up front: the moves table for
     # `## Move outcomes` below, and the stages table for which
     # `REPORT_SHAPE` items are conditional at all. Unprobeable propagates
@@ -1850,10 +3157,12 @@ def run_check_report(args):
     # hand-written set, so a stage added to the table without its own
     # `REPORT_SHAPE` key changes nothing here and a stage naming an
     # existing key is exempted from the unconditional sweep automatically.
+    # `PRE_SWEEP_ITEMS` is excluded the same way: `report-integrity` is
+    # judged entirely by the gate above, never by this loop.
     conditional_items = {key for _, key in required_stages}
 
     for item, marker in REPORT_SHAPE.items():
-        if item in conditional_items:
+        if item in conditional_items or item in PRE_SWEEP_ITEMS:
             continue
         if marker.startswith("## ") and marker not in lines:
             fail(item, f"the report carries no {marker!r} section",
@@ -1881,6 +3190,12 @@ def run_check_report(args):
              f"{path}:1")
 
     confirmed = False
+    # Populated by the per-finding `remedy` check below, keyed by vocabulary
+    # token; consumed after the loop by the derived-roster cross-check
+    # (Commit 2). Declared here, unconditionally, so a report with zero
+    # Move-6 not-adjudicable findings correctly derives three empty buckets
+    # rather than a missing name.
+    remedy_by_bucket = {"delete": [], "update": [], "undecided": []}
     for finding in findings:
         where = f"{path}:{finding['line']} {finding['label']}"
         body = "\n".join(finding["text"])
@@ -1912,6 +3227,66 @@ def run_check_report(args):
             fail("adjudication",
                  "every finding carries exactly one adjudication from "
                  + ", ".join(ADJUDICATIONS), where)
+        elif (verdict.group(1) == "not adjudicable") \
+                != (finding["section"] == "## Not adjudicable"):
+            # Mirrors the `## Undecidable` <-> `## Move outcomes`
+            # cross-section rule: a `not adjudicable` finding cannot have
+            # two homes. Either direction of the mismatch is refused --
+            # this section without that adjudication, or that adjudication
+            # outside this section.
+            fail("not-adjudicable",
+                 f"finding {finding['label']}'s adjudication is "
+                 f"{verdict.group(1)!r} but it sits under "
+                 f"{finding['section']!r}; a `not adjudicable` finding "
+                 "belongs under '## Not adjudicable' and nowhere else",
+                 where)
+
+        # Move 6's own occasion, scoped tightly: `- Remedy:` is required iff
+        # a finding carries both `- Move: 6` and `- Adjudication: not
+        # adjudicable`, and refused everywhere else -- bidirectional,
+        # mirroring the `not-adjudicable` cross-section rule right above.
+        # `remedy_by_bucket` accumulates the in-scope labels this loop finds,
+        # by vocabulary token, for the derived-roster cross-check after the
+        # loop; grouping ignores an `undecided` finding's own reason text.
+        remedy = re.search(r"^- Remedy:\s*(.+?)\s*$", body, re.MULTILINE)
+        remedy_in_scope = (
+            move is not None and move.group(1) == "6"
+            and verdict is not None and verdict.group(1) == "not adjudicable")
+        if remedy_in_scope:
+            if not remedy:
+                fail("remedy",
+                     f"finding {finding['label']} carries '- Move: 6' and "
+                     "'- Adjudication: not adjudicable' but no "
+                     "'- Remedy:' line; the field is required in exactly "
+                     "this scope", where)
+            else:
+                value = remedy.group(1)
+                if value in ("delete", "update"):
+                    remedy_by_bucket[value].append(finding["label"])
+                elif value == "undecided" or value.startswith("undecided:"):
+                    reason = value.split(":", 1)[1].strip() \
+                        if ":" in value else ""
+                    if reason:
+                        remedy_by_bucket["undecided"].append(finding["label"])
+                    else:
+                        fail("remedy",
+                             f"finding {finding['label']}'s "
+                             "'- Remedy: undecided' carries no reason; a "
+                             "bare `undecided` is refused, matching this "
+                             "repo's own idiom for every other escape "
+                             "hatch (`Unprobeable`, `no-closed-roster`, "
+                             "'## Unchecked')", where)
+                else:
+                    fail("remedy",
+                         f"finding {finding['label']}'s "
+                         f"'- Remedy: {value}' is outside the vocabulary "
+                         "delete | update | undecided: <reason>", where)
+        elif remedy:
+            fail("remedy",
+                 f"finding {finding['label']} carries "
+                 f"'- Remedy: {remedy.group(1)}' outside its exact scope "
+                 "('- Move: 6' and '- Adjudication: not adjudicable'); "
+                 "the field is refused on any other finding", where)
 
         citations = {c for c in CITATION.findall(body)}
         if len(citations) < 2:
@@ -1927,11 +3302,12 @@ def run_check_report(args):
                  f"disagrees with '## Frozen''s declared digest "
                  f"{frozen['digest']}", where)
 
-        # Stage 3's asymmetry, enforced structurally: the skill-less drive
-        # never ran the skill's own machinery, so a finding attributed to
-        # it can never make a claim with the subject itself as its target
-        # -- that pairing is a category error regardless of whether stage
-        # 3 is declared ran or skipped in this report.
+        # The differential drive's asymmetry, enforced structurally: the
+        # skill-less drive never ran the skill's own machinery, so a
+        # finding attributed to it can never make a claim with the subject
+        # itself as its target -- that pairing is a category error
+        # regardless of whether the differential-drive stage is declared
+        # ran or skipped in this report.
         drive = re.search(r"^- Drive:\s*(.+?)\s*$", body, re.MULTILINE)
         target = re.search(r"^- Target:\s*(.+?)\s*$", body, re.MULTILINE)
         if (drive and target and drive.group(1) == "skill-less"
@@ -1942,6 +3318,36 @@ def run_check_report(args):
                  "target; that drive never ran the skill's own machinery "
                  "and cannot make a claim with the subject as its target",
                  where)
+
+    # The three derived rosters, cross-checked against `remedy_by_bucket`
+    # (populated above, per finding): required, matching exactly, iff at
+    # least one Move-6 not-adjudicable finding exists; forbidden otherwise.
+    # Reuses the `"remedy"` violation item -- mirrors how `"not-adjudicable"`
+    # already covers both directions of its own cross-section rule, rather
+    # than inventing a second item id for the same capability.
+    rosters = not_adjudicable_roster_lines(lines)
+    has_move6_findings = any(remedy_by_bucket.values())
+    if has_move6_findings:
+        for bucket in ("delete", "update", "undecided"):
+            raw = rosters.get(bucket)
+            expected = sorted(remedy_by_bucket[bucket])
+            if raw is None:
+                fail("remedy",
+                     f"'## Not adjudicable' carries a Move-6 finding but no "
+                     f"'- {bucket.capitalize()}:' roster line; expected "
+                     f"{expected!r}", f"{path}:1")
+                continue
+            actual = roster_labels(raw)
+            if actual != expected:
+                fail("remedy",
+                     f"'- {bucket.capitalize()}:' names {actual!r}, but the "
+                     f"matching Move-6 findings are {expected!r}",
+                     f"{path}:1")
+    elif rosters:
+        fail("remedy",
+             "'## Not adjudicable' carries a Delete/Update/Undecided "
+             "roster line but no Move-6 not-adjudicable finding to "
+             "justify it", f"{path}:1")
 
     if findings and not confirmed:
         head = [line for line in lines[:6] if line.strip()]
@@ -2014,6 +3420,29 @@ def run_check_report(args):
                 fail(key,
                      f"stage {stage_id} is declared ran, so the report "
                      f"must carry {marker!r}", f"{path}:1")
+            elif key == "user-drive":
+                # The enforceable half: `## User drive`'s own `- Digest:`
+                # must agree with `## Frozen`'s, exactly as every finding's
+                # own `- Digest:` already must -- proof the driven-audit
+                # narrative is about the same subject state as the rest of
+                # the report.
+                drive_digest = user_drive_digest(lines)
+                if not drive_digest or (frozen.get("digest")
+                                        and drive_digest != frozen["digest"]):
+                    fail(key,
+                         "'## User drive' carries no '- Digest:' agreeing "
+                         f"with '## Frozen''s declared digest "
+                         f"{frozen.get('digest')!r}", f"{path}:1")
+                # The declared-only half: stated, never implied as proof.
+                # A drive claiming to have proven everything has misread
+                # what it did, so an empty column is refused the same as
+                # an absent one.
+                if not user_drive_declared_only_nonempty(lines):
+                    fail(key,
+                         "'## User drive' carries no non-empty "
+                         f"{USER_DRIVE_DECLARED_HEADING!r} content; the "
+                         "declared-only column must be stated, never "
+                         "implied as proof", f"{path}:1")
         else:
             not_run_value = FIELD_NOT_RUN.get(key)
             if not_run_value:
@@ -2028,6 +3457,70 @@ def run_check_report(args):
                              f"'- Found by: {not_run_value}' is no longer "
                              "accepted",
                              f"{path}:{finding['line']} {finding['label']}")
+
+    # The binding ruling: an audit never reports on a subject without
+    # driving it. Derived structurally -- the `user-drive` stage id is
+    # whichever row in `required_stages` names that key, never a hardcoded
+    # `"2"` -- so a future renumbering moves this check along with the
+    # table it reads, exactly like every other stage check above.
+    drive_stage_id = next(
+        (stage_id for stage_id, key in required_stages if key == "user-drive"),
+        None)
+    if drive_stage_id is not None:
+        drive_outcome = stage_outcomes.get(drive_stage_id)
+        if drive_outcome is not None and drive_outcome.startswith("skipped:"):
+            drive_reason = drive_outcome.split(":", 1)[1].strip()
+            if drive_reason != DRIVE_STAGE_RESERVED_SKIP:
+                fail("driver-required",
+                     f"stage {drive_stage_id}'s row reads "
+                     f"'skipped: {drive_reason}'; an audit never reports "
+                     "on a subject without driving it, and the only "
+                     f"accepted skip reason is {DRIVE_STAGE_RESERVED_SKIP!r}",
+                     f"{path}:1")
+            else:
+                undecidable_id = next(
+                    (stage_id for stage_id, key in required_stages
+                     if key == "undecidable"), None)
+                stage1_ran = (undecidable_id is not None
+                             and stage_outcomes.get(undecidable_id) == "ran")
+                entries = undecidable_entries(lines)
+                all_no_closed_roster = bool(entries) and all(
+                    entry["surfaceKind"] == "no-closed-roster"
+                    for entry in entries)
+                if not (stage1_ran and all_no_closed_roster):
+                    fail("driver-required",
+                         f"stage {drive_stage_id}'s row reads "
+                         f"'skipped: {DRIVE_STAGE_RESERVED_SKIP}', which is "
+                         "only valid when stage 1 ran and '## Undecidable' "
+                         "is non-empty with every entry's '- Kind:' reading "
+                         "'no-closed-roster'; an empty '## Undecidable' is "
+                         "not the same claim as one full of them",
+                         f"{path}:1")
+
+        # `skipped: offered, declined` is the one skip text legal only
+        # after the drive itself reached agreement -- equivalence reached
+        # is what makes the question worth asking. Scoped to stages
+        # numbered *after* the drive stage, derived the same way, never a
+        # hardcoded "3, 4, 5": stage 2's own row already cannot carry this
+        # text at all, since it must equal `DRIVE_STAGE_RESERVED_SKIP`
+        # exactly or fail as `driver-required` above.
+        drive_agreed = (stage_outcomes.get(drive_stage_id) == "ran"
+                       and user_drive_outcome(lines) == "agree")
+        for stage_id, key in required_stages:
+            if int(stage_id) <= int(drive_stage_id):
+                continue
+            outcome = stage_outcomes.get(stage_id)
+            if not outcome or not outcome.startswith("skipped:"):
+                continue
+            if outcome.split(":", 1)[1].strip() != POST_DRIVE_OFFERED_SKIP:
+                continue
+            if not drive_agreed:
+                fail(key,
+                     f"stage {stage_id}'s row reads "
+                     f"'skipped: {POST_DRIVE_OFFERED_SKIP}', which is legal "
+                     f"only once stage {drive_stage_id} reads `ran` and "
+                     "'## User drive''s own '- Outcome:' reads `agree`; "
+                     "no question was asked here", f"{path}:1")
 
     # The one cross-section rule: an `## Undecidable` entry claiming
     # `- Rung: probe` must name a move whose own `## Move outcomes` row is
@@ -2101,7 +3594,7 @@ def run_check_report(args):
                 continue
             fail(item, detail, f"{path}:{index}")
 
-    emit({"rederived": rederived, "violations": sorted(
+    emit({"rederived": rederived, "supersession": supersession, "violations": sorted(
         violations, key=lambda v: (v["item"], v["where"]))})
     return 1 if violations else 0
 
@@ -2112,6 +3605,7 @@ DISPATCH = {
     "structure": run_structure,
     "walkthrough": run_walkthrough,
     "reading-diff": run_reading_diff,
+    "sensitivity": run_sensitivity,
 }
 
 
