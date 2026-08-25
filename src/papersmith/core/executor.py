@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -189,7 +190,7 @@ def run_profile(workspace: str | Path, profile_name: str, *, target_override: st
 def print_result(result: dict[str, Any], *, dry_run: bool) -> None:
     print(json.dumps(result, indent=2, sort_keys=True))
     if dry_run:
-        print("dry-run: no job was dispatched")
+        print("dry-run: no job was dispatched", file=sys.stderr)
 
 
 def register(subparsers) -> None:

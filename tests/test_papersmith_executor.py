@@ -120,7 +120,7 @@ def test_cli_run_dry_run_and_target_list(tmp_path: Path, capsys) -> None:
     _write_local_manifest(workspace)
     assert main(["run", "smoke", "--dry-run", str(workspace)]) == SUCCESS
     output = capsys.readouterr().out
-    assert "dry-run" in output
+    assert '"dry_run": true' in output
     assert main(["target", "list", str(workspace)]) == SUCCESS
     assert "local: local" in capsys.readouterr().out
 
