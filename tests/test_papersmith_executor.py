@@ -189,7 +189,7 @@ def test_audit_check_drift_returns_exit_three_without_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = _workspace(tmp_path)
-    (workspace / "skills/skill-audit/references/probes/skill-audit.structure.json").write_text("{}")
+    (workspace / "skills/skill-audit/references/probes/skill-audit.subcommands.json").write_text("{}")
     monkeypatch.setattr(audit_bridge, "run_script", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, "audit ok\n", ""))
     monkeypatch.setattr(audit_bridge, "check_generated", lambda *args, **kwargs: ["PI.md"])
     result = audit_bridge.execute(workspace, check_drift=True)

@@ -14,13 +14,18 @@ from .python import emit_result, run_script
 
 def execute(workspace: str | Path, *, check_drift: bool = False) -> int:
     root = Path(workspace).expanduser().resolve()
-    spec = root / "skills/skill-audit/references/probes/skill-audit.structure.json"
+    spec = root / "skills/skill-audit/references/probes/skill-audit.subcommands.json"
     if not spec.is_file():
         raise UserError(f"missing structural audit probe: {spec}")
     result = run_script(
         root,
         "skills/skill-audit/scripts/audit_cli.py",
-        ["structure", "--subject", "skills", "--spec", str(spec), "--repo-root", str(root)],
+        [
+            "roster",
+            "--subject", str(root / "skills/skill-audit"),
+            "--probe-spec", str(spec),
+            "--repo-root", str(root),
+        ],
     )
     code = emit_result(result)
     if code != SUCCESS:
