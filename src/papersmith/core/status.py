@@ -119,6 +119,20 @@ def _inbox_status(root: Path) -> dict[str, Any]:
     return {"files": len(files), "job_directories": len(jobs)}
 
 
+def _runtime_status(root: Path) -> dict[str, Any]:
+    import os
+    import sys
+    node = shutil.which("node") is not None
+    micromamba = (root / ".micromamba" / "bin" / "micromamba").is_file() or shutil.which("micromamba") is not None
+    llama = shutil.which("llama-server") is not None or os.environ.get("LLAMA_CPP_BINARY") is not None
+    return {
+        "node": node,
+        "micromamba": micromamba,
+        "llama_server": llama,
+        "python_version": sys.version.split()[0],
+    }
+
+
 def status(workspace: str | Path = ".") -> dict[str, Any]:
     root = Path(workspace).expanduser().resolve()
     stored = manifest.load_manifest(root)
@@ -148,6 +162,7 @@ def status(workspace: str | Path = ".") -> dict[str, Any]:
             "version_match": workspace_version == kit_version,
             "drifted_files": drifted,
         },
+        "runtimes": _runtime_status(root),
         "proposal": _proposal_status(root),
         "implementations": _implementation_status(root),
         "tests": {
@@ -169,17 +184,23 @@ def status(workspace: str | Path = ".") -> dict[str, Any]:
 def print_human(snapshot: dict[str, Any]) -> None:
     framework = snapshot["framework"]
     proposal = snapshot["proposal"]
+    runtimes = snapshot.get("runtimes", {})
     print(f"Workspace: {snapshot['project_name']} ({snapshot['workspace']})")
     print(
         f"Framework: kit {framework['kit_version']}; workspace {framework['workspace_version']}; "
         f"CLI {framework['installed_cli_version']}"
     )
     print("Framework drift: " + (", ".join(framework["drifted_files"]) if framework["drifted_files"] else "none"))
+    if runtimes:
+        node_status = "OK" if runtimes.get("node") else "Missing"
+        llama_status = "OK" if runtimes.get("llama_server") else "Missing"
+        print(f"Runtimes: Python {runtimes.get('python_version')}; Node {node_status}; OCR Engine {llama_status}")
     print(f"Proposal: {proposal.get('revision_id') or 'none'} ({proposal.get('lifecycle_stage')})")
     print(f"Implementations: {len(snapshot['implementations'])}")
     print(f"Recorded runs: {snapshot['tests']['recorded_runs']} ({snapshot['tests']['failed_runs']} failed)")
     print(f"Accounts: {snapshot['accounts']['count']}")
     print(f"Inbox: {snapshot['inbox']['files']} files in {snapshot['inbox']['job_directories']} job directories")
+
 
 
 def register(subparsers) -> None:

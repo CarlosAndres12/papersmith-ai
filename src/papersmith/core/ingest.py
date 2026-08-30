@@ -193,7 +193,10 @@ def register(subparsers) -> None:
 
 
 def run_cli(args) -> int:
+    print(f"Ingesting {args.source} with Marker...")
+    print("Note: First-time ingestion downloads ~1.5 GB Surya model weights to ~/.cache/huggingface.")
     result = ingest(args.source, args.directory, ocr=args.ocr)
     print(f"Ingested: {result['pdf']}")
     print(f"Reference index entries: {len(result['index']['entries'])}")
     return 0
+
