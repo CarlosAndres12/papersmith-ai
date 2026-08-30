@@ -31,3 +31,15 @@ papersmith = [
 
 [tool.setuptools.dynamic]
 version = {attr = "papersmith.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = [
+  ".*",
+  "build",
+  "dist",
+  "node_modules",
+  "skills",
+  "src/papersmith/_kit",
+]
+
