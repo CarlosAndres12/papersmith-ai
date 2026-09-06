@@ -616,10 +616,14 @@ pasaría a ser un acto declarado.
 
 *Ninguna edición a mano está impedida; en el mejor caso se detecta después.* No hay en
 la forja ninguna barrera que frene a alguien —o a un agente— que abra un archivo
-gestionado y lo escriba por afuera del motor. `.claude/settings.json` tiene **un solo**
-hook `PreToolUse` (`refuse_offpath_push.py`, con matcher `Bash`, y es de
-`remote-execution`, no de esta skill), y su clave `permissions` **no tiene ninguna
-entrada `deny`**. **Qué significa para vos:** todo lo que esta skill opone a una edición
+gestionado y lo escriba por afuera del motor. El cableado propuesto
+(`.claude/settings.json` con un hook `PreToolUse` sobre `refuse_offpath_push.py`, con
+matcher `Bash`) **no está presente en el árbol**: `git ls-files .claude/*` solo muestra
+`.claude/agents/paper-ingestion.md`, y no existe hoy ninguna clave `permissions` con
+entradas `deny`. Y aun cableado, ese script no defendería `proposals/`: es un tripwire
+de superficie de push de `remote-execution` —rehúsa una invocación `Bash` que mencione
+la superficie de push de un servicio sin pasar por `remote_cli.py`—, no una negación de
+escritura sobre archivos gestionados. **Qué significa para vos:** todo lo que esta skill opone a una edición
 manual llega después del hecho — la auditoría del punto anterior te avisa en la
 operación siguiente, con los bytes ya escritos. **Qué no cubre:** el momento de la
 escritura, ni nada de lo que pase entre esa escritura y la próxima vez que alguien
@@ -1026,9 +1030,10 @@ pasa. **Cómo se arregla:** con un cruce contra el resultado real de la suite, q
 tiene por dónde entrar.
 
 *Ninguna edición a mano está impedida, y acá ni siquiera se detecta.* Vale la misma
-observación que en `proposal-deliberation` —un solo hook `PreToolUse`, que es de
-`remote-execution`, y ninguna entrada `deny`—, pero la diferencia entre las dos skills
-importa. Allá una edición manual rompe un recibo y se nota en la operación siguiente;
+observación que en `proposal-deliberation` —el hook `PreToolUse` propuesto (de
+`remote-execution`: un tripwire de superficie de push, no una negación de escritura)
+**no está cableado en el árbol** y no existe ninguna entrada `deny`—, pero la diferencia
+entre las dos skills importa. Allá una edición manual rompe un recibo y se nota en la operación siguiente;
 acá no hay recibo que romper. El `SKILL.md` de esta skill lo dice sin adornos sobre el
 token de testigo: escribirlo a mano es doctrina no soportada, **no** una prevención
 técnica — el parser no puede distinguir, y no distingue, un token escrito por la skill
