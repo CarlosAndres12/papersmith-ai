@@ -9141,7 +9141,7 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
     """
 
     SCRIPTS = SKILL_ROOT / "scripts"
-    README = FORGE / "README.md"
+    README = FORGE / "README.es.md"
 
     MERMAID_RE = re.compile(r"^```mermaid\n(.*?)^```", re.DOTALL | re.MULTILINE)
     RUN_RE = re.compile(r"Run `([^` ]+)")
