@@ -47,6 +47,30 @@ __benchmark__ = {
     #         "role": "validation split",
     #         "tieRule": "smallest value within one standard error of the best",
     #     }
+    #
+    # One key is OPTIONAL and asked of nobody, and it is the one every
+    # later reading hangs off: `record`, the path -- relative to the
+    # product folder -- of the artefact this search writes, e.g.:
+    #     "record": "Results/search-record.json"
+    # Leave it out and `search.recordFound` answers `null` forever: a
+    # ticked `@record` witness has nothing behind it, a leveled
+    # `@record:level` one reaches no rung, and `probe` keeps answering
+    # `search-first` because a declared `requiredScale` cannot be
+    # satisfied by a record nothing was told to look for. The forge never
+    # guesses the filename; you name it, and it only looks.
+    #
+    # A second key is likewise OPTIONAL: `currentWhen`, a
+    # dotted path into the record's own file naming where it wrote down the
+    # identity of the code that produced it, e.g.:
+    #     "currentWhen": "evidence.sourcesDigest"
+    # `distribution.currentWhen`'s own idiom, one level up from a shard.
+    # Declare it and a found record only counts as evidence while the value
+    # there still matches the code as it stands; a record left behind by
+    # code this repository has moved past reads as unmeasured rather than as
+    # a rung reached. Leave it out -- the default -- and a found record is
+    # trusted on arrival alone, exactly as before this key existed. The
+    # forge never guesses the field, the same way it never guesses which
+    # measurements are poolable: you name it, and it only compares.
     "search": {},
 
     # Which functions render tables and figures, which produce conclusions,
@@ -70,6 +94,33 @@ __benchmark__ = {
     #         "perRun": [],
     #         "identicalAcrossShards": ["datasetSize"],
     #     }
+    #
+    # One further key is OPTIONAL and asked of nobody: `currentWhen`, a
+    # dotted path into a shard's own `shard.json` stamp naming where that
+    # shard wrote down the identity of the code that produced it, e.g.:
+    #     "currentWhen": "evidence.sourcesDigest"
+    # Declare it and a returned shard only counts as evidence while the
+    # value there still matches the code as it stands; a shard that arrived
+    # from code this repository has moved past reads as unmeasured rather
+    # than as a step reached. Leave it out -- the default -- and a shard is
+    # trusted on arrival alone, exactly as before this key existed. The
+    # forge never guesses the field, the same way it never guesses which
+    # measurements are poolable: you name it, and it only compares.
+    #
+    # A second, sibling key is likewise OPTIONAL: `shardsRoot`, naming
+    # where a split campaign's returned shards land, relative to this
+    # repository's own root (an absolute path is honoured as given), e.g.:
+    #     "shardsRoot": "campaign-001/shards"
+    # Declare it once and every command that reads a position section --
+    # not only the ones that carry their own `--shards` flag -- measures a
+    # `@shard` witness against that same directory automatically; a `@shard`
+    # item ticked on real evidence stays checkable everywhere, not only at
+    # the one command that was told where to look for it. An explicit
+    # `--shards <dir>`, where the command accepts one, still overrides this
+    # for that single invocation. Leave it out -- the default -- and a
+    # command with no `--shards` flag of its own reads a `@shard` witness as
+    # unmeasured, exactly as before this key existed; the forge never
+    # invents a directory a repository never named.
     "distribution": {},
 
     # The dotted module and function that actually pull the target's runtime
@@ -83,3 +134,70 @@ __benchmark__ = {
     #     }
     "entry": {"module": "", "function": ""},
 }
+
+# The ordered ladder of rungs a position-section step can reach, entirely in
+# this repository's own words -- the forge holds no rung name of its own,
+# only the arithmetic that compares two of these names by position (see
+# `impl_position.level_index`). A step earns a rung by naming this file's
+# own ladder explicitly on its witness (`` `@rehearsal:level <job>` `` in
+# `AGREED.md`'s position section); a step with no `:level` marker is
+# two-state and never reads this list at all. Left empty until named -- a
+# repository whose position items are entirely two-state needs no ladder
+# here, and one is never invented on its behalf. A second, independent
+# top-level literal, held apart from `__benchmark__` above: see
+# `resolve_levels_declaration`'s own docstring for why.
+#
+# Example (a repository with no remote service at all still has a ladder):
+#     __levels__ = ["local", "cluster"]
+__levels__: list = []
+
+# A callable this repository's own code can run, isolated, under this
+# repository's own venv -- named and resolved statically by the forge
+# (module + function, never imported here), then imported and called inside
+# the target's own interpreter, never the forge's. A second, independent
+# top-level literal, held apart from `__benchmark__` for the identical
+# reason `__levels__` is: see `resolve_steps_declaration`'s own docstring.
+# Left empty until a step exists -- a repository with nothing local to run
+# in isolation needs none, and one is never invented on its behalf.
+#
+# Each entry carries `module` and `function`, and one further key that is
+# asked of every step and defaulted for none: `produces`, the list of path
+# roots -- relative to the product folder -- that this step and only this step
+# writes into. `step` snapshots the product folder before and after every run
+# and reports what changed on each side of those roots, which is the only way
+# it can tell a step that returned having written nothing from one that
+# produced its whole output, or a step that stayed in its own tree from one
+# that wrote into a neighbour's. Leave it out and BOTH readings are switched
+# off for that step: `verify` says so, per step, in `undeclaredProduces`, and
+# nothing here defaults a root on your behalf -- the forge never guesses which
+# work belongs to which step.
+#
+# Example:
+#     __steps__ = {
+#         "verification": {
+#             "module": "Example_Method_Benchmark.steps",
+#             "function": "run_verification",
+#             "produces": ["Results/verification", "Notebooks/verification.ipynb"],
+#         },
+#     }
+__steps__: dict = {}
+
+# A target-chosen name mapped to the record it addresses -- a leveled
+# `@record:level <name>` witness in AGREED.md's position section reaches
+# exactly one entry here, deriving its rung through the identical arithmetic
+# the `search` block's own bare `@record:level` already uses
+# (`impl_position._record_scale_level`). A third, independent top-level
+# literal, held apart from `__benchmark__` for the identical reason
+# `__levels__`/`__steps__` are: see `resolve_records_declaration`'s own
+# docstring. Left empty until a record is named -- a repository whose
+# leveled `@record` witness stays the bare, operand-less form needs no
+# entry here, and one is never invented on its behalf.
+#
+# Example:
+#     __records__ = {
+#         "main": {
+#             "path": "product/results.json",
+#             "requiredScale": {"seeds": 3},
+#         },
+#     }
+__records__: dict = {}

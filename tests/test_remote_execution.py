@@ -44,6 +44,7 @@ import unittest.mock
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -162,6 +163,21 @@ assert SHARD_IO_SPEC and SHARD_IO_SPEC.loader
 SHARD_IO = importlib.util.module_from_spec(SHARD_IO_SPEC)
 sys.modules[SHARD_IO_SPEC.name] = SHARD_IO
 SHARD_IO_SPEC.loader.exec_module(SHARD_IO)
+
+# The tripwire hook (design §5, `the-position-nobody-holds`) -- an inert,
+# committed script and its tests, deliberately never wired into
+# `.claude/settings.json` by this change (that switch is the user's own to
+# throw).
+PUSH_SURFACE_HOOK_SCRIPT = (
+    REPOSITORY_ROOT / "skills/remote-execution/scripts/hooks/refuse_offpath_push.py"
+)
+PUSH_SURFACE_HOOK_SPEC = importlib.util.spec_from_file_location(
+    "remote_execution_refuse_offpath_push", PUSH_SURFACE_HOOK_SCRIPT
+)
+assert PUSH_SURFACE_HOOK_SPEC and PUSH_SURFACE_HOOK_SPEC.loader
+PUSH_SURFACE_HOOK = importlib.util.module_from_spec(PUSH_SURFACE_HOOK_SPEC)
+sys.modules[PUSH_SURFACE_HOOK_SPEC.name] = PUSH_SURFACE_HOOK
+PUSH_SURFACE_HOOK_SPEC.loader.exec_module(PUSH_SURFACE_HOOK)
 
 
 def _sample_submitted_event(**overrides: object) -> dict:
@@ -293,7 +309,7 @@ class AppendTests(unittest.TestCase):
 
     def test_append_writes_a_gitignore_the_first_time_it_creates_the_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            ledger_dir = Path(tmp) / "repo" / "MIL-CREDA" / ".remote-execution"
+            ledger_dir = Path(tmp) / "repo" / "FEM-TOLLA" / ".remote-execution"
             path = ledger_dir / "ledger.jsonl"
             self.assertFalse(ledger_dir.exists())
 
@@ -305,7 +321,7 @@ class AppendTests(unittest.TestCase):
 
     def test_append_never_overwrites_an_existing_gitignore_in_that_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            ledger_dir = Path(tmp) / "repo" / "MIL-CREDA" / ".remote-execution"
+            ledger_dir = Path(tmp) / "repo" / "FEM-TOLLA" / ".remote-execution"
             ledger_dir.mkdir(parents=True)
             gitignore = ledger_dir / ".gitignore"
             gitignore.write_text("a-human-or-earlier-run-wrote-this\n", encoding="utf-8")
@@ -643,6 +659,295 @@ class FoldCurrencyTests(unittest.TestCase):
         self.assertEqual(state.verdicts["s1"], "fromStaleSubmission")
 
 
+class FoldPositionalStalenessTests(unittest.TestCase):
+    """Part B: on an identity-stable backend, every submission of the same
+    (entrypoint, worker) pair carries the SAME `submissionId` — so
+    `terminal_by_id` alone cannot tell an early, now-stale terminal event
+    apart from one that actually settles the latest submission. These tests
+    pin that the fold uses append POSITION to make that distinction.
+    """
+
+    @staticmethod
+    def _lines(*events: dict) -> list[str]:
+        return [json.dumps(event, sort_keys=True) for event in events]
+
+    def test_resubmission_after_a_stale_return_reads_pending(self) -> None:
+        """submitted(X) pos 0, returned(X) pos 1, submitted(X) pos 2 — same
+        entrypoint/worker, id repeats by construction. The pos-1 `returned`
+        event precedes the pos-2 resubmission it did not settle, so the
+        entrypoint must read `pending`, not `returned`.
+        """
+        submit_1 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:00:00Z",
+        )
+        early_return = LEDGER.returned_event(
+            submission_id="w1/a",
+            artifact_path="/out/w1-a-early",
+            observed_concurrency=1,
+            ts="2026-08-17T00:05:00Z",
+        )
+        submit_2 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:10:00Z",
+        )
+
+        state = LEDGER.fold(
+            self._lines(submit_1, early_return, submit_2), live_digest="digest-1"
+        )
+
+        self.assertEqual(state.entrypoints[("Notebooks/a.ipynb", "w1")].state, "pending")
+
+    def test_resubmission_then_return_reads_returned(self) -> None:
+        """Same setup, plus a genuine returned(X) at pos 3 — now the
+        terminal event DOES follow the pos-2 resubmission, so the
+        entrypoint reads `returned`.
+        """
+        submit_1 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:00:00Z",
+        )
+        early_return = LEDGER.returned_event(
+            submission_id="w1/a",
+            artifact_path="/out/w1-a-early",
+            observed_concurrency=1,
+            ts="2026-08-17T00:05:00Z",
+        )
+        submit_2 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:10:00Z",
+        )
+        later_return = LEDGER.returned_event(
+            submission_id="w1/a",
+            artifact_path="/out/w1-a-later",
+            observed_concurrency=1,
+            ts="2026-08-17T00:15:00Z",
+        )
+
+        state = LEDGER.fold(
+            self._lines(submit_1, early_return, submit_2, later_return),
+            live_digest="digest-1",
+        )
+
+        self.assertEqual(state.entrypoints[("Notebooks/a.ipynb", "w1")].state, "returned")
+
+
+class ByIdAndCurrencyVerdictPartCTests(unittest.TestCase):
+    """Part C: `by_id`'s last-write-wins index and `currency_verdict`'s
+    id-equality half, re-examined under a colliding (identity-stable) id.
+
+    C1 keeps last-write-wins as the correct model of a mutable remote
+    object — no mechanism change, a lock pinning the existing behavior.
+    C2 keeps `currency_verdict`'s mechanism unchanged too, but narrows what
+    its docstring claims: the id half is inert on a stable-id backend
+    (3.5), and task 3.6 is the proof that its guarding duty relocated to
+    Part B's positional check rather than simply vanishing.
+    """
+
+    @staticmethod
+    def _lines(*events: dict) -> list[str]:
+        return [json.dumps(event, sort_keys=True) for event in events]
+
+    def test_by_id_holds_the_last_appended_record_for_a_repeated_id(self) -> None:
+        """Three `submitted` events for the SAME id, same entrypoint/worker
+        (a stable-id backend resubmitting three times) — `by_id["w1/a"]`
+        must be the third (last-appended) record, not the first or second.
+        """
+        submit_1 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:00:00Z",
+        )
+        submit_2 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-2",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:05:00Z",
+        )
+        submit_3 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-3",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:10:00Z",
+        )
+
+        state = LEDGER.fold(self._lines(submit_1, submit_2, submit_3), live_digest="digest-3")
+
+        self.assertEqual(state.by_id["w1/a"]["sourceDigest"], "digest-3")
+        self.assertEqual(state.by_id["w1/a"], submit_3)
+
+    def test_retry_at_unchanged_digest_under_a_stable_id_reads_current(self) -> None:
+        """C2 inertness pin: under a stable-id backend, resubmitting at an
+        UNCHANGED digest (a retry after a service failure, not a source
+        edit) must still verdict `current` — `by_id[id]` and
+        `latest[(entrypoint, worker)]` are the SAME event object once ids
+        repeat, so the id-equality half of `superseded` can never fire
+        here. This pins that a future reader must not "fix" that inertness
+        into quarantining every legitimate retry: Part B's positional
+        guard (proven in `FoldPositionalStalenessTests` and task 3.6) is
+        what still catches a genuinely stale terminal event on this
+        backend, not this half.
+        """
+        submit_1 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:00:00Z",
+        )
+        failed = LEDGER.errored_event(
+            submission_id="w1/a", reason="service failure", ts="2026-08-17T00:05:00Z"
+        )
+        submit_2_retry = LEDGER.submitted_event(  # same digest — a retry, not an edit
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:10:00Z",
+        )
+        retry_returned = LEDGER.returned_event(
+            submission_id="w1/a",
+            artifact_path="/out/w1-a-retry",
+            observed_concurrency=1,
+            ts="2026-08-17T00:15:00Z",
+        )
+
+        state = LEDGER.fold(
+            self._lines(submit_1, failed, submit_2_retry, retry_returned),
+            live_digest="digest-1",
+        )
+
+        self.assertEqual(state.verdicts["w1/a"], "current")
+        self.assertEqual(state.entrypoints[("Notebooks/a.ipynb", "w1")].state, "returned")
+
+    def test_positional_guard_catches_what_id_equality_would_catch_on_a_fresh_id_backend(
+        self,
+    ) -> None:
+        """THE load-bearing proof for Part C's 'no mechanism change'
+        conclusion: on a fresh-id backend, `currency_verdict`'s id half
+        (`superseded = latest_for_key["submissionId"] != submission[
+        "submissionId"]`) is what catches an early `returned` event that
+        belongs to a submission a LATER resubmission has since superseded
+        — the id comparison fails because the two submissions carry
+        DIFFERENT ids there.
+
+        On a stable-id (Kaggle-shaped) backend, `submitted(X)` pos 0,
+        `returned(X)` pos 1 (an early, now-stale result), `submitted(X)`
+        pos 2 (a resubmission that reuses X) is the SAME scenario — but
+        the id half is structurally inert here (3.5): `by_id["X"]` is the
+        pos-2 record by the time `returned` is judged, so `latest_for_key`
+        and `submission` are literally the same object and `superseded`'s
+        id clause can never be true.
+
+        The claim under test is that Part B's positional guard is what
+        catches this case INSTEAD: it must mark the entrypoint `pending`
+        — refusing to let the pos-1 `returned` event read as settling the
+        pos-2 submission — which is exactly the outcome the id half would
+        have produced on a fresh-id backend. This is asserted on
+        `state.entrypoints[...].state`, the field Part B's guard itself
+        computes, not merely on some other value that happens to differ
+        from "returned" for an unrelated reason.
+
+        The relocation must ALSO cover `state.verdicts` and
+        `state.from_stale_submission` — not only `entrypoints`. Spec
+        #1129's own scenario for this exact fixture ("early return goes
+        stale after resubmission") requires the pos-1 `returned` event's
+        verdict to be `fromStaleSubmission` AND the entrypoint to appear
+        in `from_stale_submission`. `remote_cli.py` surfaces
+        `from_stale_submission` directly as the CLI's user-facing
+        `"quarantined"` field, so a narrower proof that stopped at
+        `entrypoints` would leave that consumer misled by the exact
+        defect this change exists to remove.
+        """
+        submit_1 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:00:00Z",
+        )
+        early_return = LEDGER.returned_event(
+            submission_id="w1/a",
+            artifact_path="/out/w1-a-early",
+            observed_concurrency=1,
+            ts="2026-08-17T00:05:00Z",
+        )
+        submit_2 = LEDGER.submitted_event(
+            entrypoint="Notebooks/a.ipynb",
+            source_digest="digest-1",
+            submission_id="w1/a",
+            worker="w1",
+            requested_capacity=1,
+            granted_capacity=1,
+            ts="2026-08-17T00:10:00Z",
+        )
+
+        state = LEDGER.fold(
+            self._lines(submit_1, early_return, submit_2), live_digest="digest-1"
+        )
+
+        # The id half is structurally inert: prove it, don't just assume
+        # it. by_id["w1/a"] must already equal submit_2 (last-write-wins,
+        # C1) — `fold()` re-parses each JSON line into a fresh dict, so
+        # this is a value-equality check, not an object-identity one — so
+        # `latest_for_key is submission` inside `currency_verdict` (same
+        # by_id[id] record on both sides of that call) is meaningful
+        # rather than coincidental.
+        self.assertEqual(state.by_id["w1/a"], submit_2)
+
+        # Part B's positional guard is what must have produced this
+        # answer: the entrypoint reads pending, not returned, even though
+        # a `returned` event for "w1/a" exists in the log.
+        self.assertEqual(state.entrypoints[("Notebooks/a.ipynb", "w1")].state, "pending")
+
+        # The SAME positional fact must also reach `verdicts` and
+        # `from_stale_submission` — the consumer `remote_cli.py:1135`
+        # surfaces directly as the CLI's `"quarantined"` field. Asserting
+        # only on `entrypoints` (above) proves the narrower claim that
+        # `pending_for()`/the packer clamp are protected; it does not
+        # prove the id half's guarding duty relocated for THIS consumer
+        # too, which spec #1129's own "early return goes stale after
+        # resubmission" scenario requires.
+        self.assertEqual(state.verdicts["w1/a"], "fromStaleSubmission")
+        self.assertIn("Notebooks/a.ipynb", state.from_stale_submission)
+
+
 class FakeAdapter(ADAPTER.Adapter):
     """A complete, in-memory stand-in for a real backend adapter.
 
@@ -679,6 +984,32 @@ class FakeAdapter(ADAPTER.Adapter):
 
     def list_active(self, worker: str) -> list:
         return [sid for sid, state in self._states.items() if state in ("queued", "running")]
+
+
+class StableIdAdapter(FakeAdapter):
+    """A `FakeAdapter` sibling that mints the SAME id for every submission
+    of a given `(worker, entrypoint)` pair, instead of `FakeAdapter`'s own
+    counter-based unique id per call.
+
+    This is not a test convenience invented for this suite — it models a
+    real backend's own contract: Kaggle's adapter mints `id` as
+    `<worker>/<slug>` (`adapters/kaggle.py:860`), a value that depends only
+    on which worker and which entrypoint were submitted, never on how many
+    times `submit()` has been called before. Two submissions of the same
+    job to the same worker collide on the identical id there, by
+    construction, and this fixture reproduces exactly that collision for
+    the rest of the suite without touching a real service.
+
+    `FakeAdapter.submit()` (and its counter-based default id) is left
+    completely unchanged: this is a sibling subclass, not a mutation of the
+    shared default two existing tests (`test_the_smoke_id_differs_from_the_
+    full_run_id` and its neighbour) depend on for distinctness.
+    """
+
+    def submit(self, job) -> "ADAPTER.Submission":
+        submission_id = f"{job.worker}/{job.entrypoint.stem}"
+        self._states[submission_id] = "complete"
+        return ADAPTER.Submission(id=submission_id, worker=job.worker)
 
 
 class AdapterSeamTests(unittest.TestCase):
@@ -856,6 +1187,31 @@ class AdapterSeamTests(unittest.TestCase):
         """
         self.assertEqual(len(ADAPTER.Adapter.__abstractmethods__), 6)
 
+    def test_declared_capacity_registry_round_trips(self) -> None:
+        """A FOURTH registry, the same shape as the three above it: a name
+        resolves to a callable `fn() -> (workers, per_worker) | None`, kept
+        off the `Adapter` ABC for the identical reason the metadata and
+        default-accelerator registries are -- the test right above this
+        one pins the ABC at six operations, and this never becomes a
+        seventh.
+        """
+        ADAPTER.register_declared_capacity(
+            "declared-capacity-round-trip-fake", lambda: (3, 2)
+        )
+        reporter = ADAPTER.resolve_declared_capacity("declared-capacity-round-trip-fake")
+        self.assertIsNotNone(reporter)
+        self.assertEqual(reporter(), (3, 2))
+
+    def test_declared_capacity_registry_miss_returns_none_not_a_raise(self) -> None:
+        """A miss here is a legitimate state a caller reads by leaving a
+        launch proposal's own capacity figure out of what it publishes --
+        never an error a caller must catch.
+        """
+        self.assertIsNone(
+            ADAPTER.resolve_declared_capacity(
+                "no-declared-capacity-registered-under-this-name")
+        )
+
     def test_fake_adapter_output_plugs_into_ledger_events_unchanged(self) -> None:
         """What exists today — `fold()` and the event builders — accepts a
         fake adapter's output with zero translation, proving the seam
@@ -902,6 +1258,51 @@ class AdapterSeamTests(unittest.TestCase):
             state = LEDGER.fold(lines, live_digest="digest-1")
             self.assertEqual(state.entrypoints[(str(job.entrypoint), submission.worker)].state, "returned")
             self.assertEqual(state.verdicts[submission.id], "current")
+
+
+class CollidingIdFixtureTests(unittest.TestCase):
+    """Proves `StableIdAdapter` actually mints identical ids for repeated
+    submissions of the same `(worker, entrypoint)` pair — the premise every
+    Part B/C colliding-id test in this suite depends on being genuinely
+    reachable, not merely asserted.
+    """
+
+    def test_stable_id_adapter_mints_the_same_id_for_two_submissions(self) -> None:
+        adapter = StableIdAdapter()
+        job = ADAPTER.Job(
+            entrypoint=Path("Notebooks/a.ipynb"), run_config={}, worker="w1"
+        )
+
+        first = adapter.submit(job)
+        second = adapter.submit(job)
+
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(first.id, "w1/a")
+
+    def test_stable_id_adapter_derives_id_from_worker_and_entrypoint_not_call_order(
+        self,
+    ) -> None:
+        """Triangulation: a different `(worker, entrypoint)` pair produces
+        a different id, and repeating IT collides on its own value — proves
+        the id is a function of the two recorded fields, not a hardcoded
+        constant or a disguised call counter.
+        """
+        adapter = StableIdAdapter()
+        job_a = ADAPTER.Job(
+            entrypoint=Path("Notebooks/a.ipynb"), run_config={}, worker="w1"
+        )
+        job_b = ADAPTER.Job(
+            entrypoint=Path("Notebooks/b.ipynb"), run_config={}, worker="w2"
+        )
+
+        a1 = adapter.submit(job_a)
+        b1 = adapter.submit(job_b)
+        a2 = adapter.submit(job_a)
+
+        self.assertEqual(a1.id, "w1/a")
+        self.assertEqual(b1.id, "w2/b")
+        self.assertEqual(a1.id, a2.id)
+        self.assertNotEqual(a1.id, b1.id)
 
 
 class UnreachableAdapter(FakeAdapter):
@@ -1175,13 +1576,13 @@ def _write_job_folder_run_config(job_dir: Path, **overrides: object) -> dict:
     """
     run_config = {
         "schemaVersion": 1,
-        "product": "MIL-CREDA",
+        "product": "FEM-TOLLA",
         "service": "kaggle",
         "jobName": job_dir.name,
         "commit": "a" * 40,
         "repo": {"url": "https://example.invalid/repo.git", "ref": "main"},
-        "clonePaths": ["src/MIL_CREDA_Benchmark"],
-        "run": {"module": "MIL_CREDA_Benchmark.harness", "function": "campaign"},
+        "clonePaths": ["src/FEM_TOLLA_Benchmark"],
+        "run": {"module": "FEM_TOLLA_Benchmark.harness", "function": "campaign"},
         "runnerTemplate": [],
     }
     run_config.update(overrides)
@@ -1244,6 +1645,55 @@ def _mint_launch_consent(
     )
 
 
+def _mint_launch_authorization(
+    *,
+    target: Path,
+    product: str,
+    pin_commit: str,
+    relative_entrypoint: str,
+    worker: str | None,
+    job_name: str = "search-a",
+    units: Sequence[str] = (),
+) -> None:
+    """Append a `gate`-shaped event directly into `.implementation/
+    position.jsonl`, bypassing `implementation_cli`'s own `cmd_gate`
+    entirely.
+
+    `_verify_launch_authorization()` only ever FOLDS this ledger looking
+    for a record matching this invocation's own binding -- it has no
+    opinion about how that record was produced. `proposal-implementation`'s
+    own `GateCommandTests` (`tests/test_proposal_implementation.py`)
+    already exercises `cmd_gate`'s real readiness machinery end to end; the
+    fixtures that call this helper are testing `cmd_submit`'s own READING
+    of the record, never `gate`'s writing of it, so a hand-appended line,
+    shaped exactly like `cmd_gate`'s own event, is the right-sized fixture
+    here.
+
+    `worker=None` mints a CAMPAIGN-shaped record (PR8): campaign mode never
+    names a worker (`cmd_submit`'s own `--worker`/`--unit` mutual
+    exclusivity), so a campaign authorization's `worker` field is always
+    `None` too -- the same reason `cmd_gate` itself now refuses `--worker`
+    together with `--unit`. `units` defaults to `()`, matching a single-send
+    or rehearsal launch's own empty binding.
+    """
+    ledger_path = (
+        Path(target).resolve() / product / ".implementation" / "position.jsonl"
+    )
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "kind": "gate", "jobName": job_name, "worker": worker,
+        "commit": pin_commit, "revision": "fixture-revision",
+        "revisionSha256": "f" * 64, "entrypoint": relative_entrypoint,
+        "units": list(units),
+        "justification": "fixture authorization -- this test's subject is "
+        "cmd_submit's own reading of the record, not gate's writing of it.",
+        "session": "fixture-session", "at": "2020-01-01T00:00:00+00:00",
+    }
+    with ledger_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event))
+        handle.write("\n")
+
+
 class PathGuardTests(unittest.TestCase):
     """`remote_cli.guard_entrypoint()` — the sole holder of file-kind policy.
 
@@ -1255,7 +1705,7 @@ class PathGuardTests(unittest.TestCase):
     def test_symlink_escaping_the_product_notebooks_dir_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             outside = Path(tmp) / "outside.ipynb"
             outside.write_text("{}", encoding="utf-8")
 
@@ -1274,7 +1724,7 @@ class PathGuardTests(unittest.TestCase):
     def test_non_ipynb_path_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             not_a_notebook = notebooks / "notes.txt"
             not_a_notebook.write_text("plain text", encoding="utf-8")
 
@@ -1284,7 +1734,7 @@ class PathGuardTests(unittest.TestCase):
     def test_path_legitimately_under_notebooks_dir_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -1374,7 +1824,7 @@ class ProductForTests(unittest.TestCase):
     def test_explicit_product_wins_over_a_declared_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
@@ -1383,33 +1833,33 @@ class ProductForTests(unittest.TestCase):
             )
 
             product = REMOTE_CLI.product_for(
-                target.resolve(), notebook, explicit="MIL-CREDA"
+                target.resolve(), notebook, explicit="FEM-TOLLA"
             )
-            self.assertEqual(product, "MIL-CREDA")
+            self.assertEqual(product, "FEM-TOLLA")
 
     def test_job_folder_shape_reads_the_declared_product_from_run_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             (job_dir / "run-config.json").write_text(
-                json.dumps({"product": "MIL-CREDA"}), encoding="utf-8"
+                json.dumps({"product": "FEM-TOLLA"}), encoding="utf-8"
             )
 
             product = REMOTE_CLI.product_for(target.resolve(), notebook)
-            self.assertEqual(product, "MIL-CREDA")
+            self.assertEqual(product, "FEM-TOLLA")
 
     def test_legacy_shape_falls_back_to_the_first_path_component(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             product = REMOTE_CLI.product_for(target.resolve(), notebook)
-            self.assertEqual(product, "MIL-CREDA")
+            self.assertEqual(product, "FEM-TOLLA")
 
     def test_job_folder_shape_with_no_run_config_at_all_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1560,7 +2010,7 @@ class RealDigestLoaderTests(unittest.TestCase):
     def test_the_real_loader_returns_a_working_digest_function(self) -> None:
         digest = REMOTE_CLI._load_source_digest()
         self.assertTrue(callable(digest))
-        computed = digest(REPOSITORY_ROOT, "MIL_CREDA_Benchmark")
+        computed = digest(REPOSITORY_ROOT, "FEM_TOLLA_Benchmark")
         self.assertRegex(computed, r"^[0-9a-f]{64}$")
 
     def test_the_loader_fails_loudly_when_its_target_is_gone(self) -> None:
@@ -1604,7 +2054,7 @@ class SubmitTests(unittest.TestCase):
     def test_submit_appends_exactly_one_submitted_event_with_a_fresh_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -1633,7 +2083,7 @@ class SubmitTests(unittest.TestCase):
             # target.resolve(), not the raw tmp path: on darwin, tempfile's
             # own /var/folders path is itself a symlink to /private/var, so
             # only the resolved form matches what cmd_submit actually wrote.
-            ledger_path = target.resolve() / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl"
+            ledger_path = target.resolve() / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl"
             self.assertEqual(result["ledgerPath"], ledger_path)
             lines = ledger_path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
@@ -1647,12 +2097,12 @@ class SubmitTests(unittest.TestCase):
             # Computed fresh at submit time — called exactly once, with the
             # resolved target this call actually used.
             self.assertEqual(len(digest_calls), 1)
-            self.assertEqual(digest_calls[0], (target.resolve(), "MIL-CREDA"))
+            self.assertEqual(digest_calls[0], (target.resolve(), "FEM-TOLLA"))
 
     def test_submit_refuses_a_symlink_escaping_notebooks_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             outside = Path(tmp) / "outside.ipynb"
             outside.write_text("{}", encoding="utf-8")
             link = notebooks / "evil.ipynb"
@@ -1669,7 +2119,7 @@ class SubmitTests(unittest.TestCase):
                     source_digest=lambda t, n: "d" * 64,
                 )
 
-            ledger_path = target / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl"
+            ledger_path = target / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl"
             self.assertFalse(ledger_path.exists())
 
     def test_target_must_resolve_to_an_existing_dir_before_any_write(self) -> None:
@@ -1680,7 +2130,7 @@ class SubmitTests(unittest.TestCase):
             with self.assertRaises(REMOTE_CLI.RemoteCLIError):
                 REMOTE_CLI.cmd_submit(
                     target=missing_target,
-                    entrypoint=missing_target / "MIL-CREDA" / "Notebooks" / "a.ipynb",
+                    entrypoint=missing_target / "FEM-TOLLA" / "Notebooks" / "a.ipynb",
                     worker="w1",
                     requested=1,
                     adapter=adapter,
@@ -1692,7 +2142,7 @@ class SubmitTests(unittest.TestCase):
     def test_relative_target_is_resolved_before_any_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -1702,13 +2152,13 @@ class SubmitTests(unittest.TestCase):
                 adapter = FakeAdapter(worker_id="w1", capacity=2)
                 token = _mint_launch_consent(
                     target=Path("repo"),
-                    entrypoint=Path("repo/MIL-CREDA/Notebooks/a.ipynb"),
+                    entrypoint=Path("repo/FEM-TOLLA/Notebooks/a.ipynb"),
                     adapter=adapter, source_digest=lambda t, n: "d" * 64,
                     worker="w1",
                 )
                 result = REMOTE_CLI.cmd_submit(
                     target=Path("repo"),  # relative to the tmp dir just chdir'd into
-                    entrypoint=Path("repo/MIL-CREDA/Notebooks/a.ipynb"),
+                    entrypoint=Path("repo/FEM-TOLLA/Notebooks/a.ipynb"),
                     worker="w1",
                     requested=1,
                     adapter=adapter,
@@ -1719,7 +2169,7 @@ class SubmitTests(unittest.TestCase):
                 os.chdir(original_cwd)
 
             # Written under the resolved absolute target...
-            expected_ledger = (target / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl").resolve()
+            expected_ledger = (target / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl").resolve()
             self.assertEqual(result["ledgerPath"], expected_ledger)
             self.assertTrue(expected_ledger.exists())
 
@@ -1750,11 +2200,19 @@ class SubmitTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             _write_job_folder_run_config(job_dir)
+
+            # PR7 (design §4): a job-folder launch also needs a matching
+            # `gate` record now -- consent alone is no longer enough.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
+            )
 
             original_cwd = Path.cwd()
             os.chdir(tmp)
@@ -1789,7 +2247,7 @@ class SubmitTests(unittest.TestCase):
             # And it landed under the declared product, not under "tools".
             self.assertEqual(
                 Path(result["ledgerPath"]),
-                (target.resolve() / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl"),
+                (target.resolve() / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl"),
             )
 
     def test_job_folder_submit_with_declared_product_lands_under_that_product_not_tools(
@@ -1803,7 +2261,7 @@ class SubmitTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
@@ -1821,6 +2279,13 @@ class SubmitTests(unittest.TestCase):
                 source_digest=fake_source_digest,
                 worker="w1",
             )
+            # PR7 (design §4): a job-folder launch also needs a matching
+            # `gate` record now -- consent alone is no longer enough.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
+            )
             result = REMOTE_CLI.cmd_submit(
                 target=target,
                 entrypoint=notebook,
@@ -1832,7 +2297,7 @@ class SubmitTests(unittest.TestCase):
             )
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl"
+                target.resolve() / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl"
             )
             self.assertEqual(result["ledgerPath"], ledger_path)
             self.assertTrue(ledger_path.exists())
@@ -1851,7 +2316,7 @@ class SubmitTests(unittest.TestCase):
 
             # The digest is computed over the resolved product's own tree,
             # never over "tools".
-            self.assertEqual(digest_calls, [(target.resolve(), "MIL-CREDA")])
+            self.assertEqual(digest_calls, [(target.resolve(), "FEM-TOLLA")])
 
     def test_submit_explicit_product_override_wins_over_the_declared_one(self) -> None:
         """Triangulates the job-folder case above with a DIFFERENT product,
@@ -1865,7 +2330,7 @@ class SubmitTests(unittest.TestCase):
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             _write_job_folder_run_config(job_dir)
-            # "MIL-CREDA" is deliberately never created under target: if the
+            # "FEM-TOLLA" is deliberately never created under target: if the
             # declared value were used instead of the override, product_for
             # would refuse for a not-existing-directory reason, not silently
             # succeed under the wrong product.
@@ -1874,6 +2339,13 @@ class SubmitTests(unittest.TestCase):
             token = _mint_launch_consent(
                 target=target, entrypoint=notebook, adapter=adapter,
                 source_digest=lambda t, n: "d" * 64, product="OverrideProduct",
+                worker="w1",
+            )
+            # PR7 (design §4): a job-folder launch also needs a matching
+            # `gate` record now -- consent alone is no longer enough.
+            _mint_launch_authorization(
+                target=target, product="OverrideProduct", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
                 worker="w1",
             )
             result = REMOTE_CLI.cmd_submit(
@@ -1940,10 +2412,10 @@ class SubmitTests(unittest.TestCase):
                 "--entrypoint", "/tmp/does-not-need-to-exist/a.ipynb",
                 "--worker", "w1",
                 "--backend", "fake",
-                "--product", "MIL-CREDA",
+                "--product", "FEM-TOLLA",
             ]
         )
-        self.assertEqual(args.product, "MIL-CREDA")
+        self.assertEqual(args.product, "FEM-TOLLA")
 
     def test_submit_parser_product_flag_defaults_to_none(self) -> None:
         parser = REMOTE_CLI._build_parser()
@@ -2035,6 +2507,66 @@ class ScriptedListActiveAdapter(FakeAdapter):
         return list(self._active)
 
 
+class RefusingListActiveAdapter(FakeAdapter):
+    """A `FakeAdapter` whose `list_active()` raises the seam's own generic
+    `AdapterError` — the backend refused, timed out, or answered with
+    something unusable.
+
+    `UnreachableAdapter` above raises a bare `ConnectionError` instead, and
+    the pair is deliberate: a concrete adapter's `list_active()` can fail
+    either way, and a guard narrow enough to catch only the seam's own type
+    would let the transport-level half through untouched.
+    """
+
+    def list_active(self, worker: str) -> list:
+        raise ADAPTER.AdapterError("service refused list_active (test double)")
+
+
+class RevokedCredentialAdapter(FakeAdapter):
+    """A `FakeAdapter` whose `list_active()` raises `WorkerUnauthorized` —
+    the ONE `list_active()` failure the seam declares is a decision-bearing
+    fact rather than an unreachable service.
+
+    `packer.plan()` re-raises exactly this out of the identical call; these
+    tests hold `cmd_reconcile` to the same line.
+    """
+
+    def list_active(self, worker: str) -> list:
+        raise ADAPTER.WorkerUnauthorized(
+            f"worker {worker!r} credential was revoked (test double)"
+        )
+
+
+def _pending_reconcile_fixture(
+    tmp: str, *, submission_id: str = "s1", worker: str = "w1"
+) -> tuple[Path, Path, Path]:
+    """`<tmp>/repo` holding exactly one pending submission for `worker`,
+    the fixture every `ReconcileTests` case below starts from.
+
+    Factored out so the degraded-read cases differ from the reachable ones
+    in the ADAPTER ALONE — if the ledger fixture differed too, a degraded
+    result and a clean one could be told apart by something other than the
+    field that is supposed to distinguish them.
+    """
+    target = Path(tmp) / "repo"
+    notebooks = _make_product(target, "FEM-TOLLA")
+    notebook = notebooks / "a.ipynb"
+    notebook.write_text("{}", encoding="utf-8")
+
+    ledger_path = (
+        target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+        / REMOTE_CLI.LEDGER_FILENAME
+    )
+    _append_pending_submission(
+        ledger_path,
+        entrypoint="Notebooks/a.ipynb",
+        submission_id=submission_id,
+        worker=worker,
+        source_digest="d" * 64,
+    )
+    return target, notebook, ledger_path
+
+
 class _SpySubmitAdapter(FakeAdapter):
     """A `FakeAdapter` that records the exact `Job` it was handed, so a
     test can assert what `cmd_submit()` actually constructed."""
@@ -2082,12 +2614,12 @@ class StatusTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2120,6 +2652,47 @@ class StatusTests(unittest.TestCase):
             # trusted to follow.
             self.assertNotIn("adapter", inspect.signature(REMOTE_CLI.cmd_status).parameters)
 
+    def test_the_status_command_prints_what_the_function_only_returned(self) -> None:
+        """The test above drives `cmd_status` -- the function. Nothing drove
+        `main(["status", ...])` -- the command.
+
+        The serialization lives in `main()`, so every assertion on the
+        returned dict passed while the command itself raised
+        `TypeError: Object of type PosixPath is not JSON serializable`:
+        `main()` stringified the top-level `ledgerPath` and never reached
+        the nested `smoke.ledgerPath`, still a `Path`. Coverage sat on one
+        side of the seam and the defect on the other, and `status`, whose
+        only job is to print, could not print at all.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+            ledger_path = (
+                target.resolve() / "FEM-TOLLA"
+                / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                ledger_path,
+                entrypoint="Notebooks/a.ipynb",
+                submission_id="s1",
+                worker="w1",
+                source_digest="digest-old",
+            )
+
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = REMOTE_CLI.main(
+                    ["status", "--target", str(target), "--entrypoint", str(notebook)]
+                )
+
+            self.assertEqual(code, 0)
+            payload = json.loads(buffer.getvalue())
+            # Both paths, not just the one `main()` happened to name.
+            self.assertIsInstance(payload["ledgerPath"], str)
+            self.assertIsInstance(payload["smoke"]["ledgerPath"], str)
+
     def test_status_nests_multiple_workers_under_one_entrypoint(self) -> None:
         """F4's whole point, rendered: five accounts submitting the same
         entrypoint used to fold into ONE flat entry where four of the five
@@ -2128,12 +2701,12 @@ class StatusTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             for worker in ("w1", "w2", "w3"):
@@ -2164,12 +2737,12 @@ class FetchTests(unittest.TestCase):
     def test_fetch_renames_into_place_and_appends_returned_only_on_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2182,7 +2755,7 @@ class FetchTests(unittest.TestCase):
             adapter = FakeAdapter(worker_id="w1", capacity=2)
             # target.resolve(), not the raw tmp path — see the darwin
             # /var/folders-is-a-symlink gotcha noted elsewhere in this file.
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
             result = REMOTE_CLI.cmd_fetch(
                 target=target,
@@ -2211,12 +2784,12 @@ class FetchTests(unittest.TestCase):
     def test_crash_mid_fetch_leaves_pending_and_appends_no_returned_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2228,7 +2801,7 @@ class FetchTests(unittest.TestCase):
             lines_before = ledger_path.read_text(encoding="utf-8")
 
             adapter = CrashingFetchAdapter(worker_id="w1", capacity=2)
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
             with self.assertRaises(ConnectionError):
                 REMOTE_CLI.cmd_fetch(
@@ -2257,12 +2830,12 @@ class FetchTests(unittest.TestCase):
     def test_incomplete_fetch_renames_nothing_and_appends_no_returned_event(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2274,7 +2847,7 @@ class FetchTests(unittest.TestCase):
             lines_before = ledger_path.read_text(encoding="utf-8")
 
             adapter = IncompleteFetchAdapter(worker_id="w1", capacity=2)
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
             result = REMOTE_CLI.cmd_fetch(
                 target=target,
@@ -2298,12 +2871,12 @@ class FetchTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2314,7 +2887,7 @@ class FetchTests(unittest.TestCase):
             )
 
             adapter = FakeAdapter(worker_id="w1", capacity=2)
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
             REMOTE_CLI.cmd_fetch(
                 target=target,
@@ -2354,12 +2927,12 @@ class FetchTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2370,7 +2943,7 @@ class FetchTests(unittest.TestCase):
             )
 
             adapter = FakeAdapter(worker_id="w1", capacity=2)
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
             REMOTE_CLI.cmd_fetch(
                 target=target,
@@ -2421,12 +2994,12 @@ class FetchTests(unittest.TestCase):
         verdict routes a fetch to.
         """
         target = Path(tmp) / "repo"
-        notebooks = _make_product(target, "MIL-CREDA")
+        notebooks = _make_product(target, "FEM-TOLLA")
         notebook = notebooks / "a.ipynb"
         notebook.write_text("{}", encoding="utf-8")
 
         ledger_path = (
-            target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+            target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
         )
         _append_pending_submission(
             ledger_path,
@@ -2435,7 +3008,7 @@ class FetchTests(unittest.TestCase):
             worker="w1",
             source_digest="d" * 64,
         )
-        dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+        dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
         return target, notebook, ledger_path, dest
 
     def test_retry_after_crash_refuses_instead_of_merging_into_the_leftover_partial(
@@ -2593,7 +3166,7 @@ class FetchTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -2608,7 +3181,7 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(plan.granted, 2)
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2618,7 +3191,7 @@ class FetchTests(unittest.TestCase):
                 source_digest="d" * 64,
             )
 
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
             result = REMOTE_CLI.cmd_fetch(
                 target=target,
                 entrypoint=notebook,
@@ -2634,12 +3207,12 @@ class FetchTests(unittest.TestCase):
     def test_stale_result_is_quarantined_and_never_enumerable_under_results_shards(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2658,7 +3231,7 @@ class FetchTests(unittest.TestCase):
 
             # A real, enumerable tree standing in for what a shard reader
             # walks in the actual target repository.
-            shards_dir = target.resolve() / "MIL-CREDA" / "Results" / "shards"
+            shards_dir = target.resolve() / "FEM-TOLLA" / "Results" / "shards"
             shards_dir.mkdir(parents=True)
 
             adapter = FakeAdapter(worker_id="w1", capacity=2)
@@ -2691,16 +3264,231 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(enumerated, [])
 
 
+class RehearsalPlacementTests(unittest.TestCase):
+    """`cmd_fetch`'s `--smoke`/`--dest` pairing check and the rehearsal
+    placement branch. Closes the live artifact-leak hole: before this,
+    `fetch --smoke` landed wherever `--dest` said -- the same place a real
+    fetch lands -- and nothing ever quarantined it.
+    """
+
+    def test_smoke_with_dest_refuses_before_any_filesystem_call(self) -> None:
+        """A non-existent --target proves ordering: if the pairing check
+        ran after `target.is_dir()`, the raised message would be the
+        does-not-resolve one, not this refusal's distinct wording.
+
+        Mutation-proven: moving the pairing check below `target.is_dir()`
+        turns this red -- verified below, then reverted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "does-not-exist"
+            adapter = FakeAdapter(worker_id="w1", capacity=1)
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.cmd_fetch(
+                    target=target,
+                    entrypoint=Path(tmp) / "Notebooks" / "a.ipynb",
+                    submission_id="s1",
+                    dest=Path(tmp) / "somewhere",
+                    adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64,
+                    smoke=True,
+                )
+            message = str(ctx.exception)
+            self.assertNotIn("does not resolve", message)
+            self.assertIn("--dest", message)
+            self.assertIn("computes", message)
+
+    def test_real_fetch_with_no_dest_refuses_before_any_filesystem_call(self) -> None:
+        """The other half of the pairing check: dropping `--dest`'s
+        `required=True` on the parser opens a symmetric hole for a REAL
+        fetch unless this direction refuses too.
+
+        Mutation-proven: deleting the second half of the pairing check
+        turns this red -- verified below, then reverted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "does-not-exist"
+            adapter = FakeAdapter(worker_id="w1", capacity=1)
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.cmd_fetch(
+                    target=target,
+                    entrypoint=Path(tmp) / "Notebooks" / "a.ipynb",
+                    submission_id="s1",
+                    dest=None,
+                    adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64,
+                    smoke=False,
+                )
+            message = str(ctx.exception)
+            self.assertNotIn("does not resolve", message)
+            self.assertIn("--dest", message)
+
+    def test_smoke_fetch_with_no_dest_lands_under_rehearsal_not_shards(self) -> None:
+        """Mutation-proven: making the `smoke` branch fall through to
+        `Path(dest)` turns this red -- verified below, then reverted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            adapter = FakeAdapter(worker_id="w1", capacity=1)
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64,
+                worker="w1",
+            )
+            submit_result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, worker="w1", requested=1,
+                adapter=adapter, source_digest=lambda t, n: "d" * 64, smoke=True,
+                consent=token,
+            )
+            submission_id = submit_result["submission"].id
+
+            fetch_result = REMOTE_CLI.cmd_fetch(
+                target=target, entrypoint=notebook, submission_id=submission_id,
+                dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                smoke=True,
+            )
+
+            self.assertTrue(fetch_result["complete"])
+            expected = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.REHEARSAL_DIRNAME / submission_id
+            )
+            self.assertEqual(fetch_result["path"], expected)
+            self.assertTrue((expected / "result.txt").exists())
+
+            shards_dir = target.resolve() / "FEM-TOLLA" / "Results" / "shards"
+            self.assertFalse(shards_dir.exists())
+
+    def test_rehearsal_fetch_preserves_the_8_step_ordering_contract(self) -> None:
+        """The 8-step contract (`.partial/` guard, `--force`, `os.replace`,
+        ledger-write-last) is preserved BY CONSTRUCTION -- only `final_dest`
+        moved. This re-runs the existing re-fetch-refuses / `--force`-
+        replaces / ledger-write-last coverage against a REHEARSAL fetch
+        (`smoke=True`, `dest=None`) instead of a `--dest`-chosen one, so the
+        claim is exercised, not assumed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            adapter = FakeAdapter(worker_id="w1", capacity=1)
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64,
+                worker="w1",
+            )
+            submit_result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, worker="w1", requested=1,
+                adapter=adapter, source_digest=lambda t, n: "d" * 64, smoke=True,
+                consent=token,
+            )
+            submission_id = submit_result["submission"].id
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+
+            first = REMOTE_CLI.cmd_fetch(
+                target=target, entrypoint=notebook, submission_id=submission_id,
+                dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                smoke=True,
+            )
+            self.assertTrue(first["complete"])
+            final_dest = first["path"]
+            self.assertTrue((final_dest / "result.txt").exists())
+
+            # Step 0: a second rehearsal fetch of the same submission
+            # refuses cleanly, naming the existing path -- before ever
+            # calling adapter.fetch() again.
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.cmd_fetch(
+                    target=target, entrypoint=notebook, submission_id=submission_id,
+                    dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    smoke=True,
+                )
+            self.assertIn("--force", str(ctx.exception))
+
+            # A stray leftover file --force must remove, not merge into.
+            (final_dest / "stale-leftover.txt").write_text("stale", encoding="utf-8")
+
+            # --force replaces it and appends a second `returned` event.
+            second = REMOTE_CLI.cmd_fetch(
+                target=target, entrypoint=notebook, submission_id=submission_id,
+                dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                smoke=True, force=True,
+            )
+            self.assertTrue(second["complete"])
+            self.assertEqual(second["path"], final_dest)
+            self.assertFalse((final_dest / "stale-leftover.txt").exists())
+
+            # Ledger-write-last: exactly submitted, returned, returned.
+            lines = smoke_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertEqual(json.loads(lines[-2])["kind"], "returned")
+            self.assertEqual(json.loads(lines[-1])["kind"], "returned")
+
+    def test_submission_id_with_traversal_shape_refuses_before_adapter_fetch(self) -> None:
+        """Filesystem-destination-from-service-supplied-`submission_id`
+        threat-matrix row: the rehearsal branch routes every rehearsal
+        through a path built from `submission_id`, a value that originates
+        from the remote service's response and reaches a path join
+        unguarded before this test.
+
+        Mutation-proven: removing the `.resolve()` containment check must
+        turn this red -- verified below, then reverted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            malicious_id = "../../../etc/evil"
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id=malicious_id, worker="w1", source_digest="d" * 64,
+            )
+
+            adapter = FakeAdapter(worker_id="w1", capacity=1)
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.cmd_fetch(
+                    target=target, entrypoint=notebook, submission_id=malicious_id,
+                    dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    smoke=True,
+                )
+            self.assertIn("submission", str(ctx.exception).lower())
+
+            # Refused before adapter.fetch() ever ran: nothing escaped the
+            # ledger directory tree.
+            outside = Path(tmp) / "etc" / "evil"
+            self.assertFalse(outside.exists())
+            ledger_root = target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+            for path in ledger_root.rglob("*"):
+                self.assertTrue(str(path.resolve()).startswith(str(ledger_root)))
+
+
 class ReconcileTests(unittest.TestCase):
     def test_reconcile_reports_orphan_remote_without_fabricating_a_submitted_line(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2735,12 +3523,12 @@ class ReconcileTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path,
@@ -2785,6 +3573,148 @@ class ReconcileTests(unittest.TestCase):
             self.assertEqual(appended["kind"], "errored")
             self.assertEqual(appended["reason"], "not-found-at-service")
 
+    def test_cmd_reconcile_degrades_when_the_service_cannot_be_asked(self) -> None:
+        """`reconcile` is the command an operator runs precisely BECAUSE
+        something already went wrong, which makes it the worst one to die
+        on the failure it exists to explain. It makes exactly one remote
+        call, and that call must not be able to kill it.
+
+        Degrading is only half of it. `orphanLocal: ()` from a service that
+        answered means "every pending submission this ledger expects is
+        still accounted for". From a service that could not be asked it
+        means nothing whatsoever — and the two are the same empty tuple.
+        So the distinction lives in `remote.status`, never in the payload's
+        emptiness: `packer.plan()` reports `in_flight_source` rather than a
+        bare number for this identical reason, and
+        `implementation_cli.prior_work_state()` reports `recordStatus` so
+        an unreadable record can never pass for a clean one.
+        """
+        for adapter in (
+            UnreachableAdapter(worker_id="w1", capacity=2),
+            RefusingListActiveAdapter(worker_id="w1", capacity=2),
+        ):
+            with self.subTest(adapter=type(adapter).__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    target, notebook, _ = _pending_reconcile_fixture(tmp)
+
+                    degraded = REMOTE_CLI.cmd_reconcile(
+                        target=target,
+                        entrypoint=notebook,
+                        worker="w1",
+                        adapter=adapter,
+                        source_digest=lambda t, n: "d" * 64,
+                    )
+                    self.assertEqual(degraded["remote"]["status"], "unavailable")
+                    self.assertIn("w1", degraded["remote"]["reason"])
+                    self.assertEqual(degraded["orphanRemote"], ())
+                    self.assertEqual(degraded["orphanLocal"], ())
+                    self.assertEqual(degraded["resolved"], ())
+
+                    # The clean answer over the SAME ledger and the SAME
+                    # worker: the service confirms s1 is still active, so
+                    # neither direction orphans and both tuples are empty.
+                    clean = REMOTE_CLI.cmd_reconcile(
+                        target=target,
+                        entrypoint=notebook,
+                        worker="w1",
+                        adapter=ScriptedListActiveAdapter(
+                            worker_id="w1", active=("s1",)
+                        ),
+                        source_digest=lambda t, n: "d" * 64,
+                    )
+                    self.assertEqual(clean["remote"]["status"], "read")
+                    self.assertIsNone(clean["remote"]["reason"])
+                    self.assertEqual(clean["orphanRemote"], ())
+                    self.assertEqual(clean["orphanLocal"], ())
+
+                    # The mutation this stands against: a degraded result
+                    # that merely empties the tuples and says nothing else
+                    # is byte-for-byte a clean one, and would report an
+                    # unreachable service as a fully reconciled ledger.
+                    self.assertNotEqual(degraded, clean)
+
+    def test_cmd_reconcile_still_refuses_a_revoked_credential(self) -> None:
+        """The one `list_active()` failure that is NOT a degraded read.
+
+        `packer.plan()` re-raises `WorkerUnauthorized` out of the identical
+        call, for the reason the seam states on the exception itself: a
+        revoked credential is a decision-bearing fact, not a service that
+        is merely unreachable right now. Folding it into the degraded
+        branch would tell an operator to retry a command that cannot
+        succeed until the token is replaced, and would do it in the exact
+        words used for a transient blip.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, notebook, ledger_path = _pending_reconcile_fixture(tmp)
+            before = ledger_path.read_bytes()
+
+            with self.assertRaises(ADAPTER.WorkerUnauthorized):
+                REMOTE_CLI.cmd_reconcile(
+                    target=target,
+                    entrypoint=notebook,
+                    worker="w1",
+                    adapter=RevokedCredentialAdapter(worker_id="w1", capacity=2),
+                    source_digest=lambda t, n: "d" * 64,
+                )
+
+            self.assertEqual(ledger_path.read_bytes(), before)
+
+    def test_cmd_reconcile_refuses_a_caller_side_error_rather_than_degrading(
+        self,
+    ) -> None:
+        """The degraded read covers ONE expression, `adapter.list_active()`.
+
+        A `--target` the caller typed wrong is not a service failure. A
+        guard widened to the whole function body would report it as one,
+        answering "the service could not be asked" about a problem that
+        never reached the service at all — which names the wrong side of
+        the fault, the same misattribution this command already had.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "no-such-repo"
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.cmd_reconcile(
+                    target=missing,
+                    entrypoint=missing / "a.ipynb",
+                    worker="w1",
+                    adapter=UnreachableAdapter(worker_id="w1", capacity=2),
+                    source_digest=lambda t, n: "d" * 64,
+                )
+
+            self.assertIn("--target", str(ctx.exception))
+
+    def test_cmd_reconcile_degraded_read_appends_nothing_even_under_resolve(
+        self,
+    ) -> None:
+        """`--resolve` appends one `errored` event per `orphanLocal` id, on
+        the strength of the service having said those ids are gone. A read
+        that never happened said nothing, so it must write nothing.
+
+        The ledger is asserted byte-identical rather than merely
+        `resolved == ()`: an empty return with a line on disk, or a write
+        that reached a DIFFERENT ledger than the one this fixture holds,
+        are both failures this catches and a return-value assertion alone
+        would not.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, notebook, ledger_path = _pending_reconcile_fixture(tmp)
+            before = ledger_path.read_bytes()
+
+            result = REMOTE_CLI.cmd_reconcile(
+                target=target,
+                entrypoint=notebook,
+                worker="w1",
+                adapter=UnreachableAdapter(worker_id="w1", capacity=2),
+                resolve=True,
+                source_digest=lambda t, n: "d" * 64,
+            )
+
+            self.assertEqual(result["remote"]["status"], "unavailable")
+            self.assertEqual(result["resolved"], ())
+            self.assertEqual(result["arbitration"], ())
+            self.assertEqual(ledger_path.read_bytes(), before)
+
     def test_cmd_reconcile_filters_per_worker(self) -> None:
         """F4: two DIFFERENT workers, `w1` and `w2`, both have a pending
         submission for the SAME entrypoint. Reconciling for `w1` alone must
@@ -2795,12 +3725,12 @@ class ReconcileTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
                 ledger_path, entrypoint="Notebooks/a.ipynb",
@@ -2844,7 +3774,7 @@ class FiveAccountFanoutTests(unittest.TestCase):
     def test_five_account_fanout_all_land_at_dest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -2867,7 +3797,7 @@ class FiveAccountFanoutTests(unittest.TestCase):
                               "five accounts must produce five distinct submission ids")
 
             for worker in workers:
-                dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / worker
+                dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / worker
                 fetch_result = REMOTE_CLI.cmd_fetch(
                     target=target, entrypoint=notebook,
                     submission_id=submission_ids[worker], dest=dest,
@@ -2884,7 +3814,7 @@ class FiveAccountFanoutTests(unittest.TestCase):
             # None quarantined: the quarantine directory was never created
             # at all, for any of the five.
             quarantine_dir = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.QUARANTINE_DIRNAME
             )
             self.assertFalse(quarantine_dir.exists())
@@ -2892,7 +3822,7 @@ class FiveAccountFanoutTests(unittest.TestCase):
             # And every returned event confirms it: five `returned` lines,
             # one per worker's own submission id.
             ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             lines = ledger_path.read_text(encoding="utf-8").splitlines()
@@ -3266,7 +4196,7 @@ class KaggleAdapterTests(unittest.TestCase):
         completes both in a staged copy (see below).
         """
         assembler = ADAPTER.resolve_metadata("kaggle")
-        filename, text = assembler({"jobName": "domain-adaptation-2ep"})
+        filename, text = assembler({"jobName": "bell-tuning-2ep"})
         self.assertEqual(filename, "kernel-metadata.json")
         payload = json.loads(text)
         self.assertEqual(payload["machine_shape"], KAGGLE.KAGGLE_MACHINE_SHAPE)
@@ -3346,7 +4276,7 @@ class KaggleAdapterTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            notebooks = _make_product(tmp_path / "repo", "MIL-CREDA")
+            notebooks = _make_product(tmp_path / "repo", "FEM-TOLLA")
             entrypoint = notebooks / "a.ipynb"
             entrypoint.write_text("{}", encoding="utf-8")
             # No metadata file beside it, and none is required.
@@ -3360,6 +4290,37 @@ class KaggleAdapterTests(unittest.TestCase):
             submission = adapter.submit(job)
 
             self.assertEqual(submission.worker, "w1")
+
+    def test_submit_mints_the_same_id_for_two_submissions_of_the_same_job(self) -> None:
+        """The real `KaggleAdapter`, not a fixture standing in for it,
+        collides on id — this pins that Part D's `StableIdAdapter` models
+        actual Kaggle behaviour rather than an invented test convenience.
+
+        Legacy shape (empty `run_config`, no metadata file): `submit()`
+        (`adapters/kaggle.py:858-860`) derives the slug from
+        `_kernel_slug(job.entrypoint)`, a pure function of the entrypoint
+        path alone, so `ref = f"{job.worker}/{slug}"` is identical on both
+        calls. No network call is made — `driver_script` points at this
+        test's own fake driver, never the real `kaggle_driver.py`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            notebooks = _make_product(tmp_path / "repo", "FEM-TOLLA")
+            entrypoint = notebooks / "a.ipynb"
+            entrypoint.write_text("{}", encoding="utf-8")
+
+            driver = _write_fake_driver(tmp_path / "driver")
+            token_path = _write_fake_token(tmp_path / "creds")
+            handle = KAGGLE.CredentialHandle(worker_id="w1", token_path=token_path)
+
+            adapter = KAGGLE.KaggleAdapter(credentials={"w1": handle}, driver_script=driver)
+            job = ADAPTER.Job(entrypoint=entrypoint, run_config={}, worker="w1")
+
+            first = adapter.submit(job)
+            second = adapter.submit(job)
+
+            self.assertEqual(first.id, second.id)
+            self.assertEqual(first.id, "w1/a")
 
     def test_submit_completes_id_and_code_file_in_a_staged_copy_never_touching_the_job_folder(
         self,
@@ -3380,7 +4341,7 @@ class KaggleAdapterTests(unittest.TestCase):
         to receive a second, different `id` later.
 
         The slug in `id` is derived from the metadata's own `title`
-        (`"papersmith-domain-adaptation"` here), never from the
+        (`"papersmith-bell-tuning"` here), never from the
         entrypoint's filename: confirmed against a real Kaggle account
         that a newly-created kernel's actual slug is the one the service
         derives from `title`, and every generated job folder's entrypoint
@@ -3397,7 +4358,7 @@ class KaggleAdapterTests(unittest.TestCase):
             original_metadata = json.dumps(
                 {
                     "id": "",
-                    "title": "papersmith-domain-adaptation",
+                    "title": "papersmith-bell-tuning",
                     "code_file": "",
                     "language": "python",
                     "kernel_type": "notebook",
@@ -3422,10 +4383,10 @@ class KaggleAdapterTests(unittest.TestCase):
             job = ADAPTER.Job(entrypoint=entrypoint, run_config={}, worker="w1")
             submission = adapter.submit(job)
 
-            self.assertEqual(submission.id, "w1/papersmith-domain-adaptation")
+            self.assertEqual(submission.id, "w1/papersmith-bell-tuning")
             self.assertTrue(captured_metadata.is_file())
             pushed = json.loads(captured_metadata.read_text(encoding="utf-8"))
-            self.assertEqual(pushed["id"], "w1/papersmith-domain-adaptation")
+            self.assertEqual(pushed["id"], "w1/papersmith-bell-tuning")
             self.assertEqual(pushed["code_file"], "runner.ipynb")
             self.assertIs(pushed["enable_gpu"], True)
 
@@ -3440,9 +4401,9 @@ class KaggleAdapterTests(unittest.TestCase):
         """A GENERATED job folder's `kernel-metadata.json` written before
         `machine_shape` existed carries no such key at all -- exactly the
         fixture the test directly above this one already uses, and exactly
-        the real file this repository shipped at
-        `tools/kaggle/ceiling-search/kernel-metadata.json`. Pushing it
-        unmodified lands on whatever the service defaults to, silently,
+        the shape of the versioned `kernel-metadata.json` a target's own
+        search job was shipping before F7. Pushing it unmodified lands on
+        whatever the service defaults to, silently,
         which is the entire class of waste F7 exists to prevent. The
         staged copy must carry `machine_shape` even though the versioned
         file on disk never does.
@@ -3458,7 +4419,7 @@ class KaggleAdapterTests(unittest.TestCase):
             original_metadata = json.dumps(
                 {
                     "id": "",
-                    "title": "papersmith-ceiling-search",
+                    "title": "papersmith-undercut-search",
                     "code_file": "",
                     "language": "python",
                     "kernel_type": "notebook",
@@ -3508,7 +4469,7 @@ class KaggleAdapterTests(unittest.TestCase):
             original_metadata = json.dumps(
                 {
                     "id": "",
-                    "title": "papersmith-domain-adaptation",
+                    "title": "papersmith-bell-tuning",
                     "code_file": "",
                     "language": "python",
                     "kernel_type": "notebook",
@@ -3785,7 +4746,7 @@ class KaggleAdapterTests(unittest.TestCase):
         that file never carries a `mode` key, so `select_block()` in the
         pushed kernel always saw the normal `run` block, never `smoke`.
         Confirmed on real hardware: six `--smoke` submissions ran the full
-        `run` block instead of the one-transfer rehearsal.
+        `run` block instead of the one-unit rehearsal.
 
         This test spans the two pieces every prior test proved separately
         while the bug stayed live: that `cmd_submit` sets the field on the
@@ -3903,7 +4864,7 @@ class KaggleAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             target = tmp_path / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -3962,7 +4923,7 @@ class KaggleAdapterTests(unittest.TestCase):
 
                 submission_id = submit_result["submission"].id
                 ledger_path = submit_result["ledgerPath"]
-                dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+                dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
 
                 # A different live digest at fetch time than at submit time
                 # forces `fromStaleSubmission`, exercising the quarantine
@@ -3994,6 +4955,148 @@ class KaggleAdapterTests(unittest.TestCase):
                     self.assertNotIn(
                         sentinel, artifact.read_text(encoding="utf-8", errors="ignore")
                     )
+
+
+class KaggleDeclaredCapacityTests(unittest.TestCase):
+    """The names-free capacity reporter `adapters/kaggle.py` registers under
+    `ADAPTER.register_declared_capacity("kaggle", ...)` -- disk-only,
+    computed from the exact same account listing `workers()` already
+    reads, never from a second, independently-shelled command.
+    """
+
+    def _fake_accounts_cli(self, tmp_path: Path, usernames: list) -> Path:
+        script = tmp_path / "fake_accounts_cli.py"
+        payload = json.dumps({"accounts": [{"username": n} for n in usernames]})
+        script.write_text(f"print({payload!r})\n", encoding="utf-8")
+        return script
+
+    def test_declared_capacity_reads_names_from_disk_and_multiplies_by_the_pinned_allowance(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = self._fake_accounts_cli(Path(tmp), ["acct-1", "acct-2", "acct-3"])
+            with unittest.mock.patch.object(KAGGLE, "DEFAULT_ACCOUNTS_CLI", script):
+                self.assertEqual(
+                    KAGGLE._declared_capacity(), (3, KAGGLE.KAGGLE_WORKER_CAPACITY))
+
+    def test_declared_capacity_is_live_read_not_cached(self) -> None:
+        """Patching `_account_names_on_disk` directly (rather than the
+        subprocess beneath it) proves `_declared_capacity()` calls it fresh
+        on every invocation -- a cached first answer would not move when
+        the patched function's own return value does.
+        """
+        with unittest.mock.patch.object(
+            KAGGLE, "_account_names_on_disk",
+            return_value=["acct-1", "acct-2", "acct-3"],
+        ):
+            first = KAGGLE._declared_capacity()
+        with unittest.mock.patch.object(
+            KAGGLE, "_account_names_on_disk", return_value=["acct-1", "acct-2"]
+        ):
+            second = KAGGLE._declared_capacity()
+        self.assertEqual(first, (3, KAGGLE.KAGGLE_WORKER_CAPACITY))
+        self.assertEqual(second, (2, KAGGLE.KAGGLE_WORKER_CAPACITY))
+
+    def test_declared_capacity_answers_none_not_a_traceback_on_a_failing_subprocess(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_accounts_cli.py"
+            script.write_text("import sys\nsys.exit(1)\n", encoding="utf-8")
+            with unittest.mock.patch.object(KAGGLE, "DEFAULT_ACCOUNTS_CLI", script):
+                self.assertIsNone(KAGGLE._declared_capacity())
+
+    def test_declared_capacity_answers_none_not_a_traceback_on_unparsable_stdout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "fake_accounts_cli.py"
+            script.write_text("print('not json')\n", encoding="utf-8")
+            with unittest.mock.patch.object(KAGGLE, "DEFAULT_ACCOUNTS_CLI", script):
+                self.assertIsNone(KAGGLE._declared_capacity())
+
+    def test_declared_capacity_is_registered_under_kaggle(self) -> None:
+        reporter = ADAPTER.resolve_declared_capacity("kaggle")
+        self.assertIs(reporter, KAGGLE._declared_capacity)
+
+
+class ImportTimeSafetyTripwireTests(unittest.TestCase):
+    """`_load_backend_module` execs `adapters/<service>.py` in full before
+    ANY refusal in this skill's own call path can run -- so a network read
+    or a subprocess launched from that file's own module scope (never from
+    inside a function or a method, which only runs when called) would fire
+    the moment this skill's own CLI merely discovers the file exists.
+
+    Requirement 4 (state-derived action menu) forbids a network read at
+    publish time. This is not a re-verification of `adapters/kaggle.py` as
+    it stands today -- a manual read of its module scope already confirmed
+    it clean before this task started -- it is a regression tripwire
+    against a FUTURE edit reintroducing one, restricted to true module
+    scope so a call safely tucked inside a function is never mistaken for
+    one that runs at import time.
+    """
+
+    FORBIDDEN_CALL_NAMES = ("urlopen", "run", "open", "connect")
+
+    @staticmethod
+    def _module_level_call_names(source: str) -> set:
+        tree = ast.parse(source)
+        found: set = set()
+
+        class _TopLevelCalls(ast.NodeVisitor):
+            def visit_FunctionDef(self, node):
+                return
+
+            def visit_AsyncFunctionDef(self, node):
+                return
+
+            def visit_ClassDef(self, node):
+                return
+
+            def visit_Call(self, node):
+                func = node.func
+                if isinstance(func, ast.Attribute):
+                    name = func.attr
+                elif isinstance(func, ast.Name):
+                    name = func.id
+                else:
+                    name = None
+                if name:
+                    found.add(name)
+                self.generic_visit(node)
+
+        visitor = _TopLevelCalls()
+        for stmt in tree.body:
+            visitor.visit(stmt)
+        return found
+
+    def test_adapters_kaggle_calls_none_of_the_forbidden_names_at_module_scope(
+        self,
+    ) -> None:
+        calls = self._module_level_call_names(KAGGLE_SCRIPT.read_text(encoding="utf-8"))
+        leaked = calls & set(self.FORBIDDEN_CALL_NAMES)
+        self.assertEqual(leaked, set())
+
+    def test_the_tripwire_actually_fires_on_a_module_level_network_call(self) -> None:
+        """Reachability, over a fixture module rather than mutating the
+        real file in this test's own body: a bare `urlopen(...)` at true
+        module scope must be caught, proving this checks a name that CAN
+        be found, not one that happens to appear nowhere.
+        """
+        poisoned = "import urllib.request\nurlopen('https://example.invalid')\n"
+        calls = self._module_level_call_names(poisoned)
+        self.assertIn("urlopen", calls)
+
+    def test_a_call_nested_inside_a_function_is_not_mistaken_for_module_scope(
+        self,
+    ) -> None:
+        """The boundary this walker exists to respect: this same call,
+        indented one level into a function body, must NOT be reported --
+        it only runs when the function is called, never at import time.
+        """
+        safe = "def f():\n    urlopen('https://example.invalid')\n"
+        calls = self._module_level_call_names(safe)
+        self.assertNotIn("urlopen", calls)
 
 
 class SubmitDriverWiringTests(unittest.TestCase):
@@ -4362,7 +5465,7 @@ class CredentialSecurityTests(unittest.TestCase):
         driver = _write_fake_driver(tmp_path / "driver")
 
         target = tmp_path / "repo"
-        notebooks = _make_product(target, "MIL-CREDA")
+        notebooks = _make_product(target, "FEM-TOLLA")
         notebook = notebooks / "a.ipynb"
         notebook.write_text("{}", encoding="utf-8")
 
@@ -4401,7 +5504,7 @@ class CredentialSecurityTests(unittest.TestCase):
 
             REMOTE_CLI.cmd_poll(submission_id=submission_id, adapter=adapter)
 
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
             # A different live digest at fetch time than at submit time
             # forces `fromStaleSubmission`, exercising the quarantine path
             # too, not only the ledger.
@@ -5111,6 +6214,107 @@ def _write_driver_staging_dir(
     return staging
 
 
+# Every attribute name `adapters/kaggle_driver.py`'s own module-level import
+# block reaches for, so a shim built from this list satisfies that block
+# exactly and the driver gets all the way to `main()` under it.
+_SHIM_MODULES = {
+    "kagglesdk/__init__.py": "",
+    "kagglesdk/kaggle_http_client.py": "class KaggleHttpClient:\n"
+    "    def __init__(self, *args, **kwargs):\n"
+    "        pass\n",
+    "kagglesdk/kernels/__init__.py": "",
+    "kagglesdk/kernels/services/__init__.py": "",
+    "kagglesdk/kernels/services/kernels_api_service.py": "class KernelsApiClient:\n"
+    "    def __init__(self, *args, **kwargs):\n"
+    "        pass\n",
+    "kagglesdk/kernels/types/__init__.py": "",
+    "kagglesdk/kernels/types/kernels_enums.py": "class KernelsListSortType:\n"
+    "    DATE_CREATED = 1\n"
+    "\n"
+    "\n"
+    "class KernelsListViewType:\n"
+    "    PROFILE = 1\n",
+}
+
+# The ONE line that separates the two shims. Everything else about them is
+# byte-identical, so a refusal that fires under one and not the other is
+# attributable to this field and nothing else.
+_SHIM_MACHINE_SHAPE_LINE = "        self.machine_shape = ''\n"
+
+
+def _write_kagglesdk_shim(root: Path, *, machine_shape: bool) -> Path:
+    """Build a minimal importable `kagglesdk` on disk whose
+    `ApiSaveKernelRequest` either does or does not carry `machine_shape`.
+
+    This exists because the DEFECT's own witness — an interpreter whose
+    `kagglesdk` imports but cannot name an accelerator — is a per-machine
+    accident (here, the copy vendored inside the retired `kaggle==1.7.4.5`
+    under a 3.9 user site). A test that could only be written on a machine
+    that happens to have such a distribution would skip everywhere else,
+    and a skipped lock guards nothing. The shim reproduces the exact
+    property that matters, deterministically, on any machine, and is
+    written under a caller-owned temp dir — never into any `site-packages`.
+
+    Returned path is meant for `PYTHONPATH`, where it shadows the real
+    distribution for one child process only; `requests` and the stdlib
+    still resolve normally behind it.
+    """
+    request_source = (
+        "class _Request:\n"
+        "    def __init__(self):\n"
+        "        self.id = 0\n"
+        "        self.slug = ''\n"
+        "        self.text = ''\n"
+        "        self.language = ''\n"
+        "        self.kernel_type = ''\n"
+        "        self.is_private = False\n"
+        "        self.enable_gpu = False\n"
+        "        self.enable_internet = False\n"
+        + (_SHIM_MACHINE_SHAPE_LINE if machine_shape else "")
+        + "\n"
+        "\n"
+        "class ApiSaveKernelRequest(_Request):\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "class ApiGetKernelSessionStatusRequest(_Request):\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "class ApiListKernelSessionOutputRequest(_Request):\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "class ApiListKernelsRequest(_Request):\n"
+        "    pass\n"
+    )
+    sources = dict(_SHIM_MODULES)
+    sources["kagglesdk/kernels/types/kernels_api_service.py"] = request_source
+    for relative, source in sources.items():
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(source, encoding="utf-8")
+    return root
+
+
+def _run_driver_under_shim(root: Path, argv: list[str]) -> subprocess.CompletedProcess:
+    """Drive the real driver script as a real child process with the shim
+    ahead of the real distribution, and bytecode writing off — a stale
+    `.pyc` validated by mtime-seconds plus size has already produced one
+    false reading in this repository.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(root)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return subprocess.run(
+        [sys.executable, str(KAGGLE_DRIVER_SCRIPT), *argv],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+
+
 class DriverInterceptionTests(unittest.TestCase):
     """Commit 1: `adapters/kaggle_driver.py` — the one file in this skill
     permitted to import `kagglesdk` — and its own request-observing
@@ -5324,6 +6528,155 @@ class DriverInterceptionTests(unittest.TestCase):
         self.assertIn(foreign_executable, refused_payload["error"])
         self.assertIn("pip install", refused_payload["error"])
         self.assertIn("kaggle", refused_payload["error"])
+
+    def test_driver_refuses_a_kagglesdk_that_cannot_name_an_accelerator(self) -> None:
+        """The regression lock for the defect `test_driver_selftest_imports_kagglesdk`
+        cannot see. That test's axis is IMPORT: does `kagglesdk` resolve at
+        all. Two different distributions both resolve, and only one of them
+        knows `machine_shape` — the single field by which a job asks for the
+        T4 (sm_75). An interpreter admitted on the import axis alone can
+        therefore be one that cannot request the card, and the driver used to
+        answer `{"ok": true}` for it. Measured on this machine, and the reason
+        this test exists: the standalone `kagglesdk==0.1.37` in this
+        repository's venv knows the field, while the copy vendored inside the
+        retired `kaggle==1.7.4.5` under a 3.9 user site imports and does not.
+        It cost a real submission, which died locally with `Unknown field for
+        ApiSaveKernelRequest: machine_shape`.
+
+        RED half: a `kagglesdk` that IMPORTS CLEANLY and lacks only
+        `machine_shape` must be refused, naming the interpreter and the
+        install command. Deliberately NOT "an interpreter with no
+        `kagglesdk`" — that is the existing test's RED half, it passes
+        against the defect, and copying its shape would reproduce the bug.
+
+        GREEN control, and the half that makes the RED attributable: a shim
+        identical down to the byte except that it carries `machine_shape` is
+        ACCEPTED. Without it, a refusal under the shim would prove only that
+        a shimmed `kagglesdk` is unusual, not that the missing field is what
+        the driver actually asks about.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            incapable = _write_kagglesdk_shim(Path(tmp) / "without", machine_shape=False)
+            capable = _write_kagglesdk_shim(Path(tmp) / "with", machine_shape=True)
+
+            refused = _run_driver_under_shim(incapable, ["selftest"])
+            self.assertNotEqual(
+                refused.returncode,
+                0,
+                "a kagglesdk that cannot name an accelerator was admitted: "
+                + refused.stdout
+                + refused.stderr,
+            )
+            payload = json.loads(refused.stdout)
+            self.assertFalse(payload["ok"], payload)
+            self.assertIn("machine_shape", payload["error"])
+            self.assertIn(sys.executable, payload["error"])
+            self.assertIn("pip install", payload["error"])
+            self.assertIn("kagglesdk==0.1.37", payload["error"])
+
+            accepted = _run_driver_under_shim(capable, ["selftest"])
+            self.assertEqual(
+                accepted.returncode,
+                0,
+                "the control shim, which DOES carry machine_shape, was refused "
+                "-- the refusal is not attributable to that field: "
+                + accepted.stdout
+                + accepted.stderr,
+            )
+            self.assertTrue(json.loads(accepted.stdout)["ok"], accepted.stdout)
+
+    def test_accelerator_capability_refusal_fires_on_every_operation(self) -> None:
+        """The refusal has to live where `_IMPORT_ERROR`'s does — module
+        level, checked at the top of `main()` — and not in the `selftest`
+        branch, or a caller that skipped `selftest` still reaches the service
+        under a distribution that cannot ask for the card. That is not a
+        hypothetical concern in this skill: commit `2f23340` ("submit reaches
+        the driver, and a submit that skipped it fails") is the same defect
+        class on the import axis.
+
+        `submit` is the operation that actually spends the card, but `poll`,
+        `fetch` and `capacity` are asserted too: the point is that NO
+        operation is reachable, so the check cannot be argued back into a
+        single branch later. Argument values here are deliberately junk —
+        the refusal must land before argv is even parsed, and certainly
+        before `_build_client()` opens a socket.
+        """
+        operations = [
+            ["selftest"],
+            ["submit", "/nonexistent/staging"],
+            ["poll", "owner/slug"],
+            ["fetch", "owner/slug", "/nonexistent/destination"],
+            ["capacity"],
+            [],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            incapable = _write_kagglesdk_shim(Path(tmp), machine_shape=False)
+            for argv in operations:
+                with self.subTest(operation=argv):
+                    result = _run_driver_under_shim(incapable, argv)
+                    self.assertNotEqual(
+                        result.returncode,
+                        0,
+                        result.stdout + result.stderr,
+                    )
+                    payload = json.loads(result.stdout)
+                    self.assertFalse(payload["ok"], payload)
+                    self.assertIn("machine_shape", payload["error"])
+
+    def test_the_real_vendored_distribution_on_this_machine_is_refused(self) -> None:
+        """The shim proves the rule; this proves the rule matches the actual
+        thing that broke. Measured: `/usr/bin/python3` on this machine
+        resolves `kagglesdk` out of `~/Library/Python/3.9/`, the copy
+        vendored inside the retired `kaggle==1.7.4.5`, and that copy's
+        `ApiSaveKernelRequest` has no `machine_shape`.
+
+        Skipped, not failed, where no such interpreter exists: which
+        distributions a machine happens to carry is a fact about the machine,
+        not about the driver. The lock that must hold everywhere is the shim
+        test above. This one is left non-repairing on purpose — that user-site
+        distribution is the user's, and the test's job is to DESCRIBE it, not
+        to fix it.
+        """
+        probe = (
+            "import sys\n"
+            "from kagglesdk.kernels.types.kernels_api_service import "
+            "ApiSaveKernelRequest\n"
+            "print(sys.executable)\n"
+            "print(hasattr(ApiSaveKernelRequest(), 'machine_shape'))\n"
+        )
+        for candidate in ("/usr/bin/python3", "python3.9"):
+            resolved = shutil.which(candidate) or candidate
+            if not Path(resolved).exists():
+                continue
+            probed = subprocess.run(
+                [resolved, "-c", probe], capture_output=True, text=True, timeout=30
+            )
+            if probed.returncode != 0:
+                continue
+            executable, _, has_field = probed.stdout.partition("\n")
+            if has_field.strip() != "False":
+                continue
+
+            refused = subprocess.run(
+                [resolved, str(KAGGLE_DRIVER_SCRIPT), "selftest"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            self.assertNotEqual(
+                refused.returncode, 0, refused.stdout + refused.stderr
+            )
+            payload = json.loads(refused.stdout)
+            self.assertFalse(payload["ok"], payload)
+            self.assertIn("machine_shape", payload["error"])
+            self.assertIn(executable.strip(), payload["error"])
+            self.assertIn("pip install", payload["error"])
+            return
+
+        self.skipTest(
+            "no interpreter on this machine imports kagglesdk without machine_shape"
+        )
 
     def test_wire_bearer_header_carries_token_value(self) -> None:
         """The request that first proves this skill's stored credential
@@ -5635,6 +6988,115 @@ class PollFetchDriverTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as into_tmp:
                 with self.assertRaises(KAGGLE.KaggleAdapterError):
                     adapter.fetch("acct-1/kernel-1", Path(into_tmp) / "out")
+
+    # ---- Adapter-level: fetch() runs on its own budget, not the control one ----
+    #
+    # One number used to govern both planes. A control call that has not
+    # answered in two minutes is wrong and should die; a fetch is a bulk
+    # transfer whose size the REMOTE job decides, and killing it at the
+    # control budget does not merely fail slowly -- it misdiagnoses, which
+    # is what these three locks exist to prevent. Each injects tiny
+    # budgets so the fake driver blocks deterministically for a fraction
+    # of a second rather than for anything resembling the real numbers.
+
+    def test_fetch_survives_a_child_that_outlives_the_control_plane_budget(self) -> None:
+        """The defect, stated as a lock.
+
+        The driver here blocks for longer than the control-plane budget
+        and far less than the fetch budget. Under one shared number this
+        fetch is killed and reported as a failed transfer; under two, it
+        completes and returns its files. Point `fetch()` back at the
+        shared constant and this test is the one that fails.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            driver = _write_fake_driver(
+                tmp_path / "driver",
+                fetch_files={"metrics.json": "{}"},
+                sleep_seconds=0.8,
+            )
+            token_path = _write_fake_token(tmp_path / "creds")
+            handle = KAGGLE.CredentialHandle(worker_id="acct-1", token_path=token_path)
+
+            adapter = KAGGLE.KaggleAdapter(
+                credentials={"acct-1": handle},
+                driver_script=driver,
+                timeout=0.2,
+                fetch_timeout=10.0,
+            )
+            with tempfile.TemporaryDirectory() as into_tmp:
+                fetched = adapter.fetch("acct-1/kernel-1", Path(into_tmp) / "out")
+
+            self.assertTrue(fetched.complete)
+            self.assertEqual(fetched.files, ("metrics.json",))
+
+    def test_control_plane_calls_still_die_at_the_control_budget_not_the_fetch_one(
+        self,
+    ) -> None:
+        """The other half of the same fact, and the reason the fix is two
+        constants rather than a bigger one.
+
+        This is the SAME adapter configuration the test above proves a
+        fetch survives -- a generous fetch budget alongside a tiny control
+        one. `poll()` must still refuse at its own budget. Widening the
+        shared constant to rescue fetch would blunt exactly this, and this
+        test would be the one that fails.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            driver = _write_fake_driver(tmp_path / "driver", sleep_seconds=0.8)
+            token_path = _write_fake_token(tmp_path / "creds")
+            handle = KAGGLE.CredentialHandle(worker_id="acct-1", token_path=token_path)
+
+            adapter = KAGGLE.KaggleAdapter(
+                credentials={"acct-1": handle},
+                driver_script=driver,
+                timeout=0.2,
+                fetch_timeout=10.0,
+            )
+            with self.assertRaises(KAGGLE.KaggleAdapterError):
+                adapter.poll("acct-1/kernel-1")
+
+    def test_a_timed_out_fetch_names_the_budget_that_actually_expired(self) -> None:
+        """A refusal that reports the wrong number sends the reader
+        hunting for a limit that was never enforced -- the same class of
+        wrong diagnosis the split budget exists to end. Here the fetch
+        budget is the small one and the control budget the large one, so a
+        message built from `self._timeout` names a number that did not
+        expire.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            driver = _write_fake_driver(tmp_path / "driver", sleep_seconds=0.8)
+            token_path = _write_fake_token(tmp_path / "creds")
+            handle = KAGGLE.CredentialHandle(worker_id="acct-1", token_path=token_path)
+
+            adapter = KAGGLE.KaggleAdapter(
+                credentials={"acct-1": handle},
+                driver_script=driver,
+                timeout=99.0,
+                fetch_timeout=0.2,
+            )
+            with tempfile.TemporaryDirectory() as into_tmp:
+                with self.assertRaises(KAGGLE.KaggleAdapterError) as caught:
+                    adapter.fetch("acct-1/kernel-1", Path(into_tmp) / "out")
+
+            message = str(caught.exception)
+            self.assertIn("0.2", message)
+            self.assertNotIn("99.0", message)
+
+    def test_the_control_plane_budget_was_not_widened_to_rescue_fetch(self) -> None:
+        """The two module constants are distinct, and the control-plane one
+        is still the fast-fail number it was. Fixing the shared-deadline
+        defect by raising `SUBPROCESS_TIMEOUT_SECONDS` would leave a poll
+        or a capacity call hanging for half an hour; that is not the fix.
+        """
+        self.assertEqual(KAGGLE.SUBPROCESS_TIMEOUT_SECONDS, 120.0)
+        self.assertGreater(
+            KAGGLE.KAGGLE_FETCH_TIMEOUT_SECONDS, KAGGLE.SUBPROCESS_TIMEOUT_SECONDS
+        )
+        # Bounded, not absent: a hung child must still die.
+        self.assertLess(KAGGLE.KAGGLE_FETCH_TIMEOUT_SECONDS, float("inf"))
 
     # ---- Driver-level: cmd_fetch (INNER interception) ----
 
@@ -6856,7 +8318,7 @@ class DistributeCliTests(unittest.TestCase):
 
     def _target_and_notebook(self, tmp: str) -> tuple[Path, Path]:
         target = Path(tmp) / "repo"
-        notebooks = _make_product(target, "MIL-CREDA")
+        notebooks = _make_product(target, "FEM-TOLLA")
         notebook = notebooks / "a.ipynb"
         notebook.write_text("{}", encoding="utf-8")
         return target, notebook
@@ -7044,7 +8506,7 @@ class CampaignSubmitTests(unittest.TestCase):
     down -- never asserted by reading `cmd_submit`'s own source.
     """
 
-    def _target_and_notebook(self, tmp: str, name: str = "MIL-CREDA") -> tuple[Path, Path]:
+    def _target_and_notebook(self, tmp: str, name: str = "FEM-TOLLA") -> tuple[Path, Path]:
         target = Path(tmp) / "repo"
         notebooks = _make_product(target, name)
         notebook = notebooks / "a.ipynb"
@@ -7316,7 +8778,7 @@ class ConsentGateTests(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def _target_and_notebook(self, tmp: str, name: str = "MIL-CREDA") -> tuple[Path, Path]:
+    def _target_and_notebook(self, tmp: str, name: str = "FEM-TOLLA") -> tuple[Path, Path]:
         target = Path(tmp) / "repo"
         notebooks = _make_product(target, name)
         notebook = notebooks / "a.ipynb"
@@ -7327,7 +8789,7 @@ class ConsentGateTests(unittest.TestCase):
         self, tmp: str, *, commit: str,
     ) -> tuple[Path, Path, Path]:
         target = Path(tmp) / "repo"
-        (target / "MIL-CREDA").mkdir(parents=True)
+        (target / "FEM-TOLLA").mkdir(parents=True)
         job_dir = _make_job_folder(target, "kaggle", "search-a")
         notebook = job_dir / "runner.ipynb"
         notebook.write_text("{}", encoding="utf-8")
@@ -7499,28 +8961,48 @@ class ConsentGateTests(unittest.TestCase):
             self.assertIsInstance(result, dict)
 
     def test_campaign_token_derivation_byte_identical_to_pre_change(self) -> None:
-        """Hash-pinned against the PRE-CHANGE derivation (no `worker` key
-        in the payload at all): campaign/auto-select tokens must remain
-        byte-for-byte identical to what this function computed before F2,
-        proving the new `worker` parameter is additive, never a reshape of
-        the existing payload.
+        """Hash-pinned against the derivation with NO `worker` key in the
+        payload at all: campaign/auto-select tokens must stay byte-for-byte
+        what this function computed before F2, proving the `worker`
+        parameter is additive, never a reshape of the existing payload.
+
+        The constant was re-derived once, when this fixture's entrypoint
+        stopped naming one target's product -- the digest is a function of
+        that string, so no rename of it could leave the old value standing.
+        What the pin locks is unchanged, and it is now checked twice: by
+        the opaque constant below, and by an INDEPENDENT recomputation
+        from the payload spelled out by hand. The second is what makes the
+        first readable -- an opaque hex says only "something changed"; a
+        payload written out in full says exactly which three keys, sorted,
+        are hashed, and fails loudly the day a fourth one appears.
         """
         token = REMOTE_CLI.campaign_consent_token(
             pin_commit="deadbeef",
-            relative_entrypoint="MIL-CREDA/Notebooks/a.ipynb",
+            relative_entrypoint="FEM-TOLLA/Notebooks/a.ipynb",
             units=("u0", "u1"),
         )
         self.assertEqual(
             token,
-            "856dd56193c0804e2d7758f58e5fc0041ca2af308437a0ec02985eb446e4edf4",
+            "39618b6a19a9c019d550dcb5dbee97c75a161cd5ada18e0e0231e33f01e528f3",
         )
+        # Written out rather than re-invoked: `worker` appears nowhere,
+        # `units` keeps the given order, and the keys are sorted.
+        expected = hashlib.sha256(
+            json.dumps(
+                {"entrypoint": "FEM-TOLLA/Notebooks/a.ipynb",
+                 "pin": "deadbeef",
+                 "units": ["u0", "u1"]},
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(token, expected)
         # And explicitly passing `worker=None` (auto-select's own shape)
         # must derive the identical token -- the parameter's ABSENCE and
         # its explicit `None` are the same input to this function.
         self.assertEqual(
             REMOTE_CLI.campaign_consent_token(
                 pin_commit="deadbeef",
-                relative_entrypoint="MIL-CREDA/Notebooks/a.ipynb",
+                relative_entrypoint="FEM-TOLLA/Notebooks/a.ipynb",
                 units=("u0", "u1"),
                 worker=None,
             ),
@@ -7539,7 +9021,7 @@ class ConsentGateTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks_a = _make_product(target, "MIL-CREDA")
+            notebooks_a = _make_product(target, "FEM-TOLLA")
             notebook_a = notebooks_a / "a.ipynb"
             notebook_a.write_text("{}", encoding="utf-8")
             notebooks_b = _make_product(target, "OtherProduct")
@@ -7699,7 +9181,7 @@ class ConsentGateTests(unittest.TestCase):
     def test_a_token_minted_for_a_different_entrypoint_refuses(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks_a = _make_product(target, "MIL-CREDA")
+            notebooks_a = _make_product(target, "FEM-TOLLA")
             notebook_a = notebooks_a / "a.ipynb"
             notebook_a.write_text("{}", encoding="utf-8")
             notebooks_b = _make_product(target, "OtherProduct")
@@ -7829,6 +9311,469 @@ class ConsentGateTests(unittest.TestCase):
             self.assertEqual(adapter.submit_calls, ["w1"])
 
 
+class AuthorizationGateTests(unittest.TestCase):
+    """`remote_cli._verify_launch_authorization()` (design §4, PR7): the
+    SECOND, independent precondition `submit` now enforces, closing the
+    self-authorization loop `ConsentGateTests` above cannot: that class's
+    own `_mint_launch_consent()` proves consent can be minted from an
+    invocation's own argv, by design (that is what makes printing the
+    token in the refusal safe). This class proves that minting is no
+    longer enough BY ITSELF for a job-folder launch -- a `gate` record,
+    written by a separate, earlier act, is required too.
+    """
+
+    def setUp(self) -> None:
+        # Same reason `ConsentGateTests.setUp()` stubs this: this class's
+        # subject is the authorization gate itself, not the three pin
+        # conditions `SubmitPinGateTests` already drives against real git
+        # repos.
+        patcher = unittest.mock.patch.object(
+            JOBFOLDER, "verify_pin_preconditions", return_value=None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _job_folder_and_notebook(
+        self, tmp: str, *, commit: str = "a" * 40,
+    ) -> tuple[Path, Path, Path]:
+        target = Path(tmp) / "repo"
+        (target / "FEM-TOLLA").mkdir(parents=True)
+        job_dir = _make_job_folder(target, "kaggle", "search-a")
+        notebook = job_dir / "runner.ipynb"
+        notebook.write_text("{}", encoding="utf-8")
+        _write_job_folder_run_config(job_dir, commit=commit)
+        return target, job_dir, notebook
+
+    def _target_and_notebook(self, tmp: str, name: str = "FEM-TOLLA") -> tuple[Path, Path]:
+        target = Path(tmp) / "repo"
+        notebooks = _make_product(target, name)
+        notebook = notebooks / "a.ipynb"
+        notebook.write_text("{}", encoding="utf-8")
+        return target, notebook
+
+    # -- no matching `gate` record: the self-authorization loop, closed ---
+
+    def test_job_folder_submit_with_valid_consent_but_no_gate_record_still_refuses(
+        self,
+    ) -> None:
+        """The exact loophole this PR closes: a valid, correctly-minted
+        consent token is no longer enough on its own for a job-folder
+        launch. Before this precondition existed, `run -> copy the printed
+        token -> re-run` was the whole story; now a `gate` record, written
+        by a separate act, is required too.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError) as caught:
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, worker="w1",
+                    requested=1, adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64, consent=token,
+                )
+
+            self.assertIn("gate", str(caught.exception).lower())
+            self.assertEqual(adapter.submit_calls, [], "no quota spent on refusal")
+
+    def test_the_refusal_names_the_gate_command_never_a_token_to_copy_back(
+        self,
+    ) -> None:
+        """`ConsentError`'s single-send refusal safely prints a token
+        because printing it costs nothing (Decision 4/5's own reasoning).
+        `AuthorizationError` must never reproduce that shape: there is no
+        digest this function could print that would BE the missing
+        authorization, so its refusal names a command to run instead.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError) as caught:
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, worker="w1",
+                    requested=1, adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64, consent=token,
+                )
+
+            message = str(caught.exception)
+            self.assertIn("implementation_cli", message)
+            self.assertIn("gate", message)
+            self.assertNotIn(token, message)
+
+    # -- a matching record authorizes; refusal costs no quota -------------
+
+    def test_a_matching_gate_record_authorizes_the_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
+            )
+
+            result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, worker="w1",
+                requested=1, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, consent=token,
+            )
+
+            self.assertEqual(len(adapter.submit_calls), 1)
+            self.assertTrue(Path(result["ledgerPath"]).exists())
+
+    def test_the_authorization_gate_runs_before_the_digest_walk(self) -> None:
+        """Refusing must cost nothing -- the same discipline
+        `SubmitPinGateTests.test_the_gate_runs_before_the_digest_walk`
+        already proves for the pin gate, exercised here for this second,
+        independent precondition.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+            digest_calls: list[tuple[Path, str]] = []
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, worker="w1",
+                    requested=1, adapter=adapter,
+                    source_digest=lambda t, n: digest_calls.append((t, n)) or "d" * 64,
+                    consent=token,
+                )
+
+            self.assertEqual(digest_calls, [], "the digest walk ran before the gate")
+
+    # -- exact binding: pin, entrypoint, worker all have to match ---------
+
+    def test_a_gate_record_at_a_different_pin_does_not_authorize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(
+                tmp, commit="a" * 40,
+            )
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+            # Gated at a DIFFERENT commit than the job folder's current one.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="b" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, worker="w1",
+                    requested=1, adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64, consent=token,
+                )
+            self.assertEqual(adapter.submit_calls, [])
+
+    def test_a_gate_record_for_a_different_worker_does_not_authorize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2), ("w2", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w2",
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, worker="w1",
+                    requested=1, adapter=adapter,
+                    source_digest=lambda t, n: "d" * 64, consent=token,
+                )
+            self.assertEqual(adapter.submit_calls, [])
+
+    def test_re_running_the_same_submit_invocation_never_substitutes_for_a_gate(
+        self,
+    ) -> None:
+        """The honest limit stated as a fact, not merely asserted (design
+        §4.4/§4.2, spec's own "Approval is a distinct recorded act"
+        scenario): a caller who reruns the identical refused invocation,
+        any number of times, gets the identical refusal -- nothing about
+        repeating an invocation this function already refused ever mints
+        the record it is missing.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+
+            for _ in range(3):
+                with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                    REMOTE_CLI.cmd_submit(
+                        target=target, entrypoint=notebook, worker="w1",
+                        requested=1, adapter=adapter,
+                        source_digest=lambda t, n: "d" * 64, consent=token,
+                    )
+            self.assertEqual(adapter.submit_calls, [])
+
+    # -- scope: never blocks what `gate` structurally could not cover -----
+
+    def test_a_rehearsal_is_never_gated_by_this_precondition(self) -> None:
+        """Design §4.2: gating a rehearsal would deadlock the mechanism
+        that makes readiness measurable in the first place -- `smokeReady`
+        only ever becomes `True` because a rehearsal ran. `--smoke` still
+        needs its own consent token, minted and checked exactly as before.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+
+            result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, worker="w1", requested=1,
+                adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                smoke=True, consent=token,
+            )
+
+            self.assertEqual(len(adapter.submit_calls), 1)
+            self.assertEqual(Path(result["ledgerPath"]).name, "smoke.jsonl")
+
+    def test_a_legacy_shape_launch_is_never_gated_by_this_precondition(self) -> None:
+        """Design §4.2: the legacy `<Name>/Notebooks/**.ipynb` shape has no
+        job folder, so no `run-config.json` ever declared a pin and no
+        `@rehearsal <jobName>` witness could ever name it -- there is
+        structurally nothing for a `gate` record to bind to. Requiring one
+        here would be an unpayable, permanent refusal, never an adoption
+        cost.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, notebook = self._target_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            token = _mint_launch_consent(
+                target=target, entrypoint=notebook, adapter=adapter,
+                source_digest=lambda t, n: "d" * 64, worker="w1",
+            )
+
+            result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, worker="w1", requested=1,
+                adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                consent=token,
+            )
+
+            self.assertEqual(len(adapter.submit_calls), 1)
+            self.assertTrue(Path(result["ledgerPath"]).exists())
+
+    # -- campaign mode is bound, never exempt (PR8, design revision) -----
+    #
+    # PR7 exempted `units` truthy entirely, reasoning that `gate`'s CLI had
+    # no `--unit` flag to bind against. That reasoning inverted this
+    # change's whole purpose: the single send ended up authorized and the
+    # campaign -- the full-scale, multi-worker, hours-long launch this
+    # mechanism exists to gate -- did not. `campaign_consent_token()`
+    # already proves the fix is available: `units`, at THIS call site, is
+    # the exact ordered list this invocation's own argv named, computed
+    # BEFORE `packer.distribute()` ever runs -- never the per-worker
+    # assignment `distribute()` computes later, which this function never
+    # sees. `gate` now takes the identical repeatable `--unit` and binds
+    # the same three facts consent already does.
+
+    def test_campaign_submit_with_no_matching_gate_record_still_refuses(
+        self,
+    ) -> None:
+        """The exact hole this task closes: today, before this precondition
+        binds campaign mode, this exact call proceeds and spends quota with
+        no `gate` record on file at all. RED against the unpatched function
+        (confirmed by temporarily restoring the old `if units: return`
+        exemption and re-running this test: it passes GREEN there too,
+        proving the hole -- see apply-progress for the confirmation run).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2), ("w2", 2)])
+            units = ("u0", "u1")
+            distribute_result = REMOTE_CLI.cmd_distribute(
+                target=target, entrypoint=notebook, adapter=adapter,
+                units=units, source_digest=lambda t, n: "d" * 64,
+            )
+            token = distribute_result["consentToken"]
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError) as caught:
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, requested=1,
+                    adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    units=units, consent=token,
+                )
+
+            self.assertIn("gate", str(caught.exception).lower())
+            self.assertEqual(adapter.submit_calls, [], "no quota spent on refusal")
+
+    def test_a_matching_gate_record_authorizes_a_campaign_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2), ("w2", 2)])
+            units = ("u0", "u1")
+            distribute_result = REMOTE_CLI.cmd_distribute(
+                target=target, entrypoint=notebook, adapter=adapter,
+                units=units, source_digest=lambda t, n: "d" * 64,
+            )
+            token = distribute_result["consentToken"]
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker=None, units=units,
+            )
+
+            result = REMOTE_CLI.cmd_submit(
+                target=target, entrypoint=notebook, requested=1,
+                adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                units=units, consent=token,
+            )
+
+            self.assertIn("assignments", result)
+            self.assertTrue(any(row["submissionId"] for row in result["assignments"]))
+
+    def test_a_campaign_gate_record_for_a_different_unit_list_does_not_authorize(
+        self,
+    ) -> None:
+        """Exact binding, mirroring `test_a_gate_record_at_a_different_pin_
+        does_not_authorize` above: one approval covers the EXACT ordered
+        unit list it named, the same rule `campaign_consent_token()`
+        already enforces for consent (Decision 5).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2), ("w2", 2)])
+            units = ("u0", "u1")
+            distribute_result = REMOTE_CLI.cmd_distribute(
+                target=target, entrypoint=notebook, adapter=adapter,
+                units=units, source_digest=lambda t, n: "d" * 64,
+            )
+            token = distribute_result["consentToken"]
+            # Gated against a DIFFERENT ordered unit list than this
+            # invocation's own.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker=None, units=("u0", "u2"),
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, requested=1,
+                    adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    units=units, consent=token,
+                )
+            self.assertEqual(adapter.submit_calls, [])
+
+    def test_a_single_send_gate_record_does_not_authorize_a_campaign(self) -> None:
+        """A record minted with a named worker and no units (the single-send
+        shape) never matches a campaign invocation, and vice versa -- the
+        two shapes bind different, disjoint facts (`worker` absent for a
+        campaign, always present for a single send), never a looser "was
+        gated at all" notion of authorization.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2), ("w2", 2)])
+            units = ("u0", "u1")
+            distribute_result = REMOTE_CLI.cmd_distribute(
+                target=target, entrypoint=notebook, adapter=adapter,
+                units=units, source_digest=lambda t, n: "d" * 64,
+            )
+            token = distribute_result["consentToken"]
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
+            )
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError):
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, requested=1,
+                    adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    units=units, consent=token,
+                )
+            self.assertEqual(adapter.submit_calls, [])
+
+    def test_the_campaign_refusal_names_unit_flags_never_a_worker_flag(self) -> None:
+        """`AuthorizationError`'s refusal must hand the caller the exact
+        shape of command that could actually authorize this launch. Naming
+        `--worker <account>` for a campaign refusal would send the caller
+        toward a record that can never match (§4.2's own binding rule), so
+        the campaign branch of the message names `--unit` instead.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, job_dir, notebook = self._job_folder_and_notebook(tmp)
+            adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)])
+            units = ("u0", "u1")
+            distribute_result = REMOTE_CLI.cmd_distribute(
+                target=target, entrypoint=notebook, adapter=adapter,
+                units=units, source_digest=lambda t, n: "d" * 64,
+            )
+            token = distribute_result["consentToken"]
+
+            with self.assertRaises(REMOTE_CLI.AuthorizationError) as caught:
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, requested=1,
+                    adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                    units=units, consent=token,
+                )
+
+            message = str(caught.exception)
+            self.assertIn("--unit", message)
+            self.assertNotIn("--worker <account>", message)
+
+    # -- docstring narrowing: additive only, never widened (Slice 2B) -----
+
+    def test_the_docstring_narrows_additively_and_never_widens_the_claim(self) -> None:
+        """Spec "docstring claim narrows, never widens": the pre-existing
+        honesty sentence about justification (legible, not verified) must
+        survive byte-for-byte, and the new paragraph about `gate`'s own
+        `--authorization` mechanism must say plainly that THIS function
+        does not read that field -- the strengthening is a property of how
+        a `gate` record now comes to exist, never a property this function
+        itself checks.
+        """
+        # Normalized to a single run of whitespace so a docstring's own
+        # line-wrap indentation (real, and irrelevant here) never masks a
+        # substring check -- the same reason other prose tests in this
+        # suite normalize before comparing.
+        doc = " ".join((REMOTE_CLI._verify_launch_authorization.__doc__ or "").split())
+        # Carried verbatim -- HARD RULE: never rewritten to fit.
+        self.assertIn(
+            "Justification is legible, not verified: this function checks "
+            "only that one is present on the matching record, never who "
+            "wrote it or whether a human read it.",
+            doc)
+        # The new paragraph states the mechanism and its own real limit.
+        self.assertIn("--authorization", doc)
+        self.assertIn("does not read that token", doc)
+        self.assertIn("not migrated", doc)
+        self.assertIn("not invalidated", doc)
+
+
 class AcceleratorRequestDoctrineTests(unittest.TestCase):
     """`assemble_metadata` must emit the accelerator key the installed
     client actually reads — RETARGETED for Commit 1 (F7).
@@ -7849,7 +9794,7 @@ class AcceleratorRequestDoctrineTests(unittest.TestCase):
     """
 
     def test_assemble_metadata_emits_keys_the_installed_client_recognizes(self) -> None:
-        _, text = ADAPTER.resolve_metadata("kaggle")({"jobName": "domain-adaptation-2ep"})
+        _, text = ADAPTER.resolve_metadata("kaggle")({"jobName": "bell-tuning-2ep"})
         payload = json.loads(text)
 
         self.assertIs(payload["enable_gpu"], True)
@@ -8003,14 +9948,14 @@ class JobFolderTests(unittest.TestCase):
         return bootstrap, invoke
 
     def _ensure_default_source_tree(self, target: Path) -> None:
-        """`_generate()`'s default `clone_paths=["src/MIL_CREDA_Benchmark"]`
-        and `run_module="MIL_CREDA_Benchmark.harness"` now have to resolve
+        """`_generate()`'s default `clone_paths=["src/FEM_TOLLA_Benchmark"]`
+        and `run_module="FEM_TOLLA_Benchmark.harness"` now have to resolve
         to a real file on disk under `target`, since `generate_job()` runs
         `resolve_clone_paths()`. A no-further-imports module is enough:
         exactly what makes the declared clone path match the computed one
         with nothing left over.
         """
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         if not harness.exists():
             harness.parent.mkdir(parents=True, exist_ok=True)
             harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
@@ -8022,12 +9967,12 @@ class JobFolderTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit="a" * 40,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -8051,8 +9996,8 @@ class JobFolderTests(unittest.TestCase):
 
             run_config = json.loads((job_dir / "run-config.json").read_text(encoding="utf-8"))
             self.assertEqual(run_config["schemaVersion"], 1)
-            self.assertEqual(run_config["product"], "MIL-CREDA")
-            self.assertEqual(run_config["run"]["module"], "MIL_CREDA_Benchmark.harness")
+            self.assertEqual(run_config["product"], "FEM-TOLLA")
+            self.assertEqual(run_config["run"]["module"], "FEM_TOLLA_Benchmark.harness")
 
     def test_generated_notebook_declares_a_kernelspec_papermill_can_resolve(self) -> None:
         """Confirmed against a real Kaggle kernel run: with no `kernelspec`
@@ -8281,12 +10226,12 @@ class JobFolderTests(unittest.TestCase):
                     "--target", str(target),
                     "--service", self.FAKE_SERVICE,
                     "--job-name", "cli-job",
-                    "--product", "MIL-CREDA",
+                    "--product", "FEM-TOLLA",
                     "--commit", "a" * 40,
                     "--repo-url", "https://example.invalid/repo.git",
                     "--repo-ref", "main",
-                    "--clone-path", "src/MIL_CREDA_Benchmark",
-                    "--run-module", "MIL_CREDA_Benchmark.harness",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
                     "--run-function", "campaign",
                 ])
 
@@ -8313,12 +10258,12 @@ class JobFolderTests(unittest.TestCase):
                 "--target", str(target),
                 "--service", self.FAKE_SERVICE,
                 "--job-name", "cli-job",
-                "--product", "MIL-CREDA",
+                "--product", "FEM-TOLLA",
                 "--commit", "a" * 40,
                 "--repo-url", "https://example.invalid/repo.git",
                 "--repo-ref", "main",
-                "--clone-path", "src/MIL_CREDA_Benchmark",
-                "--run-module", "MIL_CREDA_Benchmark.harness",
+                "--clone-path", "src/FEM_TOLLA_Benchmark",
+                "--run-module", "FEM_TOLLA_Benchmark.harness",
                 "--run-function", "campaign",
             ])
 
@@ -8335,7 +10280,7 @@ class JobFolderTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             target.mkdir()
             self._ensure_default_source_tree(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "import Extra.helper\n\n\ndef campaign(*args, **kwargs):\n    pass\n",
                 encoding="utf-8",
             )
@@ -8353,7 +10298,7 @@ class JobFolderTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             target.mkdir()
             self._ensure_default_source_tree(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "import sys\nsys.path.append('/tmp/extra')\n\n\n"
                 "def campaign(*args, **kwargs):\n    pass\n",
                 encoding="utf-8",
@@ -8369,7 +10314,7 @@ class JobFolderTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             target.mkdir()
             self._ensure_default_source_tree(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "import sys\nsys.path.append('/tmp/extra')\n\n\n"
                 "def campaign(*args, **kwargs):\n    pass\n",
                 encoding="utf-8",
@@ -8386,8 +10331,8 @@ class JobFolderTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             target.mkdir()
             self._ensure_default_source_tree(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
-                "mod = __import__('MIL_CREDA_Benchmark.harness')\n\n\n"
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
+                "mod = __import__('FEM_TOLLA_Benchmark.harness')\n\n\n"
                 "def campaign(*args, **kwargs):\n    pass\n",
                 encoding="utf-8",
             )
@@ -8401,12 +10346,12 @@ class JobFolderTests(unittest.TestCase):
                     "--target", str(target),
                     "--service", self.FAKE_SERVICE,
                     "--job-name", "cli-accept",
-                    "--product", "MIL-CREDA",
+                    "--product", "FEM-TOLLA",
                     "--commit", "a" * 40,
                     "--repo-url", "https://example.invalid/repo.git",
                     "--repo-ref", "main",
-                    "--clone-path", "src/MIL_CREDA_Benchmark",
-                    "--run-module", "MIL_CREDA_Benchmark.harness",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
                     "--run-function", "campaign",
                     "--accept-unresolved",
                 ])
@@ -8472,7 +10417,7 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
         return bootstrap, invoke
 
     def _ensure_default_source_tree(self, target: Path) -> None:
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         if not harness.exists():
             harness.parent.mkdir(parents=True, exist_ok=True)
             harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
@@ -8484,12 +10429,12 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
             target=target,
             service=service,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit="a" * 40,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -8533,7 +10478,7 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
                 self.assertNotIn(name, arch)
 
     # The arch list a real submission reported from the service on
-    # 2026-08-24 (kernel `papersmith-ceiling-search`, fetched log). It is a
+    # 2026-08-24 (read out of the fetched log of a live search kernel). It is a
     # MEASUREMENT, not a pin: this repository installs no torch of its own
     # for a remote run, so the only honest ground for the shipped default
     # is what the service's own image was observed to carry. Revise it by
@@ -8683,12 +10628,12 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
                     "--target", str(target),
                     "--service", self.FAKE_SERVICE_NO_DEFAULT,
                     "--job-name", "cli-explicit-accel",
-                    "--product", "MIL-CREDA",
+                    "--product", "FEM-TOLLA",
                     "--commit", "a" * 40,
                     "--repo-url", "https://example.invalid/repo.git",
                     "--repo-ref", "main",
-                    "--clone-path", "src/MIL_CREDA_Benchmark",
-                    "--run-module", "MIL_CREDA_Benchmark.harness",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
                     "--run-function", "campaign",
                     "--accelerator-kind", "cuda",
                     "--accelerator-architecture", "sm_90",
@@ -8725,12 +10670,12 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
                     "--target", str(target),
                     "--service", self.FAKE_SERVICE_WITH_DEFAULT,
                     "--job-name", "cli-from-zero",
-                    "--product", "MIL-CREDA",
+                    "--product", "FEM-TOLLA",
                     "--commit", "a" * 40,
                     "--repo-url", "https://example.invalid/repo.git",
                     "--repo-ref", "main",
-                    "--clone-path", "src/MIL_CREDA_Benchmark",
-                    "--run-module", "MIL_CREDA_Benchmark.harness",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
                     "--run-function", "campaign",
                 ])
 
@@ -8741,6 +10686,189 @@ class DefaultAcceleratorProvisioningTests(unittest.TestCase):
                 run_config["accelerator"],
                 {"kind": self.FAKE_DEFAULT_KIND, "architectures": list(self.FAKE_DEFAULT_ARCHITECTURES)},
             )
+
+
+class LocalBudgetDeclarationTests(unittest.TestCase):
+    """`jobfolder.generate_job(local_budget_seconds=...)` — the
+    `--local-budget-seconds` surface `impl_execution_strategy.
+    classify_remote_necessity()` (design D2/D3, `the-pilot-decides-the-
+    remote-strategy`) reads its `localBudget.seconds` fact from.
+
+    Same discipline as `--accelerator-kind`/`--accelerator-architecture`
+    and `--smoke-required-evidence`: recorded verbatim beside `accelerator`
+    in `run-config.json` only when the flag is given; omission writes no
+    key at all, never a default. Unlike the accelerator pair, this field
+    has no service-registered fallback of any kind — it is target
+    knowledge, exactly like `environment_requirements`.
+    """
+
+    FAKE_SERVICE = "local-budget-fake-service"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ADAPTER.register_metadata(
+            cls.FAKE_SERVICE,
+            lambda run_config: ("fake-metadata.json", json.dumps({"ok": True})),
+        )
+
+    def setUp(self) -> None:
+        patcher = unittest.mock.patch.object(
+            JOBFOLDER, "verify_pin_preconditions", return_value=None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _fixture_assets(self, tmp: str) -> tuple[Path, Path]:
+        bootstrap = Path(tmp) / "fixture_bootstrap.py"
+        invoke = Path(tmp) / "fixture_invoke.py"
+        bootstrap.write_text("# fixture bootstrap cell\nprint('cell-0')\n", encoding="utf-8")
+        invoke.write_text("# fixture invoke cell\nprint('cell-1')\n", encoding="utf-8")
+        return bootstrap, invoke
+
+    def _ensure_default_source_tree(self, target: Path) -> None:
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
+        if not harness.exists():
+            harness.parent.mkdir(parents=True, exist_ok=True)
+            harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
+
+    def _generate(self, tmp: str, target: Path, **overrides) -> Path:
+        bootstrap, invoke = self._fixture_assets(tmp)
+        self._ensure_default_source_tree(target)
+        kwargs = dict(
+            target=target,
+            service=self.FAKE_SERVICE,
+            job_name="search-a",
+            product="FEM-TOLLA",
+            commit="a" * 40,
+            repo_url="https://example.invalid/repo.git",
+            repo_ref="main",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
+            run_function="campaign",
+            bootstrap_asset=bootstrap,
+            invoke_asset=invoke,
+        )
+        kwargs.update(overrides)
+        return JOBFOLDER.generate_job(**kwargs)
+
+    # -- jobfolder.generate_job(): silence, never a default ----------------
+
+    def test_generate_job_without_local_budget_seconds_omits_the_key(self) -> None:
+        """Mutation-proven: substituting a default `{"seconds": 0}` for the
+        omitted case must turn this red — verified below, then reverted.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            destination = self._generate(tmp, target)
+            run_config = json.loads(
+                (destination / "run-config.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn("localBudget", run_config)
+
+    def test_generate_job_with_local_budget_seconds_writes_the_block(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            destination = self._generate(tmp, target, local_budget_seconds=1800)
+            run_config = json.loads(
+                (destination / "run-config.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(run_config["localBudget"], {"seconds": 1800})
+
+    # -- jobfolder.validate_run_config(): the optional block round-trips ---
+
+    def test_validate_run_config_accepts_a_localbudget_block(self) -> None:
+        """No allowlist rejects an optional key here (see that function's
+        own docstring); this documents the round-trip rather than
+        mutation-proving a rejection that was never written.
+        """
+        run_config = {
+            "schemaVersion": 1, "product": "P", "service": "s", "jobName": "j",
+            "commit": "a" * 40, "repo": {"url": "u", "ref": "main"},
+            "clonePaths": ["src/A"], "run": {"module": "A.b", "function": "f"},
+            "runnerTemplate": [{"path": "x", "sha256": "y"}],
+            "localBudget": {"seconds": 900},
+        }
+        JOBFOLDER.validate_run_config(run_config)  # must not raise
+
+    # -- CLI wiring: --local-budget-seconds ---------------------------------
+
+    def test_generate_job_parser_declares_local_budget_seconds_flag(self) -> None:
+        parser = REMOTE_CLI._build_parser()
+        args = parser.parse_args([
+            "generate-job", "--target", "/tmp/x", "--service", "svc",
+            "--job-name", "job", "--product", "P", "--commit", "a" * 40,
+            "--repo-url", "https://example.invalid/r.git", "--repo-ref", "main",
+            "--run-module", "m", "--run-function", "f",
+            "--local-budget-seconds", "1800",
+        ])
+        self.assertEqual(args.local_budget_seconds, 1800)
+
+    def test_generate_job_parser_local_budget_seconds_defaults_to_none(self) -> None:
+        parser = REMOTE_CLI._build_parser()
+        args = parser.parse_args([
+            "generate-job", "--target", "/tmp/x", "--service", "svc",
+            "--job-name", "job", "--product", "P", "--commit", "a" * 40,
+            "--repo-url", "https://example.invalid/r.git", "--repo-ref", "main",
+            "--run-module", "m", "--run-function", "f",
+        ])
+        self.assertIsNone(args.local_budget_seconds)
+
+    def test_cli_generate_job_with_local_budget_seconds_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            self._ensure_default_source_tree(target)
+            bootstrap, invoke = self._fixture_assets(tmp)
+
+            with unittest.mock.patch.object(
+                JOBFOLDER, "DEFAULT_BOOTSTRAP_ASSET", bootstrap
+            ), unittest.mock.patch.object(JOBFOLDER, "DEFAULT_INVOKE_ASSET", invoke):
+                exit_code = REMOTE_CLI.main([
+                    "generate-job",
+                    "--target", str(target),
+                    "--service", self.FAKE_SERVICE,
+                    "--job-name", "cli-local-budget",
+                    "--product", "FEM-TOLLA",
+                    "--commit", "a" * 40,
+                    "--repo-url", "https://example.invalid/repo.git",
+                    "--repo-ref", "main",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
+                    "--run-function", "campaign",
+                    "--local-budget-seconds", "600",
+                ])
+
+            self.assertEqual(exit_code, 0)
+            job_dir = target / "tools" / self.FAKE_SERVICE / "cli-local-budget"
+            run_config = json.loads((job_dir / "run-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_config["localBudget"], {"seconds": 600})
+
+    def test_cli_generate_job_without_local_budget_seconds_omits_the_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            self._ensure_default_source_tree(target)
+            bootstrap, invoke = self._fixture_assets(tmp)
+
+            with unittest.mock.patch.object(
+                JOBFOLDER, "DEFAULT_BOOTSTRAP_ASSET", bootstrap
+            ), unittest.mock.patch.object(JOBFOLDER, "DEFAULT_INVOKE_ASSET", invoke):
+                exit_code = REMOTE_CLI.main([
+                    "generate-job",
+                    "--target", str(target),
+                    "--service", self.FAKE_SERVICE,
+                    "--job-name", "cli-no-local-budget",
+                    "--product", "FEM-TOLLA",
+                    "--commit", "a" * 40,
+                    "--repo-url", "https://example.invalid/repo.git",
+                    "--repo-ref", "main",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
+                    "--run-function", "campaign",
+                ])
+
+            self.assertEqual(exit_code, 0)
+            job_dir = target / "tools" / self.FAKE_SERVICE / "cli-no-local-budget"
+            run_config = json.loads((job_dir / "run-config.json").read_text(encoding="utf-8"))
+            self.assertNotIn("localBudget", run_config)
 
 
 class CommitShapeTests(unittest.TestCase):
@@ -8786,13 +10914,13 @@ class CommitShapeTests(unittest.TestCase):
     def _run_config(self, commit: str) -> dict:
         return {
             "schemaVersion": 1,
-            "product": "MIL-CREDA",
+            "product": "FEM-TOLLA",
             "service": self.FAKE_SERVICE,
             "jobName": "search-a",
             "commit": commit,
             "repo": {"url": "https://example.invalid/repo.git", "ref": "main"},
-            "clonePaths": ["src/MIL_CREDA_Benchmark"],
-            "run": {"module": "MIL_CREDA_Benchmark.harness", "function": "campaign"},
+            "clonePaths": ["src/FEM_TOLLA_Benchmark"],
+            "run": {"module": "FEM_TOLLA_Benchmark.harness", "function": "campaign"},
             "runnerTemplate": [],
         }
 
@@ -8801,19 +10929,19 @@ class CommitShapeTests(unittest.TestCase):
         invoke = Path(tmp) / "fixture_invoke.py"
         bootstrap.write_text("# cell-0\n", encoding="utf-8")
         invoke.write_text("# cell-1\n", encoding="utf-8")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*a, **k):\n    pass\n", encoding="utf-8")
         return JOBFOLDER.generate_job(
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -8955,7 +11083,7 @@ class CommitReachabilityTests(unittest.TestCase):
         return bootstrap, invoke
 
     def _ensure_default_source_tree(self, target: Path) -> None:
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         if not harness.exists():
             harness.parent.mkdir(parents=True, exist_ok=True)
             harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
@@ -8967,12 +11095,12 @@ class CommitReachabilityTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit="c" * 40,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -9374,12 +11502,12 @@ class CommitReachabilityTests(unittest.TestCase):
                         target=target,
                         service=self.FAKE_SERVICE,
                         job_name="search-a",
-                        product="MIL-CREDA",
+                        product="FEM-TOLLA",
                         commit="c" * 40,
                         repo_url="https://example.invalid/repo.git",
                         repo_ref="main",
-                        clone_paths=["src/MIL_CREDA_Benchmark"],
-                        run_module="MIL_CREDA_Benchmark.harness",
+                        clone_paths=["src/FEM_TOLLA_Benchmark"],
+                        run_module="FEM_TOLLA_Benchmark.harness",
                         run_function="campaign",
                         bootstrap_asset=self._fixture_assets(tmp)[0],
                         invoke_asset=self._fixture_assets(tmp)[1],
@@ -9627,7 +11755,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
         self._git(target, "init", "-q")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         (target / "README.md").write_text("outside every clone path\n", encoding="utf-8")
@@ -9639,7 +11767,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
         JOBFOLDER.verify_pin_preconditions(
             target=target,
             commit=commit,
-            clone_paths=["src/MIL_CREDA_Benchmark"],
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
             decision=decision,
@@ -9697,7 +11825,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
 
             self.assertEqual(recorded["decision"], "generation")
             self.assertEqual(recorded["commit"], head)
-            self.assertEqual(list(recorded["clone_paths"]), ["src/MIL_CREDA_Benchmark"])
+            self.assertEqual(list(recorded["clone_paths"]), ["src/FEM_TOLLA_Benchmark"])
             self.assertEqual(recorded["repo_url"], "https://example.invalid/repo.git")
             self.assertEqual(recorded["repo_ref"], "main")
 
@@ -9714,12 +11842,12 @@ class CleanWorkingTreeTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -9731,13 +11859,13 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 'edited'\n", encoding="utf-8")
 
             with self.assertRaises(JOBFOLDER.JobFolderError) as caught:
                 self._verify(target, head)
 
-            self.assertIn("src/MIL_CREDA_Benchmark/harness.py", str(caught.exception))
+            self.assertIn("src/FEM_TOLLA_Benchmark/harness.py", str(caught.exception))
 
     def test_an_untracked_non_ignored_file_under_a_clone_path_refuses_naming_it(self) -> None:
         """The case `git diff` cannot see, and the reason this condition
@@ -9747,13 +11875,13 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            new_module = target / "src" / "MIL_CREDA_Benchmark" / "run_search.py"
+            new_module = target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py"
             new_module.write_text("def search():\n    pass\n", encoding="utf-8")
 
             with self.assertRaises(JOBFOLDER.JobFolderError) as caught:
                 self._verify(target, head)
 
-            self.assertIn("src/MIL_CREDA_Benchmark/run_search.py", str(caught.exception))
+            self.assertIn("src/FEM_TOLLA_Benchmark/run_search.py", str(caught.exception))
 
     def test_git_diff_would_not_have_seen_the_untracked_file(self) -> None:
         """Not a test of this module — a test of the instrument choice,
@@ -9765,17 +11893,17 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 'edited'\n", encoding="utf-8")
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "def search():\n    pass\n", encoding="utf-8"
             )
 
             diffed = self._git(
-                target, "diff", "--name-only", "--", "src/MIL_CREDA_Benchmark"
+                target, "diff", "--name-only", "--", "src/FEM_TOLLA_Benchmark"
             ).stdout
             statused = self._git(
-                target, "status", "--porcelain", "--", "src/MIL_CREDA_Benchmark"
+                target, "status", "--porcelain", "--", "src/FEM_TOLLA_Benchmark"
             ).stdout
 
             self.assertIn("harness.py", diffed)
@@ -9787,14 +11915,14 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            staged = target / "src" / "MIL_CREDA_Benchmark" / "staged.py"
+            staged = target / "src" / "FEM_TOLLA_Benchmark" / "staged.py"
             staged.write_text("STAGED = 1\n", encoding="utf-8")
-            self._git(target, "add", "src/MIL_CREDA_Benchmark/staged.py")
+            self._git(target, "add", "src/FEM_TOLLA_Benchmark/staged.py")
 
             with self.assertRaises(JOBFOLDER.JobFolderError) as caught:
                 self._verify(target, head)
 
-            self.assertIn("src/MIL_CREDA_Benchmark/staged.py", str(caught.exception))
+            self.assertIn("src/FEM_TOLLA_Benchmark/staged.py", str(caught.exception))
 
     def test_an_ignored_file_under_a_clone_path_passes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -9805,7 +11933,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
             self._git(target, "add", ".gitignore")
             self._git(target, "commit", "-q", "-m", "ignore pyc")
             head = self._git(target, "rev-parse", "HEAD").stdout.strip()
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.pyc").write_bytes(b"\x00")
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.pyc").write_bytes(b"\x00")
 
             self._verify(target, head)
 
@@ -9821,7 +11949,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
     def test_a_target_that_is_not_a_repository_refuses_carrying_gits_words(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "plain"
-            (target / "src" / "MIL_CREDA_Benchmark").mkdir(parents=True)
+            (target / "src" / "FEM_TOLLA_Benchmark").mkdir(parents=True)
 
             with self.assertRaises(JOBFOLDER.JobFolderError) as caught:
                 self._verify(target, "a" * 40)
@@ -9831,7 +11959,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
     def test_a_repository_with_no_commits_refuses_carrying_gits_words(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "src" / "MIL_CREDA_Benchmark").mkdir(parents=True)
+            (target / "src" / "FEM_TOLLA_Benchmark").mkdir(parents=True)
             self._git(target, "init", "-q")
 
             with self.assertRaises(JOBFOLDER.JobFolderError) as caught:
@@ -9843,7 +11971,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
 
@@ -9861,7 +11989,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
 
@@ -9881,10 +12009,10 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 'edited'\n", encoding="utf-8")
             before = self._tree_fingerprint(target)
 
@@ -9899,7 +12027,7 @@ class CleanWorkingTreeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "def search():\n    pass\n", encoding="utf-8"
             )
 
@@ -9983,7 +12111,7 @@ class PinIsHeadTests(unittest.TestCase):
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
         self._git(target, "init", "-q")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         (target / "README.md").write_text("outside every clone path\n", encoding="utf-8")
@@ -10000,7 +12128,7 @@ class PinIsHeadTests(unittest.TestCase):
         JOBFOLDER.verify_pin_preconditions(
             target=target,
             commit=commit,
-            clone_paths=["src/MIL_CREDA_Benchmark"],
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
             decision=decision,
@@ -10027,7 +12155,7 @@ class PinIsHeadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             pinned = self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             head = self._commit_all(target, "move the harness on")
 
@@ -10035,7 +12163,7 @@ class PinIsHeadTests(unittest.TestCase):
                 self._verify(target, pinned)
 
             message = str(caught.exception)
-            self.assertIn("src/MIL_CREDA_Benchmark/harness.py", message)
+            self.assertIn("src/FEM_TOLLA_Benchmark/harness.py", message)
             self.assertIn(pinned, message)
             self.assertIn(head, message)
 
@@ -10081,7 +12209,7 @@ class PinIsHeadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             pinned = self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             self._commit_all(target, "move the harness on")
             before = self._git(target, "rev-parse", "HEAD").stdout.strip()
@@ -10104,10 +12232,10 @@ class PinIsHeadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             pinned = self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             self._commit_all(target, "move the harness on")
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
 
@@ -10136,7 +12264,7 @@ class PinIsHeadTests(unittest.TestCase):
             ):
                 self._verify(target, pinned)
 
-            self.assertEqual(calls, [(pinned, ["src/MIL_CREDA_Benchmark"])])
+            self.assertEqual(calls, [(pinned, ["src/FEM_TOLLA_Benchmark"])])
 
     # -- the asymmetry: refuse at a decision point, report at read() ------
 
@@ -10153,12 +12281,12 @@ class PinIsHeadTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -10170,7 +12298,7 @@ class PinIsHeadTests(unittest.TestCase):
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
 
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             self._commit_all(target, "move the harness on")
 
@@ -10178,7 +12306,7 @@ class PinIsHeadTests(unittest.TestCase):
 
             self.assertEqual(job_folder.staleness["status"], "drift")
             self.assertIn(
-                "src/MIL_CREDA_Benchmark/harness.py",
+                "src/FEM_TOLLA_Benchmark/harness.py",
                 job_folder.staleness["changedPaths"],
             )
 
@@ -10186,7 +12314,7 @@ class PinIsHeadTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             pinned = self._init_repo(target)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             self._commit_all(target, "move the harness on")
 
@@ -10345,7 +12473,7 @@ class CommitDefaultTests(unittest.TestCase):
 
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         self._git(target, "init", "-q")
@@ -10366,11 +12494,11 @@ class CommitDefaultTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -10391,11 +12519,11 @@ class CommitDefaultTests(unittest.TestCase):
                 "--target", str(target),
                 "--service", self.FAKE_SERVICE,
                 "--job-name", "cli-job",
-                "--product", "MIL-CREDA",
+                "--product", "FEM-TOLLA",
                 "--repo-url", "https://example.invalid/repo.git",
                 "--repo-ref", "main",
-                "--clone-path", "src/MIL_CREDA_Benchmark",
-                "--run-module", "MIL_CREDA_Benchmark.harness",
+                "--clone-path", "src/FEM_TOLLA_Benchmark",
+                "--run-module", "FEM_TOLLA_Benchmark.harness",
                 "--run-function", "campaign",
                 *extra,
             ])
@@ -10470,7 +12598,7 @@ class CommitDefaultTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             self._init_repo(target)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "def search():\n    pass\n", encoding="utf-8"
             )
 
@@ -10498,8 +12626,8 @@ class CommitDefaultTests(unittest.TestCase):
     def test_defaulting_in_a_target_with_no_history_refuses_with_gits_words(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "src" / "MIL_CREDA_Benchmark").mkdir(parents=True)
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark").mkdir(parents=True)
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "def campaign():\n    pass\n", encoding="utf-8"
             )
             self._git(target, "init", "-q")
@@ -10628,11 +12756,11 @@ class ResolveClonePathsTests(unittest.TestCase):
         submodule FILE rather than an attribute `__init__.py` itself
         defines. `A/sub.py`'s own imports were then never walked at
         all — confirmed as a real production gap: a job folder generated
-        for `from MIL_CREDA_Benchmark import bags, config, report_digest,
+        for `from FEM_TOLLA_Benchmark import partials, config, report_digest,
         wiring` (an empty `__init__.py`) let `wiring.py`'s own `from
-        MIL_CREDA.attention import ...` slip through undeclared, and the
+        FEM_TOLLA.spectra import ...` slip through undeclared, and the
         clone failed at runtime with `ModuleNotFoundError: No module named
-        'MIL_CREDA'` — exactly the silent gap `computedNotDeclared` exists
+        'FEM_TOLLA'` — exactly the silent gap `computedNotDeclared` exists
         to refuse.
 
         The fix must stay conservative: `A.sub` is enqueued ONLY when it
@@ -10794,6 +12922,788 @@ class ResolveClonePathsTests(unittest.TestCase):
         self.assertEqual(JOBFOLDER.validate_clone_paths(["src/A"]), ("src/A",))
 
 
+class UndeclaredReadDetectionTests(unittest.TestCase):
+    """`jobfolder.resolve_clone_paths()`'s two new keys, `computedReadsNotDeclared`
+    and `unresolvedReads` (Unit 1, same-file undeclared-read detection).
+    Reuses the SAME parsed AST tree `ResolveClonePathsTests` already exercises
+    for import classification — no new file traversal, only two new node
+    families read from it (`ast.Assign` for module-level constants,
+    `ast.Call`/`ast.Attribute` for read call sites).
+
+    Every test in this class has a reachable red: before this task,
+    `resolve_clone_paths()`'s returned dict held only `{declared, computed,
+    computedNotDeclared, unresolved}` — no `computedReadsNotDeclared` or
+    `unresolvedReads` key at all, so every assertion against either key
+    fails with `KeyError` on the very first call.
+
+    Fixture module/package names deliberately avoid every string in
+    `TargetVocabularyLeakTests.TARGET_LITERALS`, which is the one place this
+    suite writes those names down — `pkg_a` through `pkg_l` instead.
+    Expected values are written as the literal relative-posix string an
+    operator would type into `--clone-path`, never recomputed by
+    re-invoking `resolve_clone_paths()` on itself.
+
+    Tests 8b/8c (corrective batch) additionally exercise
+    `producedReadsNotDeclared` and `--accept-produced-reads` — the
+    generation-deadlock fix. The class-wide `verify_pin_preconditions()`
+    stub above is exactly what hid that deadlock originally (it was never
+    exercised together with `computedReadsNotDeclared`'s refusal in any
+    test, in either unit); the SEAM test that actually crosses both
+    refusal mechanisms lives in `ClonePathExistenceTests` instead, which
+    stubs nothing and runs against a real, unmocked git repository.
+    """
+
+    FAKE_SERVICE = "undeclared-read-fake-service"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ADAPTER.register_metadata(
+            cls.FAKE_SERVICE,
+            lambda run_config: ("fake-metadata.json", json.dumps({"ok": True})),
+        )
+
+    def setUp(self) -> None:
+        # Same seam `GenerateJobTests` uses: the two generate_job()-based
+        # tests here (`test_unfoldable_read_...`, `test_accept_unresolved_...`)
+        # are not exercising pin preconditions, so stubbing the one shared
+        # `verify_pin_preconditions()` seam keeps them offline and
+        # deterministic without needing a real git repository.
+        patcher = unittest.mock.patch.object(
+            JOBFOLDER, "verify_pin_preconditions", return_value=None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _write(self, root: Path, relative: str, text: str) -> Path:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _fixture_assets(self, tmp: str) -> tuple[Path, Path]:
+        bootstrap = Path(tmp) / "fixture_bootstrap.py"
+        invoke = Path(tmp) / "fixture_invoke.py"
+        bootstrap.write_text("# fixture bootstrap cell\nprint('cell-0')\n", encoding="utf-8")
+        invoke.write_text("# fixture invoke cell\nprint('cell-1')\n", encoding="utf-8")
+        return bootstrap, invoke
+
+    def _generate(self, tmp: str, target: Path, **overrides) -> Path:
+        bootstrap, invoke = self._fixture_assets(tmp)
+        kwargs = dict(
+            target=target,
+            service=self.FAKE_SERVICE,
+            job_name="read-job",
+            product="fake-product",
+            commit="a" * 40,
+            repo_url="https://example.invalid/repo.git",
+            repo_ref="main",
+            bootstrap_asset=bootstrap,
+            invoke_asset=invoke,
+        )
+        kwargs.update(overrides)
+        return JOBFOLDER.generate_job(**kwargs)
+
+    # -- Test 1 -----------------------------------------------------------
+
+    def test_undeclared_four_link_chain_read_refuses_naming_the_resolved_path(
+        self,
+    ) -> None:
+        """Transcribed from a real target's own `config.py` (lines 459-469,
+        read as-is, never re-derived): `REPOSITORY = Path(__file__).resolve()
+        .parents[2]`, then `PRODUCT`, `RESULTS`, and finally the record
+        constant, each one a `Name` lookup into the constant folded just
+        above it, with a `.read_text()` call inside a function body that
+        returns the record. Only `src/pkg_a` is declared; the resolved record
+        path lands OUTSIDE `src/` entirely -- a sibling of it, the way a
+        product folder's `Results/` sits beside `src/` -- so it is a real,
+        contained, undeclared read.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_a/settings.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'RECORD = RESULTS / "ledger.json"\n\n\n'
+                "def ledger_on_record():\n"
+                "    if not RECORD.exists():\n"
+                "        return {}\n"
+                "    return RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_a.settings"], ["src/pkg_a"]
+            )
+
+            self.assertEqual(
+                result["computedReadsNotDeclared"],
+                ["product-out/Results/Stage/ledger.json"],
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+            # And the refusal actually reaches generate_job() (task 3.1).
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_a"],
+                    run_module="pkg_a.settings",
+                    run_function="ledger_on_record",
+                )
+            self.assertIn("product-out/Results/Stage/ledger.json", str(ctx.exception))
+
+    # -- Test 2 -------------------------------------------------------
+
+    def test_same_chain_and_read_declared_is_silent(self) -> None:
+        """The distinguishing pair with the previous test: identical chain
+        and read call, but the resolved path is now covered by a declared
+        clone path — no refusal, `computedReadsNotDeclared` empty. Proves
+        the check DISTINGUISHES rather than merely fires.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_a/settings.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'RECORD = RESULTS / "ledger.json"\n\n\n'
+                "def ledger_on_record():\n"
+                "    if not RECORD.exists():\n"
+                "        return {}\n"
+                "    return RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_a.settings"], ["src/pkg_a", "product-out"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 3 -------------------------------------------------------
+
+    def test_idiom_divergent_fixture_still_resolves_and_refuses(self) -> None:
+        """A DIFFERENT idiom than the previous two tests were templated
+        from: `.parents[4]` instead of `.parents[2]`, `.joinpath("a", "b")`
+        instead of chained `/`, and a builtin `open(P)` call inside a
+        `with` statement instead of `.read_text()`. Parsing one idiom is
+        not sufficient to pass — this must resolve and refuse too.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_b/inner/deep/loader.py",
+                "from pathlib import Path\n\n"
+                "ROOT = Path(__file__).resolve().parents[4]\n"
+                'DATA_DIR = ROOT.joinpath("assets", "cache")\n'
+                'RECORD = DATA_DIR / "manifest.json"\n\n\n'
+                "def load():\n"
+                "    with open(RECORD) as fh:\n"
+                "        return fh.read()\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_b.inner.deep.loader"], ["src/pkg_b"]
+            )
+
+            self.assertEqual(
+                result["computedReadsNotDeclared"], ["assets/cache/manifest.json"]
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 4 -------------------------------------------------------
+
+    def test_non_vacuity_no_read_call_sites_both_lists_stay_empty(self) -> None:
+        """No `open`/`read_text`/`json.load`-shaped call site anywhere
+        reachable from the entry module — all three new lists must stay
+        empty (the third key arrived with the produced-read split and this
+        assertion did not grow with it),
+        and no new refusal fires. A folder tuned to always find something
+        would pass every other test here and still be wrong; this is what
+        rules that out.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_c/entry.py",
+                "from pathlib import Path\n\n"
+                "ROOT = Path(__file__).resolve().parent\n"
+                'CONFIG_DIR = ROOT / "config"\n\n\n'
+                "def describe():\n"
+                "    return str(CONFIG_DIR)\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_c.entry"], ["src/pkg_c"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(result["producedReadsNotDeclared"], [])
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 5 -------------------------------------------------------
+
+    def test_absolute_path_inline_literal_is_never_proposed_in_either_list(self) -> None:
+        """A `Path("/sys/...")` LITERAL, folded directly at the call site
+        (never through a `Name` lookup — `_fold_path_expr()` folds a
+        string-literal `Path(...)` unconditionally, module-level or not,
+        which is why this shape folds here even though it sits inside a
+        function body): a read on an absolute path outside `target` must
+        never be proposed as an undeclared read AND never recorded as an
+        uncertainty — Decision 4's containment filter DROPS it, it does
+        not accuse.
+
+        **Corrected claim (this was measured false and fixed by the
+        verifier)**: an earlier revision of this test's docstring claimed
+        the containment drop proven here holds "regardless of which name,
+        if any, holds the Path between construction and the read." That
+        is empirically false. The real cited shape
+        (`harness.py:167-169`, `online = Path("/sys/class/power_supply/
+        AC/online")` then `online.read_text()`) binds the absolute path to
+        a LOCAL variable first — `_fold_module_constants()` never folds a
+        local, so `online` is never in the table, `online.read_text()`'s
+        receiver fails to fold, and the read reaches `unresolvedReads`
+        (refuses by default) via the read-shaped-method-name fallback
+        instead of ever reaching this containment test at all. That
+        DIFFERENT, real shape is covered by
+        `test_absolute_path_bound_to_a_local_variable_is_unresolved_not_dropped`
+        below — two different code paths, two different outcomes, and
+        this test proves only the inline-literal one.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_d/probe.py",
+                "from pathlib import Path\n\n\n"
+                "def battery_status():\n"
+                '    if Path("/sys/class/power_supply/AC/online").exists():\n'
+                "        return Path(\"/sys/class/power_supply/AC/online\")"
+                ".read_text().strip()\n"
+                "    return 'unknown'\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_d.probe"], ["src/pkg_d"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 5b (WARNING closure) --------------------------------------
+
+    def test_absolute_path_bound_to_a_local_variable_is_unresolved_not_dropped(
+        self,
+    ) -> None:
+        """The REAL shape (`harness.py:167-169`, transcribed exactly): the
+        absolute path is bound to a local variable (`online = Path(...)`)
+        BEFORE the read call (`online.read_text()`), never inlined as a
+        literal receiver. `_fold_module_constants()` only scans
+        module-level `ast.Assign` statements (by design — see
+        `_shadowed_names()`), so a local variable is never in the fold
+        table regardless of whether its spelling happens to be unique in
+        the file. The receiver therefore fails to fold, and the call
+        site's own read-shaped method name (`.read_text`) routes it to
+        `unresolvedReads` instead — refusing generation by default, with
+        `--accept-unresolved-reads` as the escape hatch, exactly like any
+        other unfoldable receiver (the f-string case, Test 6). It is NEVER
+        silently dropped by the containment filter the way the
+        INLINE-LITERAL shape above is: this is precisely the distinction
+        the previous test's docstring got wrong.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_d/probe.py",
+                "from pathlib import Path\n\n\n"
+                "def battery_status():\n"
+                '    online = Path("/sys/class/power_supply/AC/online")\n'
+                "    if online.exists():\n"
+                "        return online.read_text().strip()\n"
+                "    return 'unknown'\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_d.probe"], ["src/pkg_d"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(result["producedReadsNotDeclared"], [])
+            self.assertEqual(len(result["unresolvedReads"]), 1)
+            self.assertIn("read call", result["unresolvedReads"][0])
+
+    # -- Test 6 -------------------------------------------------------
+
+    def test_unfoldable_read_refuses_by_default_and_is_recorded_when_accepted(
+        self,
+    ) -> None:
+        """An f-string-built path is outside `_fold_path_expr()`'s closed
+        grammar (`ast.JoinedStr`, never admitted). The read call site
+        itself is unmistakably read-shaped (`.read_text()`), so it becomes
+        an `unresolvedReads` entry and refuses generation by default;
+        passing `--accept-unresolved-reads` (here, the `accept_unresolved_reads`
+        kwarg `generate_job()` now exposes) proceeds and records the
+        finding VERBATIM in `run-config.json`'s `unresolvedReads`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_e/loader.py",
+                "from pathlib import Path\n\n\n"
+                "def load(run_id):\n"
+                '    return Path(f"/data/{run_id}/manifest.json")'
+                ".read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_e.loader"], ["src/pkg_e"]
+            )
+            self.assertEqual(len(result["unresolvedReads"]), 1)
+            self.assertIn("read call", result["unresolvedReads"][0])
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_e"],
+                    run_module="pkg_e.loader",
+                    run_function="load",
+                )
+            self.assertIn("accept-unresolved-reads", str(ctx.exception))
+
+            job_dir = self._generate(
+                tmp, target,
+                job_name="read-job-accepted",
+                clone_paths=["src/pkg_e"],
+                run_module="pkg_e.loader",
+                run_function="load",
+                accept_unresolved_reads=True,
+            )
+            run_config = json.loads((job_dir / "run-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(run_config["unresolvedReads"]), 1)
+            self.assertEqual(run_config["unresolvedReads"], result["unresolvedReads"])
+
+    # -- Test 7 -------------------------------------------------------
+
+    def test_folded_contained_path_as_bare_argument_is_never_silent(self) -> None:
+        """The library-loader shape (`some_loader(RECORD)`,
+        `pd.read_csv(DATA)`): a folded, target-contained path passed as a
+        bare argument into a call this walk cannot classify. Silence is
+        the wrong default here — the defect this whole change exists to
+        catch is a missing input nobody reported.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_f/loader.py",
+                "from pathlib import Path\n\n"
+                "ROOT = Path(__file__).resolve().parent\n"
+                'DATA = ROOT / "cache" / "table.csv"\n\n\n'
+                "def load_frame():\n"
+                "    return read_frame(DATA)\n\n\n"
+                "def read_frame(path):\n"
+                "    return path\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_f.loader"], ["src/pkg_f"]
+            )
+
+            self.assertEqual(len(result["unresolvedReads"]), 1)
+            self.assertIn("bare argument", result["unresolvedReads"][0])
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+
+    # -- Test 8 -------------------------------------------------------
+
+    def test_write_only_fixture_both_lists_stay_empty(self) -> None:
+        """Mirrors `harness.py`'s real resume-record write site
+        (the folded record constant's `.parent.mkdir(parents=True,
+        exist_ok=True)` then `.write_text(...)`, `harness.py:1019-1020`),
+        transcribed same-file: a folded, target-contained path is
+        `mkdir`'d and `write_text`'d, never read. Both lists must stay
+        empty — proving Decision 5 directly: a write call site is never a
+        candidate, and this is NOT because the path happens to be
+        unfoldable (it folds here, cleanly) — a write call site is simply
+        never a read call site, full stop, with no separate "run-produced
+        output" exclusion layered on top.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_g/resume.py",
+                "from pathlib import Path\n\n"
+                "ROOT = Path(__file__).resolve().parent\n"
+                'OUT_DIR = ROOT / "out"\n'
+                'RECORD = OUT_DIR / "ledger.json"\n\n\n'
+                "def resume():\n"
+                "    RECORD.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    RECORD.write_text('{}', encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_g.resume"], ["src/pkg_g"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(result["producedReadsNotDeclared"], [])
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 8b (corrective batch: the generation-deadlock CRITICAL) ---
+
+    def test_produced_read_reclassifies_and_only_succeeds_with_accept_produced_reads_flag(
+        self,
+    ) -> None:
+        """Mirrors the real target's resumable-record shape exactly,
+        same-file (`search_record()` reading the record constant that a
+        PRIOR run of `harness.py:1019-1020` wrote): `RECORD` is
+        BOTH read (`resume_on_record()`) AND written
+        (`seal_record()`, `mkdir` + `write_text`) by the same walked file
+        set. The read is undeclared and outside `src/`, same shape as
+        Test 1.
+
+        This is the decisive assertion for the CRITICAL this corrective
+        batch closes: `computedReadsNotDeclared` must be EMPTY (the read
+        moved out of the hatch-less bucket) and
+        `producedReadsNotDeclared` must be NON-EMPTY (reclassified, never
+        silently dropped — a mutation that made this candidate vanish
+        entirely, with no bucket at all and no refusal, would pass every
+        assertion below except this one). Generation must still refuse by
+        default (no flag disappears anything silently), and must succeed
+        only once `--accept-produced-reads` is given, recording the
+        finding verbatim in `run-config.json`'s `acceptedProducedReads`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_l/harness.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'RECORD = RESULTS / "ledger.json"\n\n\n'
+                "def resume_on_record():\n"
+                "    if not RECORD.exists():\n"
+                "        return {}\n"
+                "    return RECORD.read_text(encoding='utf-8')\n\n\n"
+                "def seal_record():\n"
+                "    RECORD.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    RECORD.write_text('{}', encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_l.harness"], ["src/pkg_l"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(
+                result["producedReadsNotDeclared"],
+                ["product-out/Results/Stage/ledger.json"],
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+            # No flag at all -> still refuses, naming the path and the hatch.
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_l"],
+                    run_module="pkg_l.harness",
+                    run_function="resume_on_record",
+                )
+            self.assertIn("product-out/Results/Stage/ledger.json", str(ctx.exception))
+            self.assertIn("accept-produced-reads", str(ctx.exception))
+
+            # --accept-unresolved-reads ALONE never covers it (reachability
+            # proof, same posture as Test 10 for the import/read flags).
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_l"],
+                    run_module="pkg_l.harness",
+                    run_function="resume_on_record",
+                    accept_unresolved_reads=True,
+                )
+            self.assertIn("accept-produced-reads", str(ctx.exception))
+
+            # --accept-unresolved ALONE never covers it either. This is the
+            # THIRD pairwise independence claim, and until now it lived only
+            # in the CLI help and a docstring -- prose, in a change whose
+            # whole subject is claims nothing guards.
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_l"],
+                    run_module="pkg_l.harness",
+                    run_function="resume_on_record",
+                    accept_unresolved=True,
+                )
+            self.assertIn("accept-produced-reads", str(ctx.exception))
+
+            # --accept-produced-reads -> succeeds, recorded verbatim.
+            job_dir = self._generate(
+                tmp, target,
+                job_name="read-job-produced-accepted",
+                clone_paths=["src/pkg_l"],
+                run_module="pkg_l.harness",
+                run_function="resume_on_record",
+                accept_produced_reads=True,
+            )
+            run_config = json.loads((job_dir / "run-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                run_config["acceptedProducedReads"],
+                result["producedReadsNotDeclared"],
+            )
+
+    # -- Test 8c (distinguishing pair with 8b) --------------------------
+
+    def test_accept_produced_reads_never_waives_a_genuinely_missing_read(self) -> None:
+        """The distinguishing test: a SECOND constant (`OTHER`) in the SAME
+        file is read but never written anywhere in the walked set — a
+        genuinely missing declared input, not a produced-file candidate.
+        `--accept-produced-reads` must NEVER waive its refusal:
+        `computedReadsNotDeclared` still names it, unconditionally, even
+        while `RECORD` (written elsewhere in the same file, same as Test
+        8b) is correctly reclassified and accepted alongside it. Proves
+        the check DISTINGUISHES rather than blanket-accepting every
+        undeclared read once the flag is given.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_l/harness2.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'RECORD = RESULTS / "ledger.json"\n'
+                'OTHER = RESULTS / "other.json"\n\n\n'
+                "def resume_on_record():\n"
+                "    if not RECORD.exists():\n"
+                "        return {}\n"
+                "    return RECORD.read_text(encoding='utf-8')\n\n\n"
+                "def seal_record():\n"
+                "    RECORD.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    RECORD.write_text('{}', encoding='utf-8')\n\n\n"
+                "def read_other():\n"
+                "    return OTHER.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_l.harness2"], ["src/pkg_l"]
+            )
+
+            self.assertEqual(
+                result["computedReadsNotDeclared"],
+                ["product-out/Results/Stage/other.json"],
+            )
+            self.assertEqual(
+                result["producedReadsNotDeclared"],
+                ["product-out/Results/Stage/ledger.json"],
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+            # Even with the produced-reads flag, the genuinely missing
+            # read still refuses generation unconditionally.
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_l"],
+                    run_module="pkg_l.harness2",
+                    run_function="resume_on_record",
+                    accept_produced_reads=True,
+                )
+            self.assertIn("product-out/Results/Stage/other.json", str(ctx.exception))
+
+    # -- Test 9 -------------------------------------------------------
+
+    def test_local_parameter_shadowing_a_module_constant_is_never_folded(
+        self,
+    ) -> None:
+        """`RECORD` is both a module-level `Path` constant AND a function
+        PARAMETER name on `load()`. The shadowed name must never resolve
+        through `_fold_module_constants()`'s table — it lands in
+        `unresolvedReads`, never silently resolved to the module
+        constant's value it happens to share a spelling with.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_h/load_mod.py",
+                "from pathlib import Path\n\n"
+                'RECORD = Path(__file__).resolve().parent / "record.json"\n\n\n'
+                "def load(RECORD):\n"
+                "    return RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_h.load_mod"], ["src/pkg_h"]
+            )
+
+            self.assertEqual(len(result["unresolvedReads"]), 1)
+            self.assertIn("read call", result["unresolvedReads"][0])
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+
+    # -- Test 10 ------------------------------------------------------
+
+    def test_accept_unresolved_flag_alone_never_covers_reads(self) -> None:
+        """The reachability proof for the two-flag decision: an unfoldable
+        read call site, no unresolved imports at all, generated with
+        `--accept-unresolved` (imports) alone — still refuses for the
+        read. If this ever passed, `--accept-unresolved-reads`'s own
+        refusal-by-default would be silently unreachable.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(
+                target, "src/pkg_e/loader.py",
+                "from pathlib import Path\n\n\n"
+                "def load(run_id):\n"
+                '    return Path(f"/data/{run_id}/manifest.json")'
+                ".read_text(encoding='utf-8')\n",
+            )
+
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_e"],
+                    run_module="pkg_e.loader",
+                    run_function="load",
+                    accept_unresolved=True,
+                )
+            self.assertIn("uncertain reads", str(ctx.exception))
+
+    # -- Test 11 (Unit 2, Phase 7 — order-independence) ----------------
+
+    def test_cross_module_read_resolves_regardless_of_visit_order(self) -> None:
+        """The design's own named risk, made explicit: `resolve_clone_paths()`
+        walks its queue entry-module-first (`queue = [(name, True) for name
+        in entry_modules]`), and a sibling reached only through an import
+        discovered while scanning the entry module is enqueued to the BACK
+        of that queue. `pkg_i.harness` (the entry module, and the reader) is
+        therefore visited and scanned for read call sites BEFORE
+        `pkg_i.config` (the sibling that defines the constant it reads) is
+        ever popped off the queue — by construction of this walker, not by
+        anything this fixture arranges. If cross-module resolution depended
+        on `pkg_i.config`'s constant table already existing in some shared
+        table built file-by-file in visit order, this read would be
+        unresolvable at the moment it is scanned. It must resolve anyway.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(target, "src/pkg_i/__init__.py", "")
+            self._write(
+                target, "src/pkg_i/config.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'RECORD = RESULTS / "undercuts.json"\n',
+            )
+            self._write(
+                target, "src/pkg_i/harness.py",
+                "from pkg_i import config\n\n\n"
+                "def undercuts_on_record():\n"
+                "    if not config.RECORD.exists():\n"
+                "        return {}\n"
+                "    return config.RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_i.harness"], ["src/pkg_i"]
+            )
+
+            self.assertEqual(
+                result["computedReadsNotDeclared"],
+                ["product-out/Results/Stage/undercuts.json"],
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+    # -- Test 12 (Unit 2, Phase 8 — cross-module resolution) -----------
+
+    def test_cross_module_attribute_read_undeclared_refuses_naming_the_resolved_path(
+        self,
+    ) -> None:
+        """Mirrors `harness.py`'s real `search_record()`-shaped read of
+        a record constant off `config` (`harness.py:784`): the
+        constant folds in a DIFFERENT file (`pkg_j.config`) than the one
+        holding the read call site (`pkg_j.harness`), reached only via the
+        walk's own module->file map, reused (not duplicated) from import
+        classification. Undeclared -> refuses, naming the resolved path,
+        and the refusal reaches the full `generate_job()` round trip.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(target, "src/pkg_j/__init__.py", "")
+            self._write(
+                target, "src/pkg_j/config.py",
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'PRODUCT = REPOSITORY / "product-out"\n'
+                'RESULTS = PRODUCT / "Results" / "Stage"\n'
+                'UNDERCUTS_RECORD = RESULTS / "undercuts.json"\n',
+            )
+            self._write(
+                target, "src/pkg_j/harness.py",
+                "from pkg_j import config\n\n\n"
+                "def search_record():\n"
+                "    if not config.UNDERCUTS_RECORD.exists():\n"
+                "        return {}\n"
+                "    return config.UNDERCUTS_RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_j.harness"], ["src/pkg_j"]
+            )
+
+            self.assertEqual(
+                result["computedReadsNotDeclared"],
+                ["product-out/Results/Stage/undercuts.json"],
+            )
+            self.assertEqual(result["unresolvedReads"], [])
+
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(
+                    tmp, target,
+                    clone_paths=["src/pkg_j"],
+                    run_module="pkg_j.harness",
+                    run_function="search_record",
+                )
+            self.assertIn("product-out/Results/Stage/undercuts.json", str(ctx.exception))
+
+    # -- Test 13 (Unit 2, Phase 8 — unresolved sibling module) ---------
+
+    def test_cross_module_attribute_whose_module_did_not_resolve_is_unresolved(
+        self,
+    ) -> None:
+        """`pkg_k.missing_config` looks like this repository's own code
+        (`pkg_k` is a real package, imported the same way as the resolved
+        case above) but the specific submodule file does not exist on
+        disk — `_classify_import()` returns `"unresolved"`, exactly the
+        posture an unresolved same-package import already gets. The
+        attribute read on it must never be silently dropped: it becomes an
+        `unresolvedReads` entry, same as any other read whose receiver
+        could not fold.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            self._write(target, "src/pkg_k/__init__.py", "")
+            self._write(
+                target, "src/pkg_k/harness.py",
+                "from pkg_k import missing_config\n\n\n"
+                "def read_it():\n"
+                "    return missing_config.RECORD.read_text(encoding='utf-8')\n",
+            )
+
+            result = JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_k.harness"], ["src/pkg_k"]
+            )
+
+            self.assertEqual(result["computedReadsNotDeclared"], [])
+            self.assertEqual(len(result["unresolvedReads"]), 1)
+            self.assertIn("read call", result["unresolvedReads"][0])
+
+
 class StalenessTests(unittest.TestCase):
     """`jobfolder.read()` — design #744 section 4: there is no `is_stale()`
     a caller can forget, because staleness is computed INSIDE the one
@@ -10845,7 +13755,7 @@ class StalenessTests(unittest.TestCase):
         """
         target.mkdir(parents=True, exist_ok=True)
         self._git(target, "init", "-q")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         (target / "README.md").write_text("scratch fixture\n", encoding="utf-8")
@@ -10861,7 +13771,7 @@ class StalenessTests(unittest.TestCase):
         return bootstrap, invoke
 
     def _ensure_source_tree(self, target: Path) -> None:
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         if not harness.exists():
             harness.parent.mkdir(parents=True, exist_ok=True)
             harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
@@ -10873,12 +13783,12 @@ class StalenessTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name=job_name,
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -10912,7 +13822,7 @@ class StalenessTests(unittest.TestCase):
             self.assertEqual(still_not_stale.staleness["status"], "fresh")
 
             # Advance HEAD again, this time touching the DECLARED clone path.
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "def campaign(*args, **kwargs):\n    return 1\n", encoding="utf-8"
             )
             self._git(target, "add", "-A")
@@ -10921,7 +13831,7 @@ class StalenessTests(unittest.TestCase):
             drifted = JOBFOLDER.read(job_dir)
             self.assertEqual(drifted.staleness["status"], "drift")
             self.assertIn(
-                "src/MIL_CREDA_Benchmark/harness.py", drifted.staleness["changedPaths"]
+                "src/FEM_TOLLA_Benchmark/harness.py", drifted.staleness["changedPaths"]
             )
 
     def test_drift_is_never_a_refusal(self) -> None:
@@ -10933,7 +13843,7 @@ class StalenessTests(unittest.TestCase):
             initial_commit = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=initial_commit)
 
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "def campaign(*args, **kwargs):\n    return 2\n", encoding="utf-8"
             )
             self._git(target, "add", "-A")
@@ -11001,7 +13911,7 @@ class StalenessTests(unittest.TestCase):
 
             outside = Path(tmp) / "outside"
             outside.mkdir()
-            real_dir = target / "src" / "MIL_CREDA_Benchmark"
+            real_dir = target / "src" / "FEM_TOLLA_Benchmark"
             shutil.rmtree(real_dir)
             real_dir.symlink_to(outside)
 
@@ -11122,7 +14032,7 @@ class StalenessTests(unittest.TestCase):
                     JOBFOLDER.subprocess, "run", side_effect=recording_run
                 ):
                     staleness = JOBFOLDER._staleness_for(
-                        target.resolve(), malicious, ["src/MIL_CREDA_Benchmark"]
+                        target.resolve(), malicious, ["src/FEM_TOLLA_Benchmark"]
                     )
 
                 self.assertEqual(staleness["status"], "unknown")
@@ -11190,9 +14100,9 @@ class SubmitPinGateTests(unittest.TestCase):
 
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
-        (target / "MIL-CREDA").mkdir(parents=True, exist_ok=True)
-        (target / "MIL-CREDA" / ".keep").write_text("", encoding="utf-8")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        (target / "FEM-TOLLA").mkdir(parents=True, exist_ok=True)
+        (target / "FEM-TOLLA" / ".keep").write_text("", encoding="utf-8")
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         self._git(target, "init", "-q")
@@ -11217,12 +14127,12 @@ class SubmitPinGateTests(unittest.TestCase):
                 target=target,
                 service=self.FAKE_SERVICE,
                 job_name="search-a",
-                product="MIL-CREDA",
+                product="FEM-TOLLA",
                 commit=commit,
                 repo_url="https://example.invalid/repo.git",
                 repo_ref="main",
-                clone_paths=["src/MIL_CREDA_Benchmark"],
-                run_module="MIL_CREDA_Benchmark.harness",
+                clone_paths=["src/FEM_TOLLA_Benchmark"],
+                run_module="FEM_TOLLA_Benchmark.harness",
                 run_function="campaign",
                 bootstrap_asset=bootstrap,
                 invoke_asset=invoke,
@@ -11251,7 +14161,7 @@ class SubmitPinGateTests(unittest.TestCase):
         )
 
     def _ledger_path(self, target: Path) -> Path:
-        return target.resolve() / "MIL-CREDA" / ".remote-execution" / "ledger.jsonl"
+        return target.resolve() / "FEM-TOLLA" / ".remote-execution" / "ledger.jsonl"
 
     # -- the three conditions, at submit time ----------------------------
 
@@ -11260,7 +14170,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "def search():\n    pass\n", encoding="utf-8"
             )
             adapter = self._SpyAdapter(worker_id="w1", capacity=2)
@@ -11282,7 +14192,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+            harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
             harness.write_text("def campaign():\n    return 2\n", encoding="utf-8")
             self._commit_all(target, "move the harness on")
             adapter = self._SpyAdapter(worker_id="w1", capacity=2)
@@ -11334,7 +14244,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
 
@@ -11365,6 +14275,14 @@ class SubmitPinGateTests(unittest.TestCase):
                     source_digest=lambda t, n: "d" * 64,
                     worker="w1",
                 )
+                # PR7 (design §4): a job-folder launch also needs a
+                # matching `gate` record now -- consent alone is no
+                # longer enough.
+                _mint_launch_authorization(
+                    target=target, product="FEM-TOLLA", pin_commit=head,
+                    relative_entrypoint=f"tools/{self.FAKE_SERVICE}/search-a/runner.ipynb",
+                    worker="w1",
+                )
                 result = self._submit(
                     target, job_dir / "runner.ipynb", adapter, consent=token,
                 )
@@ -11382,7 +14300,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
             digest_calls = []
@@ -11411,7 +14329,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
             adapter = self._SpyAdapter(worker_id="w1", capacity=2)
@@ -11438,14 +14356,14 @@ class SubmitPinGateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
             self._init_repo(target)
-            notebooks = target / "MIL-CREDA" / "Notebooks"
+            notebooks = target / "FEM-TOLLA" / "Notebooks"
             notebooks.mkdir(parents=True)
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             # Deliberately dirty, and deliberately not a job folder: there
             # is no declared pin, no declared clone paths and no declared
             # remote here, so there is nothing for the gate to check.
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
             adapter = self._SpyAdapter(worker_id="w1", capacity=2)
@@ -11474,7 +14392,7 @@ class SubmitPinGateTests(unittest.TestCase):
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
             (job_dir / "run-config.json").write_text(
-                json.dumps({"product": "MIL-CREDA"}), encoding="utf-8"
+                json.dumps({"product": "FEM-TOLLA"}), encoding="utf-8"
             )
             adapter = self._SpyAdapter(worker_id="w1", capacity=2)
 
@@ -11515,7 +14433,7 @@ class SubmitPinGateTests(unittest.TestCase):
             target = Path(tmp) / "repo"
             head = self._init_repo(target)
             job_dir = self._generate(tmp, target, commit=head)
-            (target / "src" / "MIL_CREDA_Benchmark" / "run_search.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "run_search.py").write_text(
                 "x = 1\n", encoding="utf-8"
             )
             stderr = io.StringIO()
@@ -11582,10 +14500,10 @@ class StalenessRoutingTests(unittest.TestCase):
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
         self._git(target, "init", "-q")
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
-        (target / "MIL-CREDA").mkdir(parents=True, exist_ok=True)
+        (target / "FEM-TOLLA").mkdir(parents=True, exist_ok=True)
         self._git(target, "add", "-A")
         self._git(target, "commit", "-q", "-m", "initial")
         return self._git(target, "rev-parse", "HEAD").stdout.strip()
@@ -11603,12 +14521,12 @@ class StalenessRoutingTests(unittest.TestCase):
             target=target,
             service=self.FAKE_SERVICE,
             job_name="search-a",
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
             bootstrap_asset=bootstrap,
             invoke_asset=invoke,
@@ -11621,7 +14539,7 @@ class StalenessRoutingTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -11656,6 +14574,13 @@ class StalenessRoutingTests(unittest.TestCase):
             token = _mint_launch_consent(
                 target=target, entrypoint=notebook, adapter=adapter,
                 source_digest=lambda t, n: "d" * 64,
+                worker="w1",
+            )
+            # PR7 (design §4): a job-folder launch also needs a matching
+            # `gate` record now -- consent alone is no longer enough.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit=initial_commit,
+                relative_entrypoint=f"tools/{self.FAKE_SERVICE}/search-a/runner.ipynb",
                 worker="w1",
             )
             result = REMOTE_CLI.cmd_submit(
@@ -11697,12 +14622,12 @@ class StalenessRoutingTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             (job_dir / "run-config.json").write_text(
-                json.dumps({"product": "MIL-CREDA"}), encoding="utf-8"
+                json.dumps({"product": "FEM-TOLLA"}), encoding="utf-8"
             )
 
             adapter = FakeAdapter(worker_id="w1", capacity=2)
@@ -11717,7 +14642,7 @@ class StalenessRoutingTests(unittest.TestCase):
                 )
 
             self.assertFalse(
-                (target.resolve() / "MIL-CREDA" / ".remote-execution").exists()
+                (target.resolve() / "FEM-TOLLA" / ".remote-execution").exists()
             )
 
     def test_the_staleness_helper_itself_stays_tolerant(self) -> None:
@@ -11728,12 +14653,12 @@ class StalenessRoutingTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
             (job_dir / "run-config.json").write_text(
-                json.dumps({"product": "MIL-CREDA"}), encoding="utf-8"
+                json.dumps({"product": "FEM-TOLLA"}), encoding="utf-8"
             )
 
             self.assertIsNone(REMOTE_CLI._job_folder_staleness(notebook))
@@ -11751,6 +14676,13 @@ class StalenessRoutingTests(unittest.TestCase):
                 source_digest=lambda t, n: "d" * 64,
                 worker="w1",
             )
+            # PR7 (design §4): a job-folder launch also needs a matching
+            # `gate` record now -- consent alone is no longer enough.
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit=initial_commit,
+                relative_entrypoint=f"tools/{self.FAKE_SERVICE}/search-a/runner.ipynb",
+                worker="w1",
+            )
             submit_result = REMOTE_CLI.cmd_submit(
                 target=target,
                 entrypoint=notebook,
@@ -11761,7 +14693,7 @@ class StalenessRoutingTests(unittest.TestCase):
                 consent=token,
             )
 
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "search-a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "search-a"
             fetch_result = REMOTE_CLI.cmd_fetch(
                 target=target,
                 entrypoint=notebook,
@@ -11810,12 +14742,12 @@ class StalenessRoutingTests(unittest.TestCase):
                     "--target", str(target),
                     "--service", self.FAKE_SERVICE,
                     "--job-name", "cli-job",
-                    "--product", "MIL-CREDA",
+                    "--product", "FEM-TOLLA",
                     "--commit", initial_commit,
                     "--repo-url", "https://example.invalid/repo.git",
                     "--repo-ref", "main",
-                    "--clone-path", "src/MIL_CREDA_Benchmark",
-                    "--run-module", "MIL_CREDA_Benchmark.harness",
+                    "--clone-path", "src/FEM_TOLLA_Benchmark",
+                    "--run-module", "FEM_TOLLA_Benchmark.harness",
                     "--run-function", "campaign",
                 ])
 
@@ -12971,7 +15903,7 @@ class SmokeTests(unittest.TestCase):
 
     def _init_repo(self, target: Path) -> str:
         target.mkdir(parents=True, exist_ok=True)
-        harness = target / "src" / "MIL_CREDA_Benchmark" / "harness.py"
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
         harness.parent.mkdir(parents=True, exist_ok=True)
         harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
         self._git(target, "init", "-q")
@@ -12996,20 +15928,20 @@ class SmokeTests(unittest.TestCase):
         required_evidence=("evidence.commit", "evidence.outputs"),
         regenerate: bool = False,
     ) -> Path:
-        (target / "MIL-CREDA").mkdir(parents=True, exist_ok=True)
+        (target / "FEM-TOLLA").mkdir(parents=True, exist_ok=True)
         bootstrap, invoke = self._fixture_assets(tmp)
         return JOBFOLDER.generate_job(
             target=target,
             service=self.FAKE_SERVICE,
             job_name=job_name,
-            product="MIL-CREDA",
+            product="FEM-TOLLA",
             commit=commit,
             repo_url="https://example.invalid/repo.git",
             repo_ref="main",
-            clone_paths=["src/MIL_CREDA_Benchmark"],
-            run_module="MIL_CREDA_Benchmark.harness",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
             run_function="campaign",
-            smoke_module="MIL_CREDA_Benchmark.harness",
+            smoke_module="FEM_TOLLA_Benchmark.harness",
             smoke_function="campaign",
             smoke_required_evidence=list(required_evidence) if required_evidence else None,
             bootstrap_asset=bootstrap,
@@ -13025,7 +15957,7 @@ class SmokeTests(unittest.TestCase):
         full run as superseded (design #744 section 7's own rejection)."""
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
@@ -13040,6 +15972,15 @@ class SmokeTests(unittest.TestCase):
             token = _mint_launch_consent(
                 target=target, entrypoint=notebook, adapter=adapter,
                 source_digest=lambda t, n: "d" * 64,
+                worker="w1",
+            )
+            # PR7 (design §4): a job-folder FULL (non-smoke) launch also
+            # needs a matching `gate` record now -- the smoke call below
+            # stays exempt (design §4.2: gating a rehearsal would deadlock
+            # the very mechanism that makes readiness measurable).
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
                 worker="w1",
             )
             full_result = REMOTE_CLI.cmd_submit(
@@ -13076,7 +16017,7 @@ class SmokeTests(unittest.TestCase):
         prevent the real one from becoming this entrypoint's latest."""
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            (target / "MIL-CREDA").mkdir(parents=True)
+            (target / "FEM-TOLLA").mkdir(parents=True)
             job_dir = _make_job_folder(target, "kaggle", "search-a")
             notebook = job_dir / "runner.ipynb"
             notebook.write_text("{}", encoding="utf-8")
@@ -13093,6 +16034,14 @@ class SmokeTests(unittest.TestCase):
                 target=target, entrypoint=notebook, worker="w1", requested=1,
                 adapter=adapter, source_digest=lambda t, n: "d" * 64, smoke=True,
                 consent=token,
+            )
+            # PR7 (design §4): the FULL (non-smoke) launch below also needs
+            # a matching `gate` record now -- the rehearsal above stays
+            # exempt (design §4.2).
+            _mint_launch_authorization(
+                target=target, product="FEM-TOLLA", pin_commit="a" * 40,
+                relative_entrypoint="tools/kaggle/search-a/runner.ipynb",
+                worker="w1",
             )
             full_result = REMOTE_CLI.cmd_submit(
                 target=target, entrypoint=notebook, worker="w1", requested=1,
@@ -13113,7 +16062,7 @@ class SmokeTests(unittest.TestCase):
     def test_submit_smoke_sets_run_config_mode_full_submit_keeps_it_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -13177,7 +16126,7 @@ class SmokeTests(unittest.TestCase):
             self.assertEqual(result["smokeLedgerPath"].name, "smoke.jsonl")
             self.assertEqual(
                 result["smokeLedgerPath"].parent,
-                target.resolve() / "MIL-CREDA" / ".remote-execution",
+                target.resolve() / "FEM-TOLLA" / ".remote-execution",
             )
 
             lines = result["smokeLedgerPath"].read_text(encoding="utf-8").splitlines()
@@ -13527,7 +16476,7 @@ class SmokeTests(unittest.TestCase):
                 REMOTE_CLI.cmd_readiness(job_dir=job_dir, worker="w1")["ready"]
             )
 
-            (target / "src" / "MIL_CREDA_Benchmark" / "harness.py").write_text(
+            (target / "src" / "FEM_TOLLA_Benchmark" / "harness.py").write_text(
                 "def campaign(*args, **kwargs):\n    return 1\n", encoding="utf-8"
             )
             self._git(target, "add", "-A")
@@ -13591,7 +16540,7 @@ class SmokeTests(unittest.TestCase):
             job_dir = self._generate(tmp, target, commit=commit)
 
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / ".remote-execution" / "smoke.jsonl"
+                target.resolve() / "FEM-TOLLA" / ".remote-execution" / "smoke.jsonl"
             )
             LEDGER.append(
                 smoke_ledger_path,
@@ -13713,6 +16662,42 @@ class SmokeTests(unittest.TestCase):
             self.assertNotIn(leaked, source, leaked)
 
 
+def _subparser_children(parser):
+    """Every direct `(name, parser)` pair one `add_subparsers` level below
+    this parser. Duck-typed on `choices` rather than isinstance against a
+    private argparse class: the module is not imported here, and importing
+    it to name a private symbol would couple this lock to argparse's
+    internals for no gain.
+    """
+    children = []
+    for action in getattr(parser, "_actions", []):
+        choices = getattr(action, "choices", None)
+        if isinstance(choices, dict):
+            children.extend(choices.items())
+    return children
+
+
+def _declared_names(parser):
+    """Every subcommand name the parser accepts, at any nesting depth.
+
+    An unbounded, `id()`-deduplicated walk rather than a fixed-depth loop:
+    the rule this backs -- every accepted name is named in the frontmatter at
+    its own boundary -- is level-independent, so the collection must be too.
+    `id()` dedup survives `aliases=`, which map several keys to one parser
+    object; walking every alias is correct since each is a name a user can
+    actually type.
+    """
+    names, pending, seen = set(), [parser], {id(parser)}
+    while pending:
+        current = pending.pop()
+        for name, sub in _subparser_children(current):
+            names.add(name)
+            if id(sub) not in seen:
+                seen.add(id(sub))
+                pending.append(sub)
+    return names
+
+
 class FrontDoorRosterTests(unittest.TestCase):
     """The frontmatter claims a FULL front door, so it must name every command.
 
@@ -13730,15 +16715,7 @@ class FrontDoorRosterTests(unittest.TestCase):
 
     def test_the_description_names_every_subcommand_the_parser_declares(self):
         parser = REMOTE_CLI._build_parser()
-        declared = set()
-        for action in parser._actions:
-            # Duck-typed rather than isinstance against a private argparse
-            # class: the module is not imported here and importing it to name
-            # a private symbol would couple this lock to argparse's internals
-            # for no gain. A subparsers action is the one that carries choices.
-            choices = getattr(action, "choices", None)
-            if isinstance(choices, dict):
-                declared.update(choices)
+        declared = _declared_names(parser)
         self.assertTrue(
             declared, "no subcommand was recovered from the parser at all; "
             "this test would pass on an empty roster by accident")
@@ -13746,37 +16723,87 @@ class FrontDoorRosterTests(unittest.TestCase):
                 / "skills/remote-execution/SKILL.md").read_text(
                     encoding="utf-8")
         description = text.split("---", 2)[1]
-        # A command that owns a nested one is written the way a person types
-        # it -- `smoke record`, not `smoke` -- so the name is matched at a
-        # backtick boundary followed by either the closing tick or a space.
-        # Anchoring both ends keeps the match from passing on a longer name
-        # that merely starts the same way.
+        # Every accepted name -- at any nesting depth -- must be named at its
+        # own backtick boundary. A nested command is written the way a
+        # person types it -- `smoke record` -- but that string does not
+        # contain `record` at ITS OWN boundary, only `smoke`'s: there is no
+        # backtick immediately before "record" in "`smoke record`". A
+        # containment-style check that also accepted a trailing space (the
+        # `f"`{name} "` form this replaced) let `record` pass on exactly that
+        # string, which is precisely how it went undocumented at its own
+        # boundary. Anchoring both ends on the exact backtick-bounded token
+        # is the only form this test now accepts.
         missing = sorted(
             name for name in declared
-            if f"`{name}`" not in description
-            and f"`{name} " not in description)
+            if f"`{name}`" not in description)
         self.assertEqual(
             missing, [],
             "the frontmatter calls itself the full front door and does not "
             f"name: {missing}. A closed set stated by hand goes stale the "
             "next time it grows")
 
+    def test_the_description_names_the_nested_subcommand_at_its_own_boundary(self):
+        """`record` is `smoke`'s own nested subcommand
+        (`remote_cli.py:2253-2254`), derived from the parser rather than
+        hardcoded, so a rename at the code side is caught here too. The
+        frontmatter must name it at its own backtick boundary, independent
+        of `smoke` -- not merely as the tail of the two-word phrase
+        `smoke record`, which is the containment this change removes."""
+        parser = REMOTE_CLI._build_parser()
+        nested_names = set()
+        for _, sub in _subparser_children(parser):
+            for nested_name, _ in _subparser_children(sub):
+                nested_names.add(nested_name)
+        self.assertIn(
+            "record", nested_names,
+            "the nested subcommand this test pins ('record') was not found "
+            f"among the parser's nested names ({sorted(nested_names)}); it "
+            "may have moved or been renamed")
+        text = (REPOSITORY_ROOT
+                / "skills/remote-execution/SKILL.md").read_text(
+                    encoding="utf-8")
+        description = text.split("---", 2)[1]
+        self.assertIn(
+            "`record`", description,
+            "`record` must be named at its own backtick boundary in the "
+            "frontmatter, independent of `smoke`")
+
+    def test_the_parser_nests_exactly_one_level_below_the_top(self):
+        """The two-probe roster assumption (one probe file per nesting
+        level) is depth-bound, unlike the frontmatter-boundary rule above.
+        This watches that assumption rather than silently absorbing it: a
+        third level must fail HERE, by name, and say which nested command
+        needs its own probe file -- this suite cannot see what the probes
+        read, so it cannot enforce a level it does not know exists."""
+        parser = REMOTE_CLI._build_parser()
+        for name, sub in _subparser_children(parser):
+            for nested_name, nested_sub in _subparser_children(sub):
+                grandchildren = _subparser_children(nested_sub)
+                self.assertEqual(
+                    grandchildren, [],
+                    f"`{name} {nested_name}` carries its own nested "
+                    f"subcommands ({sorted(n for n, _ in grandchildren)}); "
+                    "the two-probe roster assumption (one probe file per "
+                    "nesting level) breaks at three levels, and "
+                    f"`{name} {nested_name}` needs its own probe file")
+
 
 class TargetVocabularyLeakTests(unittest.TestCase):
     """The `*_module_names_no_service` family above (eight tests) forbids
     naming a SERVICE outside `adapters/kaggle.py`. Nothing forbade naming a
     TARGET repository's own product, and that gap is exactly how two
-    mentions of `MIL_CREDA_Benchmark` — this forge's real target package —
-    reached `jobfolder.py` unnoticed: every existing guard above was blind
-    to that literal, since none of them looked for it.
+    mentions of one target's real benchmark package reached `jobfolder.py`
+    unnoticed: every existing guard above was blind to that literal, since
+    none of them looked for it.
 
     Scoped to the literal that actually leaked, generalized past its exact
-    spelling — `CREDA`, `MIL-CREDA`, `MIL_CREDA_Benchmark` and `MilCreda`
-    all share the substring `creda`, so any casing or punctuation variant
-    is caught, not only the one string seen today — plus this forge's real
+    spelling — the four spellings that product wears across this forge's
+    history (upper-cased, hyphenated, suffixed and camel-cased) all reduce
+    to the one lowercase stem below, so any casing or punctuation variant is
+    caught, not only the one string seen today — plus this forge's real
     target dataset names, added on the same reasoning even though none has
     leaked yet: proper nouns with no ordinary-English collision, exactly
-    like `creda`.
+    like that stem.
 
     Deliberately NOT extended to generic ML/benchmark vocabulary (`epoch`,
     `seed`, `checkpoint`, `arm`, `transfer`, `ceiling`): this skill's own
@@ -14086,7 +17113,7 @@ class DoctrinePinTests(unittest.TestCase):
         """`kaggle_driver.py` is production code this change added, and the
         no-target-vocabulary guard must scan it exactly like every other
         module in the skill -- omission here is precisely how
-        `MIL_CREDA_Benchmark` once reached `jobfolder.py` unnoticed, per
+        `FEM_TOLLA_Benchmark` once reached `jobfolder.py` unnoticed, per
         `TargetVocabularyLeakTests`'s own docstring.
         """
         self.assertIn(KAGGLE_DRIVER_SCRIPT, TargetVocabularyLeakTests.MODULE_SCRIPTS)
@@ -14142,12 +17169,12 @@ class ClonePathExistenceTests(unittest.TestCase):
     def test_a_declared_path_absent_from_the_pin_refuses_and_names_it(self):
         with tempfile.TemporaryDirectory() as raw:
             origin, target, _ = self.target_with_remote(Path(raw))
-            completed = self.generate(target, origin, "Results/ceilings.json")
+            completed = self.generate(target, origin, "Results/undercuts.json")
             output = completed.stdout + completed.stderr
             self.assertNotEqual(completed.returncode, 0,
                                 "generation declared a path the pin does not "
                                 "contain: " + output.strip()[:300])
-            self.assertIn("Results/ceilings.json", output)
+            self.assertIn("Results/undercuts.json", output)
             self.assertFalse((target / "tools").exists(),
                              "a job folder was written for an absent clone path")
 
@@ -14160,12 +17187,12 @@ class ClonePathExistenceTests(unittest.TestCase):
             origin, target, _ = self.target_with_remote(Path(raw))
             data = target / "Results"
             data.mkdir()
-            (data / "ceilings.json").write_text("{}\n", encoding="utf-8")
-            completed = self.generate(target, origin, "Results/ceilings.json")
+            (data / "undercuts.json").write_text("{}\n", encoding="utf-8")
+            completed = self.generate(target, origin, "Results/undercuts.json")
             output = completed.stdout + completed.stderr
             self.assertNotEqual(completed.returncode, 0,
                                 "an uncommitted file passed as a declared path")
-            self.assertIn("Results/ceilings.json", output)
+            self.assertIn("Results/undercuts.json", output)
 
     def test_a_declared_path_present_in_the_pin_is_accepted(self):
         """Non-vacuity: the check must pass for a committed data path, or it is
@@ -14175,14 +17202,106 @@ class ClonePathExistenceTests(unittest.TestCase):
             origin, target, git = self.target_with_remote(Path(raw))
             data = target / "Results"
             data.mkdir()
-            (data / "ceilings.json").write_text("{}\n", encoding="utf-8")
+            (data / "undercuts.json").write_text("{}\n", encoding="utf-8")
             subprocess.run([*git, "add", "-A"], check=True)
             subprocess.run([*git, "commit", "-q", "-m", "record"], check=True)
             subprocess.run([*git, "push", "-q", "origin", "HEAD:refs/heads/main"],
                            check=True)
-            completed = self.generate(target, origin, "Results/ceilings.json")
+            completed = self.generate(target, origin, "Results/undercuts.json")
             self.assertEqual(completed.returncode, 0,
                              (completed.stdout + completed.stderr).strip()[:300])
+
+    # -- Corrective batch: the generation-deadlock CRITICAL, crossing the
+    # seam that hid it --------------------------------------------------
+
+    def test_a_produced_read_refuses_by_default_then_succeeds_only_when_accepted(self):
+        """The CRITICAL this corrective batch closes, reproduced against a
+        REAL, unmocked git repository — this class stubs nothing at all,
+        unlike `UndeclaredReadDetectionTests`, whose `setUp()` stubs
+        `verify_pin_preconditions()` for every test in that class and
+        therefore never exercised this seam: `computedReadsNotDeclared`'s
+        (then-)unconditional refusal and `_refuse_absent_clone_paths`'
+        declared-path-must-exist-at-the-pin refusal, running together, in
+        one real `generate-job` invocation.
+
+        `harness.py` both READS and WRITES the same not-yet-existing file
+        (the `search_record()`/record-constant resumable-record
+        shape): before this corrective batch, no invocation could ever
+        succeed for a job's first-ever run — declaring the path refused
+        via `_refuse_absent_clone_paths` (no tree object at the pin, since
+        nothing has produced the file yet); leaving it undeclared refused
+        unconditionally via `computedReadsNotDeclared` (no hatch existed
+        for that bucket at all). Declaring refused; not declaring refused;
+        no third option existed.
+
+        Case A (undeclared, no `--accept-produced-reads`): still refuses
+        by default — the read is real and reported, never silently
+        dropped — but the refusal now NAMES the escape hatch. Case B
+        (undeclared, WITH `--accept-produced-reads`): succeeds, because an
+        undeclared clone path is never checked against the pin by
+        `_refuse_absent_clone_paths` at all — this is the actual
+        resolution of the deadlock: never declare the produced file, and
+        record the acceptance instead.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            origin, target, git = self.target_with_remote(Path(raw))
+            (target / "src" / "pkg" / "harness.py").write_text(
+                "from pathlib import Path\n\n"
+                "REPOSITORY = Path(__file__).resolve().parents[2]\n"
+                'RECORD = REPOSITORY / "product-out" / "ledger.json"\n\n\n'
+                "def run():\n"
+                "    if RECORD.exists():\n"
+                "        return {'record': RECORD.read_text(encoding='utf-8')}\n"
+                "    RECORD.parent.mkdir(parents=True, exist_ok=True)\n"
+                "    RECORD.write_text('{}', encoding='utf-8')\n"
+                "    return {}\n",
+                encoding="utf-8",
+            )
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-q", "-m", "produced-read shape"],
+                           check=True)
+            subprocess.run([*git, "push", "-q", "origin", "HEAD:refs/heads/main"],
+                           check=True)
+
+            # Case A: undeclared, no hatch -> refuses, naming both the
+            # resolved path and the escape hatch.
+            completed = self.generate(target, origin)
+            output = completed.stdout + completed.stderr
+            self.assertNotEqual(
+                completed.returncode, 0,
+                "an undeclared produced read was silently admitted: " + output[:300],
+            )
+            self.assertIn("product-out/ledger.json", output)
+            self.assertIn("accept-produced-reads", output)
+            self.assertFalse(
+                (target / "tools").exists(),
+                "a job folder was written despite the refusal",
+            )
+
+            # Case B: undeclared, WITH --accept-produced-reads -> the
+            # deadlock's actual resolution: generation succeeds without
+            # ever declaring the not-yet-existent file, and without the
+            # file needing to exist at the pin at all.
+            argv = [sys.executable, str(REMOTE_CLI_SCRIPT), "generate-job",
+                    "--target", str(target), "--service", "kaggle",
+                    "--job-name", "probe-job", "--product", "Product",
+                    "--repo-url", str(origin), "--repo-ref", "main",
+                    "--clone-path", "src/pkg",
+                    "--run-module", "pkg.harness", "--run-function", "run",
+                    "--accept-produced-reads"]
+            completed = subprocess.run(argv, capture_output=True, text=True,
+                                       cwd=str(target))
+            self.assertEqual(
+                completed.returncode, 0,
+                (completed.stdout + completed.stderr).strip()[:300],
+            )
+            job_dir = Path(json.loads(completed.stdout)["jobFolder"])
+            run_config = json.loads(
+                (job_dir / "run-config.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                run_config["acceptedProducedReads"], ["product-out/ledger.json"]
+            )
 
 
 class PublishedPinResolutionTests(unittest.TestCase):
@@ -14195,9 +17314,9 @@ class PublishedPinResolutionTests(unittest.TestCase):
     author is told to push a commit whose entire content is the job folder they
     are in the middle of regenerating.
 
-    Measured on the live target rather than imagined: `03ac154` changed only
-    `tools/kaggle/ceiling-search/`, and `git diff d903d14 03ac154 -- <every
-    clone path>` came back empty. The runner would have received byte-identical
+    Measured on a live target rather than imagined: `03ac154` changed only
+    that target's own job folder under `tools/`, and `git diff d903d14 03ac154
+    -- <every clone path>` came back empty. The runner would have received byte-identical
     code from the published commit.
 
     So the default narrows: when HEAD is unpublished and the declared ref's
@@ -14389,7 +17508,15 @@ class BackendResolutionTests(unittest.TestCase):
         executed.
         """
         adapters_dir = REMOTE_CLI_SCRIPT.parent / "adapters"
-        marker = adapters_dir.parent / "zz_escape_marker_for_test.py"
+        # The pid, because this marker is planted in the shipped skill's own
+        # `scripts/` directory -- one shared location, not a per-process
+        # sandbox. Under a fixed name a second copy of this suite writes the
+        # same path, and the first runner's `unlink` below then removes the
+        # second's file, whose own cleanup dies on `FileNotFoundError`. The
+        # name is load-bearing only in that the traversal attempts below have
+        # to spell it, so they are derived from it rather than repeated.
+        marker_name = f"zz_escape_marker_for_test_{os.getpid()}"
+        marker = adapters_dir.parent / f"{marker_name}.py"
         marker.write_text(
             "raise RuntimeError('a hostile --backend value executed this')\n",
             encoding="utf-8",
@@ -14397,11 +17524,11 @@ class BackendResolutionTests(unittest.TestCase):
         self.addCleanup(marker.unlink)
 
         hostile_values = (
-            "../zz_escape_marker_for_test",
-            "../../zz_escape_marker_for_test",
+            f"../{marker_name}",
+            f"../../{marker_name}",
             "/etc/passwd",
             str(marker),
-            "kaggle/../../zz_escape_marker_for_test",
+            f"kaggle/../../{marker_name}",
             "..",
             "./kaggle",
         )
@@ -14419,9 +17546,20 @@ class BackendResolutionTests(unittest.TestCase):
         dropping it into `adapters/` under a matching filename — and both
         of its own registrations (`ADAPTER.register` AND
         `ADAPTER.register_metadata`) take effect, not only the first.
+
+        The module's name carries this run's pid. `adapters/` is the shipped
+        skill's own directory, shared by every process on this machine, and
+        the fixture used to be written there under a fixed name with an
+        `unlink` cleanup that removed whatever sat at that path rather than
+        what this run put there. Measured, before the pid, on two concurrent
+        copies of this one test looped twenty-five times: nine and five
+        `FileNotFoundError`s raised out of the cleanup, on a test whose
+        subject had done nothing wrong. The name is otherwise free -- the
+        whole point is that `remote_cli.py` never names it -- so scoping it
+        costs the assertion nothing.
         """
         adapters_dir = REMOTE_CLI_SCRIPT.parent / "adapters"
-        fixture_name = "zz_fixture_backend_for_test"
+        fixture_name = f"zz_fixture_backend_for_test_{os.getpid()}"
         fixture_path = adapters_dir / f"{fixture_name}.py"
         fixture_path.write_text(
             "import importlib.util\n"
@@ -14455,9 +17593,9 @@ class BackendResolutionTests(unittest.TestCase):
             "    def list_active(self, worker):\n"
             "        return []\n"
             "\n"
-            "ADAPTER.register('zz_fixture_backend_for_test', _FixtureAdapter)\n"
+            f"ADAPTER.register({fixture_name!r}, _FixtureAdapter)\n"
             "ADAPTER.register_metadata(\n"
-            "    'zz_fixture_backend_for_test',\n"
+            f"    {fixture_name!r},\n"
             "    lambda run_config: ('fixture-metadata.json', '{}'),\n"
             ")\n",
             encoding="utf-8",
@@ -14550,16 +17688,16 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
     def test_status_reports_a_parallel_smoke_section_without_merging_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             main_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.SMOKE_LEDGER_FILENAME
             )
             _append_pending_submission(
@@ -14600,7 +17738,7 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
@@ -14618,7 +17756,7 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             submission_id = submit_result["submission"].id
             self.assertTrue(submit_result["ledgerPath"].name, "smoke.jsonl")
 
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
             fetch_result = REMOTE_CLI.cmd_fetch(
                 target=target, entrypoint=notebook, submission_id=submission_id,
                 dest=dest, adapter=adapter, source_digest=lambda t, n: "d" * 64,
@@ -14629,11 +17767,11 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             self.assertTrue((dest / "result.txt").exists())
 
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.SMOKE_LEDGER_FILENAME
             )
             main_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             smoke_lines = smoke_ledger_path.read_text(encoding="utf-8").splitlines()
@@ -14643,17 +17781,80 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             # main ledger -- ledger.jsonl was never even created.
             self.assertFalse(main_ledger_path.exists())
 
+    def test_cmd_fetch_smoke_override_resolves_to_smoke_when_the_two_records_agree(
+        self,
+    ) -> None:
+        """End-to-end coverage for spec #1129's 'fetch --smoke narrows to
+        smoke.jsonl' scenario at the `cmd_fetch` boundary itself, not only
+        at `resolve_submission_ledger` directly (verify report #1134,
+        WARNING 1). A both-files-agreeing fixture, `smoke=True` passed
+        through `cmd_fetch`, must materialize from smoke.jsonl and leave
+        ledger.jsonl's line count unchanged; every existing smoke-fetch
+        test instead uses an id present in `smoke.jsonl` alone, which
+        never exercises the both-files tie-break this flag is for.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="both-1", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="both-1", worker="w1", source_digest="d" * 64,
+            )
+
+            adapter = FakeAdapter(worker_id="w1", capacity=2)
+            # `--dest` is refused under `--smoke` (fetch --smoke computes
+            # its own rehearsal destination); this fixture's own subject is
+            # the both-files ledger tie-break, not placement, so `dest` is
+            # dropped rather than kept as a value the call now refuses.
+            fetch_result = REMOTE_CLI.cmd_fetch(
+                target=target, entrypoint=notebook, submission_id="both-1",
+                dest=None, adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                smoke=True,
+            )
+
+            self.assertTrue(fetch_result["complete"])
+            self.assertIsNone(fetch_result["arbitration"])
+            expected = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.REHEARSAL_DIRNAME / "both-1"
+            )
+            self.assertEqual(fetch_result["path"], expected)
+            self.assertTrue((expected / "result.txt").exists())
+
+            smoke_lines = smoke_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(smoke_lines), 2)  # submitted + returned
+            self.assertEqual(json.loads(smoke_lines[-1])["kind"], "returned")
+            # ledger.jsonl (the non-narrowed file) must be untouched --
+            # still only the original `submitted` event this fixture wrote.
+            main_lines = main_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(main_lines), 1)
+
     def test_fetch_raises_a_clear_error_when_submission_is_in_neither_ledger(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             adapter = FakeAdapter(worker_id="w1", capacity=2)
-            dest = target.resolve() / "MIL-CREDA" / "Results" / "shards" / "a"
+            dest = target.resolve() / "FEM-TOLLA" / "Results" / "shards" / "a"
             with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
                 REMOTE_CLI.cmd_fetch(
                     target=target, entrypoint=notebook, submission_id="ghost",
@@ -14663,24 +17864,29 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             self.assertIn(REMOTE_CLI.LEDGER_FILENAME, message)
             self.assertIn(REMOTE_CLI.SMOKE_LEDGER_FILENAME, message)
 
-    def test_resolve_submission_ledger_refuses_when_id_is_recorded_in_both_files(
+    def test_resolve_submission_ledger_refuses_when_the_two_records_disagree(
         self,
     ) -> None:
-        """Defensive: an id is only ever supposed to land in ONE file. If
-        it somehow reached both, guessing which one is authoritative would
-        hide a corruption instead of surfacing it.
+        """A shared id is the EXPECTED case on this backend: a Kaggle id is
+        `f"{worker}/{slug}"` (`adapters/kaggle.py:860`), so a legitimate
+        rehearse-then-launch pair reuses the identical id by construction
+        and agrees on `entrypoint`/`worker` by construction too. What is
+        still corruption is two `submitted` records for the same id that
+        DISAGREE on `entrypoint` or `worker` -- one record lies about what
+        was actually submitted, and picking either to fetch from would be
+        guessing.
         """
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             (notebooks / "a.ipynb").write_text("{}", encoding="utf-8")
 
             main_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.SMOKE_LEDGER_FILENAME
             )
             _append_pending_submission(
@@ -14689,26 +17895,255 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             )
             _append_pending_submission(
                 smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
-                submission_id="dup-1", worker="w1", source_digest="d" * 64,
+                submission_id="dup-1", worker="w2", source_digest="d" * 64,
             )
 
             with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
                 REMOTE_CLI.resolve_submission_ledger(
-                    target.resolve(), "MIL-CREDA", "dup-1", "d" * 64,
+                    target.resolve(), "FEM-TOLLA", "dup-1", "d" * 64,
                 )
-            self.assertIn("both", str(ctx.exception))
+            message = str(ctx.exception)
+            self.assertIn("worker", message)
+            self.assertIn("'w1'", message)
+            self.assertIn("'w2'", message)
+
+    def test_resolve_submission_ledger_refuses_when_the_two_records_disagree_on_entrypoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            (notebooks / "a.ipynb").write_text("{}", encoding="utf-8")
+            (notebooks / "b.ipynb").write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="dup-2", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/b.ipynb",
+                submission_id="dup-2", worker="w1", source_digest="d" * 64,
+            )
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.resolve_submission_ledger(
+                    target.resolve(), "FEM-TOLLA", "dup-2", "d" * 64,
+                )
+            message = str(ctx.exception)
+            self.assertIn("entrypoint", message)
+            self.assertIn("Notebooks/a.ipynb", message)
+            self.assertIn("Notebooks/b.ipynb", message)
+
+    def test_resolve_submission_ledger_resolves_to_main_when_the_two_records_agree(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            (notebooks / "a.ipynb").write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="agree-1", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="agree-1", worker="w1", source_digest="d" * 64,
+            )
+
+            path, state, note = REMOTE_CLI.resolve_submission_ledger(
+                target.resolve(), "FEM-TOLLA", "agree-1", "d" * 64,
+            )
+
+            self.assertEqual(path, main_ledger_path)
+            self.assertEqual(state.by_id["agree-1"]["submissionId"], "agree-1")
+            expected_note = (
+                f"submission 'agree-1' is recorded in both {main_ledger_path} "
+                f"and {smoke_ledger_path} with agreeing entrypoint/worker; "
+                f"resolved to the main ledger {main_ledger_path}"
+            )
+            self.assertEqual(note, expected_note)
+
+    def test_resolve_submission_ledger_smoke_override_resolves_to_smoke_when_the_two_records_agree(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            (notebooks / "a.ipynb").write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="agree-2", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="agree-2", worker="w1", source_digest="d" * 64,
+            )
+
+            path, state, note = REMOTE_CLI.resolve_submission_ledger(
+                target.resolve(), "FEM-TOLLA", "agree-2", "d" * 64, smoke=True,
+            )
+
+            self.assertEqual(path, smoke_ledger_path)
+            self.assertIsNone(note)
+
+    def test_resolve_submission_ledger_smoke_override_does_not_suppress_the_disagreement_refusal(
+        self,
+    ) -> None:
+        """`--smoke` overrides precedence, never coherence: it selects a
+        file, it does not suppress the disagreement refusal. If the flag's
+        presence or absence fully disambiguated, the guard would be deleted
+        rather than corrected.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            (notebooks / "a.ipynb").write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="dup-3", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="dup-3", worker="w2", source_digest="d" * 64,
+            )
+
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError) as ctx:
+                REMOTE_CLI.resolve_submission_ledger(
+                    target.resolve(), "FEM-TOLLA", "dup-3", "d" * 64, smoke=True,
+                )
+            self.assertIn("worker", str(ctx.exception))
+
+    def test_reconcile_resolve_appends_only_to_main_ledger_when_the_two_records_agree(
+        self,
+    ) -> None:
+        """A rehearse-then-launch pair reusing the same id is the ordinary
+        case, not corruption: `--resolve` must write the orphan's `errored`
+        event to exactly one file -- the main ledger, since the records
+        agree -- and leave `smoke.jsonl` byte-identical.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="shared-1", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="shared-1", worker="w1", source_digest="d" * 64,
+            )
+            smoke_bytes_before = smoke_ledger_path.read_bytes()
+
+            adapter = ScriptedListActiveAdapter(worker_id="w1", active=())
+            result = REMOTE_CLI.cmd_reconcile(
+                target=target, entrypoint=notebook, worker="w1", adapter=adapter,
+                resolve=True, source_digest=lambda t, n: "d" * 64,
+            )
+
+            self.assertEqual(result["orphanLocal"], ("shared-1",))
+            self.assertEqual(len(result["resolved"]), 1)
+
+            main_lines = main_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(main_lines), 2)  # submitted + errored
+            self.assertEqual(json.loads(main_lines[-1])["kind"], "errored")
+            self.assertEqual(smoke_ledger_path.read_bytes(), smoke_bytes_before)
+
+    def test_reconcile_resolve_refuses_and_writes_nothing_when_the_two_records_disagree(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+            (notebooks / "b.ipynb").write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="shared-2", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/b.ipynb",
+                submission_id="shared-2", worker="w1", source_digest="d" * 64,
+            )
+            main_bytes_before = main_ledger_path.read_bytes()
+            smoke_bytes_before = smoke_ledger_path.read_bytes()
+
+            adapter = ScriptedListActiveAdapter(worker_id="w1", active=())
+            with self.assertRaises(REMOTE_CLI.RemoteCLIError):
+                REMOTE_CLI.cmd_reconcile(
+                    target=target, entrypoint=notebook, worker="w1", adapter=adapter,
+                    resolve=True, source_digest=lambda t, n: "d" * 64,
+                )
+
+            self.assertEqual(main_ledger_path.read_bytes(), main_bytes_before)
+            self.assertEqual(smoke_ledger_path.read_bytes(), smoke_bytes_before)
 
     def test_reconcile_does_not_misreport_a_still_active_smoke_submission(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.SMOKE_LEDGER_FILENAME
             )
             _append_pending_submission(
@@ -14730,16 +18165,16 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "repo"
-            notebooks = _make_product(target, "MIL-CREDA")
+            notebooks = _make_product(target, "FEM-TOLLA")
             notebook = notebooks / "a.ipynb"
             notebook.write_text("{}", encoding="utf-8")
 
             smoke_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.SMOKE_LEDGER_FILENAME
             )
             main_ledger_path = (
-                target.resolve() / "MIL-CREDA" / REMOTE_CLI.LEDGER_DIRNAME
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
                 / REMOTE_CLI.LEDGER_FILENAME
             )
             _append_pending_submission(
@@ -14763,6 +18198,59 @@ class SmokeLedgerResolutionTests(unittest.TestCase):
             self.assertEqual(json.loads(smoke_lines[-1])["kind"], "errored")
             # Never touched: the orphan lived in smoke.jsonl alone.
             self.assertFalse(main_ledger_path.exists())
+
+    def test_cmd_reconcile_resolve_smoke_override_appends_to_smoke_ledger_when_the_two_records_agree(
+        self,
+    ) -> None:
+        """End-to-end coverage for spec #1129's 'reconcile --smoke narrows
+        to smoke.jsonl' scenario at the `cmd_reconcile --resolve` boundary
+        (verify report #1134, WARNING 1). The existing smoke-orphan
+        reconcile test above uses an id present in `smoke.jsonl` alone;
+        this one is present in BOTH files with agreeing entrypoint/worker,
+        so it exercises `resolve_submission_ledger`'s both-files tie-break
+        through `cmd_reconcile` itself, not only through a direct call.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            notebooks = _make_product(target, "FEM-TOLLA")
+            notebook = notebooks / "a.ipynb"
+            notebook.write_text("{}", encoding="utf-8")
+
+            main_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            smoke_ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.SMOKE_LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                main_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="both-2", worker="w1", source_digest="d" * 64,
+            )
+            _append_pending_submission(
+                smoke_ledger_path, entrypoint="Notebooks/a.ipynb",
+                submission_id="both-2", worker="w1", source_digest="d" * 64,
+            )
+
+            # The service no longer lists "both-2" at all -- an orphan.
+            adapter = ScriptedListActiveAdapter(worker_id="w1", active=())
+            result = REMOTE_CLI.cmd_reconcile(
+                target=target, entrypoint=notebook, worker="w1", adapter=adapter,
+                resolve=True, source_digest=lambda t, n: "d" * 64, smoke=True,
+            )
+
+            self.assertEqual(result["orphanLocal"], ("both-2",))
+            self.assertEqual(len(result["resolved"]), 1)
+            self.assertEqual(result["resolved"][0]["submissionId"], "both-2")
+
+            smoke_lines = smoke_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(smoke_lines), 2)  # submitted + errored
+            self.assertEqual(json.loads(smoke_lines[-1])["kind"], "errored")
+            # ledger.jsonl (the non-narrowed file) must be untouched --
+            # still only the original `submitted` event this fixture wrote.
+            main_lines = main_ledger_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(main_lines), 1)
 
 
 # ---------------------------------------------------------------------------
@@ -15042,6 +18530,407 @@ class ProductForParserDerivedRemedyTests(unittest.TestCase):
                 REMOTE_CLI.cmd_status(target=target, entrypoint=entrypoint)
 
             self.assertNotIn("--product", str(ctx.exception))
+
+
+
+class NestedPathSerializationTests(unittest.TestCase):
+    """Every command's payload becomes JSON in exactly one place -- `main()`
+    -- and four of those call sites named one `Path` key by hand and assumed
+    it was the only `Path` in the payload.
+
+    That assumption already shipped a defect. `cmd_status` grew a nested
+    `smoke.ledgerPath`; `main()` stringified the top-level `ledgerPath` by
+    name, never reached the nested one, and `status` -- the command whose
+    only job is to print -- raised `TypeError: Object of type PosixPath is
+    not JSON serializable` on every invocation with empty stdout. Sixteen
+    tests drove `cmd_status()`; none drove `main(["status", ...])`, so
+    coverage sat on one side of the seam and the defect on the other.
+    `test_the_status_command_prints_what_the_function_only_returned` is that
+    command-level lock; this class is its four siblings.
+
+    Those four carry the identical shape. None of their payloads nests a
+    `Path` today -- which is exactly why all four looked fine, and why a
+    test over today's flat payload would prove nothing about the class. So
+    each test below injects a `Path` BELOW the top level, the way `status`
+    acquired its `smoke` block, and asserts the command still exits 0 with
+    that nested value rendered as a string.
+
+    Each test drives `main([...])` -- the command -- never the `cmd_*`
+    function, because the serialization under test exists nowhere else.
+    """
+
+    @contextlib.contextmanager
+    def _backend_patched(self):
+        """`main()` resolves a backend and constructs an adapter before it
+        ever reaches the `cmd_*` function these tests replace -- the same
+        three patches `test_a_job_folder_refusal_reaches_stderr_through_the_cli`
+        already uses, reused rather than reinvented.
+        """
+        with unittest.mock.patch.object(
+            REMOTE_CLI, "_load_backend_module", return_value=None
+        ), unittest.mock.patch.object(
+            REMOTE_CLI.ADAPTER, "resolve", return_value=FakeAdapter
+        ), unittest.mock.patch.object(
+            REMOTE_CLI, "_construct_adapter",
+            return_value=FakeAdapter(worker_id="w1", capacity=2),
+        ):
+            yield
+
+    def test_the_submit_command_in_campaign_mode_prints_a_nested_path(self) -> None:
+        """`submit --unit` -- campaign mode's own `assignments[]` shape.
+
+        `staleness` is `_job_folder_staleness()`'s own sub-dict: the exact
+        kind of nested mapping `status` was carrying when it broke.
+        """
+        payload = {
+            "assignments": [
+                {
+                    "worker": "w1",
+                    "granted": 1,
+                    "inFlightSource": None,
+                    "units": ["u1"],
+                    "submissionId": "s1",
+                }
+            ],
+            "unplaced": [],
+            "skipped": [],
+            "ledgerPath": Path("/tmp/nowhere/ledger.jsonl"),
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+            "smoke": False,
+        }
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_submit", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "submit",
+                "--target", "/tmp/nowhere",
+                "--entrypoint", "/tmp/nowhere/a.ipynb",
+                "--backend", "fake",
+                "--unit", "u1",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertIsInstance(printed["ledgerPath"], str)
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_submit_command_for_one_submission_prints_a_nested_path(self) -> None:
+        """`submit` without `--unit` -- the single-submission shape, which
+        reshapes the payload down to six named keys. The reshaping stays;
+        only the hand-naming of the `Path` inside it goes.
+        """
+        payload = {
+            "plan": SimpleNamespace(granted=1),
+            "submission": SimpleNamespace(id="s1", worker="w1"),
+            "event": {},
+            "ledgerPath": Path("/tmp/nowhere/ledger.jsonl"),
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+            "smoke": False,
+        }
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_submit", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "submit",
+                "--target", "/tmp/nowhere",
+                "--entrypoint", "/tmp/nowhere/a.ipynb",
+                "--backend", "fake",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        # The reshaped keys are unchanged -- `default=str` changes HOW a
+        # `Path` renders, never WHAT this command prints.
+        self.assertEqual(printed["submissionId"], "s1")
+        self.assertEqual(printed["worker"], "w1")
+        self.assertEqual(printed["granted"], 1)
+        self.assertIsInstance(printed["ledgerPath"], str)
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_fetch_command_prints_a_nested_path(self) -> None:
+        """`fetch` hand-named `path` and would have missed anything below
+        it, `staleness` included.
+        """
+        payload = {
+            "verdict": "current",
+            "complete": True,
+            "path": Path("/tmp/nowhere/out"),
+            "event": {"kind": "returned"},
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+            "arbitration": None,
+        }
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_fetch", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "fetch",
+                "--target", "/tmp/nowhere",
+                "--entrypoint", "/tmp/nowhere/a.ipynb",
+                "--submission-id", "s1",
+                "--dest", "/tmp/nowhere/out",
+                "--backend", "fake",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["verdict"], "current")
+        self.assertTrue(printed["complete"])
+        self.assertIsInstance(printed["path"], str)
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_smoke_record_command_prints_a_nested_path(self) -> None:
+        """`smoke record` hand-named `smokeLedgerPath`. A `Path` inside
+        `requiredEvidence` -- a sequence, not a mapping -- is just as far
+        below the top level, and just as unreachable by name.
+
+        This command resolves no backend, so it needs none of the adapter
+        patches the three above do.
+        """
+        payload = {
+            "result": "pass",
+            "missing": [],
+            "requiredEvidence": ["runs.jsonl", Path("/tmp/nowhere/job/shard.json")],
+            "smokeLedgerPath": Path("/tmp/nowhere/smoke.jsonl"),
+            "event": {},
+        }
+
+        buffer = io.StringIO()
+        with unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_smoke_record", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "smoke", "record",
+                "--job-dir", "/tmp/nowhere/job",
+                "--from-artifact", "/tmp/nowhere/a.json",
+                "--worker", "w1",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["result"], "pass")
+        self.assertEqual(printed["missing"], [])
+        self.assertIsInstance(printed["smokeLedgerPath"], str)
+        self.assertIsInstance(printed["requiredEvidence"][1], str)
+
+
+class PushSurfaceHookTests(unittest.TestCase):
+    """`scripts/hooks/refuse_offpath_push.py` (design §5): a tripwire, not
+    a gate. The load-bearing precondition is `_verify_launch_authorization()`
+    (`AuthorizationGateTests` above); this class exercises only the residue
+    that precondition cannot see -- a launch that never calls `submit` at
+    all -- and the script's own fail-open discipline for everything it
+    cannot parse.
+
+    Committed as an inert artifact, deliberately never wired into
+    `.claude/settings.json` by this change: turning it on is a decision
+    for a human, not this script's own existence.
+    """
+
+    def test_push_surfaces_are_read_from_the_real_adapter_not_hardcoded(self) -> None:
+        surfaces = PUSH_SURFACE_HOOK._load_push_surfaces()
+        self.assertIn("kernels_push", surfaces)
+        self.assertIn("kaggle_driver.py", surfaces)
+
+    def test_a_command_naming_kernels_push_without_remote_cli_is_flagged(self) -> None:
+        matched = PUSH_SURFACE_HOOK.offpath_push(
+            "python3 adapters/kaggle_driver.py push --dir tools/kaggle/search-a",
+            ("kaggle_driver.py", "kernels_push"),
+        )
+        self.assertEqual(matched, "kaggle_driver.py")
+
+    def test_a_command_that_also_invokes_remote_cli_is_never_flagged(self) -> None:
+        """The predicate is conjunctive, not a bare substring search: a
+        command that legitimately runs `remote_cli.py submit` may well
+        mention a push-surface token (in a comment, a log path, a
+        docstring test invocation) without that being the off-path shape
+        this hook exists to catch.
+        """
+        matched = PUSH_SURFACE_HOOK.offpath_push(
+            "python3 skills/remote-execution/scripts/remote_cli.py "
+            "submit --target x --entrypoint y # uses kernels_push internally",
+            ("kaggle_driver.py", "kernels_push"),
+        )
+        self.assertIsNone(matched)
+
+    def test_a_command_naming_neither_is_never_flagged(self) -> None:
+        matched = PUSH_SURFACE_HOOK.offpath_push(
+            "git status", ("kaggle_driver.py", "kernels_push"),
+        )
+        self.assertIsNone(matched)
+
+    # -- what it explicitly does NOT do: read a job's mode ----------------
+
+    def test_the_predicate_reads_no_job_folder_and_no_mode(self) -> None:
+        """Design §5's own recorded rejection: `mode=smoke` is a
+        `submit`-time argv flag, never a job-folder property readable
+        before submission. `offpath_push()` takes only a command string
+        and a tuple of tokens -- no target, no job directory, no mode --
+        so there is no parameter this predicate COULD read a mode from.
+        """
+        import inspect
+
+        parameters = list(inspect.signature(PUSH_SURFACE_HOOK.offpath_push).parameters)
+        self.assertEqual(parameters, ["command", "push_surfaces"])
+
+    # -- the PreToolUse contract: refuse, or stay silent -------------------
+
+    def _run_main(self, payload: object) -> tuple[int, str]:
+        stdin = io.StringIO(json.dumps(payload) if not isinstance(payload, str) else payload)
+        stderr = io.StringIO()
+        with unittest.mock.patch.object(sys, "stdin", stdin), \
+                contextlib.redirect_stderr(stderr):
+            code = PUSH_SURFACE_HOOK.main([])
+        return code, stderr.getvalue()
+
+    def test_main_refuses_an_offpath_push_command_with_exit_2(self) -> None:
+        code, stderr = self._run_main({
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "python3 adapters/kaggle_driver.py push --dir x",
+            },
+        })
+        self.assertEqual(code, 2)
+        self.assertIn("kaggle_driver.py", stderr)
+        self.assertIn("remote_cli.py", stderr)
+
+    def test_main_stays_silent_on_a_command_routed_through_submit(self) -> None:
+        code, stderr = self._run_main({
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "python3 skills/remote-execution/scripts/"
+                           "remote_cli.py submit --target x --entrypoint y",
+            },
+        })
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+
+    def test_main_stays_silent_on_an_unrelated_command(self) -> None:
+        code, stderr = self._run_main({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git status"},
+        })
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+
+    def test_main_never_refuses_on_malformed_input_it_cannot_parse(self) -> None:
+        """A tripwire that cannot parse its own input refuses NOTHING --
+        it never fails closed onto a command it never actually read.
+        """
+        code, stderr = self._run_main("not valid json at all {{{")
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+
+    def test_main_stays_silent_on_a_non_bash_payload_with_no_command_key(self) -> None:
+        code, stderr = self._run_main({"tool_name": "Read", "tool_input": {"file_path": "x"}})
+        self.assertEqual(code, 0)
+        self.assertEqual(stderr, "")
+
+
+class AnnotatedModuleConstantFoldTests(unittest.TestCase):
+    """`NAME: type = value` is `ast.AnnAssign`, and `_fold_module_constants()`
+    walked only `ast.Assign`.
+
+    An annotation changes nothing about what a constant is worth, so a chain
+    with one annotated link in it has to fold to exactly what the same chain
+    spelled flat folds to. It did not: the annotated link never entered the
+    table, every constant built on top of it then failed to fold as well, and
+    the read through them left the path table entirely -- so an undeclared
+    read that the flat spelling refuses generation over went unreported.
+
+    Both forms are exercised in every test here and asserted to AGREE. Pinning
+    only the annotated one would pass just as well against a reader that had
+    stopped reading the flat one.
+    """
+
+    CHAIN = (
+        "from pathlib import Path\n\n"
+        "{repository}\n"
+        '{product}\n'
+        'RECORD = PRODUCT / "Results" / "ledger.json"\n\n\n'
+        "def ledger_on_record():\n"
+        "    return RECORD.read_text(encoding='utf-8')\n"
+    )
+
+    FLAT_REPOSITORY = "REPOSITORY = Path(__file__).resolve().parents[2]"
+    ANNOTATED_REPOSITORY = "REPOSITORY: Path = Path(__file__).resolve().parents[2]"
+    FLAT_PRODUCT = 'PRODUCT = REPOSITORY / "product-out"'
+    ANNOTATED_PRODUCT = 'PRODUCT: Path = REPOSITORY / "product-out"'
+
+    def _resolve(self, repository, product):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp)
+            path = target / "src" / "pkg_z" / "settings.py"
+            path.parent.mkdir(parents=True)
+            path.write_text(
+                self.CHAIN.format(repository=repository, product=product),
+                encoding="utf-8",
+            )
+            return JOBFOLDER.resolve_clone_paths(
+                target, ["pkg_z.settings"], ["src/pkg_z"]
+            )
+
+    def test_an_annotated_link_folds_to_what_the_flat_chain_folds_to(self):
+        """The finding: one annotated link in the middle used to drop the
+        whole resolved path off the report, and an undeclared read with it."""
+        flat = self._resolve(self.FLAT_REPOSITORY, self.FLAT_PRODUCT)
+        annotated = self._resolve(self.ANNOTATED_REPOSITORY, self.ANNOTATED_PRODUCT)
+
+        self.assertEqual(
+            flat["computedReadsNotDeclared"],
+            ["product-out/Results/ledger.json"],
+        )
+        self.assertEqual(annotated["computedReadsNotDeclared"],
+                         flat["computedReadsNotDeclared"])
+        self.assertEqual(annotated["unresolvedReads"], flat["unresolvedReads"])
+
+    def test_a_single_annotated_link_is_enough_to_break_the_chain(self):
+        """Isolates the mechanism: only `REPOSITORY` is annotated, and both
+        constants built on top of it are spelled exactly as the flat chain
+        spells them. Everything downstream of one unread link is unread."""
+        mixed = self._resolve(self.ANNOTATED_REPOSITORY, self.FLAT_PRODUCT)
+        self.assertEqual(
+            mixed["computedReadsNotDeclared"],
+            ["product-out/Results/ledger.json"],
+        )
+
+    def test_a_bare_annotation_binds_nothing_and_is_not_a_second_assignment(self):
+        """`NAME: Path` with no value assigns nothing, so it must neither
+        enter the table nor evict the real assignment beside it -- a name
+        assigned twice is dropped, and this was never assigned once.
+
+        The bare annotation is written AFTER the real assignment on purpose:
+        before it, a reader that mishandled it would still recover, and the
+        test would pass over an implementation that treats the annotation as
+        an assignment. After it, mishandling costs the whole chain.
+        """
+        result = self._resolve(
+            self.FLAT_REPOSITORY + "\nREPOSITORY: Path", self.FLAT_PRODUCT)
+        self.assertEqual(
+            result["computedReadsNotDeclared"],
+            ["product-out/Results/ledger.json"],
+        )
+
+    def test_an_annotated_name_assigned_twice_is_still_dropped(self):
+        """The existing discipline, held across the new form: two assignments
+        mean the first fold cannot be trusted as the name's one true value,
+        and admitting annotations must not open a way around that.
+
+        The second assignment resolves somewhere else that is still INSIDE the
+        target, so last-wins would report a different path rather than no path
+        -- an empty result here means the name was dropped, not that the read
+        fell outside the repository and was filtered away.
+        """
+        result = self._resolve(
+            self.ANNOTATED_REPOSITORY
+            + "\nREPOSITORY = Path(__file__).resolve().parents[1]",
+            self.FLAT_PRODUCT)
+        self.assertEqual(result["computedReadsNotDeclared"], [])
 
 
 if __name__ == "__main__":

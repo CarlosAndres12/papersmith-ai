@@ -17,8 +17,8 @@ what this file's own dependency graph can even reach:
    the credential file `kaggle-accounts` keeps for itself, and it never
    constructs a path into that skill's own data directory. Worker identity
    comes from exactly one sanctioned command, run as a subprocess:
-   `python3 <kaggle-accounts>/scripts/accounts_cli.py list --json`, which
-   answers with usernames and nothing else (`cmd_list` under `--json`
+   `sys.executable <kaggle-accounts>/scripts/accounts_cli.py list --json`,
+   which answers with usernames and nothing else (`cmd_list` under `--json`
    builds a fresh dict holding only `username` per account — no other key
    can reach a caller even by accident). This module never imports that
    script; it only runs it, exactly the way a human at a terminal would.
@@ -127,6 +127,46 @@ DEFAULT_ACCOUNTS_CLI = (
     Path(__file__).resolve().parents[3] / "kaggle-accounts" / "scripts" / "accounts_cli.py"
 )
 
+
+def _account_names_on_disk(
+    accounts_cli: Path, run: Callable[[list[str]], subprocess.CompletedProcess]
+) -> list[str]:
+    """Every account username the sanctioned `list --json` command reports
+    right now, run through `run` -- the one subprocess boundary the two
+    callers below this share, never built twice.
+
+    `run` is handed the finished argv (`sys.executable`, never a bare
+    `python3` -- the two coincide only by accident of `PATH`, and a
+    sibling skill launched under a different interpreter answers about a
+    different installation, or fails to start at all) and returns
+    a `CompletedProcess`; what happens between those two moments -- which
+    environment the child inherits, what timeout bounds it -- is entirely
+    the caller's own choice, made once by `workers()` below (an
+    authenticated instance's own `_run`) and once by `_declared_capacity()`
+    further down (a bare, credential-free call this adapter's own launch-
+    proposal reporter makes).
+
+    Raises `KaggleAdapterError` on a non-zero exit or output `json.loads`
+    cannot parse -- exactly the two failures the single call site this was
+    extracted from always raised on, in the identical wording. What a
+    caller does with that raise is its own decision; see
+    `_declared_capacity()`'s own docstring for the caller that turns it
+    into a quiet absence instead of letting it propagate.
+    """
+    result = run([sys.executable, str(accounts_cli), "list", "--json"])
+    if result.returncode != 0:
+        raise KaggleAdapterError(
+            f"{accounts_cli} list --json exited {result.returncode}: "
+            f"{result.stderr.strip()}"
+        )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise KaggleAdapterError(
+            f"{accounts_cli} list --json did not print JSON: {exc}"
+        ) from exc
+    return [account["username"] for account in payload.get("accounts", [])]
+
 # `adapters/kaggle_driver.py`, this module's own sibling — the one file in
 # this skill permitted to import the Kaggle SDK package. `submit()`/
 # `_push()` shell out to it exactly the way this module used to shell out
@@ -139,7 +179,43 @@ DEFAULT_ACCOUNTS_CLI = (
 DEFAULT_KAGGLE_DRIVER = Path(__file__).resolve().parent / "kaggle_driver.py"
 
 KAGGLE_EXECUTABLE = "kaggle"
+
+# Read by `scripts/hooks/refuse_offpath_push.py` (design §5,
+# `the-position-nobody-holds`) -- the exact substrings a hand-rolled Bash
+# command would have to contain to reach THIS service's own push surface
+# without going through `remote_cli.py submit` at all: this adapter's own
+# driver script by name, and the SDK method it shells out to
+# (`kernels_push`, see `_push()` below). Declared here, never hardcoded in
+# the hook itself, because naming a service's own vocabulary belongs to
+# this file alone -- the one confinement rule this whole skill enforces
+# (see this module's own docstring above, and
+# `implementation_cli.py`'s "No service is named here" comment). A second
+# service is covered by declaring its own `PUSH_SURFACE` beside its own
+# adapter, never by editing the hook.
+PUSH_SURFACE: tuple[str, ...] = ("kaggle_driver.py", "kernels_push")
+
+# The CONTROL-PLANE budget: worker listing, `submit`'s own push, `poll`,
+# and `capacity`. Every one of those is a small request whose answer the
+# service produces immediately, so two minutes is already generous and
+# failing fast is the correct behaviour — a control call that has not
+# answered in that long is not slow, it is wrong, and this adapter would
+# rather refuse than let a caller sit on an unanswered status.
 SUBPROCESS_TIMEOUT_SECONDS = 120.0
+
+# The FETCH budget, deliberately separate. `fetch()` is not a fast-fail
+# path: it is a bulk transfer whose SIZE IS DECIDED BY THE REMOTE JOB, not
+# by anything this process can see before the call, and the observed link
+# throughput between this machine and the service varies by more than an
+# order of magnitude — 2.1 MB/s in one measurement, 0.06 MB/s in another.
+# Under the shared 120s budget above, that combination does not merely
+# fail slowly; it MISDIAGNOSES. A 12.4 MiB probe once took 209s and 27s
+# the same day, and the refusal read as the probe's fault rather than the
+# link's; a 256 MB artifact from a completed 75-minute GPU run was killed
+# at 120s and read as a broken fetch. 1800s is generous enough that a
+# working transfer at the slow end of that range finishes, while still
+# BOUNDED — a genuinely hung child process must still die rather than
+# hold this process open forever.
+KAGGLE_FETCH_TIMEOUT_SECONDS = 1800.0
 
 # `kaggle_driver.py`'s own `EXIT_UNAUTHORIZED`, duplicated here rather than
 # imported — this module never imports the driver, the same reason
@@ -221,7 +297,9 @@ KAGGLE_ACCELERATOR_ARCHITECTURES = ("sm_75",)
 # `{"capability": "sm_75", "device": {"kind": "cuda", "name": "Tesla T4"}}`,
 # matching `KAGGLE_ACCELERATOR_ARCHITECTURES[0]` below. Five earlier
 # submissions using bare `enable_gpu` alone all reported `failed` at 35-38s
-# on a drawn P100. Cost: 75s of a 21600s/week (6h) per-account quota.
+# on a drawn P100. Cost: 75s of GPU time, stated absolutely. This skill
+# cannot see a worker's remaining time budget -- see `## What this skill
+# cannot see` in SKILL.md -- so a cost here is never a fraction of one.
 KAGGLE_MACHINE_SHAPES = {"NvidiaTeslaT4": "sm_75", "NvidiaTeslaP100": "sm_60"}
 KAGGLE_MACHINE_SHAPE = "NvidiaTeslaT4"
 
@@ -498,12 +576,18 @@ class KaggleAdapter(ADAPTER.Adapter):
         accounts_cli: Path | str | None = None,
         kaggle_executable: str = KAGGLE_EXECUTABLE,
         timeout: float = SUBPROCESS_TIMEOUT_SECONDS,
+        fetch_timeout: float = KAGGLE_FETCH_TIMEOUT_SECONDS,
         driver_script: Path | str | None = None,
     ) -> None:
         self._credential_provider = self._normalize_credentials(credentials)
         self._accounts_cli = Path(accounts_cli) if accounts_cli else DEFAULT_ACCOUNTS_CLI
         self._kaggle_executable = kaggle_executable
         self._timeout = timeout
+        # Held separately from `self._timeout`, never derived from it: the
+        # two budgets answer different questions (see the two module
+        # constants), and collapsing them is exactly the defect this
+        # attribute exists to prevent.
+        self._fetch_timeout = fetch_timeout
         self._driver_script = Path(driver_script) if driver_script else DEFAULT_KAGGLE_DRIVER
 
     @staticmethod
@@ -603,19 +687,40 @@ class KaggleAdapter(ADAPTER.Adapter):
                 )
         return env
 
-    def _run(self, argv: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    def _run(
+        self,
+        argv: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        """One subprocess boundary for every child this adapter starts.
+
+        `timeout=None` — what every caller but `fetch()` passes, by simply
+        not passing it — means `self._timeout`, the control-plane budget,
+        so those call sites behave exactly as they did before this
+        parameter existed. `fetch()` passes `self._fetch_timeout`
+        explicitly because its child is a bulk transfer, not a control
+        call; see the module constants for why one number cannot serve
+        both.
+        """
+        effective_timeout = self._timeout if timeout is None else timeout
         try:
             return subprocess.run(
                 argv,
                 shell=False,
                 capture_output=True,
                 text=True,
-                timeout=self._timeout,
+                timeout=effective_timeout,
                 env=env,
             )
         except subprocess.TimeoutExpired as exc:
+            # Names the budget that ACTUALLY expired, never `self._timeout`
+            # unconditionally: a fetch killed at 1800s reported as "timed
+            # out after 120.0s" would send the reader hunting for a limit
+            # that was not the one enforced.
             raise KaggleAdapterError(
-                f"{argv[0]} timed out after {self._timeout}s: refusing to guess "
+                f"{argv[0]} timed out after {effective_timeout}s: refusing to guess "
                 "at a status or a completion this process never confirmed"
             ) from exc
         except OSError as exc:
@@ -658,30 +763,17 @@ class KaggleAdapter(ADAPTER.Adapter):
         """Usernames from the sanctioned `list --json` command, each
         stamped with THIS service's documented per-worker allowance.
 
-        Runs `python3 <accounts_cli> list --json` as a subprocess and reads
-        only its stdout; never opens, globs or otherwise touches any file
-        `accounts_cli` itself might consult. That is what lets this method
-        answer normally even when whatever file backs `accounts_cli`'s own
-        answer is unreadable to THIS process directly — this process never
-        tries to read it at all.
+        Runs `<this interpreter> <accounts_cli> list --json` as a subprocess
+        and reads only its stdout, through `_account_names_on_disk()` below
+        — the one place this module builds that argv and reads it back. It
+        never opens, globs or otherwise touches any file `accounts_cli`
+        itself might consult. That is what lets this method answer
+        normally even when whatever file backs `accounts_cli`'s own answer
+        is unreadable to THIS process directly — this process never tries
+        to read it at all.
         """
-        result = self._run([sys.executable, str(self._accounts_cli), "list", "--json"])
-        if result.returncode != 0:
-            raise KaggleAdapterError(
-                f"{self._accounts_cli} list --json exited {result.returncode}: "
-                f"{result.stderr.strip()}"
-            )
-        try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as exc:
-            raise KaggleAdapterError(
-                f"{self._accounts_cli} list --json did not print JSON: {exc}"
-            ) from exc
-
-        return [
-            ADAPTER.Worker(id=account["username"], capacity=KAGGLE_WORKER_CAPACITY)
-            for account in payload.get("accounts", [])
-        ]
+        names = _account_names_on_disk(self._accounts_cli, self._run)
+        return [ADAPTER.Worker(id=name, capacity=KAGGLE_WORKER_CAPACITY) for name in names]
 
     def submit(self, job: "ADAPTER.Job") -> "ADAPTER.Submission":
         """Push a kernel version and report back the ref this adapter will
@@ -973,7 +1065,13 @@ class KaggleAdapter(ADAPTER.Adapter):
         handle = self._credential_for(worker)
         into.mkdir(parents=True, exist_ok=True)
         argv = [sys.executable, str(self._driver_script), "fetch", submission_id, str(into)]
-        result = self._run(argv, env=self._env_for(handle))
+        # The ONE call site in this module that does not run under the
+        # control-plane budget. Everything else this adapter shells out to
+        # asks the service a question; this one moves however many bytes
+        # the remote job decided to produce.
+        result = self._run(
+            argv, env=self._env_for(handle), timeout=self._fetch_timeout
+        )
         self._parse_driver_result(result, action=f"fetch for {submission_id}")
         files = tuple(sorted(p.name for p in into.iterdir() if p.is_file()))
         return ADAPTER.Fetched(path=into, complete=True, files=files)
@@ -1067,6 +1165,45 @@ class KaggleAdapter(ADAPTER.Adapter):
         return payload
 
 
+def _run_accounts_cli_for_declared_capacity(
+    argv: list[str],
+) -> subprocess.CompletedProcess:
+    """A bare `subprocess.run`, no instance, no credential, no environment
+    override -- this reporter never authenticates as anyone and reads
+    nothing but what THIS process's own environment already carries,
+    because a launch proposal is composed before any worker or credential
+    has been chosen for it.
+    """
+    return subprocess.run(
+        argv, shell=False, capture_output=True, text=True,
+        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+
+def _declared_capacity() -> tuple[int, int] | None:
+    """`ADAPTER.register_declared_capacity("kaggle", ...)`'s own reporter
+    (see that registry's own module-level comment for the contract every
+    reporter registered there must keep): every account name on disk
+    right now, read through the identical subprocess `workers()` itself
+    calls, multiplied by this service's own pinned per-account allowance.
+
+    A subprocess that exits non-zero, or one whose stdout is not JSON, is
+    read here as "no capacity figure can be declared right now" -- caught
+    and turned into `None` rather than left to propagate, because the one
+    caller of this function (a launch proposal's own publisher) needs to
+    leave that whole action out of what it publishes, not crash publishing
+    every other action alongside it over a subprocess this reporter does
+    not control.
+    """
+    try:
+        names = _account_names_on_disk(
+            DEFAULT_ACCOUNTS_CLI, _run_accounts_cli_for_declared_capacity)
+    except (KaggleAdapterError, subprocess.TimeoutExpired, OSError):
+        return None
+    return (len(names), KAGGLE_WORKER_CAPACITY)
+
+
 ADAPTER.register("kaggle", KaggleAdapter)
 ADAPTER.register_metadata("kaggle", assemble_metadata)
 ADAPTER.register_default_accelerator("kaggle", _default_accelerator)
+ADAPTER.register_declared_capacity("kaggle", _declared_capacity)

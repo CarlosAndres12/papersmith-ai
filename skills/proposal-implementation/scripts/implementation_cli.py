@@ -19,21 +19,43 @@ from __future__ import annotations
 
 import argparse
 import ast
+import calendar
 import fnmatch
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
+import time
 import venv
 from pathlib import Path
 
-# The forge root: <root>/skills/proposal-implementations/scripts/implementation_cli.py
-FORGE_ROOT = Path(__file__).resolve().parents[3]
 SKILL_ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE = FORGE_ROOT / "implementations"
+
+# The shared implementation core.
+#
+# Everything under `_core/implementation/` is what every implementation skill
+# needs and none of them owns: the guards that refuse a target outside the
+# workspace or a dirty worktree, the git and LFS readers, name normalisation,
+# and the reference remapping a migration depends on. None of it knows what is
+# being implemented, which is why a sibling skill can import it rather than copy
+# it. What IS specific -- product directories, source roots, what survives at the
+# root -- stays below in this file and is handed to the core where it is needed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
+from impl_layout import FORGE_ROOT, WORKSPACE, IGNORED_DIRS, LFS_POINTER_PREFIX, TEXT_EXT  # noqa: E402
+from impl_refusals import NameRefused, Refused  # noqa: E402
+from impl_gitops import git, lfs_state, present_files, read_text, text_files, tracked_files  # noqa: E402
+from impl_guards import require_clean_worktree, require_non_forge_interpreter, resolve_target  # noqa: E402
+from impl_naming import normalize_name, package_name, validate_name  # noqa: E402
+from impl_references import (is_nesting, prefix_mappings, reference_pattern,  # noqa: E402
+                             scan_reference_updates, scan_stale_references)
+import impl_availability  # noqa: E402
+import impl_execution_strategy  # noqa: E402
+import impl_position  # noqa: E402
+import impl_steps  # noqa: E402
 
 # The three files this module is allowed to path-import from the forge's
 # `remote-execution` skill. `remote_execution_state()` reads `ledger.py`
@@ -61,6 +83,30 @@ REMOTE_EXECUTION_CLI_SCRIPT = (
 REMOTE_EXECUTION_SHARD_IO_SCRIPT = (
     FORGE_ROOT / "skills" / "remote-execution" / "scripts" / "shard_io.py"
 )
+
+#: This script's own absolute path, resolved once.
+CLI_PATH = Path(__file__).resolve()
+
+#: The prefix EVERY command this engine publishes carries, and the reason it
+#: is not simply `implementation_cli.py`.
+#:
+#: Measured. Every published command was a bare relative script name -- no
+#: interpreter, no directory -- and the file ships mode 644 with no execute
+#: bit, so not one of them was runnable as printed. Whether a pasted command
+#: worked at all depended entirely on the reader's current directory, and a
+#: reader whose shell answered "command not found" got that on stdout with
+#: exit status 0 from the harness around it: a step launched from the wrong
+#: directory, an hour spent, and nothing anywhere saying the command had never
+#: run.
+#:
+#: `sys.executable` rather than a bare `python3`, for the same reason
+#: `impl_steps.run_step` prefixes the target's own `.venv/bin`: the
+#: interpreter that is running this process is the one demonstrably able to
+#: run this file, and whatever a reader's `PATH` resolves `python3` to is a
+#: different question. Both halves are `shlex.quote`d, so a forge installed
+#: under a path with a space publishes a command that still runs.
+CLI_INVOCATION = " ".join(
+    shlex.quote(part) for part in (sys.executable or "python3", str(CLI_PATH)))
 
 PRODUCT_DIRS = ("Notebooks", "Data", "Results", "Models")
 
@@ -95,11 +141,6 @@ SOURCE_ROOTS = ("src/", "tests/", "tools/")
 # the inside of a file and can be wrong on its own — and those are counted.
 LARGE_PLAN_DECISIONS = 15
 
-IGNORED_DIRS = {
-    ".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ipynb_checkpoints",
-    ".mypy_cache", ".ruff_cache", ".idea", ".vscode", "node_modules", ".codegraph",
-}
-
 ROOT_KEEP = {
     "README.md", "README.rst", "README.txt", "LICENSE", "LICENSE.md", "NOTICE",
     ".gitignore", ".gitattributes", ".python-version", "pyproject.toml",
@@ -115,37 +156,12 @@ MODEL_EXT = {".pkl", ".pt", ".pth", ".joblib", ".onnx", ".ckpt", ".safetensors",
 RESULT_EXT = {".png", ".jpg", ".jpeg", ".svg", ".eps"}
 
 
-class Refused(Exception):
-    """A guard refused to run. Nothing was modified."""
-
-    def __init__(self, code: str, detail: str) -> None:
-        super().__init__(detail)
-        self.code = code
-        self.detail = detail
-
 
 # --------------------------------------------------------------------------
 # git helpers
 # --------------------------------------------------------------------------
 
-def git(target: Path, *args: str, check: bool = True) -> str:
-    proc = subprocess.run(
-        ["git", *args], cwd=target, capture_output=True, text=True,
-    )
-    if check and proc.returncode != 0:
-        raise Refused("GIT_FAILED", f"git {' '.join(args)}: {proc.stderr.strip()}")
-    return proc.stdout
 
-
-def tracked_files(target: Path) -> list[str]:
-    out = git(target, "ls-files", "-z")
-    return [p for p in out.split("\0") if p]
-
-
-#: The first bytes of a Git LFS pointer. A pointer is a few hundred bytes of text
-#: standing where a large file is declared to be; anything that opens it as data
-#: gets a parse error that names the format it expected and not the reason.
-LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
 
 
 #: The agreements of every gate live in the product folder, so they travel with
@@ -161,13 +177,70 @@ LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/"
 AGREEMENTS_GLOB = "*.md"
 
 #: A checklist item. Anything else on the line is the item's text, verbatim.
-AGREEMENT_LINE = re.compile(r"^\s*[-*]\s*\[(?P<mark>[ xX])\]\s*(?P<text>.+?)\s*$")
+#:
+#: The trailing group is optional and scoped strictly to the shape `settle`
+#: writes (design D4, spec Group 3): a backticked `` `test_<id>` `` at the
+#: very end of the line, mirroring `impl_position.WITNESS_RE`'s own
+#: end-anchored convention one module over. A bare line, with or without a
+#: mark, parses byte-for-byte as it always has -- the group only ever
+#: matches when the line's own tail happens to have that exact shape.
+#: Measured, not assumed (design D4's own open question): a scan of the
+#: reference target's `AGREED.md` for a pre-existing line already ending in
+#: a backticked `test_...` found zero hits across 114 checklist lines, so
+#: this token form ships rather than the HTML-comment fallback D4 held in
+#: reserve.
+AGREEMENT_LINE = re.compile(
+    r"^\s*[-*]\s*\[(?P<mark>[ xX])\]\s*(?P<text>.+?)"
+    r"(?:\s+`(?P<witness>test_[A-Za-z0-9_]+)`)?\s*$")
 
 #: A bullet: a marker followed by whitespace. `**bold**` is not one, which is why
 #: this exists — a file that records a reverted agreement in prose was reported as
 #: three malformed items, and the paragraph that explains a reversal is exactly the
 #: kind of writing this file needs to allow.
 BULLET_LINE = re.compile(r"^\s*[-*]\s+\S")
+
+
+def _agreement_scan_text(data: bytes) -> str:
+    """The document's decoded text, with the position block's own byte span
+    excised — what `agreements_state` and `_agreement_collides` both scan.
+
+    One cause, one fix. Measured by construction with a minimal isolated
+    fixture (never by reading a target's own file): 2 real agreement
+    bullets plus a 3-item position block reported `open: 5`, not 2 — the
+    block's own sequence items, `- [ ] N. ...`, are exactly `AGREEMENT_LINE`
+    (line 153)'s shape, and nothing excluded the block's byte span from
+    either scanner. `_agreement_collides` reads the identical shape, which
+    is why an item's own located line always "collided" with itself: the
+    two symptoms are one cause and are repaired by the same excision.
+    `impl_position.locate_block`'s own docstring stated this exclusion
+    before it was true of anything but the two HTML-comment delimiters —
+    corrected alongside this fix, not left standing beside it.
+
+    The injected `b"\\n"` at the excision point is load-bearing, not
+    cosmetic. `data[:start] + data[end:]` alone can concatenate the last
+    partial line before the block with the first partial line after it
+    into one line neither of them was — a fabricated bullet if the merged
+    text happens to shape one, silent corruption rather than a raised
+    error. Slicing, never `re.sub` or `str.replace`, for the identical
+    backslash-interpretation reason `impl_position.splice`'s own docstring
+    gives.
+
+    A block that will not locate (`Refused`, e.g. a malformed opener or
+    more than one delimiter) is caught here, not propagated: `agreements_state`
+    is total today and reports absence as a state rather than raising, and a
+    document whose position block cannot be located is scanned in full —
+    the exact behavior both callers already had before this function
+    existed. The residual is unobservable, not merely tolerated: the same
+    document raises through `position_state` in the same `verify` call, so
+    a malformed block is never silently invisible end to end.
+    """
+    try:
+        block = impl_position.locate_block(data)
+    except Refused:
+        return data.decode("utf-8")
+    if block is None:
+        return data.decode("utf-8")
+    return (data[:block["start"]] + b"\n" + data[block["end"]:]).decode("utf-8")
 
 
 def agreements_state(target: Path, name: str) -> dict:
@@ -194,18 +267,67 @@ def agreements_state(target: Path, name: str) -> dict:
     fixed filename would decide for the repository and then report `absent` over
     whatever the repository actually called it — which is not a missing file, it
     is an absence nobody went looking for, dressed as a finding.
+
+    **A located position block never counts as an agreement.** Its own
+    sequence items are excluded before this scan sees a single line
+    (`_agreement_scan_text`, above); a holder whose only checklist items
+    are position lines therefore reports `absent`, not `open` — the same
+    fact `position_state` already reports separately, so it is never lost.
+
+    **The witness dimension, nested under `witness` (design D7, spec Group
+    4).** Three states, none collapsing into another: `unwitnessed` (the
+    line carries no `` `test_<id>` `` token at all -- reported, never a
+    failure), `unmeasured` (a token is declared but this run could not, or
+    would not, call it a contradiction), `disagrees` (declared, `tests/` is
+    readable and fully parsed, the mark is `x`, and `test_<id>` is absent
+    from `test_function_names(...)`).
+
+    **This CLI runs no test, ever** — `test_function_names` is an `ast`
+    walk, nothing here executes a suite. Finding `test_<id>` among the
+    collected names proves only that a function by that name exists; it is
+    never read as "the test passed", so that case reads `unmeasured`, the
+    same as a token this run could not evaluate at all. Only a *definite
+    absence* — a fully-parsed `tests/` that does not contain the declared
+    function — is strong enough to call `disagrees`. `unmeasured` also
+    covers `tests/` missing entirely or `unparsable_tests(...)` non-empty:
+    the collector silently skips a file that fails `ast.parse`, so "absent"
+    and "unreadable" are genuinely indistinguishable, which is exactly what
+    `unmeasured` denotes.
+
+    **One-directional, unlike `impl_position.derive()`.** An unticked
+    agreement whose declared witness function already exists is never
+    `disagrees` — `settle` always writes `[ ]`, and the symmetric rule
+    would flag every freshly settled agreement whose test already exists.
+
+    **`summary` is present on every branch, including `absent`** (`"0 of 0
+    witnessed"`), the same uniform-key-set doctrine `position_state`
+    states for itself. Silence is never how this reports "nothing is
+    declared" — see `cmd_verify`'s own contract.
     """
     product = target / name
     files = sorted(p for p in product.glob(AGREEMENTS_GLOB) if p.is_file()) \
         if product.is_dir() else []
 
+    # Computed once per call, never per item: whether `tests/` at the
+    # target's own root (the same directory `cmd_verify`'s own
+    # `test_function_names(target / "tests")` already reads) is even
+    # readable at all. A witness token cannot be told apart from a
+    # contradicted one when the collector itself could not run.
+    tests_dir = target / "tests"
+    tests_readable = tests_dir.is_dir() and not unparsable_tests(tests_dir)
+    tested_names = test_function_names(tests_dir) if tests_readable else set()
+
     open_items: list[str] = []
     settled = 0
     unparsed: list[str] = []
     holding: list[str] = []
+    unwitnessed: list[str] = []
+    unmeasured: list[str] = []
+    disagrees: list[str] = []
+    total_items = 0
     for path in files:
         items_here = 0
-        for raw in path.read_text(encoding="utf-8").splitlines():
+        for raw in _agreement_scan_text(path.read_bytes()).splitlines():
             line = raw.rstrip()
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
@@ -223,10 +345,21 @@ def agreements_state(target: Path, name: str) -> dict:
                     unparsed.append(f"{path.name}: {line.strip()}")
                 continue
             items_here += 1
-            if match.group("mark") == " ":
-                open_items.append(match.group("text"))
+            total_items += 1
+            text = match.group("text")
+            mark = match.group("mark")
+            witness = match.group("witness")
+            if mark == " ":
+                open_items.append(text)
             else:
                 settled += 1
+            if not witness:
+                unwitnessed.append(text)
+            elif (tests_readable and mark in ("x", "X")
+                  and witness not in tested_names):
+                disagrees.append(text)
+            else:
+                unmeasured.append(text)
         # A markdown file with no checklist items is a document, not a checklist.
         # Only what actually holds agreements is reported as holding them, and the
         # unparsed lines of a file that turned out to hold none go with it.
@@ -239,8 +372,11 @@ def agreements_state(target: Path, name: str) -> dict:
         return {"status": "absent", "holders": [], "searched": f"{name}/*.md",
                 "open": [], "settled": 0, "unparsed": [],
                 "note": "no markdown file in the product folder holds checklist "
-                        "items; if a gate happened, its agreements were lost"}
+                        "items; if a gate happened, its agreements were lost",
+                "witness": {"unwitnessed": [], "unmeasured": [], "disagrees": [],
+                           "summary": "0 of 0 witnessed"}}
 
+    witnessed = len(unmeasured) + len(disagrees)
     return {
         "status": "open" if open_items or unparsed else "settled",
         "holders": holding,
@@ -248,6 +384,153 @@ def agreements_state(target: Path, name: str) -> dict:
         "open": open_items,
         "settled": settled,
         "unparsed": unparsed,
+        "note": None,
+        "witness": {
+            "unwitnessed": unwitnessed,
+            "unmeasured": unmeasured,
+            "disagrees": disagrees,
+            "summary": f"{witnessed} of {total_items} witnessed",
+        },
+    }
+
+
+def position_state(target: Path, name: str, evidence: dict,
+                   revision: str | None, source: str | None) -> dict:
+    """The execution sequence's current state, read from `<Name>/AGREED.md`.
+
+    Every mark reported here is derived, never read as an asserted claim —
+    see `impl_position.derive`. `evidence` is a plain dict of already-computed
+    states (the search, the notebooks, the job readiness and, when given, the
+    arrived shards), so this function reads no filesystem itself beyond
+    locating which markdown file, if any, holds the block.
+
+    Uniform key set on every branch, `absent` included: a caller that reads
+    `position["sequence"]` on a target that never reached a gate must not
+    special-case the one status where the key would otherwise be missing —
+    `returned_keys`'s agreement rule (test_proposal_implementation.py:161-164).
+
+    Reported and never gating, exactly like `agreements_state` beside it: a
+    target with items still open is a not-yet-ready state, not a failure, and
+    neither `verify` nor `probe`'s own exit status is touched by anything this
+    returns. The one exception is a malformed block — `locate_block` and
+    `parse_items` raise `Refused` for that, the same class `MALFORMED_FINDINGS`
+    already is for `read_findings` (line 2151), and `main()`'s existing
+    `except Refused` turns it into exit 2 for every command that reads one.
+    """
+    empty = {
+        "status": "absent", "holder": None, "revision": None,
+        "revisionSha256": None, "boundTo": "unknown",
+        "sequence": [], "disagreements": [], "unmeasured": [],
+        # Every item whose box is ticked and whose witness nothing measured
+        # -- an assertion, not a reading. Its own list beside `disagreements`
+        # rather than folded into it, because a disagreement names a
+        # measurement that says otherwise and this one has none to name; see
+        # `impl_position.derive`'s docstring.
+        "unbacked": [],
+        "lastGate": None, "lastClose": None,
+        # PR10 (the-position-nobody-holds, level grammar): the rung this
+        # pass is aiming at, read straight off the block's own header --
+        # `None` on every branch that never located a block, since there is
+        # no pass to name a target for.
+        "targetLevel": None,
+        # And the other fact, which the header cannot carry: the rung the
+        # EVIDENCE reaches (`impl_position.attained_level`). An aim above what
+        # is attained is legitimate -- it is how a pass climbs -- so the two
+        # only mean something read side by side, and until this key existed
+        # only one of them was ever visible. A recorded rung standing over
+        # nothing attained was reported nowhere at all, while the much smaller
+        # incident of a tick over nothing measured had `unbacked` to itself;
+        # the gap is now readable without tripping a refusal to find it.
+        "attainedLevel": None,
+    }
+    product = target / name
+    if not product.is_dir():
+        return empty
+
+    # Found by shape, exactly like `agreements_state` two functions up: every
+    # markdown file at the top of the product folder is a candidate holder,
+    # never a fixed filename that would decide for the repository.
+    holders = []
+    for path in sorted(p for p in product.glob("*.md") if p.is_file()):
+        block = impl_position.locate_block(path.read_bytes())
+        if block is not None:
+            holders.append((path, block))
+
+    if not holders:
+        return empty
+    if len(holders) > 1:
+        raise Refused(
+            "POSITION_HOLDER_AMBIGUOUS",
+            "more than one markdown file under "
+            f"{product.relative_to(target)}/ carries a `<!-- position -->` "
+            "block; only one may hold the section this reads.")
+
+    path, block = holders[0]
+    items = impl_position.parse_items(block["body"])
+    # `evidence` is copied, never mutated in place: a caller (`cmd_gate`,
+    # `cmd_discuss`) that built it once and keeps reading it after this call
+    # must not find a `targetLevel` key it never put there itself.
+    evidence = {**evidence, "targetLevel": block["target"]}
+    derived = impl_position.derive(items, evidence)
+
+    events = impl_position.read_events(product / ".implementation" / "position.jsonl")
+    last_gate = next((e for e in reversed(events) if e.get("kind") == "gate"), None)
+    last_close = next((e for e in reversed(events) if e.get("kind") == "close"), None)
+
+    sequence, disagreements, unmeasured, unbacked = [], [], [], []
+    for item, result in zip(items, derived):
+        entry = {
+            "ordinal": item["ordinal"], "mark": item["mark"],
+            "derived": result["derived"], "twostate": result["twostate"],
+            "satisfied": result["satisfied"], "witness": item["witness"],
+            "measuredBy": result["measuredBy"], "disagrees": result["disagrees"],
+            "unbacked": result["unbacked"],
+            "text": item["text"],
+        }
+        sequence.append(entry)
+        if result["disagrees"]:
+            disagreements.append(entry)
+        if result["derived"] is None:
+            unmeasured.append(entry)
+        # An item can be both unmeasured and unbacked -- it is unbacked only
+        # BECAUSE it is unmeasured -- so it appears in both lists rather than
+        # in whichever one is tested first. `unmeasured` answers "what could
+        # not be read"; `unbacked` answers "what was claimed anyway", and a
+        # reader looking for the second must not have to know the first.
+        if result["unbacked"]:
+            unbacked.append(entry)
+
+    # The same staleness rule `admissibility_record` already applies (line
+    # 4815-4821): a revision's *content* hash, not its name, is what a header
+    # is bound to. Neither `revision` nor `source` resolved this invocation
+    # (probe without `--revision`, most commonly) reports `unknown` rather
+    # than guessing at a hash nobody could compute.
+    if not revision or not source:
+        bound_to = "unknown"
+    else:
+        current_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        bound_to = "current" if block["revisionSha256"] == current_sha else "stale"
+
+    if bound_to == "stale":
+        status = "stale"
+    elif any(item["mark"] == " " for item in items) or disagreements:
+        status = "open"
+    else:
+        status = "complete"
+
+    return {
+        "status": status, "holder": str(path.relative_to(target)),
+        "revision": block["revision"], "revisionSha256": block["revisionSha256"],
+        "boundTo": bound_to, "sequence": sequence,
+        "disagreements": disagreements, "unmeasured": unmeasured,
+        "unbacked": unbacked,
+        "lastGate": last_gate, "lastClose": last_close,
+        "targetLevel": block["target"],
+        # Derived from the same `evidence` the marks above were, and pointedly
+        # not from `derived`'s own `satisfied` column: that column is graded
+        # against the header's aim, so reading attainment off it would be
+        # reading the aim back again.
+        "attainedLevel": impl_position.attained_level(items, evidence),
     }
 
 
@@ -268,17 +551,84 @@ SEARCH_DECLARATION = {
 }
 
 
-#: The declared shape of each `search` field, the same way `DISTRIBUTION_SHAPE`
-#: declares `distribution`'s. `requiredScale` is a scale along named axes, so it
-#: is a mapping and never a bare number: `30` cannot say whether it means epochs,
-#: seeds or runs, and there is no axis to project a cost along. Without this
-#: table the field was accepted on bare truthiness and the arithmetic downstream
-#: iterated a scalar, which ended the process on a traceback instead of a result.
+#: The two facts every entry of `SEARCH_OPTIONAL`/`DISTRIBUTION_OPTIONAL`
+#: carries, spelled once so a field added to either roster cannot ship with
+#: half an answer. Both are required and neither is defaulted: a missing
+#: `evidence` silently defaulted to "feeds nothing" would put the next
+#: load-bearing field straight back into the bucket labelled optional, which
+#: is the exact defect `blocking_undeclared_state` exists to close.
+OPTIONAL_FIELD_FACTS = ("consequence", "evidence")
+
+
+#: What a search MAY say about itself, and is never asked to -- held apart
+#: from `SEARCH_DECLARATION` above for the identical reason
+#: `DISTRIBUTION_OPTIONAL` is held apart from `DISTRIBUTION_DECLARATION`: the
+#: required set is what goes `missing` when unanswered, and a key added
+#: there would declare every existing target incomplete for a question
+#: nobody had asked it yet.
+#:
+#: Each entry carries two facts, `OPTIONAL_FIELD_FACTS`. `consequence` is what
+#: the absence costs, written out. `evidence` is the token this field PRODUCES
+#: in an item's `measuredBy` -- the exact spelling `impl_position`'s own
+#: derivers publish when they consult it, either as the head of that string or
+#: as one of the `+`-joined corroborators after it -- and it is a plain
+#: statement of what the field feeds, never a judgement about whether the field
+#: matters. Which absences actually block is derived from the target's own
+#: declared sequence (`blocking_undeclared_state`), never listed here: a roster
+#: of "the load-bearing ones" is the same defect one indirection over, and it
+#: goes stale the first time a witness kind changes what it reads.
+SEARCH_OPTIONAL = {
+    "record": {
+     "evidence": "search.recordFound",
+     "consequence":
+              "the path, relative to the product folder, of the artefact this "
+              "search writes -- the one key `search_state` reads before any "
+              "of the required four, and the only one whose absence is "
+              "silent rather than reported. Undeclared, `search.recordFound` "
+              "answers `null` on every run forever, so a ticked `@record` "
+              "witness has nothing to back it and reads `POSITION_UNBACKED`; "
+              "a leveled `@record:level` witness derives no rung at all, "
+              "which sinks `position.attainedLevel` to `null` and answers "
+              "every launch `RUNG_NOT_ATTAINED`; and `probe`'s own "
+              "`search-first` rung fires on every call, since a declared "
+              "`requiredScale` can never be satisfied by a record nothing "
+              "was told to look for -- telling the operator to run a search "
+              "they may already have run. The forge never guesses the "
+              "filename: a default here would make it answer a question the "
+              "target never asked, and `undeclaredRecords` would then report "
+              "the real artefact as unaccounted for beside the invented one"},
+    "currentWhen": {
+     "evidence": "recordCurrent",
+     "consequence":
+                   "a dotted path into the record's own file naming where it "
+                   "wrote down the identity of the code that produced it -- "
+                   "`distribution.currentWhen`'s own idiom, one level up "
+                   "from a shard. Arrival says the record's file exists, "
+                   "never which code wrote it, so without this a found "
+                   "record is trusted on the strength of being present. "
+                   "The forge never guesses the field: the repository "
+                   "names it and the forge only compares the value there "
+                   "against the digest of the code as it stands"},
+}
+
+
+#: The declared shape of each `search` field, required and optional alike --
+#: the same way `DISTRIBUTION_SHAPE` declares `distribution`'s. `requiredScale`
+#: is a scale along named axes, so it is a mapping and never a bare number:
+#: `30` cannot say whether it means epochs, seeds or runs, and there is no
+#: axis to project a cost along. Without this table the field was accepted on
+#: bare truthiness and the arithmetic downstream iterated a scalar, which
+#: ended the process on a traceback instead of a result.
 SEARCH_SHAPE = {
     "what": str,
+    # A path, so a string. Without an entry here the key was accepted on
+    # bare truthiness and a list reached `product / record`, which is the
+    # same shape defect `requiredScale` was added to this table for.
+    "record": str,
     "requiredScale": dict,
     "role": str,
     "tieRule": str,
+    "currentWhen": str,
 }
 
 
@@ -323,12 +673,36 @@ def declared_required_scale(search: dict) -> dict:
 
 def _record_scale(expected: Path | None, axes: dict) -> dict:
     """The record's own reported scale, read only under the axis names
-    `requiredScale` itself declares.
+    `requiredScale` itself declares, at either of two shapes.
 
     No axis vocabulary is forge-known: whichever names `requiredScale`
     declares are exactly the names looked up here, so a record naming its
     scale under any other key is read as answering none of them — never
     guessed at, never learned from one target and applied to the next.
+
+    What the declaration declares is the axis *names*; it never declared a
+    depth, and reading only the top level assumed one. A record written by a
+    run comparing several things groups its result by whatever it compared —
+    one group per family — and the declared axes sit inside each group, so
+    the top-level read finds nothing and a search that ran at full declared
+    scale reports back as one that has not run. So the flat shape is tried
+    first and answers exactly as it always did; only when it answers nothing
+    is the record read as groups, and only when that nesting is structurally
+    unambiguous: every top-level value a mapping, and every one of those
+    carrying every declared axis. One value that is not a mapping, one group
+    silent on one axis, an empty record — all `{}`, as before.
+
+    This learns no target's vocabulary. The rule is structural and identical
+    for every target: it names nothing, recognises nothing, and asks only
+    whether the record is uniformly grouped, which either holds or does not.
+    The alternative — a declaration field naming where the axes live — would
+    make every record already on disk unreadable until its own repository
+    was edited, and this forge does not reach into those.
+
+    Where groups disagree on an axis the weakest is what is reported: a
+    record satisfies a requirement only if every part of it does, so the
+    minimum is the honest reading — taken per axis, never per group, and
+    never averaged into a number no group ran at.
     """
     if expected is None or not axes or not expected.is_file():
         return {}
@@ -338,7 +712,29 @@ def _record_scale(expected: Path | None, axes: dict) -> dict:
         return {}
     if not isinstance(payload, dict):
         return {}
-    return {axis: payload[axis] for axis in axes if axis in payload}
+    flat = {axis: payload[axis] for axis in axes if axis in payload}
+    if flat:
+        return flat
+    groups = list(payload.values())
+    if not groups or not all(isinstance(group, dict) for group in groups):
+        return {}
+    if not all(axis in group for group in groups for axis in axes):
+        return {}
+    return {axis: min((group[axis] for group in groups), key=_scale_rank)
+            for axis in axes}
+
+
+def _scale_rank(value: object) -> tuple[int, int]:
+    """How weak a scale reads, ordered so the weakest sorts first.
+
+    A value `_scale_of` cannot measure at all is weaker than any it can: it
+    proves nothing about how large the run was, and reporting the measurable
+    sibling instead would hand `_scale_satisfied` a number no group vouched
+    for. Below that, smaller is weaker, which is what `_scale_of` already
+    means.
+    """
+    scale = _scale_of(value)
+    return (0, 0) if scale is None else (1, scale)
 
 
 def _scale_satisfied(record_scale: dict, required_scale: dict) -> bool | None:
@@ -538,16 +934,60 @@ DISTRIBUTION_DECLARATION = {
 }
 
 
-#: The declared shape of each `distribution` field. A container answers by
-#: existing, even empty; a scalar answers only non-blank. Neither branch is
-#: trusted until the value's own type is confirmed first — that confirmation
-#: is what keeps a malformed value from being read as either.
+#: What a distributed run MAY say about itself, and is never asked to. Held
+#: apart from `DISTRIBUTION_DECLARATION` above rather than mixed into it,
+#: because that dict is the required set: every field in it that goes
+#: unanswered is reported `missing` and the whole block reads `incomplete`.
+#: A key added there would declare every existing target incomplete for
+#: never having answered a question nobody had asked them yet, which is a
+#: worse lie than the silence it replaces.
+#:
+#: Optional, and still schema: a value of the wrong shape is `malformed`
+#: here exactly as it is above, because a target that DID answer deserves to
+#: be told its answer is unreadable rather than have it quietly ignored.
+#:
+#: `OPTIONAL_FIELD_FACTS` per entry, the identical pair `SEARCH_OPTIONAL`
+#: carries and for the identical reason -- see that roster's own comment.
+DISTRIBUTION_OPTIONAL = {
+    "currentWhen": {
+     "evidence": "shardsCurrent",
+     "consequence":
+                   "a dotted path into a shard's own stamp naming where that "
+                   "shard recorded the identity of the code that produced it. "
+                   "Arrival says a shard folder exists, never which code wrote "
+                   "it, so without this a returned shard is trusted on the "
+                   "strength of being present. The forge never guesses the "
+                   "field: the repository names it and the forge only compares "
+                   "the value there against the digest of the code as it "
+                   "stands, the same division `identicalAcrossShards` already "
+                   "keeps"},
+    "shardsRoot": {
+     "evidence": "distribution.shardsArrived",
+     "consequence":
+                  "where a split campaign's returned shards land, so that a "
+                  "command with no `--shards` flag of its own -- `gate`, "
+                  "`close`, `discuss`, `probe` -- measures a `@shard` witness "
+                  "against the same directory `position`/`verify`'s own "
+                  "`--shards` would, rather than reading it as unmeasured "
+                  "forever. The forge never invents this directory: the "
+                  "repository names it once and every reader compares against "
+                  "the identical answer"},
+}
+
+
+#: The declared shape of each `distribution` field, required and optional
+#: alike. A container answers by existing, even empty; a scalar answers only
+#: non-blank. Neither branch is trusted until the value's own type is
+#: confirmed first — that confirmation is what keeps a malformed value from
+#: being read as either.
 DISTRIBUTION_SHAPE = {
     "axis": str,
     "poolable": list,
     "perEnvironment": list,
     "perRun": list,
     "identicalAcrossShards": list,
+    "currentWhen": str,
+    "shardsRoot": str,
 }
 
 
@@ -586,6 +1026,62 @@ def _distribution_list(dist: dict, field: str) -> list:
     """
     value = dist.get(field)
     return list(value) if isinstance(value, list) else []
+
+
+#: Returned by `_stamp_at` for a path the stamp does not hold, so that a
+#: stamp carrying a literal `null` there is never confused with one that
+#: carries nothing. A private sentinel rather than `None`, because the whole
+#: point of the lookup is telling those two apart.
+_STAMP_ABSENT = object()
+
+
+def _stamp_at(stamp: dict, dotted: str):
+    """The value a shard's own stamp holds at a dotted path, or `_STAMP_ABSENT`.
+
+    Dotted because a stamp is a document a repository shaped, not a flat
+    table: whatever it keeps its code identity under may well sit one level
+    down beside the rest of what that run recorded. Every segment must
+    resolve through a mapping — a path that runs into a list, a scalar or a
+    missing key answers absent rather than raising, since a stamp this
+    cannot read is a stamp that did not answer, which is a state and not a
+    crash.
+    """
+    current = stamp
+    for segment in dotted.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return _STAMP_ABSENT
+        current = current[segment]
+    return current
+
+
+def _shards_current(shards: list, dist: dict | None, digest: str) -> list | None:
+    """Which arrived shards say they were produced by the code as it stands.
+
+    `None` — not `[]` — when the repository declared no `currentWhen`. The
+    two are opposite answers: `[]` says every shard was asked and none of
+    them speaks for this code, while `None` says nobody was asked, because
+    the forge holds no name for the field that would answer and inventing
+    one on a repository's behalf is the one thing it must not do (see
+    `DISTRIBUTION_OPTIONAL`). `impl_position` reads that difference directly:
+    `None` leaves arrival alone deciding, exactly as it did before this key
+    existed.
+
+    A shard whose stamp carries nothing at the declared path is left out. It
+    is tempting to read a silent stamp as "probably fine" — it is the same
+    temptation as reading an unstamped notebook as current, and
+    `notebooks_state` already refuses it for the same reason: a stamp that
+    cannot answer the question is not evidence that the answer is yes.
+
+    `digest` is the caller's already-computed current source digest — the
+    identical value `notebooks_state` compares a report's own stamp against
+    (`source_digest`), never a second one derived here, or a shard and a
+    notebook could disagree about what "current" means in one report.
+    """
+    declared = (dist or {}).get("currentWhen")
+    if not isinstance(declared, str) or not declared:
+        return None
+    return [entry["shard"] for entry in shards
+            if _stamp_at(entry.get("stamp") or {}, declared) == digest]
 
 
 def _projected_cost(reduction: dict, target_scale: dict) -> dict | None:
@@ -684,9 +1180,12 @@ def distribution_state(contract: dict, dimensions: dict,
                if not _distribution_answered(dist, field)
                and not _distribution_malformed(dist, field)]
 
+    # The optional field is scanned for shape and never for presence: a
+    # target that answered it badly hears about it, and one that never
+    # answered it at all is not `missing` anything.
     malformed = [{"field": field, "expected": DISTRIBUTION_SHAPE[field].__name__,
                  "found": type(dist[field]).__name__}
-                for field in DISTRIBUTION_DECLARATION
+                for field in (*DISTRIBUTION_DECLARATION, *DISTRIBUTION_OPTIONAL)
                 if _distribution_malformed(dist, field)]
 
     # The only axis this refuses, and it refuses it by name because the name is
@@ -730,9 +1229,46 @@ def distribution_state(contract: dict, dimensions: dict,
     }
 
 
+def _record_current(expected: Path | None, current_when, digest: str | None) -> bool | None:
+    """Whether the record found at `expected` says it was produced by the
+    code as it stands -- `_shards_current`'s own doctrine (see that
+    function's docstring), one level up from a shard.
+
+    `None` is the sentinel that means "nothing to check", and it means that
+    for exactly one reason: `current_when` (`search.currentWhen`) is not a
+    real string. That is the ONLY branch this returns `None` from, so
+    `_derive_record` can read `recordCurrent is None` as "not declared" and
+    nothing else -- the identical contract `_shards_current` keeps for a
+    shard by returning `None` only when `distribution.currentWhen` is
+    absent, never when a declared check merely came back negative.
+
+    Declared, this always resolves to a real `True`/`False`: the record's
+    own JSON is read at the declared dotted path (absent, unparsable, or the
+    path itself missing all read the same as a value that fails to match)
+    and compared against `digest`. A `False` here composes with
+    `impl_position._derive_record`'s own doctrine that a definite mismatch
+    and an unreadable stamp are graded identically -- both collapse to
+    `None` (unmeasured), never `False`, at the witness itself; see that
+    function's own docstring for why.
+    """
+    if not isinstance(current_when, str) or not current_when:
+        return None
+    if expected is None or not expected.is_file():
+        return False
+    try:
+        stamp = json.loads(expected.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    value = _stamp_at(stamp if isinstance(stamp, dict) else {}, current_when)
+    if value is _STAMP_ABSENT:
+        return False
+    return value == digest
+
+
 def search_state(contract: dict, declared_records: list,
                  product: Path | None = None,
-                 declaration_status: str = "declared") -> dict:
+                 declaration_status: str = "declared",
+                 digest: str | None = None) -> dict:
     """Whether a declared search says enough about itself to be an experiment.
 
     A search is an experiment and gets declared as one. Three things it needs are
@@ -774,10 +1310,12 @@ def search_state(contract: dict, declared_records: list,
             return {"status": declaration_status, "declared": {}, "missing": [],
                     "malformed": [],
                     "recordNotDeclared": None, "recordFound": None,
+                    "recordCurrent": None,
                     "strayRecords": [], "recordScale": {}, "scaleSatisfied": None,
                     "note": "no benchmark declaration to read a search from yet"}
         return {"status": "none", "declared": {}, "missing": [], "malformed": [],
-                "recordNotDeclared": None, "recordFound": None, "strayRecords": [],
+                "recordNotDeclared": None, "recordFound": None,
+                "recordCurrent": None, "strayRecords": [],
                 "recordScale": {}, "scaleSatisfied": None,
                 "note": "no search declared; `undeclaredRecords` is what would "
                         "surface one that left an artefact"}
@@ -790,10 +1328,14 @@ def search_state(contract: dict, declared_records: list,
     # A value of the wrong shape is reported as itself. Folding it into
     # `missing` would ask for a field that is already there, and folding it
     # into the answered set is what let a scalar reach the arithmetic.
+    # `SEARCH_OPTIONAL` is scanned for shape and never for presence, the same
+    # rule `distribution_state` already keeps for its own optional fields: a
+    # target that answered `currentWhen` badly hears about it, and one that
+    # never answered it at all is not `missing` anything.
     malformed = [{"field": field,
                   "expected": SEARCH_SHAPE[field].__name__,
                   "found": type(search[field]).__name__}
-                 for field in SEARCH_DECLARATION
+                 for field in (*SEARCH_DECLARATION, *SEARCH_OPTIONAL)
                  if _search_malformed(search, field)]
 
     # The join between the two declarations: a search that writes a record and
@@ -830,11 +1372,28 @@ def search_state(contract: dict, declared_records: list,
     scale_satisfied = (_scale_satisfied(record_scale, required_scale)
                        if required_scale else None)
 
+    # `None` whenever `currentWhen` is not a real string -- undeclared, or
+    # declared with the wrong shape (already reported in `malformed` above,
+    # and contributing no comparison here for the identical reason a
+    # malformed `requiredScale` contributes no axes). `_record_current`
+    # itself never raises on a missing/unparsable record; see its own
+    # docstring for why the only `None` this ever returns is "not declared".
+    record_current = _record_current(
+        expected,
+        search.get("currentWhen") if isinstance(search.get("currentWhen"), str) else None,
+        digest)
+
     return {
         "status": ("ok" if not missing and not malformed and covered
                    and found is not False else "incomplete"),
         "declared": dict(search),
         "recordFound": found,
+        # `impl_position._derive_record`'s own currency check, computed here
+        # rather than at the witness: this is the only layer that knows both
+        # the record's own on-disk bytes and the digest of the code as it
+        # stands. See `_record_current`'s docstring for the three-valued
+        # contract.
+        "recordCurrent": record_current,
         "strayRecords": stray,
         "missing": missing,
         "malformed": malformed,
@@ -846,6 +1405,651 @@ def search_state(contract: dict, declared_records: list,
         "recordScale": record_scale,
         "scaleSatisfied": scale_satisfied,
     }
+
+
+def named_records_state(target: Path, name: str, records: dict, digest: str) -> dict:
+    """`evidence["records"]`: `{name: {recordFound, recordCurrent,
+    scaleSatisfied, requiredScale}}`, one entry per `__records__` declaration
+    -- design D4, assembled from the identical primitives `search_state`
+    already reuses for the `search` block's own record (`_record_scale`,
+    `_scale_satisfied`, `_record_current`), never a new measurement of any
+    kind ("no deriver opens a file" doctrine). `_derive_record_level`
+    (`impl_position.py`) reads this dict's own entries through the identical
+    `_record_scale_level` arithmetic the `search` block's own bare
+    `@record:level` already uses, so an addressed record and the search's
+    own share one arithmetic rather than a second one drifting beside it.
+
+    Each entry's `path` is resolved relative to the product folder
+    (`target/name`), the identical layout `search_state`'s own `record`
+    field already resolves against. A declared entry naming no file yet, or
+    naming one of the wrong shape, reads `recordFound: False` (or `None`
+    when the product folder does not exist at all), exactly as an absent
+    search record does; a non-dict entry is skipped entirely, the same
+    silent-rather-than-crashing rule `resolve_records_declaration` already
+    applies one layer up.
+
+    `recordCurrent` reads `entry.get("currentWhen")` through the identical
+    `_record_current` primitive `search_state` uses -- always `None` today,
+    since `__records__`'s own declared shape carries no `currentWhen` key
+    (design's own "Recorded, not fixed here" note: `_record_scale_level`
+    reads no currency at all), but computed generically here rather than
+    hardcoded, so a target that adds the key by hand is read rather than
+    silently ignored.
+    """
+    product = target / name
+    state: dict = {}
+    for record_name, entry in records.items():
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        required_scale = entry.get("requiredScale") \
+            if isinstance(entry.get("requiredScale"), dict) else {}
+        found = None
+        expected = None
+        if isinstance(path, str) and path and product.is_dir():
+            expected = product / path
+            found = expected.is_file()
+        record_scale = _record_scale(expected, required_scale)
+        scale_satisfied = (_scale_satisfied(record_scale, required_scale)
+                           if required_scale else None)
+        record_current = _record_current(
+            expected,
+            entry.get("currentWhen") if isinstance(entry.get("currentWhen"), str) else None,
+            digest)
+        state[record_name] = {
+            "recordFound": found,
+            "recordCurrent": record_current,
+            "scaleSatisfied": scale_satisfied,
+            "requiredScale": required_scale,
+        }
+    return state
+
+
+def _optional_sections(search: dict, distribution: dict) -> tuple:
+    """The two optional rosters beside the section state each one belongs to,
+    in one expression rather than two loop bodies.
+
+    `undeclared_optional_state` and `blocking_undeclared_state` walk the
+    identical pairs and must never disagree about which sections exist or what
+    "declared" means for one -- two spellings of that walk is how a field ends
+    up reported by both, or by neither.
+    """
+    return (("search", search, SEARCH_OPTIONAL),
+            ("distribution", distribution, DISTRIBUTION_OPTIONAL))
+
+
+def _unanswered_optional(section_state: dict, roster: dict) -> list[tuple]:
+    """`(field, facts)` for every roster key a DECLARED block left unanswered.
+
+    Empty for a block that was never declared at all: `search["declared"]`/
+    `distribution["declared"]` are empty exactly when the contract carried no
+    such block, and a target with nothing to answer is asked nothing.
+    """
+    declared = section_state.get("declared")
+    if not declared:
+        return []
+    return [(field, facts) for field, facts in roster.items()
+            if field not in declared]
+
+
+def undeclared_optional_state(search: dict, distribution: dict,
+                              blocking: list[dict] | None = None) -> list[dict]:
+    """Every optional key a DECLARED `search` or `distribution` block left
+    unanswered, named beside the exact consequence its absence carries --
+    minus the ones `blocking_undeclared_state` has already reported, which
+    are not optional in any sense the word carries here.
+
+    **Why the blocking ones are moved out rather than flagged inside.** The
+    defect this parameter closes was measured on a live flow: a target left
+    `distribution.shardsRoot` undeclared, `verify` named it here with an
+    accurate consequence, and the operator read "optional field unanswered",
+    moved on, and met a permanent `STEP_SEQUENCE_NOT_REACHED` four ordinals
+    and forty minutes later with the cause three screens back. A flag inside
+    a list this key names `undeclaredOptional` would have been read the same
+    way, because the bucket is what a reader takes the entry's weight from.
+    So a field whose absence leaves a witness in the target's OWN declared
+    sequence permanently unmeasurable leaves this list entirely.
+
+    `SEARCH_OPTIONAL`/`DISTRIBUTION_OPTIONAL` are scanned for shape only,
+    never presence, at `search_state`/`distribution_state` themselves --
+    both docstrings state it directly, and for the identical reason: a
+    required key added there would declare every existing target
+    incomplete for a question nobody had asked it yet. That restraint is
+    correct and stays. What was missing is the OTHER half: a target that
+    never learns the key exists cannot decide to answer it either, and the
+    comment naming it sits only in the kit's own source, never in
+    anything `verify` prints. This reads what `search_state`/
+    `distribution_state` already computed -- `declared`, the raw section
+    dict, copied verbatim only when a real block was found -- and never
+    touches the filesystem or the contract itself a second time.
+
+    **Reported, never demanded.** A target with no search, or no split
+    run, is asked nothing here either: `search["declared"]`/
+    `distribution["declared"]` are empty exactly when `contract.get(
+    "search"/"distribution")` was falsy, the same gate `search_state`/
+    `distribution_state` open with. Forcing an answer from a target with
+    nothing to answer would be the forge deciding for the target -- the
+    one thing this whole file refuses to do.
+    """
+    moved = {(entry["section"], entry["field"]) for entry in (blocking or [])}
+    entries: list[dict] = []
+    for section, state, roster in _optional_sections(search, distribution):
+        for field, facts in _unanswered_optional(state, roster):
+            if (section, field) in moved:
+                continue
+            entries.append({"section": section, "field": field,
+                            "consequence": facts["consequence"]})
+    return entries
+
+
+#: What an undeclared field costs when the target's OWN sequence is waiting on
+#: it, written out rather than labelled -- `LADDER_UNDECLARED_CONSEQUENCE`'s
+#: doctrine, and `FLOW_UNFINISHABLE_CONSEQUENCE`'s reason for being a format
+#: string rather than a constant: "an item cannot be measured" is advice, the
+#: ordinals beside the steps waiting on them is a decision somebody can take.
+#: The field's own `consequence` is composed in rather than restated, so the
+#: two can never drift into two accounts of one absence.
+BLOCKING_UNDECLARED_CONSEQUENCE = (
+    "`{section}.{field}` is undeclared, and this target's own sequence is "
+    "waiting on it. Item{plural} at ordinal {ordinals} {carry} a witness "
+    "measured through {evidence}, which nothing can answer until that field "
+    "is declared -- so {they} read `unmeasured` rather than `false`, on every "
+    "run, forever. An unmeasured item is never ticked from evidence, and "
+    "`step` refuses `STEP_SEQUENCE_NOT_REACHED` for {steps} -- every declared "
+    "step whose own `advances` ordinal sits above {first} -- on every call. "
+    "Nothing later in the flow runs, so the sequence items those steps would "
+    "have produced evidence for stay blank too. This is said here, before the "
+    "first step runs, because every fact it rests on was declared before the "
+    "first step ran: the measured incident that put it here cost an operator "
+    "four steps and forty minutes of a live run to reach the same sentence. "
+    "What the field itself buys, in full: {consequence}."
+)
+
+
+def blocking_undeclared_state(target: Path, name: str, search: dict,
+                              distribution: dict, sequence: list[dict],
+                              steps: dict) -> list[dict]:
+    """Every undeclared optional field a witness in the target's OWN declared
+    sequence cannot be measured without, beside the declared steps it stops.
+
+    `unfinishable_flow_state`'s shape, placement and restraint (design D8),
+    one class over: that one reports an ordered flow two PRESENT declarations
+    make unwalkable, this one a flow an ABSENT declaration does.
+
+    **The predicate is derived from the sequence, never listed.** A roster of
+    "the load-bearing optional fields" would be the reported defect one
+    indirection away -- it answers today's four fields and goes stale the
+    first time a witness kind changes what it reads, exactly as a hand-listed
+    anything on this surface already has. What each roster entry states is a
+    plain fact about itself: `evidence`, the token the field PRODUCES inside
+    an item's `measuredBy`, spelled exactly as `impl_position`'s own derivers
+    publish it. Blocking is then the join: an item whose `measuredBy` HEAD is
+    that token is an item this field stands between the flow and.
+
+    **The head, and never the whole string or any token in it.** `measuredBy`
+    is `<head>` or `<head>+<corroborator>` --
+    `search.recordFound+recordCurrent`, `distribution.shardsArrived+
+    shardsCurrent`. The head is what a witness is measured THROUGH; a
+    corroborator only decides how far that answer is trusted. Comparing the
+    whole string would go silent on the target furthest along, and that is
+    reachable rather than theoretical: `verify --shards <dir>` on a target
+    declaring `distribution.currentWhen` and not `shardsRoot` publishes the
+    joined form for every shard item, while `shardsRoot` is still what stands
+    between that witness and every command carrying no `--shards` flag.
+
+    **What keeps the corroborator fields out today is not the head rule.**
+    Measured, rather than assumed: `shardsCurrent` is derived only from a
+    DECLARED `distribution.currentWhen` and `recordCurrent` only from a
+    declared `search.currentWhen`, so while either field is unanswered no
+    item can carry its token at all, and it matches nothing however this
+    compared. The head rule is what states the intent anyway -- a
+    corroborator is not what a witness is measured through -- so the day a
+    deriver publishes one its own field did not pay for, an absence that
+    narrows a reading still does not get reported as a dead flow. The same rule sorts the record
+    kinds for free: a leveled `@record:level <name>` witness is measured
+    through `records[<name>].recordFound`, its own `__records__` entry, so an
+    undeclared `search.record` does not block it -- while the two-state
+    `@record` and the operand-less `@record:level` beside it, both measured
+    through `search.recordFound`, are blocked and reported.
+
+    **A step is affected when it must WAIT behind such an item**, and an item
+    at or above the furthest ordinal any step advances blocks no step at all
+    -- `unfinishable_flow_state`'s own rule, read off `cmd_step`, which
+    refuses on items strictly below the ordinal a step advances. A target
+    that declares no ordered flow is reported nothing here: there is no step
+    to name, and the absence is still named in `undeclaredOptional` with its
+    consequence, which is the honest reading of a field that costs a reading
+    rather than a flow.
+
+    **The marks are deliberately not read**, and neither is anything on
+    disk: `unfinishable_flow_state`'s own restraint, for its own reason. A
+    diagnosis a false tick can switch off is worse than no diagnosis. The
+    `measuredBy` this reads is published by the derivation itself, never by a
+    mark, and for a field the target left undeclared it is invocation-
+    independent -- an undeclared `search.record` leaves `recordFound` `None`
+    on every branch there is, and a shard witness names its key before any
+    directory is consulted at all.
+
+    **This asks a target for nothing new.** Every input is one the forge
+    already reads and the kit already ships: the two optional rosters, the
+    `__steps__` entries' own `advances` ordinals, and the position sequence
+    the target already writes. Nothing here adds a declaration a from-zero
+    repository would have to be built to carry, which is why there is no kit
+    change beside it -- the whole finding is a join over declarations that
+    were all present before the first step ran.
+
+    **The exit is a question and never a command**, and that is measured
+    rather than preferred. The one act that clears this is an edit to the
+    target's own benchmark declaration, and the forge authors no target
+    declaration anywhere in this file -- `undeclared_ladder_state`,
+    `undeclared_records_state` and `unfinishable_flow_state` each say so in
+    their own words. So there is no command to publish that would run
+    unedited, and inventing one would be the forge deciding a repository's
+    vocabulary for it. What IS published is `_refusal_question`'s own shape,
+    the identical one the `except Refused` chokepoint publishes for
+    `POSITION_SHARDS_UNDECLARED`: the question, and the directly runnable
+    `discuss` command that opens it.
+    """
+    flow = _flow_steps(steps)
+    if not flow:
+        return []
+    furthest = max(advances for _, advances in flow)
+    entries: list[dict] = []
+    for section, state, roster in _optional_sections(search, distribution):
+        for field, facts in _unanswered_optional(state, roster):
+            evidence = facts["evidence"]
+            blocking = [item for item in sequence
+                        if isinstance(item.get("ordinal"), int)
+                        and item["ordinal"] < furthest
+                        and str(item.get("measuredBy") or "").split("+")[0]
+                        == evidence]
+            if not blocking:
+                continue
+            # The earliest one bounds the flow -- `cmd_step` refuses on the
+            # first unticked item below the ordinal -- but every one is named,
+            # so a reader who repairs the first is not sent back for the next.
+            first = min(item["ordinal"] for item in blocking)
+            blocked = [{"step": step_name, "advances": advances}
+                       for step_name, advances in flow if advances > first]
+            ordinals = ", ".join(str(item["ordinal"]) for item in blocking)
+            question = (
+                f"item(s) {ordinals} in this target's own position sequence "
+                f"carry a witness measured through {evidence}, and "
+                f"`{section}.{field}` is undeclared, so that measurement can "
+                f"never be answered and "
+                f"{', '.join(row['step'] for row in blocked)} can never be "
+                f"reached; declare `{section}.{field}` in the benchmark "
+                "package now, or say how the flow finishes without it, and "
+                "why?")
+            entries.append({
+                "section": section,
+                "field": field,
+                "evidence": evidence,
+                "blockedBy": [{"ordinal": item["ordinal"],
+                               "witness": dict(item["witness"])}
+                              for item in blocking],
+                "blockedSteps": blocked,
+                "consequence": BLOCKING_UNDECLARED_CONSEQUENCE.format(
+                    section=section, field=field, evidence=evidence,
+                    plural="s" if len(blocking) > 1 else "",
+                    carry="carry" if len(blocking) > 1 else "carries",
+                    they="they" if len(blocking) > 1 else "it",
+                    ordinals=ordinals, first=first,
+                    steps=", ".join(row["step"] for row in blocked),
+                    consequence=facts["consequence"]),
+                "exit": {
+                    "kind": "question",
+                    "question": question,
+                    "command": _discuss_command(
+                        target, name,
+                        about=_blocking_about(blocking), question=question),
+                },
+            })
+    return entries
+
+
+def _blocking_about(blocking: list[dict]) -> str:
+    """The `--about <kind> [operand]` spelling for the earliest blocked item's
+    own witness, so the question this opens is addressed to the thing that
+    cannot be measured rather than to the bare `record` bucket every other
+    publication point falls back to.
+
+    `_about_arg`'s own form, reused rather than respelled. The earliest item
+    is chosen for the reason the consequence names it first: it is the one
+    `cmd_step` actually refuses on.
+    """
+    earliest = min(blocking, key=lambda item: item["ordinal"])
+    return _about_arg(earliest.get("witness") or {})
+
+
+#: What a repository gives up by leaving `__levels__` empty, written out
+#: rather than labelled. `undeclaredOptional`'s entries earn their place by
+#: naming the cost of an absence, never the absence itself, and this follows
+#: them: an entry reading "no ladder is declared" would restate the key's own
+#: name and leave a reader who has never seen a rung exactly where they
+#: started. Four facts, each one read off code in this file or beside it --
+#: `_skipped_rung_detail`'s empty-ladder exit, `impl_position.attained_level`'s
+#: `[]` answer, `cmd_position`'s `POSITION_LEVELS_UNDECLARED`, and the
+#: `if declared_levels and ...` that guards `POSITION_TARGET_LEVEL_UNKNOWN`.
+LADDER_UNDECLARED_CONSEQUENCE = (
+    "no rung exists for another to sit above, so the whole ordering "
+    "discipline of the position section is switched off for this repository. "
+    "`POSITION_RUNG_SKIPPED` -- the refusal that stops a pass sealing at a "
+    "rung whose predecessor the evidence has not reached -- can never fire, "
+    "because an empty ladder has no predecessor to put the question to. "
+    "`position.attainedLevel` stays `null` on every run, since there is no "
+    "rung name to answer \"which one does the evidence currently reach\" "
+    "with, and a reader gets no answer rather than a low one. Every item in "
+    "the sequence is two-state, reached or not: a `:level`-marked witness "
+    "cannot be written at all (`POSITION_LEVELS_UNDECLARED` refuses it), so "
+    "a step that got part of the way -- a record found but short of its own "
+    "declared scale -- is recorded as reached or as nothing, with no rung in "
+    "between for it to rest on. And a header's own `--target-level` accepts "
+    "any word typed at it, since `POSITION_TARGET_LEVEL_UNKNOWN` compares a "
+    "named rung against a declared vocabulary and there is none to compare "
+    "against. Declaring an ordered `__levels__`, in this repository's own "
+    "words, is what turns all four back on."
+)
+
+
+def undeclared_ladder_state(target: Path, name: str,
+                            levels: list[str]) -> dict | None:
+    """The rung ladder this target never named, beside what naming none costs
+    it -- or `None` when it named one.
+
+    The gap this closes is the one `__steps__` does not have. Run a step
+    against an empty `__steps__` and `STEPS_UNDECLARED` refuses and publishes
+    the question, so nobody keeps an empty one by accident. An empty
+    `__levels__` is demanded by nothing at all:
+    `POSITION_LEVELS_UNDECLARED` fires only once a `:level`-marked witness
+    already exists in the sequence, and a target that never writes one is
+    never asked for a rung; `_skipped_rung_detail` answers `None` before it
+    grades anything at all when `levels` is empty; and the call sites of
+    `resolve_levels_declaration` pour the answer straight into
+    `evidence["levels"]`, where `[]` and
+    a ladder that was read are the same value. A repository scaffolded from
+    zero therefore has no rungs, is asked for none, and cannot be reached by
+    the rung discipline at all -- and until this existed, nothing said so.
+
+    **Reported, never demanded.** A target with genuinely no rungs is a
+    legitimate resting state, the same way an unanswered optional field is,
+    and refusing one would be the forge deciding a repository's own
+    vocabulary for it -- the one thing `resolve_levels_declaration`'s own
+    docstring exists to refuse. This never gates and never raises.
+
+    **Its own key rather than an `undeclaredOptional` entry.** Those are
+    `{section, field, consequence}`: a field inside a DECLARED
+    `search`/`distribution` block. `__levels__` is a module-level literal
+    held apart from `__benchmark__` on purpose, so it sits in no section and
+    names no field, and borrowing that shape would mean writing a `section`
+    that does not exist. Top-level in `cmd_verify`'s return for the
+    constraint that decided `toDiscuss`'s and `undeclaredOptional`'s own
+    placement: `returned_keys` reads dict-literal keys at the top level of a
+    function's own return, so a key nested anywhere at all ships invisible to
+    `VerifyStatusRosterTests`.
+
+    **A target with nowhere to write it is asked nothing**, the identical
+    restraint `undeclared_optional_state` keeps for a repository with no
+    search: no benchmark package, or a package carrying neither file
+    `resolve_levels_declaration` reads, is not a repository that left a
+    question unanswered -- `structure.scaffoldGaps` already names the file it
+    is missing, and saying it twice would turn one gap into two findings.
+
+    `levels` is passed in rather than resolved here, from the same
+    `resolve_levels_declaration` call `verify` already makes for the position
+    evidence: two reads of one declaration in one command is how the two come
+    to disagree about what the target declared.
+    """
+    if levels:
+        return None
+    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
+    if not bench_root.is_dir():
+        return None
+    # The file that WOULD carry it, chosen in the order
+    # `resolve_levels_declaration` reads them, so the path named here is the
+    # one a reader's own declaration would actually be found at.
+    holder = next((candidate for candidate in ("__init__.py", "config.py")
+                   if (bench_root / candidate).is_file()), None)
+    if holder is None:
+        return None
+    return {"declaration": LEVELS_DECLARATION,
+            "path": (bench_root / holder).relative_to(target).as_posix(),
+            "consequence": LADDER_UNDECLARED_CONSEQUENCE}
+
+
+#: What a repository gives up when its ladder and its sequence cannot meet,
+#: written out for the identical reason `LADDER_UNDECLARED_CONSEQUENCE` is: a
+#: reader handed "the ladder is unreachable" learns the key's own name and
+#: nothing else. A format string rather than a constant, because the two exits
+#: are only actionable once the actual rungs are named -- "declare at most
+#: three rungs" is advice, `"declare at most three"` beside the four this
+#: target wrote is a decision somebody can take.
+LADDER_UNREACHABLE_CONSEQUENCE = (
+    "no launch can ever be authorized for any job in this sequence. "
+    "`launch_available` floors a launch at {required!r} -- the rung below "
+    "the top of the declared ladder -- and reads `position.attainedLevel`, "
+    "which is the highest rung at which EVERY leveled item grades satisfied. "
+    "The leveled item{plural} at ordinal {ordinals} can never grade satisfied "
+    "above {bound!r}, whatever runs: a `@rehearsal` witness reads "
+    "`smokeReady`, which is two-valued, so a rehearsal that passed proves the "
+    "floor plus one rung and never more -- full scale is `@record`'s or "
+    "`@shard`'s evidence to speak to. So the gate answers `RUNG_NOT_ATTAINED` "
+    "on every call, naming a rung nothing that can run will reach, and the "
+    "top rungs of this ladder can never be sealed at either. Two exits, both "
+    "the target's own to take: declare a `{declaration}` of at most three "
+    "rungs, so the launch floor sits at or below what a rehearsal proves; or "
+    "drop the `:level` marker from that item and record it two-state -- the "
+    "grammar's own default -- since a two-state item is graded without the "
+    "ladder and holds no rung down. The forge changes neither on its own: a "
+    "floor that moved with whatever the sequence happens to contain would let "
+    "ADDING a leveled item quietly LOWER the launch threshold for every other "
+    "item beside it."
+)
+
+
+def unreachable_ladder_state(items: list[dict], levels: list[str]) -> dict | None:
+    """The declared ladder no evidence in this sequence can ever climb far
+    enough to open a launch on -- or `None` when it can.
+
+    `undeclared_ladder_state`'s own shape, placement and restraint (design
+    D8), one fact over: that one reports a ladder nobody named, this one a
+    ladder named longer than the sequence beside it can reach.
+
+    **The gap.** `_derive_rehearsal_level` bounds a leveled `@rehearsal`
+    item at index 1 and `launch_available` floors a launch at
+    `levels[-2]`, and each is right on its own. Composed, they are
+    unsatisfiable from four rungs up: one leveled `@rehearsal` anywhere in
+    the sequence pins `attained_level` at index 1 forever, and
+    `RUNG_NOT_ATTAINED` then answers every launch with a rung nothing that
+    can run will reach. The operator is told which rung was not attained --
+    true, and unanswerable.
+
+    **Reported, never repaired.** The other closure on offer was to lower
+    the gate's own floor to `min(len(levels) - 2, the highest attainable)`,
+    and it is rejected: that floor would then be a function of what the
+    sequence happens to hold, so writing one more leveled `@rehearsal` item
+    would LOWER the launch threshold for every other item beside it. A gate
+    a sequence can weaken by growing is strictly worse than one that will
+    not open, because only the second is visible.
+
+    **Below two rungs, nothing is reported**: `launch_available` skips the
+    rung threshold entirely there -- there is no predecessor rung for a
+    launch to have missed -- so a finding would name a gate that does not
+    exist. The identical "structurally unreachable" restraint
+    `_skipped_rung_detail` already keeps for a ladder too short to name a
+    predecessor.
+
+    `items` is the sequence `position_state` already parsed and `levels` the
+    ladder `verify` already resolved; nothing here opens a file or measures
+    anything, so this can never disagree with the marks reported beside it.
+    """
+    if len(levels) < 2:
+        return None
+    bound = impl_position.attainable_rung(items, levels)
+    floor_index = len(levels) - 2
+    highest_index = impl_position.level_index(levels, bound)
+    if highest_index is None or highest_index >= floor_index:
+        return None
+    # Which items actually hold the bound down, so a reader has something to
+    # change rather than a whole sequence to re-read. Only the ones AT the
+    # minimum: naming every leveled item would name two that reach the top
+    # beside the one that does not.
+    capped = [{"ordinal": item["ordinal"], "witness": item["witness"]}
+              for item in items
+              if not item["witness"].get("twostate", True)
+              and impl_position.highest_rung(
+                  item["witness"]["kind"], levels) == highest_index]
+    ordinals = ", ".join(str(row["ordinal"]) for row in capped)
+    return {
+        "declaration": LEVELS_DECLARATION,
+        "levels": list(levels),
+        "requiredLevel": levels[floor_index],
+        "highestAttainable": bound,
+        "cappedBy": capped,
+        "consequence": LADDER_UNREACHABLE_CONSEQUENCE.format(
+            required=levels[floor_index], bound=bound,
+            ordinals=ordinals, plural="s" if len(capped) > 1 else "",
+            declaration=LEVELS_DECLARATION),
+    }
+
+
+#: What a repository gives up by leaving `__records__` empty, written out for
+#: the identical reason `LADDER_UNDECLARED_CONSEQUENCE` is: an absence read as
+#: "no records are declared" restates the key's own name, and a reader who
+#: has never seen a named record is left exactly where they started.
+RECORDS_UNDECLARED_CONSEQUENCE = (
+    "no name exists for a leveled `@record:level <name>` witness to "
+    "address, so the only rung a leveled record item can reach is the "
+    "`search` block's own -- a bare `@record:level` with no operand, "
+    "unchanged since before this declaration existed. A named "
+    "`@record:level <name>` witness written into the sequence anyway "
+    "derives `None` (unmeasured), never a rung: `position` refuses "
+    "`POSITION_RECORD_UNKNOWN` before it ever writes a mark from that "
+    "state, so `verify` and `probe`, which never refuse, only ever read the "
+    "already-refused case as `unmeasured` -- never as a wrongly-satisfied "
+    "one. Declaring `__records__`, in this repository's own words, is what "
+    "gives a named witness something to reach."
+)
+
+
+def undeclared_records_state(target: Path, name: str, records: dict) -> dict | None:
+    """The named records this target never declared, beside what naming none
+    costs it -- `undeclared_ladder_state`'s own shape and placement (design
+    D8), one declaration over.
+
+    **Reported, never demanded.** A target with genuinely no named records is
+    a legitimate resting state, the same way an empty `__levels__` is: no
+    `@record:level <name>` witness is ever forced into existence by this
+    report, and refusing an absence would be the forge deciding a
+    repository's own vocabulary for it.
+
+    **Its own key rather than an `undeclaredOptional` entry**, for the
+    identical reason `undeclared_ladder_state` gives: `__records__` is a
+    module-level literal held apart from `__benchmark__`, so it sits in no
+    section and names no field, and borrowing that shape would mean writing
+    a `section` that does not exist.
+
+    **A target with nowhere to write it is asked nothing**, the identical
+    restraint `undeclared_ladder_state` keeps: no benchmark package, or a
+    package carrying neither file `resolve_records_declaration` reads, is
+    not a repository that left a question unanswered --
+    `structure.scaffoldGaps` already names the file it is missing.
+
+    `records` is passed in rather than resolved here, from the same
+    `resolve_records_declaration` call `verify` already makes for the
+    position evidence -- two reads of one declaration in one command is how
+    the two come to disagree about what the target declared.
+    """
+    if records:
+        return None
+    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
+    if not bench_root.is_dir():
+        return None
+    holder = next((candidate for candidate in ("__init__.py", "config.py")
+                   if (bench_root / candidate).is_file()), None)
+    if holder is None:
+        return None
+    return {"declaration": RECORDS_DECLARATION,
+            "path": (bench_root / holder).relative_to(target).as_posix(),
+            "consequence": RECORDS_UNDECLARED_CONSEQUENCE}
+
+
+#: The sub-key a `__steps__` entry names its own output roots with, relative
+#: to the product folder. Spelled once, read by `cmd_step` and reported on by
+#: `undeclared_produces_state`, for the reason every other declaration name in
+#: this file is a constant: two spellings of one key is how a declaration comes
+#: to be half-read.
+PRODUCES_KEY = "produces"
+
+#: What a step gives up by naming no output roots, written out rather than
+#: labelled -- `LADDER_UNDECLARED_CONSEQUENCE`'s own doctrine. Every fact here
+#: is read off `cmd_step`'s own body: the two comparisons it cannot make, and
+#: the incident that proved neither is theoretical.
+PRODUCES_UNDECLARED_CONSEQUENCE = (
+    "this step's run is measured against nothing. `step` compares the product "
+    "folder before and after every run, but with no declared root it cannot "
+    "say which side of the comparison belongs to this step, so both readings "
+    "are switched off for it: a run that returned having written nothing at "
+    "all reads exactly like a run that produced its whole output, and a run "
+    "that wrote into ANOTHER step's tree reads exactly like one that stayed "
+    "in its own. Measured twice on one repository in one day -- a step wrote "
+    "into a neighbour's product, reported `outcome: \"returned\"`, passed "
+    "every check this skill runs, and was caught only because somebody "
+    "compared a digest by hand.")
+
+
+def undeclared_produces_state(target: Path, name: str, steps: dict) -> list[dict]:
+    """Every declared step that names no output root, beside what that costs.
+
+    `undeclared_ladder_state`'s shape and restraint, one declaration deeper:
+    per-STEP rather than per-repository, because `__steps__` is a map and one
+    step naming its roots says nothing about its neighbour.
+
+    **Reported, never demanded, and the reasoning is not a preference.** Two
+    precedents point opposite ways and one of them is inside this very
+    declaration. `advances` -- the only other optional sub-key a `__steps__`
+    entry carries -- is documented at its own call site as "a step that
+    declares none runs ungated, exactly as before; an ordering nobody declared
+    is not one this command invents". A sibling key that REFUSED would put two
+    opposite doctrines inside one declaration, and would refuse work that is
+    perfectly runnable.
+
+    The second reason is about WHEN the reading happens. Every fail-closed
+    refusal in this skill guards an act the engine is about to take. This one
+    grades an act already taken: the subprocess has run, the product is on
+    disk, and the time is spent. A refusal there would discard the run's own
+    verdict and teach an operator to stop declaring steps.
+
+    So the absence is reported with its consequence, and the consequence is
+    the part that has to be unmissable -- which is why it is written out
+    rather than named. `verify` is where a from-zero repository is told, and
+    the kit ships the key in its own `__steps__` example, so a target built
+    from zero meets the question rather than defaulting past it silently.
+
+    **A target with nowhere to write it is asked nothing**, the identical
+    restraint `undeclared_ladder_state` keeps: no benchmark package, or no
+    file `resolve_steps_declaration` reads, is a scaffold gap
+    `structure.scaffoldGaps` already names.
+
+    `steps` is passed in rather than resolved here, from the same
+    `resolve_steps_declaration` call `verify` already makes -- two reads of
+    one declaration in one command is how the two come to disagree.
+    """
+    if not steps:
+        return []
+    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
+    if not bench_root.is_dir():
+        return []
+    holder = next((candidate for candidate in ("__init__.py", "config.py")
+                   if (bench_root / candidate).is_file()), None)
+    if holder is None:
+        return []
+    return [{"step": step, "declaration": f"{STEPS_DECLARATION}[{step!r}]"
+                                          f"[{PRODUCES_KEY!r}]",
+             "path": (bench_root / holder).relative_to(target).as_posix(),
+             "consequence": PRODUCES_UNDECLARED_CONSEQUENCE}
+            for step, entry in sorted(steps.items())
+            if not (isinstance(entry, dict) and entry.get(PRODUCES_KEY))]
 
 
 def search_cost_forecast(reduction: dict, required_scale: dict) -> dict | None:
@@ -1070,171 +2274,15 @@ def prior_work_state(target: Path, package: str) -> dict:
     }
 
 
-def lfs_state(target: Path) -> dict:
-    """Which files are placeholders, and what fetching them would cost.
 
-    Cloning with the smudge filter skipped is already the rule — pointers are enough
-    to reorganize a repository, and materializing gigabytes to move them around burns
-    a quota that does not come back. What was missing is saying so. A four-kilobyte
-    text file sitting where a model checkpoint is expected fails at load time with an
-    error about the file format, and the reason is nowhere near the symptom.
-
-    Nothing here fetches anything. The quota is the user's, spending it is their
-    decision, and the command that would do it is reported rather than run.
-    """
-    attributes = target / ".gitattributes"
-    if not attributes.exists():
-        return {"status": "none", "patterns": []}
-
-    patterns = [line.split()[0] for line in attributes.read_text(
-        encoding="utf-8", errors="replace").splitlines()
-        if "filter=lfs" in line and line.split()]
-    if not patterns:
-        return {"status": "none", "patterns": []}
-
-    pointers, materialized = [], 0
-    for path in target.rglob("*"):
-        if not path.is_file() or ".git" in path.parts:
-            continue
-        relative = str(path.relative_to(target))
-        if not any(fnmatch.fnmatch(relative, p) or fnmatch.fnmatch(path.name, p)
-                   for p in patterns):
-            continue
-        try:
-            head = path.open("rb").read(256)
-        except OSError:
-            continue
-        if head.startswith(LFS_POINTER_PREFIX):
-            # The pointer states the real file's size. Reading it is what turns
-            # "some files are missing" into a number the user can weigh.
-            declared = 0
-            for line in head.decode("utf-8", "replace").splitlines():
-                if line.startswith("size "):
-                    declared = int(line.split()[1]) if line.split()[1].isdigit() else 0
-            pointers.append({"path": relative, "bytes": declared})
-        else:
-            materialized += 1
-
-    total = sum(p["bytes"] for p in pointers)
-    return {
-        "status": "pointers" if pointers else "materialized",
-        "patterns": patterns,
-        "pointerCount": len(pointers),
-        "materializedCount": materialized,
-        "bytesToFetch": total,
-        "humanBytesToFetch": f"{total / 1024**3:.2f} GiB" if total else "0",
-        "pointers": sorted(pointers, key=lambda p: -p["bytes"])[:20],
-        "truncated": max(0, len(pointers) - 20),
-        # Reported, never run.
-        "fetchCommand": "git lfs pull --include=" + ",".join(f'"{p}"' for p in patterns),
-        "note": ("These files are placeholders of a few hundred bytes. Anything that "
-                 "opens one as data fails with an error about its format rather than "
-                 "about its absence, so treat them as missing material: the flow reads "
-                 "none of them."),
-        # The tempting workaround does not exist, and believing it does is worse than
-        # knowing the cost. GitHub counts every download against the repository
-        # owner's bandwidth — the command below, the browser's download button, even a
-        # source archive that happens to contain LFS objects. The free allowance is
-        # 1 GiB a month. There is no route that avoids it.
-        "quota": ("Every download counts against the repository owner's LFS bandwidth, "
-                  "by any route: the command below, the web interface's download "
-                  "button, or a source archive containing these objects. Clicking "
-                  "download in a browser costs exactly the same as fetching them here."),
-        # Where the material might come from instead — read from the repository's own
-        # code, not guessed. Weights fetched from a drive, unpacked from an archive or
-        # produced by training do not touch the quota at all.
-        "insteadOfFetching": ("Before spending it, check what `probe` reports under "
-                              "`acquisition`: material this repository downloads, "
-                              "clones or unpacks by itself costs nothing, and anything "
-                              "training produced can be produced again."),
-    }
-
-
-def present_files(target: Path) -> list[str]:
-    """What the repository actually holds, minus what it deliberately ignores.
-
-    The index is the wrong enumerator for an inspection. A file that exists, is not
-    ignored and is doing real work stays invisible until somebody commits it — so a
-    misplaced module is reported after it has entered the history rather than before,
-    which is the opposite of useful.
-
-    Two questions were being answered by one list, and they are different: *does this
-    exist* is answered by the disk, and *is this part of the record* is answered by
-    the ignore rules. Both are local; nothing here reaches a remote.
-    """
-    candidates = [
-        path for path in sorted(target.rglob("*"))
-        if path.is_file() and not any(part in IGNORED_DIRS or part == ".git"
-                                      for part in path.relative_to(target).parts)
-    ]
-    if not candidates:
-        return []
-    relative = [str(path.relative_to(target)) for path in candidates]
-    # One call rather than one per file; `check-ignore` reads the same rules git
-    # itself does, including any nested .gitignore.
-    proc = subprocess.run(
-        ["git", "check-ignore", "--stdin", "-z"], cwd=target,
-        input="\0".join(relative), capture_output=True, text=True,
-    )
-    ignored = {p for p in proc.stdout.split("\0") if p}
-    return [p for p in relative if p not in ignored]
-
-
-def require_clean_worktree(target: Path) -> None:
-    if git(target, "status", "--porcelain").strip():
-        raise Refused(
-            "DIRTY_WORKTREE",
-            "The target working tree has uncommitted or untracked changes. "
-            "Commit or stash them first; this skill never mutates a dirty repository.",
-        )
 
 
 # --------------------------------------------------------------------------
 # guards
 # --------------------------------------------------------------------------
 
-def resolve_target(raw: str) -> Path:
-    target = Path(raw).expanduser().resolve()
-    try:
-        target.relative_to(WORKSPACE.resolve())
-    except ValueError:
-        raise Refused(
-            "OUTSIDE_WORKSPACE",
-            f"Target must live under {WORKSPACE}. Clone the repository there first — "
-            "the forge's own environment is never a workspace for generated code.",
-        )
-    if not (target / ".git").exists():
-        raise Refused("NOT_A_GIT_REPO", f"{target} is not a git repository.")
-    return target
 
 
-def require_non_forge_interpreter() -> None:
-    prefix = Path(sys.prefix).resolve()
-    try:
-        prefix.relative_to((FORGE_ROOT / "skills").resolve())
-    except ValueError:
-        return
-    raise Refused(
-        "FORGE_INTERPRETER",
-        "This process is running inside one of the forge's own virtualenvs. "
-        "Re-run with a system interpreter so the target venv never inherits it.",
-    )
-
-
-def validate_name(name: str) -> str:
-    if not name or not name.replace("_", "").replace("-", "").isalnum():
-        raise Refused("INVALID_NAME", f"Name {name!r} must be alphanumeric (- and _ allowed).")
-    return name
-
-
-def package_name(name: str) -> str:
-    """The importable form of the name.
-
-    A hyphen is legal in a directory but not in a Python identifier, so
-    `Example-Method/` pairs with `src/Example_Method/`. The correspondence the layout
-    exists to make visible survives; `import Example-Method` would not.
-    """
-    return name.replace("-", "_")
 
 
 # --------------------------------------------------------------------------
@@ -1270,8 +2318,64 @@ def detect_product_dir(target: Path, name: str, paths: list[str]) -> str | None:
     return candidates.pop() if len(candidates) == 1 else None
 
 
-TEXT_EXT = {".py", ".ipynb", ".md", ".rst", ".txt", ".toml", ".cfg", ".ini",
-            ".yaml", ".yml", ".json", ".sh"}
+def misnamed_product_dir(target: Path, name: str) -> str | None:
+    """The product folder a `<name>/`-rooted write is about to walk past.
+
+    `detect_product_dir` above answers "is this repository's product folder
+    merely misnamed?", and it answered it for exactly one caller -- the
+    migration plan, which proposes the rename. Every OTHER command resolves
+    `<target>/<name>/` and, when nothing is there, creates it.
+
+    Measured. An operator passed the PACKAGE spelling of a name where the
+    DIRECTORY spelling belongs -- the two are different strings by
+    construction (`normalize_name` returns both, joined by `-` and by `_`),
+    and `validate_name` accepts either. Every ledger-writing command then
+    appended into a brand-new folder holding nothing but
+    `.implementation/position.jsonl`, reported `outcome: "returned"`, and said
+    nothing; `.implementation/` is git-ignored, so `git status` showed nothing
+    either. The science ran and landed in the real product tree. Only the
+    bookkeeping went to a folder no reader ever opens, and `probe` and
+    `position` went on reporting that those steps had never run.
+
+    Two conditions, and BOTH are load-bearing:
+
+    1. `<name>/` holds none of `PRODUCT_DIRS`. Existence is not the test --
+       the phantom folder EXISTS the moment the first event is appended, so a
+       guard asking "is `<name>/` there?" would fire once and never again,
+       which is the shape that lets a split ledger keep growing.
+    2. `detect_product_dir` names exactly one differently-named candidate.
+       Zero (a genuinely new target, nothing built yet) and more than one
+       (nothing here can choose) both answer `None`, and both must keep
+       working: scaffolding a target from zero is the flow that starts with
+       no product folder at all.
+    """
+    product = target / name
+    if any((product / category).is_dir() for category in PRODUCT_DIRS):
+        return None
+    return detect_product_dir(target, name, tracked_files(target))
+
+
+def require_named_product_dir(target: Path, name: str) -> None:
+    """Refuse a `<name>/`-rooted write that would open a second product tree.
+
+    Fail closed, this skill's whole doctrine, at the one place the split
+    starts: before the first event is appended. Both exits are named in the
+    detail because the engine cannot choose between them -- the folder on disk
+    may be the right one under the wrong `--name`, or the wrong one under the
+    right `--name`, and only a human knows which.
+    """
+    detected = misnamed_product_dir(target, name)
+    if detected is None:
+        return
+    raise Refused(
+        "PRODUCT_DIR_MISNAMED",
+        f"{name}/ holds none of {list(PRODUCT_DIRS)} and {detected}/ holds "
+        f"them, so this call would open a second product tree under a name "
+        f"nothing else reads -- the ledger would land in {name}/"
+        f".implementation/ while the product stays in {detected}/. Either "
+        f"re-run with --name {detected}, or rename {detected}/ to {name}/ "
+        f"through `plan` and `apply`.")
+
 
 # `<folder>/<Category>` written inside source, notebooks or docs. Anchored so a
 # longer path segment (`.../Images/Results`) does not match on its tail.
@@ -1291,130 +2395,11 @@ PATH_CHAIN_RE = re.compile(
 )
 
 
-def text_files(target: Path, paths: list[str]) -> list[str]:
-    return [p for p in paths if Path(p).suffix.lower() in TEXT_EXT]
 
 
-def read_text(target: Path, rel: str) -> str | None:
-    try:
-        return (target / rel).read_text(encoding="utf-8")
-    except (UnicodeDecodeError, OSError):
-        return None
 
 
-def prefix_mappings(renames: list[dict], moves: list[dict]) -> list[tuple[str, str]]:
-    """Every `old prefix -> new prefix` a migration implies.
 
-    A rename gives one directly. Moves give one too, and forgetting them breaks
-    exactly as much: after `Alpha/Results/x.csv -> <Name>/Results/x.csv`, code
-    addressing `Alpha/Results` points nowhere. The prefix is derived by
-    stripping the longest common suffix, so a move that only nests a folder
-    deeper yields `Results -> <Name>/Results`, not a bare rename.
-    """
-    mappings: dict[str, set[str]] = {}
-    for rename in renames:
-        mappings.setdefault(rename["from"], set()).add(rename["to"])
-
-    for move in moves:
-        source, dest = Path(move["from"]).parts, Path(move["to"]).parts
-        common = 0
-        while (common < min(len(source), len(dest))
-               and source[-1 - common] == dest[-1 - common]):
-            common += 1
-        keep = max(1, len(source) - common)
-        mappings.setdefault("/".join(source[:keep]), set()).add(
-            "/".join(dest[:len(dest) - len(source) + keep])
-        )
-
-    # An ambiguous prefix (two destinations) is left alone: rewriting it would
-    # have to guess, and a wrong rewrite is worse than a reported one.
-    return sorted((old, next(iter(new))) for old, new in mappings.items() if len(new) == 1)
-
-
-def reference_pattern(needle: str, kind: str, anchored: bool) -> re.Pattern:
-    """Match `needle`, anchored to a path boundary only when nesting demands it.
-
-    Two mappings behave differently. A pure rename (`Images -> <Name>`) is safe
-    to replace anywhere: the new value cannot contain the old one, so a nested
-    occurrence such as a URL `.../blob/main/Images/Notebooks/` is a genuine hit
-    and must be rewritten. A nesting mapping (`Results -> <Name>/Results`) must
-    be anchored, or `Images/Results/` becomes `Images/<Name>/Results/`.
-    """
-    if kind == "path prefix" and anchored:
-        return re.compile(r"(?<![\w./-])" + re.escape(needle))
-    return re.compile(re.escape(needle))
-
-
-def is_nesting(old: str, new: str) -> bool:
-    """True when the new prefix merely nests the old one deeper."""
-    return new.endswith(f"/{old}")
-
-
-def scan_reference_updates(target: Path, mappings: list[tuple[str, str]],
-                           paths: list[str]) -> list[dict]:
-    """Files naming an old path that the migration is about to invalidate."""
-    updates: list[dict] = []
-    for old, new in mappings:
-        if old == new:
-            continue
-        patterns = [(f"{old}/", f"{new}/", "path prefix")]
-        # Only a pure one-segment rename is safe to rewrite in quoted form;
-        # substituting a multi-segment path into a quoted literal would match
-        # unrelated strings.
-        if "/" not in old and "/" not in new:
-            patterns += [(f'"{old}"', f'"{new}"', "quoted path segment"),
-                         (f"'{old}'", f"'{new}'", "quoted path segment")]
-        for rel in text_files(target, paths):
-            content = read_text(target, rel)
-            if not content:
-                continue
-            for needle, replacement, kind in patterns:
-                anchored = is_nesting(old, new)
-                hits = len(reference_pattern(needle, kind, anchored).findall(content))
-                if hits:
-                    updates.append({
-                        "file": rel,
-                        "occurrences": hits,
-                        "kind": kind,
-                        "anchored": anchored,
-                        "replace": needle,
-                        "with": replacement,
-                    })
-    return updates
-
-
-def scan_stale_references(target: Path, name: str, paths: list[str]) -> list[dict]:
-    """Textual `<folder>/<Category>` paths under a parent that does not exist.
-
-    Deliberately narrow. A quoted single segment (`root / "data"`) is NOT
-    flagged: fallback probes for optional dataset roots are legitimately absent,
-    so treating every missing directory as breakage buries the real finding.
-    That form is still rewritten during a rename, where the exact old name is
-    known and the user approves the list first.
-    """
-    def resolves(folder: str, category: str) -> bool:
-        """An empty directory is not a destination: the content it named is gone.
-
-        `git mv` leaves the old parents behind as empty shells, so existence
-        alone would report a broken path as healthy.
-        """
-        directory = target / folder / category
-        if not directory.is_dir():
-            return False
-        return any(entry.name != ".gitkeep" for entry in directory.iterdir())
-
-    stale: list[dict] = []
-    for rel in text_files(target, paths):
-        content = read_text(target, rel)
-        if not content:
-            continue
-        pairs = {(m.group(1), m.group(2)) for m in REFERENCE_RE.finditer(content)}
-        pairs |= {(m.group(1), m.group(2)) for m in PATH_CHAIN_RE.finditer(content)}
-        broken = sorted(f"{folder}/{category}" for folder, category in pairs
-                        if folder != name and not resolves(folder, category))
-        if broken:
-            stale.append({"file": rel, "references": broken})
-    return stale
 
 
 def classify(path: str, name: str, product_dir: str | None = None) -> tuple[str | None, str]:
@@ -1601,6 +2586,66 @@ def unreached_mathematics(modules: list[dict], declaration: dict,
             "declaredBy": declared_by,
         })
     return unreached
+
+
+#: What a repository gives up by leaving `arms` empty, written out rather
+#: than labelled -- `LADDER_UNDECLARED_CONSEQUENCE`'s own doctrine, one block
+#: over. A format string, because the file the declaration belongs in and the
+#: number of modules that go uncrossed are what make the sentence checkable
+#: instead of general.
+ARMS_UNDECLARED_CONSEQUENCE = (
+    "{count} module{plural} under `src/{package}/` declare{verb} the sections "
+    "of a proposal, and no arm claims any of them: `{path}` names `arms` "
+    "empty. `unreachedModules` is the one join this flow makes between the "
+    "method's own provenance and the bench's declaration -- the two documents "
+    "can both be impeccable while an arm reimplements an equation instead of "
+    "calling it, and only crossing them says so. It is built FROM `arms`, so "
+    "with none declared it answers `[]` on every run whatever those modules "
+    "hold and whatever the harness calls; `armsReached` answers `null` for "
+    "the same reason; `fidelity.benchmark.status` can never read "
+    "`unfaithful`, and `fidelity.status` can never be driven to `drift` by "
+    "an unreached module; and `probe`'s own `wiring-first` rung -- the answer "
+    "that publishes the draft of how each module becomes trainable -- can "
+    "never be reached. Declaring one entry per arm, naming the sections it "
+    "exercises, is what turns all four back on. Reported and never demanded: "
+    "a repository with one arm and nothing to compare is a legitimate resting "
+    "state, and which comparison it runs is not the forge's to decide."
+)
+
+
+def undeclared_arms_note(target: Path, name: str, declaration: dict,
+                         modules: list[dict]) -> str | None:
+    """Why `unreachedModules` came back empty, when the reason is that no arm
+    was declared -- or `None` when there is nothing to explain away.
+
+    `distribution.note`'s own shape and placement (see `cmd_verify`, where a
+    missing `DIMENSIONS` literal is named so an empty `unpartitioned` is not
+    read as evidence the split is complete), applied to the other side of the
+    same silence. `unreached_mathematics`'s docstring calls itself "the join
+    nothing else in the flow crosses"; an empty `arms` switches that join off
+    entirely, and until this existed nothing said so.
+
+    **Silent when there is nothing to cross.** A repository whose modules
+    declare no sections at all has no crossing to lose, and
+    `fidelity.missingProvenance` already names a module that declares
+    nothing. Reporting here too would turn one gap into two findings -- the
+    identical restraint `undeclared_ladder_state` keeps for a target with no
+    benchmark package.
+
+    `declaration` and `modules` are both passed in, from the reads `verify`
+    already made: two reads of one declaration in one command is how the two
+    come to disagree about what the target declared.
+    """
+    if declaration.get("arms"):
+        return None
+    claimable = [module for module in modules if module.get("sections")]
+    if not claimable:
+        return None
+    package = package_name(name)
+    holder = f"src/{package}_Benchmark/__init__.py"
+    return ARMS_UNDECLARED_CONSEQUENCE.format(
+        count=len(claimable), plural="" if len(claimable) == 1 else "s",
+        verb="s" if len(claimable) == 1 else "", package=package, path=holder)
 
 
 def benchmark_unfaithfulness(target: Path, name: str) -> list[dict]:
@@ -2163,7 +3208,64 @@ def cmd_probe(args) -> dict:
     search = search_state(
         resolved["contract"],
         list((report.get("declared") or {}).get("records") or []),
-        target / name, declaration_status=resolved["status"])
+        target / name, declaration_status=resolved["status"],
+        digest=source_digest(target, package_name(name)))
+    # Computed once and reused for the `remoteExecution` merge below, rather
+    # than called twice for the same answer.
+    jobs = remote_execution_jobs_state(target)
+    # `probe` takes no `--shards` of its own, but a target that declared
+    # `distribution.shardsRoot` still gets a real shard answer here --
+    # `_resolve_shard_evidence` is the identical fallback
+    # `_position_write_evidence` applies for `gate`/`close`/`discuss`.
+    # Undeclared, both stay `None`: `@shard` reports `unmeasured`, never a
+    # false "did not arrive" (see `impl_position.derive`'s own docstring).
+    shards_arrived, shards_current = _resolve_shard_evidence(
+        target, name, resolved["contract"], None)
+    probe_digest = source_digest(target, package_name(name))
+    # Read once and handed to both readers below: `position_state` derives
+    # the sequence from it, and `pilot_completeness_state` grades the flow
+    # against the identical dict. Two evidence builds inside one command is
+    # how two answers come to disagree about the same repository.
+    probe_evidence = {
+        "search": search, "requiredScale": declared_required_scale(search),
+        "notebooks": notebooks_state(target, name, package_name(name)),
+        "smokeReady": jobs["smokeReady"], "shardsArrived": shards_arrived,
+        "shardsCurrent": shards_current,
+        "levels": resolve_levels_declaration(target, name),
+        "stepVerdicts": _step_verdicts(target, name),
+        # Design B5 (evidence wiring is three sites): the identical
+        # `named_records_state` call `_position_write_evidence` and
+        # `cmd_verify`'s own inline dict make, so `probe` never reports
+        # `unmeasured` for a `@record:level <name>` witness while `gate`
+        # (which reads `_position_write_evidence`) reports it satisfied.
+        "records": named_records_state(
+            target, name, resolve_records_declaration(target, name),
+            probe_digest)}
+    # Hoisted above the ladder rather than computed after it, because two of
+    # its rungs read the flow's own state. The evidence itself is unchanged;
+    # only the order in which this function builds it is.
+    position = position_state(
+        target, name, probe_evidence, args.revision,
+        revision_source(args.revision) if args.revision else None)
+    # Resolved once and handed to both readers, the identical restraint
+    # `probe_evidence` itself keeps: two reads of one declaration in one
+    # command is how the two come to disagree about what the target declared.
+    probe_steps = resolve_steps_declaration(target, name)
+    pilot = pilot_completeness_state(
+        probe_steps, position["sequence"], probe_evidence)
+    walk = walk_state(
+        probe_steps, position["sequence"], probe_evidence,
+        _ledger_step_events(impl_position.read_events(
+            target / name / ".implementation" / "position.jsonl")),
+        probe_evidence["levels"], product_artefacts(target, name))
+    # Which of the flow's own steps still owes a decision about how it is
+    # carried out in the full run. Never "which are open": a step nobody has
+    # asked about yet appears in no open bucket either, and reading that as
+    # decided is silence taken for consent.
+    answered = _answered_discussions(target, name)
+    pilot_undecided = [
+        row["step"] for row in pilot["steps"]
+        if _pilot_decision_question(target, name, row["step"]) not in answered]
     if next_step in ("benchmark", "piloted") and resolved["status"] in (
             "absent", "undeclared"):
         next_step = "declare-first"
@@ -2191,6 +3293,37 @@ def cmd_probe(args) -> dict:
     # Only `pending` names a submission a wait can actually resolve.
     elif next_step in ("benchmark", "piloted") and remote["status"] == "pending":
         next_step = "poll-first"
+    # The declared flow itself, read before the search record and after the
+    # submission already out. A submission already sent keeps its place at the
+    # top of this half of the ladder for the reason it always had -- an answer
+    # on its way outranks anything this repository could be told to start --
+    # but everything BELOW it is about spending machine time that has not been
+    # spent yet, and the pilot comes before the scale.
+    #
+    # Measured, and the defect that named this rung: a target declaring six
+    # ordered steps had run the second and nothing else, six of its seven
+    # notebooks carried zero executed cells and zero outputs, and this ladder
+    # answered `search-first` -- whose published question offers to continue
+    # toward the declared scale. That rung's own condition ("the record is
+    # absent or short") was true; it is simply a different fact from "the flow
+    # was validated at pilot", and nothing had been produced for anybody to
+    # read. A question that offers the expensive run at that point is an
+    # invitation to say yes.
+    elif next_step in ("benchmark", "piloted") and (
+            pilot["status"] == "incomplete"):
+        next_step = "pilot-first"
+    # And what a finished pilot unlocks is NOT permission to launch. The flow
+    # returns to its first step and each one owes its own decision about how
+    # it is carried out in the full run; only once every one of those is on
+    # the record does the ladder fall through to the rung that offers the
+    # declared scale. `offer --answer` is not that mechanism and is not
+    # borrowed for it: it records one closed yes/no per call, and this is one
+    # decision per step. `discuss` already buckets by exact question text, so
+    # N steps are N independently-retiring buckets with no second approval
+    # surface built beside it.
+    elif next_step in ("benchmark", "piloted") and (
+            pilot["status"] == "complete" and pilot_undecided):
+        next_step = "pilot-decisions"
     elif next_step in ("benchmark", "piloted") and (
             search["recordFound"] is False
             or (declared_required_scale(search)
@@ -2199,13 +3332,82 @@ def cmd_probe(args) -> dict:
     elif next_step in ("benchmark", "piloted") and report["status"] != "ok":
         next_step = "report-first"
 
-    proposal = wiring_proposal(target, name, baselines) if next_step == "benchmark" else None
+    # The roster decides, never a literal. This line read `if next_step ==
+    # "benchmark"`, and `wiring-first` is assigned by an override twenty lines
+    # above it -- so at the one answer that names an arm declaring mathematics
+    # it never calls, the draft of how each module becomes trainable came back
+    # `None` and whoever was driving the CLI composed the wiring plan in prose.
+    # `benchmark` keeps it (it is the raw material the run offer is built from,
+    # and nothing is unreached there); `wiring-first` gains it, because the
+    # state it describes IS the thing blocking.
+    proposal = (wiring_proposal(target, name, baselines)
+                if PROBE_NEXT_STEPS[next_step]["wiring"] else None)
     # The harness's name is read from the target's own declaration
     # (`resolve_harness_status`), never assumed from a filename: a fixed
     # convention here reported `harness: null` on a target that had followed
     # doctrine exactly but named its module something else.
     harness_status = resolve_harness_status(target, name, package_name(name))
     notebook = target / name / "Notebooks" / PROBE_NOTEBOOK
+    # Computed once and reused for both `search.costForecast` below and the
+    # classification call: the exact same projection, never a second one
+    # (design D3, `the-pilot-decides-the-remote-strategy`).
+    cost_forecast = search_cost_forecast(
+        state.get("reduction") or {}, declared_required_scale(search))
+    # `classify_remote_necessity` never inspects `smokeReady` today (see its
+    # own docstring), but it is folded into each row anyway so the shape
+    # handed to it matches the one the row's own producer documents.
+    necessity = impl_execution_strategy.classify_remote_necessity(
+        jobs=[{**job, "smokeReady": jobs["smokeReady"].get(job["job"], False)}
+              for job in jobs["jobs"]],
+        results_status=state["status"],
+        cost_forecast=cost_forecast)
+    # What this answer publishes, decided by `PROBE_NEXT_STEPS` rather than by
+    # a literal. The line this replaces fired on `next_step == "piloted"` and
+    # on nothing else, so every other answer -- `search-first` above all, which
+    # launches a search -- named a step and published no way to take it, and
+    # whoever was driving the CLI composed the question in prose. Two of the
+    # eleven answers publish nothing, and the roster is where they say so.
+    #
+    # The declared scale is the only fact either experiment question reads, and
+    # only ever the DECLARED one: the achieved count climbs on every poll while
+    # the decision has not changed, and embedding it would open a new,
+    # never-to-be-revisited `discuss` bucket on every call (the stability rule
+    # `_piloted_discuss_entry` already documents).
+    publication = next_step_publication(
+        target, name, next_step,
+        {"declared": (state.get("belowTargetScale") or {})
+         if next_step == "piloted"
+         else (declared_required_scale(search) or {}),
+         # The two facts `declare-first` is assigned from, threaded through
+         # rather than recomputed: its published sentence names the state that
+         # actually routed there, and a second read here could disagree with
+         # the branch above that published it.
+         "declarationStatus": resolved["status"],
+         "live": report.get("live"),
+         # The two facts the flow rungs publish, threaded through rather than
+         # recomputed: a second read here could disagree with the branch that
+         # published it, the same discipline `declarationStatus` states.
+         "incomplete": pilot["incomplete"],
+         "notebooks": [row["notebook"] for row in pilot["steps"]
+                       if row["notebook"]]})
+    # `toDiscuss` carries the question-shaped publications only -- a command
+    # this flow can name completely is not a question anybody answers, and
+    # putting one in a discussion list would open a bucket nothing retires.
+    # Computed unconditionally as a list so the key's shape never varies with
+    # state, the same discipline `verify`'s `toDiscuss` already keeps.
+    to_discuss = (
+        [{key: value for key, value in publication.items() if key != "kind"}]
+        if publication and publication["kind"] == "question" else []
+    )
+    # The per-step pass, appended after the rung's own question rather than
+    # replacing it: the first entry says what state the flow is in and where
+    # its outputs are, and one entry per still-undecided step follows, each in
+    # its own `discuss` bucket. This is the one answer whose `toDiscuss` is
+    # longer than its `resolve`, and the roster's `publish` shape (one dict)
+    # is why the per-step half lives here rather than inside it.
+    if next_step == "pilot-decisions":
+        to_discuss += [_pilot_decision_entry(target, name, step)
+                       for step in pilot_undecided]
     return {
         "status": "ok",
         "target": str(target),
@@ -2225,58 +3427,52 @@ def cmd_probe(args) -> dict:
         # has already reported a value of any other shape as malformed, and a
         # forecast projected from a scale nobody can name an axis of would be a
         # number invented to fill the field.
-        "search": {**search,
-                   "costForecast": search_cost_forecast(
-                       state.get("reduction") or {},
-                       declared_required_scale(search))},
+        "search": {**search, "costForecast": cost_forecast},
         "unreachedModules": unfaithful,
         # A static fact, reported and never gating: see `notebook_coupling`.
         "coupling": coupling_state(target, name, package_name(name)),
+        # A static fact, reported and never gating: see `position_state`.
+        "position": position,
+        # Whether the ordered flow this target declared has actually run at
+        # pilot, step by step. Two rungs read it (`pilot-first`,
+        # `pilot-decisions`); it is reported beside them because "which steps
+        # are still short" is exactly what a reader needs in order to act on
+        # either answer. See `pilot_completeness_state`.
+        "pilotCompleteness": pilot,
+        # Where this repository stands in its own declared flow, step by step,
+        # and what each artefact's state is by inheritance. A description of a
+        # position, never a list of findings: an absence report answers "what
+        # is broken" and this answers "where am I", which is the question
+        # somebody opening a clean repository to run the flow from the top
+        # actually has. Gates nothing. See `walk_state`.
+        "walk": walk,
         # What went out to a remote worker (the ledger), plus what job
-        # folders exist right now (the filesystem) — reported, never
-        # resolved, and never a submission. See `remote_execution_jobs_state`.
+        # folders exist right now (the filesystem), plus — purely additive,
+        # this slice refuses nothing on it — whether each job classifies as
+        # needing a remote worker at all. See `remote_execution_jobs_state`
+        # and `impl_execution_strategy.classify_remote_necessity`.
         "remoteExecution": {
             **remote,
-            **remote_execution_jobs_state(target),
+            **jobs,
+            "necessity": necessity,
         },
         "nextStep": next_step,
+        # What to do about that answer, published by the engine rather than
+        # composed by whoever reads it. `null` only where the roster declares
+        # the step terminal -- a step that names no work, not a step nobody
+        # decided about. The identical shape a refused payload's own `resolve`
+        # carries, deliberately: one publication shape, wherever this engine
+        # reaches a point somebody has to act on.
+        "resolve": ({key: value for key, value in publication.items()
+                     if key in ("kind", "question", "command")}
+                    if publication else None),
+        "toDiscuss": to_discuss,
         "wiring": proposal,
         # `probe` looks and reports; it never runs anything itself.
         "kind": "read-only",
     }
 
 
-class NameRefused(Exception):
-    """The name the user typed cannot become a directory and a package."""
-
-
-def normalize_name(raw: str) -> dict:
-    """Turn whatever the user typed into the `<Name>/` + `src/<Package>/` pair.
-
-    The user types `deep set`, `DEEP-SET` or `deepSet` and means the same thing.
-    Splitting happens on any separator and on a lower-to-upper boundary; an all-caps
-    token of two or more letters is an acronym and survives untouched, because
-    lowercasing an acronym renames the method rather than tidying the folder.
-    """
-    text = (raw or "").strip()
-    if not text:
-        raise NameRefused("NAME_EMPTY")
-    # Split first on explicit separators, then inside each piece on camel boundaries.
-    tokens: list[str] = []
-    for piece in re.split(r"[\s\-_]+", text):
-        if not piece:
-            continue
-        tokens.extend(re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+", piece))
-    if not tokens:
-        raise NameRefused("NAME_HAS_NO_WORDS")
-    for token in tokens:
-        if not token.isalnum():
-            raise NameRefused(f"NAME_NOT_ALPHANUMERIC:{token}")
-    if tokens[0][0].isdigit():
-        raise NameRefused("NAME_STARTS_WITH_DIGIT")
-    parts = [token if token.isupper() and len(token) >= 2 else token.capitalize()
-             for token in tokens]
-    return {"input": raw, "directory": "-".join(parts), "package": "_".join(parts)}
 
 
 def cmd_name(args) -> dict:
@@ -2427,7 +3623,18 @@ def well_formed(declared: object) -> list[dict]:
 
 
 def read_findings(target: Path) -> list[dict]:
-    """The declared audit findings, read statically from tests/findings.py."""
+    """The declared audit findings, read statically from tests/findings.py.
+
+    Both assignment forms, for the reason `read_declaration` states in full:
+    `FINDINGS: list[dict] = [...]` is `ast.AnnAssign`, and a reader walking
+    only `ast.Assign` sees nothing there. The consequence is worse here than
+    anywhere else this class appears — the comment below already says why an
+    empty list is the wrong answer for an unparsable file, and an annotated
+    declaration produced exactly that answer, silently, for a repository
+    whose findings were sitting in the file the whole time. A bare `FINDINGS:
+    list[dict]` with no value declares nothing and is skipped, never read as
+    an audit that found nothing.
+    """
     path = target / "tests" / "findings.py"
     if not path.exists():
         return []
@@ -2443,17 +3650,34 @@ def read_findings(target: Path) -> list[dict]:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "FINDINGS" for t in node.targets
         ):
-            try:
-                declared = ast.literal_eval(node.value)
-            except ValueError as exc:
-                raise Refused("MALFORMED_FINDINGS",
-                              "FINDINGS is not a literal, so it cannot be read without "
-                              "executing the target's code.") from exc
-            return well_formed(declared)
+            value = node.value
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name)
+              and node.target.id == "FINDINGS"):
+            if node.value is None:
+                continue
+            value = node.value
+        else:
+            continue
+        try:
+            declared = ast.literal_eval(value)
+        except ValueError as exc:
+            raise Refused("MALFORMED_FINDINGS",
+                          "FINDINGS is not a literal, so it cannot be read without "
+                          "executing the target's code.") from exc
+        return well_formed(declared)
     return []
 
 
-IGNORE_ENTRIES = (".venv/", "__pycache__/", ".ipynb_checkpoints/")
+#: `.implementation/` joins them because this skill writes a ledger there and
+#: that ledger carries launch authorizations. Committed, an approval travels
+#: in a clone: it authorizes no different work, being bound to
+#: `(commit, entrypoint, units, worker)`, but it travels. The cost is real
+#: and is stated under "What this skill has not written down" -- the same
+#: file also carries the deliberation itself now (`discuss`, `settle`), and
+#: that half IS project history a clone would want.
+IGNORE_ENTRIES = (".venv/", "__pycache__/", ".ipynb_checkpoints/",
+                  ".implementation/")
 
 
 def ignore_gaps(target: Path) -> list[str]:
@@ -2470,26 +3694,37 @@ def ignore_gaps(target: Path) -> list[str]:
     return [entry for entry in IGNORE_ENTRIES if entry.rstrip("/") not in text]
 
 
+def scaffold_destinations(name: str) -> list[str]:
+    """The eleven file paths a `materialize --stage scaffold` writes.
+
+    Pulled out of `scaffold_gaps` so the writer and the gap-reporter read one
+    list rather than two: `scaffold_gaps` reports which of these are missing
+    (plus the two merge anchors, which are not paths in this sense at all —
+    see `scaffold_gaps`'s own docstring-equivalent comment below), and
+    `materialize --stage scaffold` copies exactly these into a target.
+    """
+    return [f"src/{package_name(name)}/__init__.py",
+            f"src/{package_name(name)}_Benchmark/__init__.py",
+            # The seal every notebook stamps by importing, rather than by
+            # hashing a tree of its own. It belongs inside the package because
+            # `_here()` reads the repository off its own path as `parents[1]`,
+            # and because producing the report is what the bench package does.
+            f"src/{package_name(name)}_Benchmark/report_digest.py",
+            "tests/test_smoke.py",
+            # `conftest.py`, `sweep.py` and `admissibility.py` are not tests and
+            # were never asked for, so a scaffold built from exactly this list
+            # could not be collected: `test_audit.py` and `test_remedies.py`
+            # below both open by importing them. `admissibility.py` fixes its
+            # own destination — its RULING_PATH resolves beside itself, which is
+            # where `admit` writes the ruling.
+            "tests/findings.py", "tests/conftest.py", "tests/sweep.py",
+            "tests/admissibility.py",
+            "tests/test_audit.py", "tests/test_remedies.py",
+            f"{name}/Notebooks/verification.ipynb"]
+
+
 def scaffold_gaps(target: Path, name: str) -> list[str]:
-    wanted = [f"src/{package_name(name)}/__init__.py",
-              f"src/{package_name(name)}_Benchmark/__init__.py",
-              # The seal every notebook stamps by importing, rather than by
-              # hashing a tree of its own. It belongs inside the package because
-              # `_here()` reads the repository off its own path as `parents[1]`,
-              # and because producing the report is what the bench package does.
-              f"src/{package_name(name)}_Benchmark/report_digest.py",
-              "tests/test_smoke.py",
-              # `conftest.py`, `sweep.py` and `admissibility.py` are not tests and
-              # were never asked for, so a scaffold built from exactly this list
-              # could not be collected: `test_audit.py` and `test_remedies.py`
-              # below both open by importing them. `admissibility.py` fixes its
-              # own destination — its RULING_PATH resolves beside itself, which is
-              # where `admit` writes the ruling.
-              "tests/findings.py", "tests/conftest.py", "tests/sweep.py",
-              "tests/admissibility.py",
-              "tests/test_audit.py", "tests/test_remedies.py",
-              f"{name}/Notebooks/verification.ipynb"]
-    gaps = [w for w in wanted if not (target / w).exists()]
+    gaps = [w for w in scaffold_destinations(name) if not (target / w).exists()]
     if pytest_anchor_missing(target):
         gaps.insert(0, "pyproject.toml [tool.pytest.ini_options] pythonpath")
     missing_ignores = ignore_gaps(target)
@@ -2498,11 +3733,261 @@ def scaffold_gaps(target: Path, name: str) -> list[str]:
     return gaps
 
 
+def object_destinations(name: str) -> list[str]:
+    """The three file paths a `materialize --stage objects` writes.
+
+    SKILL.md step 9's table, made concrete. `module.py` is the kit's own
+    filename — not a per-object name — matching `MaterializeWritesStageOneTests
+    .STAGE_TWO`, which already fixes `src/<Package>/module.py` as the literal
+    path a stage-two write lands on.
+    """
+    package = package_name(name)
+    return [f"src/{package}/module.py", "tests/test_invariants.py",
+            "tests/test_synthetic.py"]
+
+
+def object_gaps(target: Path, name: str) -> list[str]:
+    return [w for w in object_destinations(name) if not (target / w).exists()]
+
+
+def object_kit_source(destination: str, name: str) -> Path | None:
+    package = package_name(name)
+    mapping = {
+        f"src/{package}/module.py": SKILL_ROOT / "assets" / "kit" / "src" / "module.py",
+        "tests/test_invariants.py":
+            SKILL_ROOT / "assets" / "kit" / "tests" / "test_invariants.py",
+        "tests/test_synthetic.py":
+            SKILL_ROOT / "assets" / "kit" / "tests" / "test_synthetic.py",
+    }
+    return mapping.get(destination)
+
+
+def harness_destinations(name: str) -> list[str]:
+    """The three file paths a `materialize --stage harness` writes: SKILL.md's
+    harness-wiring table, made concrete. `wiring.py` is deliberately absent —
+    SKILL.md states it is bespoke-authored, never kit-sourced, and stays out
+    of every stage.
+    """
+    package = package_name(name)
+    return [f"src/{package}_Benchmark/benchmark.py",
+            f"src/{package}_Benchmark/verdict.py",
+            f"{name}/Notebooks/probe.ipynb"]
+
+
+def harness_gaps(target: Path, name: str) -> list[str]:
+    return [w for w in harness_destinations(name) if not (target / w).exists()]
+
+
+def harness_kit_source(destination: str, name: str) -> Path | None:
+    package = package_name(name)
+    mapping = {
+        f"src/{package}_Benchmark/benchmark.py":
+            SKILL_ROOT / "assets" / "kit" / "nb" / "benchmark.py",
+        f"src/{package}_Benchmark/verdict.py":
+            SKILL_ROOT / "assets" / "kit" / "nb" / "verdict.py",
+        f"{name}/Notebooks/probe.ipynb":
+            SKILL_ROOT / "assets" / "kit" / "nb" / "probe.ipynb",
+    }
+    return mapping.get(destination)
+
+
+def all_kit_destinations(name: str) -> list[str]:
+    """Every kit destination across all three stages — the domain
+    `--authored`/`--adopt` are scoped to (`NOT_A_KIT_DESTINATION`). Eleven
+    scaffold + three objects + three harness = seventeen, matching the
+    design's own count.
+    """
+    return [*scaffold_destinations(name), *object_destinations(name),
+            *harness_destinations(name)]
+
+
+# --------------------------------------------------------------------------
+# materialize — the engine writes the scaffold; the receipt is the only
+# mechanism. See design #the-skill-materializes-not-the-agent.
+# --------------------------------------------------------------------------
+
+#: Where the receipt lives, relative to a target's root. `.implementation/`
+#: is already git-ignored (`IGNORE_ENTRIES`) and already excused from the
+#: dirty-worktree check (`_is_own_bookkeeping`), so this file inherits both
+#: properties rather than needing either built for it.
+MATERIALIZATION_RECEIPT = Path(".implementation") / "materialization.json"
+
+#: The kit template each copied scaffold destination is written from, keyed
+#: by the destination path a `{Name}`-parameterized target resolves to. The
+#: one entry with no kit source (`src/<Package>/__init__.py`) is authored by
+#: this engine directly — step 9 has written no module yet, so it exports
+#: none — and is looked up as `None`, never a missing key.
+def scaffold_kit_source(destination: str, name: str) -> Path | None:
+    package = package_name(name)
+    mapping = {
+        f"src/{package}_Benchmark/__init__.py":
+            SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py",
+        f"src/{package}_Benchmark/report_digest.py":
+            SKILL_ROOT / "assets" / "kit" / "nb" / "report_digest.py",
+        "tests/test_smoke.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_smoke.py",
+        "tests/findings.py": SKILL_ROOT / "assets" / "kit" / "tests" / "findings.py",
+        "tests/conftest.py": SKILL_ROOT / "assets" / "kit" / "tests" / "conftest.py",
+        "tests/sweep.py": SKILL_ROOT / "assets" / "kit" / "tests" / "sweep.py",
+        "tests/admissibility.py": SKILL_ROOT / "assets" / "kit" / "tests" / "admissibility.py",
+        "tests/test_audit.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_audit.py",
+        "tests/test_remedies.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_remedies.py",
+        f"{name}/Notebooks/verification.ipynb":
+            SKILL_ROOT / "assets" / "kit" / "nb" / "verification.ipynb",
+    }
+    return mapping.get(destination)
+
+
+def authored_package_init(name: str) -> str:
+    """`src/<Package>/__init__.py`'s content: authored, never copied.
+
+    Exports the target's own modules, and step 9 has written none of them
+    yet, so it exports nothing.
+    """
+    return (f'"""Reference implementation of the {name} formulation.\n\n'
+            "Each module declares the sections and equations it implements in\n"
+            "`__provenance__`, and every invariant listed there has a matching\n"
+            "test under tests/.\n"
+            '"""\n\n'
+            "__all__ = []\n")
+
+
+def writable_at_scaffold_time(source: str) -> bool:
+    """Whether a substituted template is a file the scaffold stage may write.
+
+    The discriminator between the two stages, and it is mechanical rather
+    than a list the kit could fall out of step with. A template that still
+    carries a `{{TOKEN}}` where an identifier has to be does not parse, and
+    the tokens left in it — `{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`,
+    `{{EXPECTATION}}` — are answers to the object map step 8 approves.
+    Nothing could have answered them at scaffold time.
+
+    Substituting dummy identifiers instead would be worse: the result
+    parses, collects and *passes* while asserting nothing.
+    """
+    try:
+        ast.parse(source)
+    except SyntaxError:
+        return False
+    return True
+
+
+def scaffold_substitute_body(text: str, name: str, seed: str) -> str:
+    """The two tokens `materialize --stage scaffold` answers: `{{PKG}}` and
+    `{{SEED}}`. Every other token a template still carries after this belongs
+    to a later step and is left standing — see `writable_at_scaffold_time`.
+    """
+    return text.replace("{{PKG}}", package_name(name)).replace("{{SEED}}", seed)
+
+
+def read_materialization_receipt(target: Path) -> dict:
+    path = target / MATERIALIZATION_RECEIPT
+    if not path.exists():
+        return {"version": 1, "name": None, "entries": []}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_materialization_receipt(target: Path, receipt: dict) -> None:
+    """Atomic replace, written last — after every file of the stage has
+    landed. An aborted run leaves no receipt entry for that invocation."""
+    path = target / MATERIALIZATION_RECEIPT
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
+def receipt_entry(receipt: dict, path: str) -> dict | None:
+    return next((e for e in receipt["entries"] if e["path"] == path), None)
+
+
+def set_receipt_entry(receipt: dict, entry: dict) -> None:
+    """Replace the entry for `entry['path']` in place; append if absent.
+
+    Keeps a second stage's entries beside the first's rather than truncating
+    them, and lets a stale entry (the file it names no longer exists) be
+    replaced by a fresh one on the next successful write of that path.
+    """
+    entries = receipt["entries"]
+    for index, existing in enumerate(entries):
+        if existing["path"] == entry["path"]:
+            entries[index] = entry
+            return
+    entries.append(entry)
+
+
+def _kit_structure_gaps(target: Path, destinations: list[str]) -> dict:
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD`, generalized over any one
+    stage's own destination list — never a merge anchor, whose correctness is
+    re-derived presence (`ignore_gaps`/`pytest_anchor_missing`), not a hash,
+    and never a destination absent from disk, which is a gap the stage's own
+    `*_gaps` reports, not drift or an unrecorded write.
+
+    One function shared by `scaffold_structure_gaps`, `object_structure_gaps`
+    and `harness_structure_gaps`: the three stages' destination sets are
+    disjoint paths, so a receipt entry keyed by path is unambiguous across
+    all of them without needing to also check the entry's own `stage` field.
+    """
+    receipt = read_materialization_receipt(target)
+    entries = {e["path"]: e for e in receipt["entries"]}
+    drift: list[str] = []
+    unrecorded: list[str] = []
+    for destination in destinations:
+        full = target / destination
+        if not full.exists():
+            continue
+        entry = entries.get(destination)
+        if entry is None:
+            unrecorded.append(destination)
+            continue
+        current_sha256 = hashlib.sha256(full.read_bytes()).hexdigest()
+        if current_sha256 != entry.get("writtenSha256"):
+            drift.append(destination)
+    return {"drift": sorted(drift), "unrecorded": sorted(unrecorded)}
+
+
+def scaffold_structure_gaps(target: Path, name: str) -> dict:
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the eleven scaffold
+    destinations only — never the two merge anchors, whose correctness is
+    re-derived presence (`ignore_gaps`/`pytest_anchor_missing`), not a hash,
+    and never a destination absent from disk, which is a gap `scaffold_gaps`
+    already reports, not drift or an unrecorded write.
+    """
+    return _kit_structure_gaps(target, scaffold_destinations(name))
+
+
+def object_structure_gaps(target: Path, name: str) -> dict:
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the three `objects`
+    destinations only. Named `object_structure_gaps`, not folded into
+    `scaffold_structure_gaps`, because the two stages' destinations are
+    different files reported under different `structure` keys
+    (`objectDrift`/`unrecordedObjects` vs `scaffoldDrift`/`unrecordedScaffold`)
+    — `scaffold_gaps`/`scaffold_structure_gaps` stay scoped to the eleven, as
+    every existing caller and test already assumes.
+    """
+    return _kit_structure_gaps(target, object_destinations(name))
+
+
+def harness_structure_gaps(target: Path, name: str) -> dict:
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the three `harness`
+    destinations only — see `object_structure_gaps` for why this is a
+    sibling function rather than a widening of the scaffold one."""
+    return _kit_structure_gaps(target, harness_destinations(name))
+
+
 # --------------------------------------------------------------------------
 # provenance (static, never imports target code)
 # --------------------------------------------------------------------------
 
 def read_provenance(path: Path) -> dict | None:
+    """The module's own `__provenance__`, read without importing it.
+
+    Both assignment forms, for the reason `read_declaration` states in full:
+    `__provenance__: dict = {...}` is `ast.AnnAssign`, and a reader walking
+    only `ast.Assign` answers `None` for it — which every caller here reads
+    as "this module declares no provenance at all", the exact opposite of
+    what the file says. A bare `__provenance__: dict` with no value declares
+    nothing and is skipped rather than reported as absent-with-an-error.
+    """
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     except (SyntaxError, UnicodeDecodeError) as exc:
@@ -2511,10 +3996,19 @@ def read_provenance(path: Path) -> dict | None:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == "__provenance__" for t in node.targets
         ):
-            try:
-                return ast.literal_eval(node.value)
-            except ValueError:
-                return {"__error__": "__provenance__ is not a literal"}
+            value = node.value
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name)
+              and node.target.id == "__provenance__"):
+            if node.value is None:
+                continue
+            value = node.value
+        else:
+            continue
+        try:
+            return ast.literal_eval(value)
+        except ValueError:
+            return {"__error__": "__provenance__ is not a literal"}
     return None
 
 
@@ -2935,7 +4429,7 @@ def _produced(cell: dict) -> dict:
 #: A number a cell put in front of a reader: a decimal, or a count over a total
 #: like `7/10`. Integers alone are left out — a year, a seed or a count of rows is
 #: not a measurement, and treating every digit as one would make the check below
-#: fire on any sentence that mentions how many transfers there are.
+#: fire on any sentence that mentions how many runs there are.
 MEASUREMENT = re.compile(r"\d+\.\d+|\b\d+/\d+\b")
 
 #: How many of its table's measurements a conclusion may restate before it stops
@@ -2987,7 +4481,7 @@ def _described(produced: dict) -> str | None:
 #: It imports the target's benchmark package and nothing of this skill, runs in the
 #: target's virtualenv, and prints one JSON object. It never writes.
 INTROSPECT = r'''
-import importlib, json, random, sys
+import importlib, importlib.util, json, random, sys
 
 package = sys.argv[1]
 record = sys.argv[2]
@@ -3000,7 +4494,28 @@ entry_module = sys.argv[3] if len(sys.argv) > 3 else ""
 # read verbatim by the caller, rather than being paraphrased.
 if entry_module:
     importlib.import_module(entry_module)
-config = importlib.import_module(f"{package}_Benchmark.config")
+# Which module the constants below are read from. `config.py` is optional
+# everywhere else in this engine -- `resolve_benchmark_declaration`,
+# `resolve_levels_declaration` and `declared_dimension_names` each fall back to
+# another file and not one of them calls its absence a failure -- and the kit
+# ships no `config.py` at all. This line used to import it unconditionally, so a
+# repository built exactly as the kit prescribes raised `ModuleNotFoundError`
+# here, reported `unavailable`, and was routed to `env-first`: the one rung whose
+# exit is a command, and that command installs packages. It could never have
+# created a module.
+#
+# Resolved the way `declared_dimension_names` already resolves the same
+# question -- `config` first, where a target keeps its own contract, then
+# `benchmark`, where the kit's own template defines it. Looked up rather than
+# tried, so a `ModuleNotFoundError` raised INSIDE either file still propagates
+# untouched and still reads as the unavailability it is; only the absence of the
+# file itself is answered, and it is answered by name rather than by blaming the
+# interpreter.
+constants_holder = next(
+    (candidate for candidate in (f"{package}_Benchmark.config",
+                                 f"{package}_Benchmark.benchmark")
+     if importlib.util.find_spec(candidate) is not None), None)
+config = importlib.import_module(constants_holder) if constants_holder else None
 declaration = importlib.import_module(f"{package}_Benchmark")
 contract = getattr(declaration, "__benchmark__", {}).get("report", {})
 
@@ -3016,7 +4531,8 @@ def frozen(value):
 # Constants that are a proper subset of another constant: a selection somebody
 # wrote out. Legitimate when the rule that fixed it looks at no outcome — and that
 # is a claim a human makes, so it is declared rather than inferred.
-values = {n: frozen(getattr(config, n)) for n in dir(config) if n.isupper()}
+values = ({n: frozen(getattr(config, n)) for n in dir(config) if n.isupper()}
+          if config is not None else {})
 values = {n: v for n, v in values.items() if v}
 subsets = []
 for name, value in sorted(values.items()):
@@ -3073,7 +4589,11 @@ else:
                 inert.append({"conclusion": label,
                               "reason": "el texto no cambia cuando cambian los números"})
 
-print(json.dumps({"subsets": subsets, "inertConclusions": inert}))
+print(json.dumps({"subsets": subsets, "inertConclusions": inert,
+                  # Named, never inferred from an empty `subsets`: a check that
+                  # had nowhere to look must not report its silence as an answer.
+                  "constants": "read" if constants_holder else "absent",
+                  "constantsHolder": constants_holder}))
 '''
 
 
@@ -3119,16 +4639,88 @@ def resolve_harness_status(target: Path, name: str, package: str) -> dict:
       relative to `target`.
     """
     contract = resolve_benchmark_declaration(target, name)["contract"]
-    declared = (contract.get("entry") or {}).get("module")
+    entry = contract.get("entry") or {}
+    declared = entry.get("module")
+    function = entry.get("function")
+    function = function if isinstance(function, str) and function else None
     if not declared:
+        # One absence, one fact: `entry.module` undeclared already has its own
+        # status, and naming the function beside it would turn one gap into two
+        # findings -- `undeclared_ladder_state`'s own restraint.
         return {"status": "undeclared", "declaredModule": None,
-                "path": None, "searchedPath": None}
+                "declaredFunction": None, "path": None, "searchedPath": None,
+                "note": None}
+    # The one value in `entry` nothing in this file reads -- `.module` is read
+    # twice and `.function` nowhere. That is not a stray declaration: the kit
+    # names it for `generate-job --run-function`, which `remote_cli` declares
+    # `required=True`, so the value is genuinely needed at the one handoff
+    # SKILL.md's own seam table publishes. What was missing is that a target
+    # could answer `module`, leave `function` blank, hear about it nowhere, and
+    # reach a required flag with nothing to type into it.
+    note = None if function else (
+        "`entry.function` is blank. Nothing in this skill reads it, so no "
+        "check here fails on it -- but the remote-execution handoff does: "
+        "`generate-job --run-function` is a required argument with no "
+        "default, and this declaration is where its value is supposed to "
+        "come from. Name the callable inside "
+        f"{declared!r} that a run enters through.")
     searched = target / "src" / Path(*declared.split(".")).with_suffix(".py")
     if searched.is_file():
         return {"status": "present", "declaredModule": declared,
-                "path": str(searched.relative_to(target)), "searchedPath": None}
+                "declaredFunction": function,
+                "path": str(searched.relative_to(target)), "searchedPath": None,
+                "note": note}
     return {"status": "declaredMissing", "declaredModule": declared,
-            "path": None, "searchedPath": str(searched.relative_to(target))}
+            "declaredFunction": function, "path": None,
+            "searchedPath": str(searched.relative_to(target)), "note": note}
+
+
+def target_interpreter(target: Path) -> Path:
+    """The target repository's own interpreter — the only one this skill's
+    isolation rule permits target code to run under.
+
+    One spelling, because three call sites needed it and a path spelled three
+    times is a path that eventually differs in one of them. `introspect` runs
+    it, `env` builds it, and `target_python_version` reads what it is; the
+    Windows branch is here rather than repeated at each.
+    """
+    bin_dir = "Scripts" if os.name == "nt" else "bin"
+    return target / ".venv" / bin_dir / ("python.exe" if os.name == "nt"
+                                         else "python")
+
+
+def target_python_version(target: Path) -> str | None:
+    """What version that interpreter is, read off `pyvenv.cfg` rather than run.
+
+    Static, like every other reading in this file: `notebooks_state` is called
+    three times inside one `verify`, and spawning an interpreter each time to
+    ask it a question its own config file already answers would be paying a
+    process for a string. `pyvenv.cfg`'s `version` is written by `venv` at
+    creation and is the same three-component string the interpreter reports as
+    `sys.version.split()[0]` — which is what a kernel stamps into a notebook.
+
+    `version_info` is read as a fallback because newer CPythons write that key
+    (`3.12.13.final.0`) beside or instead of `version`; only its first three
+    components are kept, so the two spellings compare as one.
+
+    `None` when there is no venv, no config, or nothing parsable in it. Never a
+    guess: a comparison against a version nobody could read is not a comparison.
+    """
+    config = target / ".venv" / "pyvenv.cfg"
+    if not config.exists():
+        return None
+    values: dict[str, str] = {}
+    for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    for key in ("version", "version_info"):
+        raw = values.get(key)
+        if raw:
+            parts = raw.split(".")
+            if len(parts) >= 3 and all(p.isdigit() for p in parts[:3]):
+                return ".".join(parts[:3])
+    return None
 
 
 def introspect(target: Path, package: str, record: Path | None,
@@ -3157,9 +4749,7 @@ def introspect(target: Path, package: str, record: Path | None,
                           "so there is nothing to import; declare it and this "
                           "becomes a reading about the interpreter"}
 
-    bin_dir = "Scripts" if os.name == "nt" else "bin"
-    interpreter = target / ".venv" / bin_dir / ("python.exe" if os.name == "nt"
-                                                else "python")
+    interpreter = target_interpreter(target)
     if not interpreter.exists():
         return {"status": "unavailable",
                 "detail": f"no hay intérprete en {interpreter}: corré `env` primero"}
@@ -3205,7 +4795,13 @@ def report_state(target: Path, name: str, package: str) -> dict:
                         literal rather than a computed statement. A conclusion typed
                         by hand is the `proseNumbers` failure wearing a sentence.
     `undeclared`        a dimension rendered whose direction the package never
-                        declared, so nothing could have checked its framing.
+                        declared. `unframed` asks whether a paragraph precedes
+                        the table, never what it says, so the only place a
+                        direction is written down is `report.dimensions` — and
+                        a column missing from it is one no reader is ever told
+                        which way wins. Every check that reads that mapping
+                        (`componentsNotRecorded`, and the key the duplication
+                        rule buckets a rendering under) is blind to it too.
     `unrendered`        a cell that computed a declared measurement and emitted
                         nothing. The number exists and no reader ever sees it.
     `describedNotShown` a cell that emitted a description of a figure instead of
@@ -3236,6 +4832,19 @@ def report_state(target: Path, name: str, package: str) -> dict:
     conclusions = set(contract.get("conclusions") or [])
     drawings = set(contract.get("figures") or [])
     dimensions = dict(contract.get("dimensions") or {})
+    # The OTHER declaration of the same columns: the module's own `DIMENSIONS`
+    # literal, which the kit's `benchmark.py` ships and a materialized target
+    # keeps in `config.py`. `report.dimensions` says which way each one wins,
+    # and the two are written by hand in two files -- so one can carry a column
+    # the other never names, and until this crossed them nothing said so.
+    #
+    # `None` (neither file binds the name, or it is bound to something no
+    # reading can make sense of) is NOT an empty universe: it means the
+    # question could not be put, and `declared_dimension_names`' own docstring
+    # keeps the two apart for exactly this reason. Read as `()` here, so a
+    # target with nowhere to declare a universe is asked nothing -- the same
+    # restraint `undeclared_ladder_state` keeps one file over.
+    universe = declared_dimension_names(target, package) or ()
     # One declared call that states, for a dimension, which value would count as
     # the good one. An entry point rather than a list of targets, for the same
     # reason `conclusionEntry` is one: what a good value looks like is a fact about
@@ -3423,6 +5032,16 @@ def report_state(target: Path, name: str, package: str) -> dict:
             # recognised as the same table wherever it is printed.
             named = sorted(d for d in dimensions
                            if f'"{d}"' in source or f"'{d}'" in source)
+            # The complement of the line above, read off the same source with
+            # the same literal idiom: a column this cell renders that the
+            # module's own universe carries and the report contract does not.
+            # Scoped to `universe` rather than to every string literal in the
+            # cell, because which strings are dimensions is the package's claim
+            # and not this file's guess -- the one thing that would make this a
+            # finding about somebody else's vocabulary.
+            undeclared.update(d for d in universe
+                              if d not in dimensions
+                              and (f'"{d}"' in source or f"'{d}'" in source))
             if not writes_record:
                 for key in named or ["<sin dimensión>"]:
                     for call in rendered:
@@ -3641,6 +5260,18 @@ def report_state(target: Path, name: str, package: str) -> dict:
     return {"status": status,
             "live": live.get("status"),
             "liveDetail": live.get("detail"),
+            # Which module `writtenSelections` was actually derived from, and
+            # whether there was one at all. `"absent"` is not routed anywhere and
+            # deliberately does not move `status`: it is reachable only when the
+            # declared entry module imported cleanly (or this key would not exist)
+            # while neither `config.py` nor `benchmark.py` sits in the benchmark
+            # package -- and a missing `benchmark.py` is already a harness gap
+            # `harness_gaps` reports by name. A second rung for the same fact
+            # would be one fact answered twice. What it buys is that
+            # `writtenSelections: []` can be read: "nothing is written out" and
+            # "there was nowhere to look" no longer print the same.
+            "constants": live.get("constants"),
+            "constantsHolder": live.get("constantsHolder"),
             "declared": {"renderers": sorted(renderers),
                          "conclusions": sorted(conclusions),
                          # Echoed even when empty, so "declares no drawing calls"
@@ -3665,7 +5296,18 @@ def report_state(target: Path, name: str, package: str) -> dict:
 
 
 def read_declaration(path: Path, name: str) -> dict | None:
-    """A module-level literal, read without importing anything."""
+    """A module-level literal, read without importing anything.
+
+    Accepts both a plain assignment (`NAME = value`, `ast.Assign`) and an
+    annotated one (`NAME: type = value`, `ast.AnnAssign`) — a type annotation
+    does not change what a declaration says. The kit's own scaffold writes
+    `__levels__` in the annotated form (`assets/kit/src_benchmark/__init__.py`),
+    and a reader that only recognized `ast.Assign` never saw it: a target
+    using the scaffold the skill itself ships declared a ladder the skill
+    could not read. A bare annotation with no value (`NAME: type`, no `=`) has
+    `node.value is None` under `ast.AnnAssign` and declares nothing — read as
+    absent, never as an error or an empty literal.
+    """
     if not path.exists():
         return None
     try:
@@ -3676,10 +5318,18 @@ def read_declaration(path: Path, name: str) -> dict | None:
         if isinstance(node, ast.Assign) and any(
             isinstance(t, ast.Name) and t.id == name for t in node.targets
         ):
-            try:
-                return ast.literal_eval(node.value)
-            except ValueError:
-                return {"__error__": f"{name} is not a literal"}
+            value = node.value
+        elif (isinstance(node, ast.AnnAssign)
+              and isinstance(node.target, ast.Name) and node.target.id == name):
+            if node.value is None:
+                continue
+            value = node.value
+        else:
+            continue
+        try:
+            return ast.literal_eval(value)
+        except ValueError:
+            return {"__error__": f"{name} is not a literal"}
     return None
 
 
@@ -3796,6 +5446,139 @@ def resolve_benchmark_declaration(target: Path, name: str) -> dict:
             "detail": None, "contract": declaration}
 
 
+#: The name PR10 (`the-position-nobody-holds`, level grammar) reads an
+#: ordered ladder from — a second, independent top-level literal beside
+#: `__benchmark__`, never a new field inside it.
+LEVELS_DECLARATION = "__levels__"
+
+
+def resolve_levels_declaration(target: Path, name: str) -> list[str]:
+    """The ordered rung ladder `__levels__` names, or `[]` when nothing does.
+
+    Read the same way `resolve_benchmark_declaration` reads `__benchmark__`
+    (`__init__.py` first, then `config.py`), but held apart from it rather
+    than added as an eighth block: `_declaration_is_blank`'s "seven blocks"
+    is `__benchmark__`'s own invariant, and a target may name its ladder long
+    before it answers a single one of those seven — or never answer any of
+    them at all, on a repository whose position items are entirely two-state
+    and therefore need no ladder read here at all. Held apart for the same
+    reason `search`'s `requiredScale` is declared apart from the scale it is
+    running at (`SEARCH_DECLARATION`'s own docstring): folding the two
+    together would let one silently gate the other.
+
+    Exists for generality, not to avoid naming a service:
+    `remote-execution/SKILL.md`'s own containment rule (only one named
+    adapter file may name a remote service) is about *where* a service name
+    may be written, not whether the forge may know one exists at all — a
+    fixed forge-owned rung vocabulary would not by itself violate that rule.
+    This module still declares no rung name of its own, because a repository
+    that never sends work anywhere still has a ladder (its own, possibly a
+    single rung), and one fixed forge-wide vocabulary would not fit it — the
+    same generality `SEARCH_DECLARATION` and `WITNESS_KINDS` already keep for
+    their own vocabularies. See `level_index`'s own docstring in
+    `impl_position.py` for the arithmetic this ladder feeds.
+
+    A value of any shape other than a list is read as nothing declared
+    (`[]`), the same silent-rather-than-crashing rule `declared_dimension_names`
+    already applies to a `DIMENSIONS` bound to something other than a dict.
+    """
+    package = package_name(name)
+    bench_root = target / "src" / f"{package}_Benchmark"
+    if not bench_root.is_dir():
+        return []
+    for candidate in ("__init__.py", "config.py"):
+        result = read_declaration(bench_root / candidate, LEVELS_DECLARATION)
+        if isinstance(result, list):
+            return [str(level) for level in result]
+        if result is not None:
+            return []
+    return []
+
+
+#: A third top-level literal, held apart from `__benchmark__` for the same
+#: reason `LEVELS_DECLARATION` is: `step` names a callable to RUN, not
+#: something `resolve_benchmark_declaration`'s seven-block "declared"/
+#: "undeclared" verdict is about, and `_declaration_is_blank` must never
+#: learn an eighth shape to compare against.
+STEPS_DECLARATION = "__steps__"
+
+
+def resolve_steps_declaration(target: Path, name: str) -> dict:
+    """The `{name: {module, function}}` map `__steps__` names, or `{}` when
+    nothing does.
+
+    Read exactly the way `resolve_levels_declaration` reads `__levels__`
+    (`__init__.py` first, then `config.py`, `ast`-only, no import) and held
+    just as apart from `__benchmark__`: a target may declare a step long
+    before it has answered a single one of `__benchmark__`'s seven blocks,
+    or never answer any of them at all on a repository whose only work is
+    local. Each entry carries the same `{module, function}` shape
+    `__benchmark__["entry"]` already uses — mirrored on purpose, not shared,
+    because a step and the harness entry are resolved by two different
+    processes (this one, statically, for the name; the target's own
+    interpreter, dynamically, for the callable) and a single shared literal
+    would blur that split.
+
+    A value of any shape other than a dict is read as nothing declared
+    (`{}`), the same silent-rather-than-crashing rule
+    `resolve_levels_declaration` already applies to a non-list `__levels__`.
+    `cmd_step` is the only reader that ever inspects one entry's own shape
+    (missing `module`/`function` is `STEP_MALFORMED`); this function only
+    ever answers "declared, or not", never validates what it found.
+    """
+    package = package_name(name)
+    bench_root = target / "src" / f"{package}_Benchmark"
+    if not bench_root.is_dir():
+        return {}
+    for candidate in ("__init__.py", "config.py"):
+        result = read_declaration(bench_root / candidate, STEPS_DECLARATION)
+        if isinstance(result, dict):
+            return result
+        if result is not None:
+            return {}
+    return {}
+
+
+#: A fourth top-level literal, held apart from `__benchmark__` for the
+#: identical reason `STEPS_DECLARATION` is: a named record's own found/scale
+#: state is measured by the `search`/`records` join (`named_records_state`),
+#: never routed through `_declaration_is_blank`'s seven-block
+#: "declared"/"undeclared" verdict.
+RECORDS_DECLARATION = "__records__"
+
+
+def resolve_records_declaration(target: Path, name: str) -> dict:
+    """The `{name: {path, requiredScale}}` map `__records__` names, or `{}`
+    when nothing does.
+
+    Read exactly the way `resolve_steps_declaration` reads `__steps__`
+    (`__init__.py` first, then `config.py`, `ast`-only, no import) and held
+    just as apart from `__benchmark__`: a target may name a record long
+    before it has answered a single one of `__benchmark__`'s seven blocks,
+    or never answer any of them at all on a repository whose only leveled
+    `@record:level` witness is the bare, operand-less one.
+
+    A value of any shape other than a dict is read as nothing declared
+    (`{}`), the same silent-rather-than-crashing rule
+    `resolve_steps_declaration` already applies to a non-dict `__steps__`.
+    This function only ever answers "declared, or not", never validates
+    what one entry's own shape carries -- `named_records_state` is the one
+    reader that opens an entry, and it reads defensively rather than
+    trusting this resolver to have ruled on it.
+    """
+    package = package_name(name)
+    bench_root = target / "src" / f"{package}_Benchmark"
+    if not bench_root.is_dir():
+        return {}
+    for candidate in ("__init__.py", "config.py"):
+        result = read_declaration(bench_root / candidate, RECORDS_DECLARATION)
+        if isinstance(result, dict):
+            return result
+        if result is not None:
+            return {}
+    return {}
+
+
 def declared_dimension_names(target: Path, package: str) -> list[str] | None:
     """The shard-level dimension names a target declares, read without importing.
 
@@ -3819,6 +5602,13 @@ def declared_dimension_names(target: Path, package: str) -> list[str] | None:
     declares zero dimensions" — trivially exhaustive, and a name bound to a
     call or a list is not a declaration of zero dimensions, it is a
     declaration this reading cannot make sense of.
+
+    Both assignment forms are read, for the reason `read_declaration` states
+    in full: `DIMENSIONS: dict = {...}` is `ast.AnnAssign`, and a reader
+    walking only `ast.Assign` answered `None` for it — "the universe could
+    not be determined" over a file that determines it on the line being
+    looked at. A bare `DIMENSIONS: dict` with no value binds nothing and is
+    skipped.
     """
     bench_root = target / "src" / f"{package}_Benchmark"
     for candidate in ("config.py", "benchmark.py"):
@@ -3830,13 +5620,21 @@ def declared_dimension_names(target: Path, package: str) -> list[str] | None:
         except (SyntaxError, UnicodeDecodeError):
             continue
         for node in tree.body:
-            if not (isinstance(node, ast.Assign) and any(
+            if isinstance(node, ast.Assign) and any(
                 isinstance(t, ast.Name) and t.id == "DIMENSIONS" for t in node.targets
-            )):
+            ):
+                value = node.value
+            elif (isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name)
+                  and node.target.id == "DIMENSIONS"):
+                if node.value is None:
+                    continue
+                value = node.value
+            else:
                 continue
-            if not isinstance(node.value, ast.Dict):
+            if not isinstance(value, ast.Dict):
                 continue
-            return [key.value for key in node.value.keys
+            return [key.value for key in value.keys
                     if isinstance(key, ast.Constant) and isinstance(key.value, str)]
     return None
 
@@ -3889,6 +5687,21 @@ def _scale_of(value: object) -> int | None:
     return None
 
 
+#: What `source_digest` compared, carried beside every status that depends on
+#: it. `stale-sources` proves the tree moved since a notebook ran; it does NOT
+#: prove the change touched anything that notebook imports, because the
+#: comparison never asked. Two notebooks importing disjoint modules report this
+#: identically, and a reader who saw them differ would infer a distinction the
+#: digest never computes.
+DIGEST_SCOPE = (
+    "every .py under src/, never this notebook's own import closure: a "
+    "stale-sources status proves the tree moved since this notebook ran, not "
+    "that this notebook's own claims are affected. Clearing it means "
+    "re-executing the notebook -- re-running the stamp cell alone would print "
+    "a current digest over outputs that were never re-run."
+)
+
+
 def source_digest(target: Path, package: str) -> str:
     """One hash over everything a report's claims depend on.
 
@@ -3896,6 +5709,11 @@ def source_digest(target: Path, package: str) -> str:
     checkout time and the ordering is gone. Content can, and the skill already
     settles the same question this way for the revision behind an admissibility
     ruling — the ruling stores the revision's digest and `verify` recomputes it.
+
+    Sibling to `suite_digest`, below, and never merged into it: this answers
+    whether a REPORT speaks for the code that produced it (`src/` alone); a
+    suite run additionally depends on `tests/` and the environment
+    declaration, which is exactly what `suite_digest` covers instead.
     """
     digest = hashlib.sha256()
     # All of `src/`, and nothing else. The boundary is the claim: a report depends
@@ -3915,9 +5733,33 @@ def source_digest(target: Path, package: str) -> str:
     # writes the conclusions. Leaving it out let a conclusion be corrected in code
     # while the record kept asserting the old one, with everything green.
     #
+    # Two further attempts are recorded here so a fourth is refused by reading
+    # rather than rediscovered by trying.
+    #
+    # A stamper lives in every target, not here. Eighteen copies of
+    # `report_digest.py` sit under `implementations/` -- one in the product's
+    # own `src/`, seventeen frozen inside shard clones. Changing the algorithm
+    # in the forge moves the VERIFIER and never those stampers, so every
+    # notebook of every existing product would read `stale-sources` at once:
+    # the defect under repair, in every product at once. Two locks hold that
+    # boundary -- a pinned literal digest and a whole-AST comparison against a
+    # source -- and the lock test states the mechanism itself.
+    #
+    # And `stamp()` once demanded arguments. The first notebook that did not
+    # use exactly the same names as the rest failed to stamp and was reported
+    # stale. A per-notebook digest needs the stamp to know which notebook
+    # prints it, which is that same failure wearing a new name.
+    #
     # `package` no longer selects what is covered. It stays in the signature
     # because the two halves must be callable alike — see `report_digest.py` in
     # the kit, which the forge tests against this one over the same tree.
+    #
+    # NOT `suite_digest`, below, and never merged into it: this answers
+    # whether a REPORT speaks for the code that produced it; `suite_digest`
+    # answers whether a SUITE RUN witnessed the code, tests, and environment
+    # declaration as they stand now. Folding the two into one function would
+    # make either caller pay for a scope it never asked for — a notebook
+    # report never reads `tests/`, and a suite run always does.
     root = target / "src"
     if root.is_dir():
         for file in sorted(root.rglob("*.py")):
@@ -3925,6 +5767,61 @@ def source_digest(target: Path, package: str) -> str:
                 continue
             digest.update(str(file.relative_to(target)).encode("utf-8"))
             digest.update(file.read_bytes())
+    return digest.hexdigest()
+
+
+#: Five Python-ecosystem-standard, target-agnostic manifest paths
+#: `suite_digest` folds in beside `src/` and `tests/` -- no target's own
+#: vocabulary is read here, the same discipline `WITNESS_KINDS`
+#: (`impl_position.py`) keeps one level down for evidence classes. Each is
+#: folded through `impl_position.current_file_digest`/`ABSENT_FILE_DIGEST`,
+#: never a branching skip, so a manifest declared later moves the digest
+#: exactly as one edited does.
+SUITE_ENVIRONMENT_MANIFESTS = (
+    "requirements.txt", "pyproject.toml", "setup.cfg", "tox.ini", "pytest.ini",
+)
+
+
+def suite_digest(target: Path) -> str:
+    """One hash over everything a `step`'s suite run depends on: `src/`,
+    `tests/`, and the environment declaration that decides what runs
+    against them.
+
+    **Deliberately not `source_digest`, above, and never merged into it.**
+    `source_digest` answers "does this report speak for the code that
+    produced it" and is scoped to `src/` alone by hard-won incident (its own
+    docstring: pulling in `tests/` marked every notebook report stale the
+    moment any test changed at all, with no notebook ever importing
+    `tests/`). `suite_digest` answers the opposite-shaped question -- "did
+    the suite that just ran witness the code, the tests, and the
+    environment declaration as they stand now" -- and a suite run DOES
+    depend on `tests/`, so the two functions cannot share a scope without
+    one of them paying for a boundary it never asked for.
+
+    Walks `*.py` under both `src/` and `tests/` -- `unparsable_tests`'s own
+    `rglob("*.py")`, not `test_function_names`'s narrower `test_*.py`.
+    Measured: the narrower glob excludes `conftest.py`, which a suite run
+    depends on exactly as much as any `test_*.py` file it collects fixtures
+    for. `__pycache__` is skipped, the same exclusion `source_digest` keeps.
+    Then folds in `SUITE_ENVIRONMENT_MANIFESTS`, each through
+    `impl_position.current_file_digest`/`ABSENT_FILE_DIGEST` -- one
+    `is_file()` test producing a value whether the file exists or not,
+    never a branching skip, so declaring a manifest later moves this digest
+    exactly as creating any other tracked file does.
+    """
+    digest = hashlib.sha256()
+    for subdir in ("src", "tests"):
+        root = target / subdir
+        if root.is_dir():
+            for file in sorted(root.rglob("*.py")):
+                if "__pycache__" in file.parts:
+                    continue
+                digest.update(str(file.relative_to(target)).encode("utf-8"))
+                digest.update(file.read_bytes())
+    for name in SUITE_ENVIRONMENT_MANIFESTS:
+        digest.update(name.encode("utf-8"))
+        digest.update(
+            impl_position.current_file_digest(target / name).encode("utf-8"))
     return digest.hexdigest()
 
 
@@ -3938,12 +5835,14 @@ def notebook_execution(path: Path) -> dict:
     anything, and answering it is the difference between a report and a claim.
     """
     if not path.exists():
-        return {"status": "missing", "codeCells": 0, "unexecuted": [], "errors": []}
+        return {"status": "missing", "codeCells": 0, "unexecuted": [],
+                "errors": [], "executedBy": None}
     try:
         notebook = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         return {"status": "unreadable", "detail": str(exc)[:160],
-                "codeCells": 0, "unexecuted": [], "errors": []}
+                "codeCells": 0, "unexecuted": [], "errors": [],
+                "executedBy": None}
 
     # `or []` rather than a default: nbformat writes an explicit null for an
     # absent list often enough, and a crash here would answer nothing at all
@@ -3971,6 +5870,21 @@ def notebook_execution(path: Path) -> dict:
             if DIGEST_MARKER in text:
                 recorded = text.split(DIGEST_MARKER, 1)[1].strip().split()[0]
 
+    # Which interpreter actually ran this, in the notebook's own words.
+    # `metadata.language_info.version` is written by the kernel on execution
+    # and reflects the process that ran the cells -- NOT the kernelspec the
+    # file names, which is a label the launcher resolves at start time and
+    # which routinely resolves somewhere else entirely (see
+    # `notebooks_state`'s `interpreterMatch`). Measured by executing one
+    # notebook twice through the same `jupyter nbconvert` and varying only
+    # PATH: the field came back 3.12.13 and 3.9.6.
+    language_info = (notebook.get("metadata") or {}).get("language_info")
+    executed_by = None
+    if isinstance(language_info, dict):
+        version = language_info.get("version")
+        if isinstance(version, str) and version.strip():
+            executed_by = version.strip()
+
     if not code_cells:
         status = "empty"
     elif errors:
@@ -3980,7 +5894,8 @@ def notebook_execution(path: Path) -> dict:
     else:
         status = "executed"
     return {"status": status, "codeCells": len(code_cells),
-            "unexecuted": unexecuted, "errors": errors, "recordedDigest": recorded}
+            "unexecuted": unexecuted, "errors": errors, "recordedDigest": recorded,
+            "executedBy": executed_by}
 
 
 def _module_scope_statements(tree: ast.Module):
@@ -4291,9 +6206,30 @@ def notebooks_state(target: Path, name: str, package: str) -> dict:
     they could be unexecuted, or full of errors, and the validation would still
     report `ok`. And `executed` alone answers the wrong question — it says a cell
     ran once, not that it ran against this code.
+
+    `sourcesMatch` and `interpreterMatch` are two different questions and both
+    have to be asked. The first is whether the notebook ran against this code;
+    the second is whether it ran under the interpreter this skill's isolation
+    rule requires — and the obvious way to execute a notebook gets the second
+    one wrong silently. A kernelspec is a NAME the launcher resolves when the
+    kernel starts, and the ordinary `python3` kernelspec's `argv` begins with a
+    bare `python`, resolved off `PATH`. So running `<target>/.venv/bin/python
+    -m jupyter nbconvert --execute` does not put that venv's `bin` on `PATH`
+    and the cells run under whatever `python` was already first there. Measured
+    on a real target: a suite passing 297/297 standalone produced fifteen
+    failures inside the notebook, and nothing in the failure text named an
+    interpreter. `interpreterMatch` is what makes that visible.
+
+    It is REPORTED and never drifts `status` on its own. A wrong interpreter is
+    not a wrong number — it is a reason to distrust the numbers, and which one
+    of those a reader is looking at is exactly what a folded status destroys.
+    `None` is unmeasured throughout: a notebook whose metadata names no version,
+    or a target with no venv to compare against, has not been checked and never
+    reads as checked.
     """
     root = target / name / "Notebooks"
     current = source_digest(target, package)
+    interpreter_version = target_python_version(target)
     contract = report_contract(target, name)
     reports = []
     for notebook in sorted(root.glob("*.ipynb")) if root.is_dir() else []:
@@ -4303,13 +6239,31 @@ def notebooks_state(target: Path, name: str, package: str) -> dict:
             state["status"] = "stale-sources"
         state["notebook"] = str(notebook.relative_to(target))
         state["sourcesMatch"] = None if not recorded else recorded == current
+        state["interpreterMatch"] = (
+            None if not interpreter_version or not state.get("executedBy")
+            else state["executedBy"] == interpreter_version)
         # Static, and it never gates: it names the same fact `verify` and
         # `probe` echo, nowhere close to `status` above.
         state["coupling"] = notebook_coupling(notebook, contract)
+        # The boundary travels WITH the status, where a reader meets it,
+        # rather than in a docstring they will not open.
+        state["digestScope"] = DIGEST_SCOPE
         reports.append(state)
     return {
         "sourcesDigest": current,
+        # What the target's own interpreter is, beside the digest of its own
+        # sources: the two facts every report below is measured against, said
+        # once where a reader meets them rather than inferred from the
+        # per-report verdicts.
+        "interpreterVersion": interpreter_version,
         "reports": reports,
+        # An executed report that ran under something other than the target's
+        # own interpreter. Named for the same reason `unstamped` is: the
+        # skill's isolation rule is the one rule nothing could check, so a
+        # notebook that broke it looked exactly like one that kept it.
+        # Reported, never gating -- see the docstring.
+        "foreignInterpreter": [r["notebook"] for r in reports
+                               if r["interpreterMatch"] is False],
         # An executed report that never stamped what it ran against cannot be told
         # apart from a relic, so it is named — and it counts. Naming it and then
         # reporting `ok` anyway said the quiet part twice: the skill knows the
@@ -4521,9 +6475,8 @@ def cmd_env(args: argparse.Namespace) -> dict:
     target = resolve_target(args.target)
     venv_dir = target / ".venv"
     floor, floor_source = _python_floor(target)
-    bin_dir = "Scripts" if os.name == "nt" else "bin"
-    interpreter = venv_dir / bin_dir / ("python.exe" if os.name == "nt" else "python")
-    pip = venv_dir / bin_dir / ("pip.exe" if os.name == "nt" else "pip")
+    interpreter = target_interpreter(target)
+    pip = interpreter.parent / ("pip.exe" if os.name == "nt" else "pip")
     created = False
     if not (venv_dir / "pyvenv.cfg").exists():
         # Check site 1: BEFORE spending the work of building a venv from an
@@ -4600,6 +6553,7 @@ def cmd_plan(args: argparse.Namespace) -> dict:
 def cmd_apply(args: argparse.Namespace) -> dict:
     target = resolve_target(args.target)
     name = validate_name(args.name)
+    _require_no_open_defect(target, name)
     require_clean_worktree(target)
 
     approved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
@@ -4827,6 +6781,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
     finishing something else.
     """
     target = resolve_target(args.target)
+    name = validate_name(args.name)
     source = revision_source(args.revision)
     if source is None:
         raise Refused("REVISION_UNREADABLE",
@@ -4897,6 +6852,15 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                 f"ECUACIONES A TOCAR: {', '.join(finding.get('remedy_equations', []))}")
             deferred.append(item)
 
+    # Diagnostic and costless (design decision 7): a new report key, never a
+    # gate on this command itself -- `handoff` reads the identical
+    # `impl_position.open_defects` derivation `_require_no_open_defect`
+    # refuses on, so a defect blocking `step`/`gate`/`offer`/`close`/
+    # `settle`/`apply`/`admit` stays visible here rather than silent.
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    events = impl_position.read_events(ledger_path)
+    open_defects = impl_position.open_defects(events, FORGE_ROOT)
+
     return {
         "command": "handoff",
         "target": str(target),
@@ -4905,6 +6869,9 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
         "settleInline": inline,
         "deferToOwnSession": deferred,
         "alreadyAdopted": [i["id"] for i in settled],
+        "openDefects": [{"file": e.get("file"), "session": e.get("session"),
+                         "detail": e.get("detail"), "at": e.get("at")}
+                        for e in open_defects],
         "note": "This skill proposes; proposal-deliberation decides and publishes.",
     }
 
@@ -4980,6 +6947,8 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     without it. Only the verdict travels: the proposal's text stays in the forge.
     """
     target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
     source = revision_source(args.revision)
     if source is None:
         raise Refused("REVISION_UNREADABLE",
@@ -5227,6 +7196,89 @@ def _discovered_job_folders(target: Path, rcli) -> list[Path]:
     return found
 
 
+def _campaign_identity(target: Path, rcli) -> dict:
+    """The campaign-identifying fact `propose` freezes into its own
+    `campaign` field, and `_verify_gate_proposal` (below) re-derives fresh
+    at every `gate` call to detect drift (design D4, `the-pilot-decides-
+    the-remote-strategy`) -- the proposal's OWN staleness keys, structurally
+    distinct from `_AUTHORIZATION_BINDING_KEYS`' seven original ones (never
+    `entrypoint`, never `positionStatus`; a single job's transient failure
+    moves neither `commit` nor `jobSet` here, which is the whole retry
+    guarantee).
+
+    `jobSet` -- every job name `_discovered_job_folders()` currently finds,
+    sorted for determinism -- moves the moment a job folder is added or
+    removed, exactly the second half of the design's own stated trigger.
+
+    `commit` -- the single pin every discovered job folder's own
+    `run-config.json` currently agrees on, or `None` when they disagree.
+    `None` is a reported fact, never a picked winner: two genuinely
+    different disagreeing states could otherwise be flattened onto the
+    same fabricated value and compare equal by accident. `None` never
+    does that -- an unchanged disagreement re-derives the identical `None`
+    both times, and only an actual disk change (a job's declared commit
+    moving, or a job folder appearing/disappearing) ever moves this
+    result at all.
+
+    Never argv, never a second, independently-written copy: `propose` and
+    `gate` both call this exact function over the SAME live disk state
+    `_discovered_job_folders()` and `JOBFOLDER.read()` already expose
+    elsewhere in this file, the same single-shared-rule discipline
+    `impl_availability.launch_available` enforces one layer down.
+    """
+    job_names: list[str] = []
+    commits: set = set()
+    for job_dir in _discovered_job_folders(target, rcli):
+        try:
+            run_config = rcli.JOBFOLDER.read(job_dir).run_config
+        except rcli.JOBFOLDER.JobFolderError:
+            continue
+        job_names.append(run_config.get("jobName", job_dir.name))
+        commits.add(run_config.get("commit"))
+    commit = next(iter(commits)) if len(commits) == 1 else None
+    return {"commit": commit, "jobSet": sorted(job_names)}
+
+
+def _proposal_digest(events: list, campaign: dict) -> str | None:
+    """The digest of the NEWEST `proposal` event on this target's ledger
+    whose OWN frozen `campaign` equals `campaign` -- the CURRENT, freshly
+    re-derived `_campaign_identity()` -- or `None` when none does (design
+    D4, "the digest of the newest proposal event ... whose campaign
+    identity matches"). Read only by `_authorization_binding` (offer/mint
+    time), to bind a freshly minted token to whichever campaign proposal
+    is CURRENTLY live for this target -- never filtered by job name: a
+    campaign proposal covers every job it names, and every one of those
+    jobs' tokens bind to the SAME proposal, the same way `gate --unit`
+    already authorizes the whole campaign rather than one job's slice of
+    it. A job the bound proposal does NOT name is exactly what
+    `GATE_PROPOSAL_MISMATCH` (below) exists to catch -- not filtered out
+    here, or that refusal would never be reachable.
+
+    Filtering by CURRENT campaign match (not merely "the newest proposal,
+    period") also means a token is never minted against a proposal that
+    is ALREADY stale the instant it is minted: if disk has drifted since
+    the newest proposal was published, this returns `None` for that
+    proposal (it is not the CURRENT campaign any more) rather than
+    binding a token that would fail `GATE_PROPOSAL_STALE` before ever
+    being presented once.
+
+    `_verify_gate_proposal` (gate/verify time, below) never calls this: it
+    looks the proposal event up by the token's OWN recorded digest instead,
+    never re-derives a fresh one -- a token minted against a given
+    proposal stays checked against exactly that proposal, never silently
+    upgraded to a newer one. That is what keeps a same-campaign retry
+    (spec "proposal survives a same-campaign retry") working with no
+    re-propose: the bound proposal digest never moves under a token that
+    has not been re-minted, even though a FRESH mint (a retry's `offer`
+    call) would resolve to the identical digest again as long as the
+    campaign identity has not moved.
+    """
+    for event in reversed(events):
+        if event.get("kind") == "proposal" and event.get("campaign") == campaign:
+            return event.get("digest")
+    return None
+
+
 def remote_execution_jobs_state(target: Path) -> dict:
     """`probe`'s own job-folder fact (design #744 section 9): what job
     folders exist on disk right now, reported alongside
@@ -5242,6 +7294,15 @@ def remote_execution_jobs_state(target: Path) -> dict:
 
     Staleness is read through `remote_cli.JOBFOLDER.read()` alone — the
     single reader design #744 section 4 mandates — never recomputed here.
+
+    **`accelerator`/`localBudget`, read out of the same open `run_config`
+    this loop already holds** (design D3, `the-pilot-decides-the-remote-
+    strategy`): both are optional, additive blocks `jobfolder.
+    build_run_config()` writes only when the target declared them, and
+    both are carried through verbatim — `None` when absent, never a
+    default. This is the one and only place either is read for
+    `classify_remote_necessity()` (`impl_execution_strategy.py`); no
+    caller opens `run-config.json` a second time to get them.
 
     **The `None` conflation, made visible rather than passed through.**
     `remote_cli._job_folder_staleness()` returns `None` for two different
@@ -5303,16 +7364,25 @@ def remote_execution_jobs_state(target: Path) -> dict:
                 "job": job_dir.name,
                 "product": None,
                 "staleness": {"status": "unreadable", "reason": str(exc)},
+                "accelerator": None,
+                "localBudget": None,
             })
             continue
 
         run_config = job_folder.run_config
         job_name = run_config.get("jobName", job_dir.name)
         product = run_config.get("product")
+        # Read out of the SAME open `run_config` this loop already holds
+        # (design D3, `the-pilot-decides-the-remote-strategy`): never a
+        # second `JOBFOLDER.read()`. Both are additive, optional blocks
+        # `jobfolder.build_run_config()` writes only when the target
+        # declared them; absent here, exactly as they are absent there.
         jobs.append({
             "job": job_name,
             "product": product,
             "staleness": dict(job_folder.staleness),
+            "accelerator": run_config.get("accelerator"),
+            "localBudget": run_config.get("localBudget"),
         })
 
         if not isinstance(product, str) or not product:
@@ -5328,6 +7398,5232 @@ def remote_execution_jobs_state(target: Path) -> dict:
         smoke_ready[job_name] = bool(readiness["ready"])
 
     return {"jobs": jobs, "services": services, "smokeReady": smoke_ready}
+
+
+def _now_iso8601() -> str:
+    """UTC, exactly the shape `remote-execution/scripts/ledger.py`'s own
+    `_now()` already writes (`time.strftime(..., time.gmtime())`, line 117)
+    — one format for "when" across the forge, not a second one this file
+    invents beside it.
+    """
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _resolve_shard_evidence(
+        target: Path, name: str, contract: dict,
+        shards_root: str | None) -> tuple[list | None, list | None]:
+    """`(shardsArrived, shardsCurrent)` for any caller that needs the
+    identical answer `_position_write_evidence` derives -- factored out so
+    `cmd_probe`, the one reader of a `@shard` witness that never routed
+    through that function, computes this the same way rather than its own,
+    permanently-`None` copy.
+
+    `shards_root`, when given, is the caller's own explicit override --
+    `position`/`verify`'s own `--shards` flag. `None` falls back to the
+    target's own declared `distribution.shardsRoot` (`DISTRIBUTION_
+    OPTIONAL`): a relative path is resolved against `target`, cwd-
+    independent by construction, unlike an explicit `--shards` value, which
+    `Path()` reads exactly as typed. Neither declared: both `shards_arrived`
+    and `shards_current` stay `None`, exactly as before this key existed.
+
+    A shard location, once declared, is read by every caller equally --
+    there is no second, narrower declaration for `probe` alone or `gate`
+    alone. A repository names one directory; every reader compares against
+    that same answer.
+    """
+    resolved_root = shards_root
+    if resolved_root is None:
+        declared = ((contract or {}).get("distribution") or {}).get("shardsRoot")
+        if isinstance(declared, str) and declared:
+            candidate = Path(declared)
+            resolved_root = str(candidate if candidate.is_absolute()
+                                else target / candidate)
+    if not resolved_root:
+        return None, None
+    shard_io = _load_remote_execution_shard_io()
+    shards = shard_io.read_shards(Path(resolved_root))
+    shards_arrived = [entry["shard"] for entry in shards]
+    # The same currency read `verify --shards` makes, computed the same way
+    # from the same two inputs. A writer that skipped it would tick a
+    # `@shard` witness on a shard that arrived from code the repository has
+    # since moved past -- and `position` is the one command that writes
+    # those marks down, so the reader would then be trusting a mark the
+    # writer had never checked.
+    shards_current = _shards_current(
+        shards, (contract or {}).get("distribution") or {},
+        source_digest(target, package_name(name)))
+    return shards_arrived, shards_current
+
+
+def _skipped_rung_detail(
+        items: list[dict], evidence: dict, levels: list[str],
+        target_level: str) -> str | None:
+    """Why this pass skips a rung, or `None` when it skips none: **to seal at
+    rung N, every leveled item must already grade as satisfied at rung N-1.**
+
+    Returns the refusal's detail rather than raising it, and the caller raises.
+    `GatingRefusalRosterTests` walks a gating command's own body for the
+    `Refused` literals it carries, and a code raised one call deep in a helper
+    is invisible to that walk -- so a rule this heavy would have entered the
+    engine with nobody having classified it. The refusal is kept where the
+    roster can see it; the reasoning is kept here, where it belongs.
+
+    The three checks above this one ask whether a rung was named, whether the
+    target declared it, and whether a leveled witness has a ladder to stand on.
+    None of them asks whether the rung *below* the named one was ever reached,
+    so a header could jump straight from the floor to the top of a target's own
+    ladder -- and the rung being skipped is exactly the one whose whole purpose
+    is proving the flow runs before anything is spent further up.
+
+    **Derived from state, never from history.** The obvious rule -- "was there
+    a prior pass at the rung below" -- reads the position ledger, and a target
+    that has never run this command has no ledger at all: the check would pass
+    vacuously on precisely the repositories it exists to stop, which is worse
+    than no check, because it looks like one. So the question is put to the
+    evidence instead, and put to it through `impl_position.derive` itself,
+    re-graded at the previous rung rather than by a second arithmetic beside
+    it: whatever "satisfied at rung N-1" means for a witness, it means the same
+    thing here as it does when the mark is written.
+
+    **Aim and attainment are two facts, and the header carries only the
+    first.** `target=` states what a pass AIMS at, legitimately one rung above
+    what has been reached -- otherwise no pass could ever climb. An earlier
+    revision of this rule exempted any seal at or below the rung the header
+    recorded, reading that field as what had already been REACHED and using it
+    as a floor. Nothing ever lowered it, so a rung that outlived its evidence
+    did not go stale: it switched this guard off for itself, permanently, and a
+    switched-off guard is indistinguishable from a green one. The exemption now
+    reads `impl_position.attained_level` -- the evidence's own answer -- and the
+    header is not consulted here at all.
+
+    Three boundaries, each of them a decision rather than a fallout:
+
+    - **The first rung has no predecessor** (`target_index == 0`), so nothing is
+      checked there. A repository where nothing has run yet must still be able
+      to start, or the ladder has no bottom step. This is also what keeps the
+      earlier revision's decision 2 alive under a rule that no longer reads the
+      header: *`position` is the instrument that measures, and an instrument
+      that refuses to take a reading because the reading is bad hides the
+      regression it exists to report.* An operator whose evidence has collapsed
+      is never cornered, because the floor is always sealable and demoting the
+      header to it is the honest reading; and the refusal that sends them there
+      names every item that came up short, so the regression is reported louder
+      than the old exemption's silent success ever reported it.
+    - **Where a pass came from is not consulted.** A retreat and a re-seal are
+      seals like any other: landing on rung N asserts that N-1 is reached
+      whether the pass climbed to N, stayed at N, or fell back to it. Only
+      `target_level` and the evidence decide, so there is no direction a skip
+      could be laundered through.
+    - **Two-state items do not participate.** Their verdict is computed without
+      the ladder and is identical at every rung (`derive`: `satisfied` *is*
+      `derived` for them), so they carry no information about which rung was
+      reached. Folding them in would refuse a legitimate advance because some
+      unrelated boolean step is still open -- whole-sequence completeness
+      wearing this rule's name. Their own ordering is already held, within a
+      rung, by `impl_availability.launch_available`'s `SEQUENCE_NOT_REACHED`.
+    - **An unmeasured leveled item is not attainment.** `satisfied is None`
+      means nobody looked, and "we did not look" is not "it has been reached" --
+      the same distinction `derive` keeps one level down by refusing to fold
+      `None` into the floor rung. This is also what separates this rule from a
+      cheaper one that merely counts positions on the ladder: a single-step
+      advance is refused too when the step below it is not shown attained.
+
+    A target that declares no ladder (`levels == []`) reaches none of this: it
+    has no rungs, so it has no progression to enforce, and `level_index` would
+    answer `None` for every name anyway.
+    """
+    target_index = impl_position.level_index(levels, target_level)
+    if not levels or not target_index:
+        # `not target_index` covers both `None` (a name off the ladder -- an
+        # undeclared ladder cannot be climbed, and a declared one already
+        # refused an unknown rung above) and `0` (the floor, which has no
+        # predecessor to attain).
+        return None
+    attained = impl_position.attained_level(items, evidence)
+    attained_index = impl_position.level_index(levels, attained)
+    if attained_index is not None and target_index <= attained_index + 1:
+        return None
+    # Reached only when the rung directly below the aim is NOT attained, since
+    # `attained_level` is by definition the highest rung every leveled item
+    # grades satisfied at: `target_index > attained_index + 1` puts `previous`
+    # strictly above it, and `attained is None` puts every rung above it. So
+    # `short` is never empty here, and the sentence below never names an empty
+    # set -- it is the same grading, re-read one rung down for the item names
+    # the refusal has to carry.
+    previous = levels[target_index - 1]
+    graded = impl_position.derive(items, {**evidence, "targetLevel": previous})
+    short = [(item, result) for item, result in zip(items, graded)
+            if not result["twostate"] and result["satisfied"] is not True]
+    named = "; ".join(
+        f"item {item['ordinal']} reached "
+        + (f"{result['derived']!r}" if result["derived"] is not None
+          else "nothing measurable")
+        for item, result in short)
+    return (
+        f"--target-level {target_level!r} sits above {previous!r} on this "
+        f"target's own declared ladder, and {previous!r} is not attained by "
+        f"the evidence as it stands ({named}); the evidence currently attains "
+        + (f"{attained!r}" if attained is not None else "no rung at all")
+        + ". A position names the rung it aims at, and an aim reaches at most "
+        "one rung above what is attained -- whichever rung the header happens "
+        "to record now.")
+
+
+def _step_operand_detail(items: list[dict], steps: dict) -> str | None:
+    """Why an `@step` witness in this sequence cannot be measured, or
+    `None` when every one names a step this target's own `__steps__`
+    actually declares -- `_skipped_rung_detail`'s own shape, above, for the
+    identical reason: returns the refusal's detail rather than raising it,
+    so `POSITION_STEP_UNKNOWN` stays visible to `raised_refusal_codes` at
+    the one call site (inside `cmd_position`) that raises it, not buried
+    one call deep in a helper `GatingRefusalRosterTests`'s walk cannot see.
+
+    `parse_items` (`impl_position.py`) validates only the witness KIND --
+    that `"step"` is a member of `WITNESS_KINDS` -- never the operand
+    string against this target's own declared steps. An `@step nosuch`
+    item reaches here unblocked, and without this check would silently
+    derive `unmeasured` forever (`_derive_step`'s own missing-operand
+    branch), never telling anyone the name was never declared at all.
+
+    Assumes `steps` is non-empty: the caller raises `STEPS_UNDECLARED`
+    first (design "Second arm: reuse `STEPS_UNDECLARED` verbatim") when it
+    is not -- the identical fact `cmd_step` itself already raises that
+    code for, no new classification needed.
+    """
+    unknown = sorted({
+        item["witness"]["operand"] for item in items
+        if item["witness"]["kind"] == "step"
+        and item["witness"]["operand"] not in steps})
+    if not unknown:
+        return None
+    return (
+        f"{unknown!r} names a step this target's __steps__ does not "
+        f"declare ({sorted(steps)!r}); an `@step` witness must name one "
+        "of them.")
+
+
+def _record_operand_detail(items: list[dict], records: dict) -> str | None:
+    """Why a leveled `@record:level <name>` witness in this sequence cannot
+    be measured, or `None` when every one names a record this target's own
+    `__records__` actually declares -- `_step_operand_detail`'s own shape,
+    above, for the identical reason: returns the refusal's detail rather
+    than raising it, so `POSITION_RECORD_UNKNOWN` stays visible to
+    `raised_refusal_codes` at the one call site (inside `cmd_position`) that
+    raises it, not buried one call deep in a helper `GatingRefusalRosterTests`'s
+    walk cannot see.
+
+    **One code covers two facts** (design D6): `__records__` declares
+    nothing at all, and `__records__` declares others but not this name.
+    `unknown` is built the identical way either way -- a name absent from
+    `records` -- so no second code (a `RECORDS_UNDECLARED` mirroring
+    `STEPS_UNDECLARED`) is needed; the detail below distinguishes the two
+    readings for a human, the classification does not need to.
+
+    Only a LEVELED `@record:level <name>` witness carrying a non-empty
+    operand is checked here: a bare, operand-less `@record` (two-state, by
+    `OPERAND_REQUIRED_KINDS`'s own exclusion) and a leveled `@record:level`
+    with no operand at all (the grammar that predates `__records__`) still
+    derive against the `search` block, unchanged -- this check has nothing
+    to say about either one, the identical restraint `derive()`'s own
+    record branch keeps (`impl_position.py`).
+    """
+    unknown = sorted({
+        item["witness"]["operand"] for item in items
+        if item["witness"]["kind"] == "record"
+        and not item["witness"].get("twostate", True)
+        and item["witness"]["operand"]
+        and item["witness"]["operand"] not in records})
+    if not unknown:
+        return None
+    if not records:
+        return (
+            f"{unknown!r} names a record, and this target's __records__ "
+            "declares none at all; declare it there before a leveled "
+            "`@record:level <name>` witness can address it.")
+    return (
+        f"{unknown!r} names a record this target's __records__ does not "
+        f"declare ({sorted(records)!r}); a leveled `@record:level <name>` "
+        "witness must name one of them.")
+
+
+def _record_shape_detail(items: list[dict], records: dict) -> str | None:
+    """Why an ADDRESSED `__records__` entry cannot be read at all, or `None`
+    when every addressed one carries the shape `named_records_state`
+    expects -- `_record_operand_detail`'s own shape, one question further in,
+    and `cmd_step`'s `STEP_MALFORMED` one literal over.
+
+    `POSITION_RECORD_UNKNOWN` above checks membership in the raw dict and
+    nothing else, so a declared entry of ANY shape passes it. Two shapes
+    reach here, and each fails a different way downstream:
+
+    - **Not a mapping at all.** `named_records_state` skips it entirely, so
+      `evidence["records"]` carries no entry for the name while the refusal
+      above has already agreed the name is declared. The reader and the
+      refusal disagree about the same name and nothing crosses them.
+    - **A mapping with no usable `path`.** The entry survives, and
+      `named_records_state` answers `recordFound: None` forever, since the
+      only branch that can look at a file is guarded on `path` being a
+      non-empty string.
+
+    Either way a ticked witness becomes `POSITION_UNBACKED` and a leveled one
+    derives no rung, sinking `attained_level` -- and neither says the
+    declaration is the cause. `STEP_MALFORMED` already refuses exactly this
+    for `__steps__`; there was no sibling here.
+
+    **Only entries a witness in THIS sequence addresses**, the identical
+    narrowing `cmd_step` keeps by refusing the step it was asked to run
+    rather than auditing every `__steps__` entry. A repository may carry a
+    half-written entry it has not wired a witness to yet, and refusing every
+    position write until every entry is finished would be the forge deciding
+    when a declaration is done.
+
+    Returns the detail and never raises, for the reason
+    `_record_operand_detail` states in full: a code raised one call deep in a
+    helper is invisible to `raised_refusal_codes`' walk over the `cmd_*`
+    body, so a refusal this heavy would enter the engine unclassified.
+    """
+    broken = []
+    for operand in sorted({
+            item["witness"]["operand"] for item in items
+            if item["witness"]["kind"] == "record"
+            and not item["witness"].get("twostate", True)
+            and item["witness"]["operand"]
+            and item["witness"]["operand"] in records}):
+        entry = records[operand]
+        if not isinstance(entry, dict):
+            broken.append(
+                f"{operand!r} is declared as {type(entry).__name__}, not a "
+                "mapping: the reader that measures a named record skips a "
+                "non-mapping entry entirely, so this name reads as declared "
+                "here and as absent there")
+        elif not isinstance(entry.get("path"), str) or not entry.get("path"):
+            broken.append(
+                f"{operand!r} declares no usable `path` (found "
+                f"{entry.get('path')!r}, and the keys present are "
+                f"{sorted(entry)!r}): without one, nothing can be looked "
+                "for, and the witness derives unmeasured on every run")
+    if not broken:
+        return None
+    return ("; ".join(broken) + ". A `@record:level <name>` witness "
+            "addresses one __records__ entry, and an entry it cannot read "
+            "is a declaration nobody can measure against.")
+
+
+def _ledger_step_events(events: list[dict]) -> list[dict]:
+    """Every `kind: "step"` event in `events`, in ledger order.
+
+    THE one place in this file that selects the `kind: "step"` ledger line,
+    and the reason it is a function rather than a comprehension twice: the
+    suite pins that selection to exactly one site (design mechanism 2 --
+    "every `gate` consumer still selects on the exact string `gate`, and this
+    ledger line stays invisible to them"). Two readers legitimately need the
+    same events -- `_step_verdicts`, folding evidence for the `@step`
+    witness, and `_abandoned_step`, telling a dirty tree caused by a killed
+    step from an ordinary one -- and a second literal selection beside the
+    first is indistinguishable, to any scanner, from an accidental third.
+
+    `event.get("step")` is part of the selection, not a separate filter: an
+    event carrying no step name identifies no step, and every caller here
+    keys by that name.
+    """
+    return [event for event in events
+            if event.get("kind") == "step" and event.get("step")]
+
+
+#: A terminal `step` outcome that MEASURED something: the callable was
+#: resolved, a process ran, and it reported. `refused` is terminal too and is
+#: deliberately not here -- it is one of `impl_steps`' three resolution
+#: refusals, raised before the callable is ever entered, so its elapsed time
+#: is the cost of failing to find a function and not the cost of the step.
+MEASURED_STEP_OUTCOMES = ("returned", "raised", "unknown")
+
+
+def _elapsed_seconds(start: str, end: str) -> int | None:
+    """Whole seconds between two `_now_iso8601` stamps, or `None`.
+
+    `None` for anything that is not two readable stamps in order: a ledger
+    line written by an older shape with no `at`, a hand-edited one, or a pair
+    whose end precedes its start (a clock moved between the two writes). A
+    forecast built on an unreadable pair would be worse than no forecast --
+    the whole point is that this number is MEASURED.
+    """
+    try:
+        first = calendar.timegm(time.strptime(start, "%Y-%m-%dT%H:%M:%SZ"))
+        last = calendar.timegm(time.strptime(end, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+    return None if last < first else int(last - first)
+
+
+def _last_measured_run(events: list[dict], step: str) -> dict | None:
+    """How long this step took the last time it ran to a verdict, or `None`.
+
+    Free, and that is the whole argument for it. `cmd_step` already writes a
+    PAIR of ledger events -- `outcome: "started"` the instant before the
+    subprocess spawns, a terminal event once it reports -- so the elapsed
+    time of every completed run is already on disk. Nothing new is declared,
+    nothing new is measured, and no target gains an obligation: a duration a
+    target would have had to declare (`expectedMinutes` in `__steps__`) would
+    bind the from-zero rule, and this deliberately does not.
+
+    The pairing is read exactly the way `_abandoned_step` reads it, and the
+    two agree by construction: a `started` with no terminal event after it is
+    a killed run, so it measures nothing and a LATER `started` supersedes it.
+    Only the most recent completed pair is returned -- an older one describes
+    a step whose code has since moved.
+    """
+    pending: dict | None = None
+    measured: dict | None = None
+    for event in _ledger_step_events(events):
+        if event.get("step") != step:
+            continue
+        outcome = event.get("outcome")
+        if outcome == "started":
+            pending = event
+            continue
+        if pending is None or outcome not in MEASURED_STEP_OUTCOMES:
+            pending = None
+            continue
+        seconds = _elapsed_seconds(pending.get("at"), event.get("at"))
+        pending = None
+        if seconds is not None:
+            measured = {"seconds": seconds, "outcome": outcome,
+                        "at": event.get("at"), "session": event.get("session")}
+    return measured
+
+
+#: Said on the first run of a step, and said rather than omitted. The limit is
+#: the honest half of this whole field: the run that surprises an operator is
+#: the one nobody has measured yet, and that is precisely the run this cannot
+#: describe. A reader who meets the field only when it carries a number never
+#: learns which half they are standing in.
+STEP_LAST_RUN_UNMEASURED = (
+    "no completed run of this step is on this target's ledger, so nothing "
+    "here says what it costs. This publishes a measurement, never an "
+    "estimate -- and the first run of a step is exactly the one no "
+    "measurement exists for.")
+
+#: Said whenever there is a number. A measurement of one past run, not a
+#: budget: the same step over a larger scale costs what it now costs, and
+#: nothing here claims otherwise.
+STEP_LAST_RUN_MEASURED = (
+    "elapsed seconds of the LAST completed run of this step, read off its own "
+    "ledger pair (`started` -> terminal). It describes that run, not this "
+    "one: a step whose scale or input has moved since costs what it now "
+    "costs. Runs that never reported are not measurements and are skipped.")
+
+
+def _step_last_run(measured: dict | None) -> dict:
+    """The measured-cost field, published on every run in both states.
+
+    Deliberately NOT a declared `expectedMinutes` in `__steps__`. A duration
+    the target declares is a duration this skill READS, and anything it reads
+    it must also demand from a repository built from zero -- the kit would
+    have to ship the field and the from-zero check would have to refuse its
+    absence. That is an obligation nobody chose. The `started`/terminal pair
+    already on the ledger costs no declaration at all.
+    """
+    if measured is None:
+        return {"status": "unmeasured", "seconds": None, "outcome": None,
+                "at": None, "session": None,
+                "note": STEP_LAST_RUN_UNMEASURED}
+    return {"status": "measured", **measured, "note": STEP_LAST_RUN_MEASURED}
+
+
+def product_snapshot(target: Path, name: str) -> dict[str, tuple]:
+    """Every file under the product folder, mapped to a cheap write identity.
+
+    `(st_size, st_mtime_ns)` rather than a content digest, and the choice is
+    measured against what a product folder holds: trained artifacts and
+    datasets live under `Models/` and `Data/`, and hashing them on both sides
+    of every step would make each step pay, in full, for a guard about
+    bookkeeping. Every write a filesystem records moves `st_mtime_ns`, so the
+    change this exists to see -- a field rewritten inside a JSON nobody opens
+    -- is seen. **Its limit, stated rather than left to be discovered**: a
+    file touched without its bytes changing reads as written, which is the
+    safe direction for a guard whose whole subject is who wrote where.
+
+    `.implementation/` is excluded for the reason `impl_guards` excuses it
+    from the dirty-tree check: it is this skill's own bookkeeping, appended by
+    the very command being measured, and counting it would make every single
+    step look like it wrote outside its roots. `IGNORED_DIRS` goes for the
+    reason every other reader here drops it.
+    """
+    product = target / name
+    if not product.is_dir():
+        return {}
+    snapshot: dict[str, tuple] = {}
+    skipped = {*IGNORED_DIRS, ".implementation"}
+    for path in product.rglob("*"):
+        relative = path.relative_to(product)
+        if skipped & set(relative.parts):
+            continue
+        if not path.is_file():
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            # A file that vanished between the walk and the stat. Recording
+            # it as absent is the honest reading and matches what the other
+            # side of the comparison will see.
+            continue
+        snapshot[relative.as_posix()] = (stat.st_size, stat.st_mtime_ns)
+    return snapshot
+
+
+def changed_paths(before: dict[str, tuple], after: dict[str, tuple]) -> list[str]:
+    """Product-relative paths that were written, added or removed between two
+    snapshots, sorted. A removal counts: a step that deletes a neighbour's
+    result has written into that neighbour's tree exactly as surely as one
+    that overwrites it."""
+    return sorted({path for path in set(before) | set(after)
+                   if before.get(path) != after.get(path)})
+
+
+def _owns(path: str, roots: list[str]) -> bool:
+    """Whether one product-relative path lies under one of the declared roots.
+
+    Segment-wise, never `str.startswith`: a root of `Results/one` must not
+    swallow `Results/one-more`, which is the difference between a guard and a
+    guard-shaped string comparison.
+    """
+    parts = Path(path).parts
+    for root in roots:
+        root_parts = Path(root).parts
+        if parts[:len(root_parts)] == root_parts:
+            return True
+    return False
+
+
+#: Said when a step declared its roots and everything it wrote is under them.
+STEP_WROTE_OWN = (
+    "everything this run changed in the product folder lies under the roots "
+    "this step declares.")
+
+#: Said when a step declared roots and changed nothing under them. Not an
+#: accusation -- a step whose whole output is already current legitimately
+#: rewrites nothing -- but it is the one reading `outcome: \"returned\"` alone
+#: cannot give.
+STEP_WROTE_NOTHING = (
+    "this run returned and changed nothing under the roots this step "
+    "declares. A step whose output was already current writes nothing and is "
+    "not defective for it; a step that silently did no work looks the same "
+    "from its exit status, and this is the only place the two are told apart.")
+
+#: The defect the whole declaration exists for.
+STEP_WROTE_FOREIGN = (
+    "this run changed paths in the product folder that lie OUTSIDE the roots "
+    "this step declares. Either the step wrote into work it does not own -- "
+    "measured twice on one repository in one day, each time reported as "
+    "`outcome: \"returned\"` and caught only by a digest compared by hand -- "
+    "or its declared roots are wrong. Both are the target's to decide; this "
+    "reports what changed and never repairs it.")
+
+
+def _step_wrote(declared: list[str] | None,
+                before: dict[str, tuple], after: dict[str, tuple]) -> dict:
+    """What this run changed, split by whether this step owns it.
+
+    Published on every run, in all four states, so a reader learns what the
+    check watches rather than meeting it only when it has something to say --
+    `undeclaredLadder`'s own doctrine.
+    """
+    if not declared:
+        return {"status": "undeclared", "declared": [], "inside": [],
+                "outside": [], "note": PRODUCES_UNDECLARED_CONSEQUENCE}
+    changed = changed_paths(before, after)
+    inside = [path for path in changed if _owns(path, declared)]
+    outside = [path for path in changed if not _owns(path, declared)]
+    if outside:
+        status, note = "foreign", STEP_WROTE_FOREIGN
+    elif not inside:
+        status, note = "nothing", STEP_WROTE_NOTHING
+    else:
+        status, note = "own", STEP_WROTE_OWN
+    return {"status": status, "declared": list(declared),
+            "inside": inside, "outside": outside, "note": note}
+
+
+def _step_verdicts(target: Path, name: str) -> dict:
+    """`evidence["stepVerdicts"]` for every caller that reads an `@step`
+    witness -- `_position_write_evidence`, `cmd_probe`'s inline dict, and
+    `cmd_verify`'s inline dict, the identical three-caller shape
+    `_resolve_shard_evidence`, above, already keeps for `@shard`. Design
+    "All three evidence builders share one fold": the proposal named only
+    `_position_write_evidence`; wiring just that one function would leave
+    `probe` and `verify` reporting `unmeasured` forever while `gate`
+    reports satisfied -- two places disagreeing about "the suite is
+    green", the same defect this codebase already refuses for a `@shard`
+    witness read only through `probe`'s own, permanently-`None` copy.
+
+    Folds `kind: "step"` events from `.implementation/position.jsonl`,
+    latest wins by ledger order (later events override earlier ones for
+    the same step name, never reordered by content). Short-circuits to
+    `{}` when the ledger holds no `kind: "step"` event at all: a fresh
+    `suite_digest(target)` is a real filesystem walk, and a target that
+    never ran `step` has nothing here worth paying for it.
+
+    **Digest is compared before outcome is read** (spec "The Ledger
+    Carries Currency, Old Events Read Safely"): a latest event whose
+    recorded `suiteDigest` no longer matches a fresh `suite_digest(target)`
+    folds to `None` regardless of whether its `outcome` was `"returned"`
+    or `"raised"` -- a stale measurement is unmeasured, never a `False`
+    asserting the suite fails now about code nobody ran under. A
+    pre-change event with no `suiteDigest` key at all reads identically:
+    `.get("suiteDigest")` is `None`, which can never equal a real hex
+    digest, so it folds to `None` exactly like a stale one -- never
+    raising, never `True`. `cmd_step`'s two non-verdict events
+    (`outcome: "started"`, written before the subprocess spawns, and
+    `outcome: "refused"`, written when a target-side resolution refusal
+    propagates) carry no digest for exactly this reason: a killed run whose
+    latest event is a bare `started` folds to `None` here at the digest
+    comparison, before its outcome is ever read, and a step that PASSED
+    earlier and was then re-run and killed stops reading as a pass --
+    which is the honest answer, since nobody knows what the killed run
+    did. This function reads the ledger and compares
+    digests; it does not itself decide what a `True`/`False`/`None`
+    verdict MEANS to a witness -- that reading is `_derive_step`'s
+    (`impl_position.py`), a plain dict reader one layer up.
+    """
+    events = impl_position.read_events(
+        target / name / ".implementation" / "position.jsonl")
+    step_events = _ledger_step_events(events)
+    if not step_events:
+        return {}
+    latest: dict[str, dict] = {}
+    for event in step_events:
+        latest[event["step"]] = event
+    live_digest = suite_digest(target)
+    verdicts: dict[str, bool | None] = {}
+    for step_name, event in latest.items():
+        if event.get("suiteDigest") != live_digest:
+            verdicts[step_name] = None
+        elif event.get("outcome") == "returned":
+            verdicts[step_name] = True
+        elif event.get("outcome") == "raised":
+            verdicts[step_name] = False
+        else:
+            verdicts[step_name] = None
+    return verdicts
+
+
+def _flow_steps(steps: dict) -> list[tuple[str, int]]:
+    """The declared flow, in the order the target declared it: every
+    `__steps__` entry carrying an integer `advances` ordinal, sorted by it.
+
+    **An entry without an ordinal is outside the flow, and that is the
+    target's own statement, not this reader's guess.** `cmd_step` runs such
+    an entry ungated for exactly that reason -- "an ordering nobody declared
+    is not one this command invents" -- so an entry that never claimed a
+    position in the sequence cannot be a position the sequence is waiting on.
+    Folding them in would report a finished flow unfinished forever, for
+    every step a repository keeps beside the ordering rather than inside it.
+
+    **A non-integer ordinal declares no position either.** `cmd_step` already
+    refuses `STEP_MALFORMED` for one at the moment it would run; this reader
+    never raises (it is called from three reporting paths), so it drops the
+    entry rather than sorting a string against an int and crashing a command
+    whose whole job is to report. `bool` is excluded even though
+    `isinstance(True, int)` holds, the same shape defect `_numeric`
+    (`impl_execution_strategy`) already refuses to read as a number.
+
+    Ties break on the step's own name, so two entries claiming one ordinal
+    still produce one deterministic order rather than a dict-insertion order
+    that moves when the target's file is re-spelled.
+    """
+    ordered: list[tuple[str, int]] = []
+    for step_name, entry in steps.items():
+        if not isinstance(entry, dict):
+            continue
+        advances = entry.get("advances")
+        if isinstance(advances, bool) or not isinstance(advances, int):
+            continue
+        ordered.append((step_name, advances))
+    return sorted(ordered, key=lambda pair: (pair[1], pair[0]))
+
+
+def pilot_completeness_state(steps: dict, sequence: list[dict],
+                             evidence: dict) -> dict:
+    """Whether the ordered flow this target declared has actually run at
+    pilot -- `{"status", "steps", "incomplete"}`, and never a refusal.
+
+    The measured defect this exists for: a target declaring six ordered steps
+    had run the second of them and nothing else; six of its seven notebooks
+    carried zero executed cells and zero outputs; and `probe` answered the
+    rung that offers the declared scale anyway. That rung fires on "the search
+    record is absent", which is a different fact from "the flow was validated
+    at pilot", and the ladder was reading the wrong one. Nothing had been
+    produced for anybody to read, and a question that offers the expensive run
+    at that point is an invitation to say yes.
+
+    Two facts per step, and only two:
+
+    - **It ran and returned.** `@step <name>` is already the witness that
+      reads exactly that (`impl_position._derive_step` over
+      `evidence["stepVerdicts"]`, which `_step_verdicts` folds from the
+      ledger and expires against a live `suite_digest`). `None` --
+      never run, a stale digest, an event from before digests were
+      recorded -- is "not shown", never a pass: the same refusal to fold
+      unmeasured into attainment that `_skipped_rung_detail` states one
+      rung up.
+    - **The notebook it owes, when it owes one, is executed against these
+      sources.** `@notebook <path>` is already the witness that reads exactly
+      that (`status == "executed"` and `sourcesMatch is True`).
+
+    **How the notebook is known, and why nothing new is declared for it.**
+    The forge must never read the target's own Python to find which file a
+    step executes. It does not have to: `advances` is the target saying which
+    position item a step produces evidence for, and that item already names
+    its own witness. So the notebook a step owes is the operand of the
+    sequence item at that step's ordinal, whenever that item's witness kind is
+    `notebook` -- a link the target already writes, in the vocabulary it
+    already uses. A second declaration beside it would be one more thing that
+    can disagree with the first.
+
+    **Both halves are graded through `impl_position.derive`, never by a
+    second arithmetic beside it** -- the discipline `_skipped_rung_detail`
+    already keeps ("whatever satisfied means for a witness, it means the same
+    thing here as it does when the mark is written"), and the same synthetic-
+    item shape `cmd_discuss` already hands it. So this predicate can never
+    disagree with what a tick in the sequence asserts.
+
+    **Both probes are built two-state, however the sequence item declared
+    itself, and that is the decision this rule turns on.** A leveled
+    `@notebook` witness grades a RUNG, and every rung above the floor is
+    evidence only a full-scale run can produce (`_derive_notebook_level`
+    reads the record's own scale behind the report). Read that way a pilot
+    could never complete, the rung waiting on completeness would never lift,
+    and the flow would deadlock on the very evidence it is withholding
+    permission to go and get. What a pilot genuinely produces is the
+    executed-and-current fact, so that is what is asked for -- and because
+    the probe carries `twostate: True`, `evidence["targetLevel"]` is never
+    consulted for it at all.
+
+    **An item whose witness is not a notebook adds nothing.** A `@record` or
+    `@shard` witness is full-scale evidence by construction -- a record must
+    meet its own declared scale, and a pilot campaign leaves no shard at all
+    -- so demanding either here would deadlock the flow on evidence the pilot
+    cannot produce. The step's own verdict is the whole predicate there.
+
+    **A flow nobody declared is not an incomplete one.** `status` is
+    `"undeclared"` when no entry carries an ordinal, and every caller reads
+    that as "this rule does not apply" -- a target that never opted into an
+    ordering keeps exactly the ladder it always had.
+
+    Pure: no I/O, no filesystem walk, no ledger read. `steps` is
+    `resolve_steps_declaration`'s own return, `sequence` is
+    `position_state`'s, and `evidence` is the position evidence dict every
+    caller already builds -- the same restraint `classify_remote_necessity`
+    keeps, so two callers asking this question cannot answer it differently.
+    """
+    flow = _flow_steps(steps)
+    if not flow:
+        return {"status": "undeclared", "steps": [], "incomplete": []}
+    by_ordinal = {item["ordinal"]: item for item in sequence
+                  if isinstance(item.get("ordinal"), int)}
+    rows = []
+    for step_name, advances in flow:
+        witness = (by_ordinal.get(advances) or {}).get("witness") or {}
+        notebook = (witness.get("operand")
+                    if witness.get("kind") == "notebook" else None)
+        probes = [{"witness": {"kind": "step", "operand": step_name,
+                               "twostate": True}, "mark": " "}]
+        if notebook:
+            probes.append({"witness": {"kind": "notebook", "operand": notebook,
+                                       "twostate": True}, "mark": " "})
+        graded = impl_position.derive(probes, evidence)
+        ran = graded[0]["satisfied"]
+        current = graded[1]["satisfied"] if notebook else None
+        rows.append({
+            "step": step_name, "advances": advances, "ran": ran,
+            "notebook": notebook, "notebookCurrent": current,
+            "complete": ran is True and (notebook is None or current is True),
+        })
+    incomplete = [row["step"] for row in rows if not row["complete"]]
+    return {"status": "incomplete" if incomplete else "complete",
+            "steps": rows, "incomplete": incomplete}
+
+
+#: What the walk report is, said in the payload rather than left to a reader
+#: to infer from the field names. Reported on every run, in every state --
+#: `priorWork`'s own doctrine: a report met only when something is wrong is a
+#: report nobody has learnt to read by the time it matters.
+WALK_NOTE = (
+    "where this repository stands in its own declared flow, step by step. "
+    "Nothing here is a finding: a step nobody has walked yet is a state, an "
+    "artefact no declared step renders is a description of that artefact and "
+    "not an accusation about it, and a flow that has not started is where "
+    "every repository begins. Every input is one this skill already holds -- "
+    "the ledger's own step events, the position sequence and its rungs, and "
+    "each step's declared output roots -- and no target declares anything "
+    "for it that it does not already declare.")
+
+#: An artefact under a category the skill understands, which no declared step
+#: names among its own output roots. A description, and the reason it is worth
+#: making is that the alternative reading is silence: an artefact nobody
+#: renders sits in the product folder looking exactly like one that is current.
+WALK_OUTSIDE = "outsideTheWalk"
+
+#: The three states a step can stand in, ordered least-walked first. An
+#: artefact claimed by more than one step is only as walked as the least
+#: walked of them -- an artefact is not produced until everything that writes
+#: into it has run.
+WALK_ORDER = ("notWalked", "unfinished", "walked")
+
+
+def product_artefacts(target: Path, name: str) -> list[str]:
+    """The result-rendering artefacts the product folder holds, product-relative.
+
+    Notebooks, and only notebooks, because they are the artefacts this skill
+    already understands as rendering a result: it parses their cells, reads
+    whether they executed, and digests the sources they ran against
+    (`notebooks_state`). Enumerating every file under `Results/` and `Models/`
+    instead would list a step's whole output rather than the things a reader
+    opens, and the incident this serves was three notebooks with empty cells
+    sitting beside four that were named.
+
+    `IGNORED_DIRS` is dropped for the reason every other reader here drops it
+    -- `.ipynb_checkpoints/` in particular holds copies, not artefacts.
+    """
+    product = target / name
+    notebooks = product / "Notebooks"
+    if not notebooks.is_dir():
+        return []
+    return sorted(
+        path.relative_to(product).as_posix()
+        for path in notebooks.rglob("*.ipynb")
+        if path.is_file()
+        and not set(path.relative_to(product).parts) & IGNORED_DIRS)
+
+
+def _walk_rung(item: dict | None, evidence: dict, levels: list[str]) -> str | None:
+    """The rung this step's own position item grades at, or `None`.
+
+    Graded through `impl_position.derive`, never by a second arithmetic
+    beside it -- `pilot_completeness_state`'s own stated discipline, for the
+    same reason: whatever a rung means when a mark is written, it means the
+    same thing here.
+
+    The probe is built LEVELED whatever the item declared itself, because the
+    question this report asks is "at which rung", and a two-state item answers
+    that with a bool. A witness kind with no level deriver answers `None`
+    rather than raising: not every kind can be read as a rung, and a report
+    that fell over on one would take the whole walk with it.
+    """
+    witness = (item or {}).get("witness") or {}
+    if not witness.get("kind") or not levels:
+        return None
+    probe = [{"witness": {"kind": witness["kind"],
+                          "operand": witness.get("operand"),
+                          "twostate": False}, "mark": " "}]
+    try:
+        graded = impl_position.derive(
+            probe, {**evidence, "levels": levels})
+    except Exception:                        # noqa: BLE001 -- see docstring
+        return None
+    derived = graded[0].get("derived")
+    return derived if isinstance(derived, str) else None
+
+
+def walk_state(steps: dict, sequence: list[dict], evidence: dict,
+               step_events: list[dict], levels: list[str],
+               artefacts: list[str]) -> dict:
+    """Where this repository stands in its own declared flow.
+
+    **A walk report, not an absence report, and the difference is the whole
+    design.** An absence report answers "what is broken"; this answers "where
+    am I". The state an operator is usually in when they read it is opening a
+    clean repository to run the flow from the top, and at that moment a list
+    of things to worry about turns normal, expected states into things that
+    read as defects -- a whole side axis of legitimate work arriving as
+    findings on the first clean run. So nothing here is a finding, every line
+    is reported whatever it says, and the reader decides.
+
+    Three facts per step, each read off something the skill already holds:
+
+    - **`walk`**, from the ledger's own step events. `bc78905` made a run's
+      shape legible -- no event at all, a `started` with no partner, a
+      terminal event -- and those are exactly `notWalked`, `unfinished` and
+      `walked`. Collapsing the first two is the ambiguity that pair was built
+      to remove, so they stay apart here too.
+    - **`rung`**, from the position sequence and the declared ladder, through
+      `impl_position.derive`. A step walked at the floor and a step walked at
+      the top are two different states of the same `walked`.
+    - **`renders`**, from the step's own declared output roots (`produces`).
+
+    An artefact inherits the state of the step that renders it. One claimed by
+    more than one step is only as walked as the LEAST walked of them -- it is
+    not produced until everything writing into it has run. One no declared
+    step renders is described as exactly that, `outsideTheWalk`, which is a
+    description of the artefact and not an accusation about it: a repository
+    legitimately carries work outside what its agreement adjudicates.
+
+    **No new target declaration.** Every input is already declared or already
+    derived: `__steps__` (with the `produces` roots), the position sequence,
+    the declared ladder, and the ledger this skill writes itself. Nothing here
+    asks a repository built from zero for anything it is not already asked
+    for.
+
+    **What no declaration can carry, said rather than faked.** An artefact
+    outside the walk carries no *reason* for being outside it, because nothing
+    a target declares today can state one -- there is no witness kind for an
+    artefact, and no block of `__benchmark__` holds a per-artefact note.
+    Inventing one would be a new declaration, and a declaration this skill
+    reads is one a from-zero repository must be made to ship. So the fact is
+    reported and the reason is not guessed at.
+
+    Pure: no I/O, no filesystem walk, no ledger read. Every argument is
+    already computed by the caller -- `pilot_completeness_state`'s own
+    restraint, so two callers asking this cannot answer it differently.
+    """
+    if not steps:
+        return {"status": "undeclared", "note": WALK_NOTE, "levels": list(levels),
+                "topRung": levels[-1] if levels else None,
+                "steps": [], "artefacts": []}
+
+    by_ordinal = {item["ordinal"]: item for item in sequence
+                  if isinstance(item.get("ordinal"), int)}
+    latest: dict[str, dict] = {}
+    for event in step_events:
+        latest[event["step"]] = event
+
+    top = levels[-1] if levels else None
+    rows = []
+    for step_name, entry in sorted(steps.items()):
+        entry = entry if isinstance(entry, dict) else {}
+        advances = entry.get("advances")
+        advances = advances if isinstance(advances, int) else None
+        last = latest.get(step_name)
+        if last is None:
+            walk, outcome, at = "notWalked", None, None
+        elif last.get("outcome") == "started":
+            walk, outcome, at = "unfinished", None, last.get("at")
+        else:
+            walk, outcome, at = "walked", last.get("outcome"), last.get("at")
+        rung = _walk_rung(by_ordinal.get(advances), evidence, levels)
+        renders = [root for root in entry.get(PRODUCES_KEY) or []
+                   if isinstance(root, str)]
+        rows.append({
+            "step": step_name, "advances": advances, "walk": walk,
+            "lastOutcome": outcome, "lastAt": at, "rung": rung,
+            "atTopRung": None if top is None or rung is None else rung == top,
+            "renders": renders,
+        })
+
+    witnessed = {item["witness"]["operand"] for item in sequence
+                 if isinstance(item.get("witness"), dict)
+                 and item["witness"].get("kind") == "notebook"
+                 and item["witness"].get("operand")}
+    artefact_rows = []
+    for artefact in artefacts:
+        rendered_by = sorted(
+            row["step"] for row in rows
+            if _owns(artefact, row["renders"]))
+        if rendered_by:
+            claimed = [row for row in rows if row["step"] in rendered_by]
+            least = min(claimed, key=lambda row: WALK_ORDER.index(row["walk"]))
+            walk, rung = least["walk"], least["rung"]
+        else:
+            walk, rung = WALK_OUTSIDE, None
+        artefact_rows.append({
+            "path": artefact, "renderedBy": rendered_by, "walk": walk,
+            "rung": rung, "witnessed": artefact in witnessed,
+        })
+
+    walks = {row["walk"] for row in rows}
+    if walks == {"notWalked"}:
+        status = "notStarted"
+    elif walks == {"walked"}:
+        status = "walked"
+    else:
+        status = "walking"
+    return {"status": status, "note": WALK_NOTE, "levels": list(levels),
+            "topRung": top, "steps": rows, "artefacts": artefact_rows}
+
+
+#: What a repository gives up when its own ordered flow and its own declared
+#: scale cannot both be satisfied, written out for the identical reason
+#: `LADDER_UNREACHABLE_CONSEQUENCE` is: a reader handed "the flow is
+#: unfinishable" learns the key's own name and nothing else. A format string
+#: rather than a constant, because the exit is only actionable once the actual
+#: ordinals are named -- "give that item a rung" is advice, `item 2` beside the
+#: four steps waiting on it is a decision somebody can take.
+FLOW_UNFINISHABLE_CONSEQUENCE = (
+    "the ordered flow this target declared can never be finished below the "
+    "scale its own search declares, while `pilotCompleteness` asks for "
+    "exactly that -- two declarations that cannot both be satisfied. The "
+    "sequence item{plural} at ordinal {ordinals} {carry} a two-state "
+    "`@record` witness, and `impl_position._derive_record` grades one of "
+    "those against `search.scaleSatisfied` whenever a `requiredScale` is "
+    "declared, as this target's is. Below that scale `scaleSatisfied` is not "
+    "`true`, so the item derives `false`; and a two-state item admits no "
+    "rung, so there is no partial credit a smaller run could earn on it "
+    "either. `step` then answers `STEP_SEQUENCE_NOT_REACHED` for {steps} -- "
+    "every declared step whose own `advances` ordinal sits above {first} -- "
+    "on every call, and the refusal is true: nothing a run below that scale "
+    "produces can ever tick the item they are waiting on. What is lost is "
+    "the whole flow past that item. Those steps never run, so the sequence "
+    "items they would have produced evidence for stay blank; `probe` keeps "
+    "answering `pilot-first` and naming steps it has just refused; and "
+    "`pilot-decisions` -- the rung standing between a validated flow and the "
+    "offer of the declared scale -- is never reached at all. The exit is "
+    "already built and is the target's own to take: mark that item leveled "
+    "and give it a named witness, `@record:level <name>`, backed by one "
+    "`{declaration}` entry per record the flow actually produces, each "
+    "carrying its own `path` and its own `requiredScale`. "
+    "`_record_scale_level` grades a named entry against ITS own declared "
+    "scale rather than the search block's -- absent is the floor rung, "
+    "present but short of that entry's own scale is one rung under the top "
+    "on a ladder of three rungs or more, and at that scale is the top -- so "
+    "the record a smaller run leaves behind reaches a rung a smaller pass "
+    "can be sealed at, while the entry declaring the full scale still "
+    "reaches the top and nothing about the full run is loosened. The forge "
+    "writes neither the entry nor the marker: which scales a flow passes "
+    "through, what each one is called, and which file each leaves behind "
+    "are the repository's own words, and a reader that invented them would "
+    "be declaring the thing it exists to receive. Nothing here is weakened: "
+    "`STEP_SEQUENCE_NOT_REACHED` is unchanged, and this only says before the "
+    "first step runs what it would otherwise say several steps in."
+)
+
+
+def unfinishable_flow_state(steps: dict, sequence: list[dict],
+                            required_scale: dict) -> dict | None:
+    """The ordered flow this target declared and cannot finish below its own
+    declared scale -- or `None` when it can.
+
+    `unreachable_ladder_state`'s own shape, placement and restraint (design
+    D8), one composition over: that one reports a ladder the sequence beside
+    it can never climb, this one a sequence the flow beside it can never walk
+    to the end of.
+
+    **The measured defect.** A target declared six ordered steps and six
+    sequence items. Its first two steps ran and returned; the third was
+    refused `STEP_SEQUENCE_NOT_REACHED`, because item 2 was unticked and item
+    3 cannot run ahead of it. Item 2 carried a bare `@record` witness, and
+    nothing a run below the declared scale produces can ever tick one -- so
+    steps three through six were refused permanently, while
+    `pilot_completeness_state` asked for exactly that flow to finish at
+    pilot. Every fact needed to say so was already declared before the first
+    step ran; the operator found it by running for ten minutes and then
+    reading four files.
+
+    **The predicate is two-state AND graded against a declared scale, never
+    two-state alone.** That same target's item 1 is two-state too -- a
+    `@notebook` witness -- and it was satisfied at pilot, because
+    `_derive_notebook` asks only that the notebook be executed against these
+    sources. Of the five two-state derivers (`impl_position._DERIVERS`, plus
+    the `record` branch `derive` special-cases above it), exactly one ever
+    reads a declared scale: `_derive_record` returns `scaleSatisfied is True`
+    when `evidence["requiredScale"]` is non-empty, and `recordFound` alone
+    when it is not. So the pair is what makes an item unsatisfiable below
+    scale, and either half alone would be a different rule: naming two-state
+    would report every flow with a notebook item in it, and naming `@record`
+    would report every target that never declared a scale for its search --
+    where a record a smaller run leaves behind ticks the item perfectly well.
+
+    **The operand is deliberately not consulted.** `derive` routes a
+    two-state `record` witness to `_derive_record(evidence)` with no operand
+    at all, so `@record <name>` is graded against the search block exactly as
+    a bare `@record` is; an item is unsatisfiable here whether or not it
+    names something.
+
+    **A step is affected when it must WAIT behind such an item, never merely
+    when its own item is one.** `cmd_step` refuses on items strictly below
+    the ordinal a step advances, so the step that advances the unsatisfiable
+    item runs perfectly well -- the measured run proves it, the step
+    advancing item 2 returned -- and only the steps above it are refused. An
+    unsatisfiable item at or above the furthest ordinal any step advances
+    blocks nothing at all and is reported by nothing here: the flow runs to
+    its end and stops one tick short of a full sequence, which is an
+    unfinished POSITION, and `position_state` already says so.
+
+    **`_flow_steps` decides what the flow is, reused rather than restated.**
+    An entry carrying no ordinal is outside the ordering by the target's own
+    statement, and `cmd_step` runs one ungated for exactly that reason -- so
+    it can never be refused for waiting on anything, and naming one here
+    would publish a step that is not blocked.
+
+    **The marks are deliberately not read.** `cmd_step` refuses on
+    `mark != "x"`, so consulting the marks would silence this report the
+    moment somebody ticked the unsatisfiable item by hand -- the assertion
+    `impl_position.derive`'s own `unbacked` key exists to expose. A
+    diagnosis a false tick can switch off is worse than no diagnosis, so
+    this answers the question the declarations answer and never the one the
+    disk does.
+
+    Pure: no I/O, no evidence read, no measurement at all. `steps` is
+    `resolve_steps_declaration`'s own return, `sequence` is
+    `position_state`'s, and `required_scale` is the caller's own
+    `declared_required_scale(search)` -- the identical restraint
+    `unreachable_ladder_state` keeps, so this can never disagree with the
+    marks reported beside it, and it answers before anything has run.
+    """
+    flow = _flow_steps(steps)
+    if not required_scale or not flow:
+        return None
+    furthest = max(advances for _, advances in flow)
+    blocking = [item for item in sequence
+                if isinstance(item.get("ordinal"), int)
+                and item["ordinal"] < furthest
+                and (item.get("witness") or {}).get("kind") == "record"
+                and (item.get("witness") or {}).get("twostate", True)]
+    if not blocking:
+        return None
+    # The earliest one is what actually bounds the flow -- `cmd_step` refuses
+    # on the first unticked item below the ordinal -- but every one of them is
+    # named, so a reader who repairs the first is not sent back to meet the
+    # next.
+    first = min(item["ordinal"] for item in blocking)
+    blocked = [{"step": step_name, "advances": advances}
+               for step_name, advances in flow if advances > first]
+    ordinals = ", ".join(str(item["ordinal"]) for item in blocking)
+    return {
+        "requiredScale": dict(required_scale),
+        "blockedBy": [{"ordinal": item["ordinal"],
+                       "witness": dict(item["witness"])}
+                      for item in blocking],
+        "blockedSteps": blocked,
+        "consequence": FLOW_UNFINISHABLE_CONSEQUENCE.format(
+            plural="s" if len(blocking) > 1 else "",
+            carry="carry" if len(blocking) > 1 else "carries",
+            ordinals=ordinals, first=first,
+            steps=", ".join(row["step"] for row in blocked),
+            declaration=RECORDS_DECLARATION),
+    }
+
+
+def _position_write_evidence(
+        target: Path, name: str, shards_root: str | None = None) -> dict:
+    """The same evidence shape `position_state` is handed through `probe`
+    (2069-2075): search, its declared required scale, the notebooks, the
+    jobs' `smokeReady`, and a shard answer whenever one is resolvable —
+    either `shards_root` names one directly, or the target's own declared
+    `distribution.shardsRoot` does (`_resolve_shard_evidence`).
+
+    `discuss`, `gate` and `close` declare no `--shards` flag at all
+    (`main()`, ~6333), so their callers always pass `shards_root=None` here
+    — but that no longer means `@shard` reads `unmeasured` for them: once a
+    target declares `shardsRoot`, this function resolves it for every one
+    of them exactly as `position --shards <dir>` would have, and a tick
+    written from real evidence stays checkable everywhere that evidence is
+    read, not only at the one command that happened to carry the flag.
+    `probe` reaches the identical answer through `_resolve_shard_evidence`
+    directly, since it builds this evidence shape inline rather than
+    calling this function (see that helper's own docstring for why).
+
+    `position` is different: `main()` gives it `--shards` (~6320), and a
+    caller MUST thread `getattr(args, "shards", None)` through here rather
+    than let it fall back silently, or an explicit flag stops overriding
+    anything — `_resolve_shard_evidence` only reaches for the declaration
+    when `shards_root` itself is `None`, so a `--shards <dir>` passed here
+    always wins, exactly as before this fallback existed (see
+    `impl_position.derive`'s own docstring for why `None` must never become
+    `False` instead).
+    """
+    resolved = resolve_benchmark_declaration(target, name)
+    report = report_state(target, name, package_name(name))
+    search = search_state(
+        resolved["contract"],
+        list((report.get("declared") or {}).get("records") or []),
+        target / name, declaration_status=resolved["status"],
+        digest=source_digest(target, package_name(name)))
+    shards_arrived, shards_current = _resolve_shard_evidence(
+        target, name, resolved["contract"], shards_root)
+    # One call, both fields read from it (design D3): `cmd_gate` needs the
+    # SAME `jobs` rows `probe` classifies from, never a second walk of
+    # `_discovered_job_folders()` computing its own answer.
+    jobs = remote_execution_jobs_state(target)
+    digest = source_digest(target, package_name(name))
+    return {
+        "search": search, "requiredScale": declared_required_scale(search),
+        "notebooks": notebooks_state(target, name, package_name(name)),
+        "smokeReady": jobs["smokeReady"],
+        "jobs": jobs["jobs"],
+        "shardsArrived": shards_arrived,
+        "shardsCurrent": shards_current,
+        "levels": resolve_levels_declaration(target, name),
+        "stepVerdicts": _step_verdicts(target, name),
+        # Design B5 (evidence wiring is three sites): the same
+        # `named_records_state` call `cmd_probe`'s and `cmd_verify`'s own
+        # inline evidence dicts make below, so a `@record:level <name>`
+        # witness reads the identical answer wherever it is measured.
+        "records": named_records_state(
+            target, name, resolve_records_declaration(target, name), digest),
+    }
+
+
+#: What a freshly discovered, never-agreed-on step's item text reads until a
+#: human writes the real sentence. The tool names no content for a step it
+#: only found on disk: deciding what a step MEANS is the discussion's job,
+#: never `--reconcile`'s (design §3.3, "the tool never writes a sentence
+#: about what a step means").
+POSITION_PLACEHOLDER_TEXT = "TODO: describe this step."
+
+
+def _chosen_holder(target: Path, name: str, product: Path) -> Path:
+    """Which markdown file receives a FRESH block, chosen from
+    `agreements_state`'s own already-computed `holders` — never a fixed
+    filename, and never a guess between two candidates.
+
+    Shared by `--sequence`'s fresh install and `--reconcile`'s fresh
+    reconstruction: both write into a product folder that carries no
+    position block yet, and both refuse the identical way when there is
+    nothing to append into, or more than one candidate to choose from
+    (`agreements_state`'s own doctrine that the tool never invents a
+    checklist file, 140-145).
+    """
+    holding = [target / h for h in agreements_state(target, name)["holders"]]
+    if not holding:
+        raise Refused(
+            "POSITION_HOLDER_ABSENT",
+            f"no markdown file under {product.relative_to(target)}/ holds "
+            "checklist items; the position section is never written into "
+            "a file this command invents.")
+    if len(holding) > 1:
+        raise Refused(
+            "POSITION_HOLDER_AMBIGUOUS",
+            f"{len(holding)} markdown files under {product.relative_to(target)}/ "
+            "hold checklist items and none yet carries a position block; "
+            "which one should receive it is not decidable without a human "
+            "choosing.")
+    return holding[0]
+
+
+def _reconcile_discovered_witnesses(target: Path, name: str, args: argparse.Namespace) -> list:
+    """Every witness `--reconcile` can build from what the target already
+    has, in the order design §3.3 names them: the declared `@record`, one
+    `@rehearsal` per discovered job folder, one `@notebook` per
+    `Notebooks/*.ipynb` in name order, one `@shard` per arrived shard when
+    `--shards` is given.
+
+    Every source read here is one `_position_write_evidence` (or `verify`'s
+    own `--shards` handling) already measures against, on purpose: a step
+    reconciliation discovers is a step the very next `verify` can actually
+    derive a tick for, which is what keeps a reconciled target from reading
+    mostly `unmeasured` (design §11's falsifier).
+
+    Every discovered witness is two-state (`"twostate": True`), the same
+    default the markdown grammar itself keeps: reconciliation discovers
+    *that a step exists*, never what a human means by it, and a leveled
+    reading is a decision only a human declaring `:level` on the item text
+    afterward can make (design §3.3, "the tool never writes a sentence
+    about what a step means" -- the same restraint extended to whether a
+    step has rungs at all).
+    """
+    product = target / name
+    witnesses: list[dict] = []
+
+    resolved = resolve_benchmark_declaration(target, name)
+    if (resolved["contract"].get("search") or {}).get("record"):
+        witnesses.append({"kind": "record", "operand": None, "twostate": True})
+
+    rcli = _load_remote_execution_cli()
+    for job_dir in _discovered_job_folders(target, rcli):
+        try:
+            job_name = rcli.JOBFOLDER.read(job_dir).run_config.get(
+                "jobName", job_dir.name)
+        except rcli.JOBFOLDER.JobFolderError:
+            job_name = job_dir.name
+        witnesses.append({"kind": "rehearsal", "operand": job_name, "twostate": True})
+
+    notebooks_root = product / "Notebooks"
+    if notebooks_root.is_dir():
+        for notebook in sorted(notebooks_root.glob("*.ipynb")):
+            witnesses.append({"kind": "notebook",
+                              "operand": str(notebook.relative_to(product)),
+                              "twostate": True})
+
+    shards_root = getattr(args, "shards", None)
+    if shards_root:
+        shard_io = _load_remote_execution_shard_io()
+        for entry in sorted(shard_io.read_shards(Path(shards_root)),
+                            key=lambda e: e["shard"]):
+            witnesses.append({"kind": "shard", "operand": entry["shard"], "twostate": True})
+
+    return witnesses
+
+
+def position_reinstall_payload(sequence: list[dict]) -> list[dict]:
+    """The exact `--sequence` array that reinstalls the sequence a report has
+    just described: same items, same order, same text, same witness, and no
+    mark at all.
+
+    Every field comes out of the report's own `sequence` entries, which is the
+    whole point -- the engine emitted them in the same payload that names the
+    finding, so nothing here is re-read from disk and nothing is invented. The
+    mark is deliberately absent rather than blanked: `--sequence` installs
+    every item at `[ ]` on its own (`cmd_position`'s install branch), and the
+    marks are then re-derived against evidence inside that same call, so a
+    reinstall clears exactly the assertions nothing measured and restores every
+    mark that anything does.
+
+    `twostate` is carried explicitly rather than left to the install branch's
+    default: the default is `True`, so a leveled witness whose flag was dropped
+    here would come back two-state and grade against a rung ladder it no longer
+    declares it belongs to.
+    """
+    return [{"text": item["text"],
+             "witness": {"kind": item["witness"]["kind"],
+                        "operand": item["witness"].get("operand"),
+                        "twostate": bool(item["witness"].get("twostate", True))}}
+            for item in sequence]
+
+
+def _position_reinstall_command(args, sequence: list[dict]) -> str:
+    """One shell line that reinstalls `sequence` and re-derives it, payload
+    included.
+
+    **The payload travels inside the command, and that is the requirement.**
+    `position --sequence -` reads stdin, so a published command that stopped at
+    the flag would hand the reader a hole to fill by hand -- which is exactly
+    the improvisation the incident on record consisted of: reading `SKILL.md`,
+    grepping the suite for a worked example, and rebuilding the array out of
+    `position`'s own printed output. `printf '%s'` writes the array this
+    function already holds and pipes it in, so the line runs unedited.
+
+    `printf` rather than a heredoc or `echo`: the format string is the literal
+    `%s` and the JSON is an argument, so a `%` or a backslash inside an item's
+    text is data on every shell rather than a directive on some of them. Both
+    halves are `shlex.quote`d by the same discipline `_cli_command` keeps.
+
+    **`--shards` is carried through when the caller gave one, and this is not
+    decoration.** A reinstall re-derives every mark from evidence, and evidence
+    for an `@shard` witness is only there when the shard directory is. Dropping
+    the flag would publish a command that clears a mark this very invocation
+    could measure -- a published act that destroys a reading it was handed.
+    """
+    payload = json.dumps(position_reinstall_payload(sequence),
+                        ensure_ascii=False, sort_keys=True)
+    extra: list[str] = []
+    shards = getattr(args, "shards", None)
+    if shards:
+        extra += ["--shards", str(shards)]
+    return (f"printf '%s' {shlex.quote(payload)} | "
+            + _refusal_position_command(args, *extra, "--sequence", "-",
+                                        "--replace"))
+
+
+def position_finding_resolution(args, sequence: list[dict]) -> dict | None:
+    """The act that clears an unbacked tick, published beside the finding that
+    names one -- `WORK_STATE`'s own rule (`_WORK_STATE_RESOLUTIONS`), carried
+    one surface out from refusals to findings.
+
+    **Only `unbacked` reaches here, and the omission is the measurement.** A
+    contradicted mark IS corrected by the refresh that reported it: `derive`
+    runs before the write loop, so a `disagrees` entry in the returned
+    `sequence` describes a mark this very call has already rewritten, and
+    publishing an act for it would prescribe work that is done. An unmeasured
+    item is `continue`d over and its mark survives untouched -- which is
+    honest for a blank box and a standing false claim for a ticked one, and
+    that ticked one is what `unbacked` names.
+
+    **A command, not a question, and it takes nothing away from the restraint
+    that was right.** `position` still refuses to rewrite a mark it could not
+    measure; nothing about the refresh changes. What the reinstall does is a
+    different act with a different meaning -- it withdraws an assertion rather
+    than deciding one -- and it is the act the engine may name without
+    guessing, because a mark nothing measured is not a reading the block is
+    entitled to carry however the operator came by it.
+
+    `None` when nothing is unbacked: a resolution published over a report with
+    no finding in it is an act nobody needs to run, and the reader learns to
+    skip the key.
+    """
+    if not any(item.get("unbacked") for item in sequence):
+        return None
+    return _refusal_command(_position_reinstall_command(args, sequence))
+
+
+def cmd_position(args: argparse.Namespace) -> dict:
+    """The only writer into `<Name>/AGREED.md`'s position section.
+
+    Three write modes:
+
+    **No flag — REFRESH.** The block already there has its marks re-derived
+    against current evidence and nothing else about it changes: not the
+    item text, not their order, not which witness each one names. Only
+    `mark` is ever mutated in place, so byte preservation of everything
+    else follows from never touching it, the same discipline `splice`
+    documents for the bytes around the block.
+
+    **`--sequence` — INSTALL.** A fresh, ordered sequence read from stdin
+    JSON (`- to read stdin`, the convention `cmd_compose`'s `--entry-text`
+    already uses) becomes the block. Refused as `POSITION_BLOCK_EXISTS`
+    unless `--replace` says the caller means to overwrite what is there.
+    The declared `{text, witness}` pairs are round-tripped through
+    `render()` + `parse_items()` immediately rather than trusted as typed:
+    the same grammar that validates a hand-authored block validates one
+    this command is about to write, so a malformed `--sequence` is refused
+    here rather than surfacing later at the next `verify`.
+
+    **`--reconcile` — RECONSTRUCTION.** Builds a sequence from what the
+    target already has (`_reconcile_discovered_witnesses`) and merges it
+    with whatever block already exists, **by witness identity**
+    (kind+operand): an existing item keeps its text and its order exactly,
+    and only a witness with no match among the existing items is appended,
+    with `POSITION_PLACEHOLDER_TEXT` standing in for the sentence a human
+    has not written yet. Safe to run repeatedly — a second `--reconcile`
+    against an unchanged target appends nothing (spec "Reconstruction From
+    an Existing Target").
+
+    **The holder, found by shape for a refresh or a reconcile against an
+    existing block** — exactly `position_state`'s own rule (`>1 candidate
+    carrying a block` is `POSITION_HOLDER_AMBIGUOUS`, the same code,
+    because a delimiter this module owns appearing twice is an ambiguous
+    document regardless of which command is reading it). **For a fresh
+    install or a fresh reconcile**, chosen by `_chosen_holder`.
+
+    **`status: "unchanged"` skips the write entirely.** Comparing the
+    complete item list — witness, text, mark, and count — old vs new, plus
+    `(revision, revisionSha256, targetLevel)`, but never `derivedAt`, which
+    would differ on every single call and defeat the comparison: a refresh
+    that finds nothing to flip and nothing to rebind, or a reconcile that
+    discovers nothing new, leaves the file and the ledger untouched. Writing
+    a fresh `derivedAt` over marks nobody re-measured would claim work
+    happened that did not; `status: "written"` is reserved for a call that
+    actually changed something. A fresh install is never `"unchanged"`: the
+    block itself is new content, not a no-op, whatever its derived marks
+    turn out to be.
+
+    **`--target-level` (PR10, level grammar): the rung this pass is aiming
+    at, sticky across a refresh.** Required only when there is no existing
+    block to inherit one from; otherwise a caller that never restates it
+    keeps whatever a prior write already recorded, the same way a bare
+    refresh never asks a caller to retype item text nobody changed. Refused
+    `POSITION_TARGET_LEVEL_UNKNOWN` when the target names something
+    `__levels__` never declared, and `POSITION_LEVELS_UNDECLARED` when the
+    sequence carries a `:level`-marked (leveled) witness but no ladder is
+    declared at all. A mark then means "reached the
+    level this pass asks for", read from `satisfied`, never `derived`
+    directly — see `impl_position.derive`'s own docstring for the two-state
+    vs leveled distinction a witness's `:level` marker declares.
+    """
+    if args.sequence is not None and args.reconcile:
+        raise Refused(
+            "POSITION_SEQUENCE_AND_RECONCILE",
+            "--sequence installs an explicit sequence and --reconcile "
+            "builds one from what the target already has; only one of the "
+            "two names this call's sequence.")
+
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    require_named_product_dir(target, name)
+    product = target / name
+
+    source = revision_source(args.revision)
+    if source is None:
+        raise Refused(
+            "REVISION_UNREADABLE",
+            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            "the position header cannot be bound to a revision.")
+    revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    # Found by shape, exactly like `agreements_state` and `position_state`:
+    # every markdown file at the top of the product folder is a candidate,
+    # never a fixed filename.
+    md_files = sorted(p for p in product.glob("*.md") if p.is_file()) \
+        if product.is_dir() else []
+    # Explicit loop, not a comprehension over a fresh `path.read_bytes()`
+    # per branch (design decision 2, "Capture"): `data` is bound exactly
+    # once per candidate and BOTH the block search and the pre-image
+    # digest read it back, so "the bytes a block's offsets were located
+    # against" is literally the same object `holder_digests` records a
+    # hash of -- never a second, later read that could already disagree.
+    # A candidate that carries no block yet still gets a digest: a fresh
+    # `--sequence`/`--reconcile` install may choose exactly such a file
+    # below (`_chosen_holder`), and `write_spliced`'s own re-check needs a
+    # pre-image for that path too.
+    # `allow_legacy=True`: `position` is the one place a block written by
+    # the prior boolean-only grammar can be seen at all, so it can be
+    # rewritten -- see `locate_block`'s own docstring. `verify`/`probe`/
+    # `position_state`'s read side pass no such flag and keep refusing.
+    holder_digests: dict[Path, str] = {}
+    holders_with_block = []
+    for path in md_files:
+        data = path.read_bytes()
+        holder_digests[path] = impl_position.digest_bytes(data)
+        block = impl_position.locate_block(data, allow_legacy=True)
+        if block is not None:
+            holders_with_block.append((path, block))
+    if len(holders_with_block) > 1:
+        raise Refused(
+            "POSITION_HOLDER_AMBIGUOUS",
+            f"more than one markdown file under {product.relative_to(target)}/ "
+            "carries a `<!-- position -->` block; only one may hold the "
+            "section this writes.")
+    existing_path, existing_block = (
+        holders_with_block[0] if holders_with_block else (None, None))
+
+    # `target` is filled in below, once every branch has produced `items` and
+    # the section is confirmed actually about to be measured or written (the
+    # `existing_block is None` "nothing to refresh" branch returns before
+    # ever needing one). `"__pending__"` here is a placeholder for the
+    # `--sequence` branch's own round-trip validation `render()` call only,
+    # which checks witness/item grammar, never a rung's legitimacy -- its
+    # output is parsed straight back into `items` and the header itself is
+    # discarded and rebuilt below with the real value.
+    header = {"revision": args.revision, "revisionSha256": revision_sha256,
+              "derivedAt": _now_iso8601(), "session": args.session,
+              "target": "__pending__"}
+    structure_changed = False
+
+    if args.sequence is not None:
+        if existing_block is not None and not args.replace:
+            raise Refused(
+                "POSITION_BLOCK_EXISTS",
+                f"{existing_path.relative_to(target)} already carries a "
+                "position block; pass --replace to overwrite it.")
+        raw = sys.stdin.read() if args.sequence == "-" else args.sequence
+        try:
+            declared = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise Refused("POSITION_SEQUENCE_UNREADABLE",
+                          f"--sequence is not valid JSON: {exc}") from exc
+        if not isinstance(declared, list) or not declared:
+            raise Refused("POSITION_SEQUENCE_EMPTY",
+                          "--sequence must be a non-empty JSON array of "
+                          "{text, witness} entries.")
+        items = []
+        for ordinal, entry in enumerate(declared, start=1):
+            if not isinstance(entry, dict):
+                raise Refused("POSITION_SEQUENCE_UNREADABLE",
+                              f"--sequence[{ordinal - 1}] is not a mapping "
+                              "of {text, witness}.")
+            witness = entry.get("witness") or {}
+            items.append({
+                "ordinal": ordinal, "mark": " ",
+                "text": str(entry.get("text", "")).strip(),
+                "witness": {"kind": witness.get("kind"),
+                           "operand": witness.get("operand"),
+                           # Two-state unless the declared entry opts in --
+                           # the same default the markdown grammar itself
+                           # keeps (`WITNESS_RE`'s own docstring).
+                           "twostate": bool(witness.get("twostate", True))},
+            })
+        # See docstring: validated by the reader that already validates a
+        # hand-authored block, not by a second, parallel set of checks.
+        rendered = impl_position.render(header, items)
+        items = impl_position.parse_items(
+            impl_position.locate_block(rendered.encode("utf-8"))["body"])
+        target_path = existing_path or _chosen_holder(target, name, product)
+    elif args.reconcile:
+        existing = (impl_position.parse_items(existing_block["body"])
+                   if existing_block else [])
+        known = {(item["witness"]["kind"], item["witness"]["operand"])
+                for item in existing}
+        appended = []
+        for witness in _reconcile_discovered_witnesses(target, name, args):
+            key = (witness["kind"], witness["operand"])
+            if key in known:
+                continue
+            known.add(key)
+            appended.append({"mark": " ", "text": POSITION_PLACEHOLDER_TEXT,
+                             "witness": witness})
+        structure_changed = bool(appended)
+        items = existing + appended
+        for ordinal, item in enumerate(items, start=1):
+            item["ordinal"] = ordinal
+        target_path = existing_path or _chosen_holder(target, name, product)
+    elif existing_block is None:
+        # Nothing to refresh is a state, not a failure -- the same doctrine
+        # `agreements_state` and `position_state` already report absence
+        # with: a target whose flow never reached a gate has nothing to
+        # record, and asking it to refresh reports that rather than refusing.
+        return {
+            "command": "position", "target": str(target), "name": name,
+            "status": "absent", "holder": None, "wrote": [], "left": [],
+            "unmeasured": [], "unbacked": [], "sequence": [],
+            # Uniform key set on every branch, `position_state`'s own rule one
+            # function over: a reader that checks `resolve` must not have to
+            # know which branch answered. Nothing is unbacked in a block that
+            # is not there, so it is `None` here by the same derivation as
+            # everywhere else rather than by a special case.
+            "resolve": position_finding_resolution(args, []),
+            "revision": args.revision,
+            "revisionSha256": revision_sha256, "targetLevel": None,
+        }
+    else:
+        items = impl_position.parse_items(existing_block["body"])
+        target_path = existing_path
+
+    # PR10 (the-position-nobody-holds, level grammar): the rung this pass is
+    # aiming at. `--target-level` is optional and sticky -- refreshing an
+    # existing block reuses its own recorded target unless a caller
+    # explicitly names a new one, the same way `--revision` is required on
+    # every call but a bare refresh does not otherwise ask a caller to
+    # restate facts a prior write already recorded. Only a genuinely fresh
+    # header (no existing block to inherit one from) requires it explicitly.
+    declared_levels = resolve_levels_declaration(target, name)
+    target_level = getattr(args, "target_level", None) or (
+        existing_block["target"] if existing_block is not None else None)
+    if target_level is None:
+        raise Refused(
+            "POSITION_TARGET_LEVEL_REQUIRED",
+            "no --target-level was given and no existing block's header "
+            "names one to reuse; a fresh position header cannot be written "
+            "without stating which rung this pass is aiming at.")
+    if declared_levels and target_level not in declared_levels:
+        raise Refused(
+            "POSITION_TARGET_LEVEL_UNKNOWN",
+            f"--target-level {target_level!r} is not one of this target's "
+            f"own declared levels ({declared_levels!r}); __levels__ names "
+            "the only vocabulary a header's target may use.")
+    if not declared_levels and any(
+            not item["witness"].get("twostate", True) for item in items):
+        raise Refused(
+            "POSITION_LEVELS_UNDECLARED",
+            "a leveled (non-two-state) witness exists in this sequence but "
+            "__levels__ declares no ladder; a rung cannot be reached "
+            "against a ladder nobody named.")
+    # Trap 1's verified placement (design D5): BEFORE `_skipped_rung_detail`
+    # is ever called, and therefore before `evidence` is even built --
+    # `_record_operand_detail` needs only `items` and this target's own
+    # `__records__`. An unknown record name derives `None`
+    # (`_derive_record_level`), which sinks `attained_level`; placed after
+    # `_skipped_rung_detail` instead (mirroring `@step`'s own position,
+    # which has no such trap because a two-state item never reaches
+    # `attained_level`), `POSITION_RUNG_SKIPPED` would fire first for any
+    # `--target-level` above the floor and this refusal would become
+    # unreachable there -- reachable only at the floor, where
+    # `_skipped_rung_detail` never intervenes regardless of order.
+    declared_records = resolve_records_declaration(target, name)
+    record_detail = _record_operand_detail(items, declared_records)
+    if record_detail is not None:
+        raise Refused("POSITION_RECORD_UNKNOWN", record_detail)
+    # Immediately after the membership check and therefore still ahead of
+    # `_skipped_rung_detail`, for the identical trap-1 reason (design D5): a
+    # malformed entry derives `None` too, which sinks `attained_level`, so a
+    # check placed after the rung guard would answer `POSITION_RUNG_SKIPPED`
+    # first for any `--target-level` above the floor and be reachable only at
+    # the floor. What reaches it: a name that IS a key of `__records__` -- or
+    # the refusal above would have fired -- whose entry the reader cannot use.
+    record_shape = _record_shape_detail(items, declared_records)
+    if record_shape is not None:
+        raise Refused("POSITION_RECORD_MALFORMED", record_shape)
+    header["target"] = target_level
+
+    evidence = _position_write_evidence(target, name, getattr(args, "shards", None))
+    evidence["targetLevel"] = target_level
+    # Read before a single mark is derived, and so before a single byte is
+    # written: the three checks above decide whether the rung NAMED is a legal
+    # name, and this one decides whether the rung is legally REACHABLE from
+    # where the evidence currently stands.
+    skipped = _skipped_rung_detail(
+        items, evidence, declared_levels, target_level)
+    if skipped is not None:
+        raise Refused("POSITION_RUNG_SKIPPED", skipped)
+    # `@step` operand validity, read fresh here rather than by `parse_items`
+    # (which validates only the witness KIND, never this string): an unknown
+    # step name must never silently derive `unmeasured` forever (spec
+    # "Unknown Step Operand Is A Classified, Roster-Visible Refusal").
+    steps = resolve_steps_declaration(target, name)
+    if not steps and any(item["witness"]["kind"] == "step" for item in items):
+        raise Refused(
+            "STEPS_UNDECLARED",
+            f"{name} declares no __steps__ at all; nothing here names a "
+            "callable this command could run.")
+    step_detail = _step_operand_detail(items, steps)
+    if step_detail is not None:
+        raise Refused("POSITION_STEP_UNKNOWN", step_detail)
+    derived = impl_position.derive(items, evidence)
+    wrote, left, unmeasured, unbacked = [], [], [], []
+    for item, result in zip(items, derived):
+        # Read off the mark as it stood on disk, BEFORE the loop below can
+        # rewrite it. It never can, for exactly these items -- an unmeasured
+        # witness is `continue`d over and its mark survives the refresh
+        # untouched -- which is precisely why a tick here has to be named:
+        # a refresh corrects a contradicted mark and leaves an unbacked one
+        # exactly where it was.
+        if result["unbacked"]:
+            unbacked.append(item["ordinal"])
+        if result["derived"] is None:
+            unmeasured.append(item["ordinal"])
+            left.append(item["ordinal"])
+            continue
+        # Tick decisions read `satisfied`, never `derived` directly: for a
+        # two-state item the two are the same value, but for a leveled item
+        # `derived` is the rung reached (a string) and `satisfied` is
+        # whether that rung is at or above this pass's own target -- the
+        # value that actually means "reached the level this pass asks for".
+        new_mark = "x" if result["satisfied"] else " "
+        if new_mark != item["mark"]:
+            wrote.append(item["ordinal"])
+        else:
+            left.append(item["ordinal"])
+        item["mark"] = new_mark
+
+    unchanged = (
+        args.sequence is None and not structure_changed
+        and existing_block is not None
+        and existing_block["revision"] == args.revision
+        and existing_block["revisionSha256"] == revision_sha256
+        and existing_block["target"] == target_level
+        and not wrote
+    )
+
+    sequence = [{
+        "ordinal": item["ordinal"], "mark": item["mark"],
+        "witness": item["witness"], "text": item["text"],
+        "derived": result["derived"], "twostate": result["twostate"],
+        "satisfied": result["satisfied"], "disagrees": result["disagrees"],
+        "unbacked": result["unbacked"],
+    } for item, result in zip(items, derived)]
+
+    if unchanged:
+        return {
+            "command": "position", "target": str(target), "name": name,
+            "status": "unchanged",
+            "holder": str(target_path.relative_to(target)),
+            "wrote": [], "left": left, "unmeasured": unmeasured,
+            "unbacked": unbacked,
+            "resolve": position_finding_resolution(args, sequence),
+            "sequence": sequence, "revision": existing_block["revision"],
+            "revisionSha256": existing_block["revisionSha256"],
+            "targetLevel": target_level,
+        }
+
+    before_bytes = target_path.read_bytes() if target_path.exists() else b""
+    new_block = impl_position.render(header, items).encode("utf-8")
+    spliced = impl_position.splice(before_bytes, new_block, existing_block)
+    # The pre-image digest captured at the SAME read that located
+    # `existing_block`'s own offsets above -- never a digest of
+    # `before_bytes`, which is itself a second, later read and exactly
+    # the read a stale-offset corruption would have already used. A
+    # candidate `write_spliced` never saw during the holder search (a
+    # brand-new file `_chosen_holder` could in principle name) falls back
+    # to the empty digest, matching `write_spliced`'s own absent-path rule.
+    impl_position.write_spliced(
+        target_path, spliced,
+        expect_digest=holder_digests.get(target_path, impl_position.digest_bytes(b"")))
+    impl_position.append_event(
+        product / ".implementation" / "position.jsonl",
+        {"kind": "position", "session": args.session, "revision": args.revision,
+         "revisionSha256": revision_sha256, "targetLevel": target_level,
+         "holder": str(target_path.relative_to(target)),
+         "wrote": wrote, "left": left, "at": header["derivedAt"]})
+
+    return {
+        "command": "position", "target": str(target), "name": name,
+        "status": "written", "holder": str(target_path.relative_to(target)),
+        "wrote": wrote, "left": left, "unmeasured": unmeasured,
+        "unbacked": unbacked,
+        "resolve": position_finding_resolution(args, sequence),
+        "sequence": sequence, "revision": args.revision,
+        "revisionSha256": revision_sha256, "targetLevel": target_level,
+    }
+
+
+def _agreement_collides(target: Path, name: str, operand: str | None) -> list[str]:
+    """Every existing checklist item, anywhere in the product folder's
+    markdown, whose text names the same operand this witness does.
+
+    Computed fresh on every call, over `AGREEMENT_LINE`/`AGREEMENTS_GLOB`
+    directly -- never through `agreements_state`, which collapses a
+    settled item down to a bare count and keeps only an open item's text.
+    A collision search needs the text of every item, settled or not, so it
+    reads the files itself rather than asking a function that already threw
+    half of them away.
+
+    Both this function and `agreements_state` now read through the same
+    `_agreement_scan_text` excision, so an item's own located line, inside
+    a position block, is never scanned here either -- the self-match a
+    caller `--about`-ing its own sequence item used to get, measured with
+    a fixture whose operand is a substring of its own rendered witness
+    token. Reading through the shared excision, not calling
+    `agreements_state` directly, is what keeps this function's own
+    contract (settled items included, open items too) unchanged.
+    """
+    if not operand:
+        return []
+    product = target / name
+    if not product.is_dir():
+        return []
+    collides: list[str] = []
+    for path in sorted(p for p in product.glob(AGREEMENTS_GLOB) if p.is_file()):
+        for raw in _agreement_scan_text(path.read_bytes()).splitlines():
+            match = AGREEMENT_LINE.match(raw.rstrip())
+            if match and operand in match.group("text"):
+                collides.append(match.group("text"))
+    return collides
+
+
+def _resolve_discuss_about(raw: str, position: dict) -> dict:
+    """`--about <ordinal|witness>`: a caller names a step either by its
+    number in the current sequence, or by a bare witness spec ("kind" or
+    "kind operand") when there is no sequence item yet to number (design
+    §3.3). Never both -- a witness spec is never itself all-digits, so the
+    two are unambiguous on sight.
+
+    A bare `kind` with no operand, for a kind `_agreement_collides` needs
+    an operand to search with, is refused rather than silently accepted.
+    Measured with a fixture built to discriminate `--about notebook
+    <path>` (operand present, one real collision found) from `--about
+    notebook` (operand absent) -- before this refusal, both returned
+    successfully and only the second one's `collides` was always `[]`,
+    indistinguishable from a search that genuinely found nothing. `record`
+    is excluded (`impl_position.OPERAND_REQUIRED_KINDS`): it is the one
+    `WITNESS_KINDS` member legitimately operand-less.
+    """
+    if raw.isdigit():
+        ordinal = int(raw)
+        item = next((i for i in position["sequence"] if i["ordinal"] == ordinal), None)
+        if item is None:
+            raise Refused(
+                "DISCUSS_ABOUT_NOT_FOUND",
+                f"no sequence item numbered {ordinal}; the position section "
+                f"holds {len(position['sequence'])} item(s).")
+        return {"ordinal": ordinal, "kind": item["witness"]["kind"],
+                "operand": item["witness"]["operand"],
+                "twostate": item["witness"].get("twostate", True)}
+    parts = raw.split(None, 1)
+    kind = parts[0]
+    operand = parts[1] if len(parts) > 1 else None
+    if kind not in impl_position.WITNESS_KINDS:
+        raise Refused(
+            "POSITION_WITNESS_UNKNOWN_KIND",
+            f"--about names unknown witness kind {kind!r}; expected one of "
+            f"{sorted(impl_position.WITNESS_KINDS)}")
+    if kind in impl_position.OPERAND_REQUIRED_KINDS and not operand:
+        raise Refused(
+            "DISCUSS_ABOUT_OPERAND_REQUIRED",
+            f"--about {kind!r} requires an operand ('--about \"{kind} <name>\"'); "
+            "without one, the collision search this call would otherwise run "
+            "cannot know what to search for, and a caller reading an empty "
+            "`collides` back would wrongly believe it ran.")
+    # A bare witness spec (no existing sequence item to read a marker off
+    # of) carries no `:level` information of its own; two-state is the same
+    # default the grammar itself keeps for an unmarked witness.
+    return {"ordinal": None, "kind": kind, "operand": operand, "twostate": True}
+
+
+def _discuss_command(target: Path, name: str, *, about: str, question: str,
+                     answer: str | None = None) -> str:
+    """The one directly runnable `discuss` command string every publication
+    point this change adds routes through (design D2; spec "reuses the
+    identical `shlex.quote` discipline as Half 1"): every embedded value is
+    escaped with `shlex.quote`, never a naive interpolation or single-quote
+    wrapping. `expand-contract`'s own hardcoded command (`cmd_offer`, above)
+    survives with a different, single-quoted construction only because its
+    fixed text carries no apostrophe -- left alone, out of scope, rather
+    than migrated to this builder.
+    """
+    parts = ["discuss", "--target", str(target), "--name", name,
+             "--about", about, "--question", question]
+    if answer is not None:
+        parts += ["--answer", answer]
+    return _cli_command(*parts)
+
+
+def _cli_command(*parts: str) -> str:
+    """One directly runnable invocation of this CLI.
+
+    The same `shlex.quote` discipline `_discuss_command` keeps, generalized:
+    every publication point this file has now publishes a command a reader
+    pastes unedited, and a naive interpolation is how one of them stops being
+    that the first time a path carries a space.
+    """
+    return " ".join([CLI_INVOCATION, *(shlex.quote(str(part)) for part in parts)])
+
+
+def _about_arg(about: dict) -> str:
+    """Round-trips a ledger event's `about` dict back into the `--about
+    <ordinal|witness>` spelling `_resolve_discuss_about` reads (design D1's
+    shared `_discuss_command` needs one caller-agnostic form). Never an
+    ordinal: an ordinal names a position-sequence slot that may not exist,
+    or may no longer mean the same thing, by the time a retirement command
+    is actually run -- the bare witness spec is stable across a
+    `--reconcile` renumber the same way `_settle_discussed_events`'s own
+    identity match already is.
+    """
+    kind = about.get("kind") or "record"
+    operand = about.get("operand")
+    return f"{kind} {operand}" if operand else kind
+
+
+def _local_remedy_discuss_entry(target: Path, name: str, finding_id: str) -> dict:
+    """One `toDiscuss` entry for one `audit.localRemediesNotWritten` finding
+    id (design D1's new top-level publication surface; spec Domain B,
+    "Verify publishes one discuss command per unwritten local remedy
+    finding"). Question text derives from the finding id alone (design D5's
+    stable source for this site) -- never a count, never anything that
+    varies between calls while the same finding is still unwritten.
+    """
+    question = (f"finding {finding_id!r}'s local remedy is not written; "
+                "write it now, or record why it is deliberately deferred, "
+                "and why?")
+    return {
+        "about": {"kind": "record", "operand": finding_id},
+        "question": question,
+        "command": _discuss_command(
+            target, name, about=f"record {finding_id}", question=question),
+    }
+
+
+def _piloted_discuss_entry(target: Path, name: str, below: dict) -> dict:
+    """The one `toDiscuss` entry `cmd_probe` publishes when `nextStep` is
+    `piloted` (design D1's new top-level publication surface; spec "Probe's
+    `piloted` status publishes a specific, runnable discuss command").
+
+    Question text derives from the target/name pair and each axis's
+    DECLARED scale alone -- `below[axis]["declared"]`, sorted by axis name
+    (design D5's stable source for this site). `below[axis]["ran"]` (the
+    currently-achieved count) is never read here: it climbs on every poll
+    while the pilot-vs-declared-scale decision has not changed, and
+    embedding it would open a new, never-to-be-revisited `discuss` bucket
+    on every call (spec's stability requirement, Test Obligation #7).
+    """
+    axes = ", ".join(
+        f"{axis}={below[axis]['declared']!r}" for axis in sorted(below))
+    question = (
+        f"{name} (target {target}) ran a pilot below its declared scale "
+        f"({axes}); accept the pilot's scale as final, or continue toward "
+        "the declared scale?")
+    return {
+        "about": {"kind": "record", "operand": None},
+        "question": question,
+        "command": _discuss_command(
+            target, name, about="record", question=question),
+    }
+
+
+#: The choice the standing rule keeps open wherever the flow reaches the point
+#: of running experiments. One spelling, because three steps ask it and a
+#: sentence written three times is a sentence that eventually differs in one of
+#: them.
+NEXT_STEP_EXPERIMENT_CHOICE = ("continue the flow toward the declared scale, "
+                               "or complement the experiments first?")
+
+#: The choice at a step whose work is a repair rather than a run. Same
+#: discipline as `_local_remedy_discuss_entry`'s own sentence, which is where
+#: this wording comes from: an act, or a recorded reason for not taking it.
+NEXT_STEP_REPAIR_CHOICE = ("do it now, or record why it is deliberately "
+                           "deferred, and why?")
+
+#: The three kinds a `nextStep` can be, and the only three. `terminal` is a
+#: decision, not an absence: a step that names no work publishes nothing and
+#: SAYS so, exactly as an `INVOCATION_DEFECT` refusal does one lock over.
+NEXT_STEP_TERMINAL = "terminal"
+NEXT_STEP_REPAIR = "repair"
+NEXT_STEP_EXPERIMENT = "experiment"
+
+
+def _next_step_question_entry(target: Path, name: str, question: str) -> dict:
+    """One published question, in the shape `toDiscuss` already carries.
+
+    `about` is the identical `(record, None)` identity `_piloted_discuss_entry`
+    has always used, so a question published here lands in the same bucket
+    reader and the same `--about record` spelling; buckets are by exact
+    question text (`_open_discussions`), so each step's own wording keeps its
+    own bucket without a second identity being invented for it.
+    """
+    return {
+        "kind": "question",
+        "about": {"kind": "record", "operand": None},
+        "question": question,
+        "command": _discuss_command(
+            target, name, about="record", question=question),
+    }
+
+
+def _benchmark_publication(target: Path, name: str, facts: dict) -> dict:
+    """`benchmark` -- the offer to run. The wiring draft rides in `wiring`
+    (the roster says so); this is the question that must be open beside it."""
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) is ready to be wired and run, and the "
+        "wiring draft is published beside this question; "
+        + NEXT_STEP_EXPERIMENT_CHOICE)
+
+
+def _search_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """`search-first` -- the defect that named this lock. A search is an
+    experiment, declared as one, and launching it is exactly the point the
+    standing rule asks about. Question text derives from the DECLARED scale
+    alone, the same stability rule `_piloted_discuss_entry` documents: the
+    achieved count climbs on every poll while the decision has not changed."""
+    declared = facts.get("declared") or {}
+    axes = ", ".join(f"{axis}={declared[axis]!r}" for axis in sorted(declared))
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) declares a search whose record is absent "
+        f"or short of the scale it declares for itself ({axes}); "
+        + NEXT_STEP_EXPERIMENT_CHOICE)
+
+
+def _piloted_publication(target: Path, name: str, facts: dict) -> dict:
+    """`piloted` -- the one publication that already existed. Its payload is
+    produced by the unchanged `_piloted_discuss_entry`, byte for byte: the
+    question text is pinned by its own stability proof and this lock may not
+    move it."""
+    return {"kind": "question",
+            **_piloted_discuss_entry(target, name, facts.get("declared") or {})}
+
+
+def _convert_publication(target: Path, name: str, facts: dict) -> dict:
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) computes with an array backend that "
+        "cannot be trained, so no comparison can run at all; "
+        + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _declare_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """Which of the three states actually routed here, said as itself.
+
+    `declare-first` is assigned from two different conditions in `cmd_probe`,
+    and this sentence described one of them. `resolved["status"]` being
+    `"absent"` is no benchmark package at all -- "has a benchmark declaration"
+    is false. `report.live == "undeclared"` is a blank `entry.module` and
+    nothing else, over a declaration that may name six blocks fully -- "names
+    nothing yet" is false there too, and the reader is sent to re-read a
+    declaration whose only gap is one field.
+
+    `facts` carries both, computed once by `cmd_probe` from the same two reads
+    it branched on: a fact recomputed here is a fact that can disagree with the
+    branch that published it.
+    """
+    if facts.get("declarationStatus") == "absent":
+        state = ("declares no benchmark package at all, and every later "
+                 "reading is read from one")
+    elif facts.get("live") == "undeclared":
+        state = ("has a benchmark declaration whose `entry.module` is blank, "
+                 "so nothing names the module that pulls its runtime in and "
+                 "no reading about the interpreter is possible")
+    else:
+        state = ("has a benchmark declaration that names nothing yet, and "
+                 "every later reading is read from it")
+    return _next_step_question_entry(
+        target, name, f"{name} (target {target}) {state}; "
+        + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _env_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """The one step whose exit the engine can name completely. `env` reports
+    the target's own declared manifests beside the forge's dev requirements,
+    and the fix here is provisioning rather than code -- so this publishes the
+    command rather than a question nobody has to decide."""
+    return {"kind": "command",
+            "command": _cli_command("env", "--target", str(target))}
+
+
+def _wiring_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """`wiring-first` -- the step whose payload was withheld. The draft of how
+    each module becomes trainable is attached (roster: `wiring`), and this is
+    the question that goes with it."""
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) declares mathematics no arm reaches, and "
+        "the wiring draft is published beside this question; "
+        + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _poll_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """No runnable command: a `poll` names a submission id, and
+    `remote_execution_state` deliberately reports counts rather than ids or
+    worker names. So the engine publishes the decision instead of a command it
+    would have to invent an argument for."""
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) has a submission already out whose answer "
+        "has not returned; wait for it before anything else is offered, or "
+        "reconcile the ledger, and why?")
+
+
+def _report_first_publication(target: Path, name: str, facts: dict) -> dict:
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) has a report that does not yet agree with "
+        "the run it describes; " + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _pilot_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """`pilot-first` -- the flow's own steps that have not finished at pilot,
+    named one by one.
+
+    Named rather than counted, and the shape is `POSITION_RUNG_SKIPPED`'s own
+    detail: a reader handed "the pilot is incomplete" learns a verdict and
+    nothing they can act on, while a reader handed the step names knows
+    exactly which `step` invocations are still owed.
+
+    **This sentence must not offer the declared scale**, and that is the
+    entire point of the rung. `NEXT_STEP_EXPERIMENT_CHOICE` asks whether to
+    continue toward the declared scale; asking it here would offer the
+    expensive run at the one state where nothing has been produced for
+    anybody to read. The repair choice is the honest one: run the steps the
+    flow already agreed to, or record why the flow is deliberately deferred.
+    """
+    missing = list(facts.get("incomplete") or [])
+    named = ", ".join(repr(step) for step in missing)
+    plural = "s" if len(missing) != 1 else ""
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) declares an ordered flow whose step{plural} "
+        f"{named} {'have' if len(missing) != 1 else 'has'} not finished at "
+        "pilot -- each still owes a run that returned, and the ones whose own "
+        "sequence item names a notebook still owe that notebook executed "
+        "against these sources, because the outputs are what anybody reads to "
+        "know the agreed thing is there; " + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _pilot_decision_question(target: Path, name: str, step: str) -> str:
+    """The exact text of one step's own decision question, and the only
+    construction of it.
+
+    Buckets are by exact trimmed text (`_discussion_buckets`), so this string
+    IS the bucket key: a second spelling anywhere would open a second,
+    never-retiring bucket for a decision somebody already made. It is derived
+    from the target, the name and the step alone -- never from a count, a
+    scale or an achieved figure, all of which move while the decision has not
+    changed (the stability rule `_piloted_discuss_entry` documents).
+    """
+    return (f"{name} (target {target}) has finished step {step!r} of its "
+            "declared flow at pilot; how is that step carried out in the full "
+            "run -- on a remote worker, or locally -- and why?")
+
+
+def _pilot_decision_entry(target: Path, name: str, step: str) -> dict:
+    """One step's decision, in the shape `toDiscuss` already carries, minus
+    the `kind` key every other entry in that list also drops."""
+    entry = _next_step_question_entry(
+        target, name, _pilot_decision_question(target, name, step))
+    return {key: value for key, value in entry.items() if key != "kind"}
+
+
+def _pilot_decisions_publication(target: Path, name: str, facts: dict) -> dict:
+    """`pilot-decisions` -- the pass itself, published beside the per-step
+    questions `cmd_probe` appends to `toDiscuss`.
+
+    The owner's rule, in order: the flow runs as it stands at pilot, which
+    proves it runs; the notebooks run, which proves it shows what was agreed;
+    and only then does the flow return to its first step, one step at a time,
+    with a decision per step about how the full run carries it. So what a
+    finished pilot unlocks is the start of that pass -- never permission to
+    launch, and never a single yes/no at the end.
+
+    Where the outputs are is named here rather than left to the reader, since
+    reading them is the act this question is waiting on. The paths are the
+    target's own declared operands, read out of its own sequence.
+    """
+    notebooks = list(facts.get("notebooks") or [])
+    where = (" its outputs are at " + ", ".join(notebooks) + "; "
+             if notebooks else " ")
+    return _next_step_question_entry(
+        target, name,
+        f"{name} (target {target}) has finished every step of its declared "
+        f"flow at pilot and{where}"
+        "the flow now returns to its first step: each step owes its own "
+        "decision about how the full run carries it, and those questions are "
+        "published beside this one; " + NEXT_STEP_REPAIR_CHOICE)
+
+
+#: Every value `cmd_probe`'s ladder can assign to `next_step`, and what each
+#: one publishes. The roster exists because the condition it replaces was one
+#: literal -- `next_step == "piloted"` -- so `search-first`, which launches a
+#: search, reported a word and published nothing; adding a second literal
+#: beside the first would have reproduced that defect one value later.
+#:
+#: `kind` is read for what the question asks. `wiring` is read for whether the
+#: `wiring_proposal` draft belongs in the payload: it had exactly one call site,
+#: guarded on `benchmark`, and `wiring-first` is set by an override that runs
+#: BEFORE that guard -- so the one answer naming missing wiring withheld the
+#: draft of how to wire it. `publish` is `None` only where `kind` is terminal,
+#: and `NextStepPublicationRosterTests` holds that join.
+PROBE_NEXT_STEPS: dict[str, dict] = {
+    # Terminal. Flow B says to ask the user and invent no work for either, so
+    # a publication here would be inventing exactly the work Flow B refuses --
+    # the same reason `NextStepSectionCoverageTests` withholds their SKILL.md
+    # sections. `piloted` is deliberately NOT among them: its own rule keeps a
+    # question open, and an open question is work.
+    "nothing-to-compare": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+                           "publish": None},
+    "already-benchmarked": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+                            "publish": None},
+
+    # Repairs: work whose cost is already settled -- a person's attention, or
+    # a run the flow already agreed to. Never an offer of the declared scale,
+    # which is what separates this kind from `experiment` below.
+    "convert": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                "publish": _convert_publication},
+    "declare-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                      "publish": _declare_first_publication},
+    "env-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                  "publish": _env_first_publication},
+    "wiring-first": {"kind": NEXT_STEP_REPAIR, "wiring": True,
+                     "publish": _wiring_first_publication},
+    "poll-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                   "publish": _poll_first_publication},
+    "report-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                     "publish": _report_first_publication},
+    # The declared flow, before and after it has finished at pilot. Repairs
+    # rather than experiments, and the distinction is not "does a machine
+    # run": running the remaining steps of an already-agreed flow, and
+    # deciding how the full run carries each one, are both work whose cost
+    # was settled when the step was declared. What makes an answer an
+    # EXPERIMENT here is that it OFFERS the declared scale and must therefore
+    # ask the standing rule's flow question -- and these two exist precisely
+    # to withhold that offer until the pilot has run and every step has been
+    # decided.
+    "pilot-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                    "publish": _pilot_first_publication},
+    "pilot-decisions": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+                        "publish": _pilot_decisions_publication},
+
+    # Experiments: the three answers that spend machine time, and therefore the
+    # three the standing rule's flow question belongs at. `search-first`
+    # launches a search, which declares a scale of its own and is an experiment
+    # by this skill's own hard rule; `benchmark` is the offer to run; `piloted`
+    # is a run already made below the scale it declared.
+    "search-first": {"kind": NEXT_STEP_EXPERIMENT, "wiring": False,
+                     "publish": _search_first_publication},
+    "benchmark": {"kind": NEXT_STEP_EXPERIMENT, "wiring": True,
+                  "publish": _benchmark_publication},
+    "piloted": {"kind": NEXT_STEP_EXPERIMENT, "wiring": False,
+                "publish": _piloted_publication},
+}
+
+
+def next_step_publication(target: Path, name: str, next_step: str,
+                          facts: dict) -> dict | None:
+    """What `next_step` publishes, or `None` when the roster declares it
+    terminal. Raises `KeyError` on an unrostered value rather than returning
+    `None`: a step nobody classified must fail loudly here, never read as a
+    step that legitimately names no work."""
+    entry = PROBE_NEXT_STEPS[next_step]
+    if entry["publish"] is None:
+        return None
+    return entry["publish"](target, name, facts)
+
+
+def _discussion_buckets(target: Path, name: str) -> dict[str, dict]:
+    """Every `discuss` bucket in this target's ledger: exact trimmed question
+    text -> the LAST event in ledger order that carries it.
+
+    One fold, two readers (`_open_discussions` and `_answered_discussions`
+    below), for the reason this codebase already states about every other
+    shared derivation: two spellings of one fold is how two commands come to
+    disagree about the same ledger. Both readers need the identical bucketing
+    rule -- by exact trimmed text, never by witness identity, since every
+    entry a published question writes shares the same operand-less `record`
+    identity -- and the identical last-wins rule, never "any event answered
+    this", which would let a stale answer sit in front of a fresh re-ask.
+
+    Ledger (append) order decides, never a comparison of `at`, which is
+    second-granularity and can tie. Insertion order is preserved in
+    first-asked order: re-assigning an existing key updates its value in
+    place and never moves the key.
+    """
+    events = impl_position.read_events(
+        target / name / ".implementation" / "position.jsonl")
+    buckets: dict[str, dict] = {}
+    for event in events:
+        if event.get("kind") != "discuss":
+            continue
+        text = (event.get("asked") or "").strip()
+        if not text:
+            continue
+        buckets[text] = event
+    return buckets
+
+
+def _answered_discussions(target: Path, name: str) -> set[str]:
+    """Every distinct `discuss` question text whose LAST occurrence in ledger
+    order carries a non-blank answer -- `_open_discussions`'s exact
+    complement over the same fold.
+
+    A pass that asks one question per item needs this, and cannot get it from
+    `_open_discussions`: a question nobody has asked yet appears in neither
+    list, so reading "not open" as "decided" would treat every item that was
+    never asked about as already settled -- silence read as consent, which is
+    the one reading this whole surface exists to refuse.
+    """
+    return {text for text, event in _discussion_buckets(target, name).items()
+            if (event.get("answered") or "").strip()}
+
+
+def _open_discussions(target: Path, name: str) -> list[dict]:
+    """Every distinct `discuss` question text whose LAST occurrence in
+    ledger order carries no answer (spec Domain A, "Bucketing is by exact
+    trimmed question text, never by witness identity"; "A bucket's state is
+    the LAST event in ledger order, never a per-event reading, never
+    answered-once").
+
+    Grouped by `asked.strip()`, never by `(about.kind, about.operand)` --
+    `_settle_discussed_events` (below) groups by that identity for its own,
+    narrower purpose, and reusing it here would let one answer silently
+    mark every other distinct question answered too: all 27 live `discuss`
+    events measured on the reference target share the identical witness
+    identity `(kind="record", operand=None)`.
+
+    A bucket's open/answered state is read from the event that occurs LAST
+    in `impl_position.read_events`'s own file (append) order -- never a
+    comparison of `at`, which is second-granularity and can tie, and never
+    "any answered event satisfies this" (answered-once would silently
+    accept a stale answer sitting behind a fresh, unanswered re-ask).
+    Because grouping is by exact text, a later, differently-worded
+    clarification forms its own, independent bucket and can never enter an
+    already-answered one -- the doctrine `settle`'s own
+    `SETTLE_DISCUSSION_UNANSWERED` ("ANY answered event satisfies this,
+    never newest-wins") protects under identity grouping is preserved here
+    by construction, not by a second rule.
+
+    Returned in first-asked order (plain dict insertion order: re-assigning
+    an existing key updates its value in place, it never moves the key) --
+    deterministic across identical ledgers, never a live re-sort.
+    """
+    return [
+        {"asked": text, "about": event.get("about") or {}}
+        for text, event in _discussion_buckets(target, name).items()
+        if not (event.get("answered") or "").strip()
+    ]
+
+
+def cmd_discuss(args: argparse.Namespace) -> dict:
+    """Discussion as an operation with a return value (design §3.3).
+
+    Replaces the prose at `SKILL.md`'s AGREEMENTS doctrine telling the agent
+    to name a collision with an existing agreement and wait for the user:
+    prose cannot be held to a return statement, so this makes "I asked" a
+    fact with a ledger line instead. It never gates -- there is no refusal
+    here for a question left unanswered, only a reported `status`.
+
+    `--question -` and `--answer -` both read stdin the same way
+    `cmd_compose`'s `--entry-text` already does; giving both `-` at once is
+    refused rather than silently reading one and leaving the other blank.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    require_named_product_dir(target, name)
+
+    if args.question == "-" and args.answer == "-":
+        raise Refused(
+            "DISCUSS_STDIN_CONFLICT",
+            "--question and --answer cannot both read stdin in one call; "
+            "pass at most one of them as -.")
+
+    evidence = _position_write_evidence(target, name)
+    position = position_state(target, name, evidence, None, None)
+    about = _resolve_discuss_about(args.about, position)
+
+    question = sys.stdin.read() if args.question == "-" else args.question
+    question = question.strip()
+    if not question:
+        raise Refused("DISCUSS_EMPTY_QUESTION",
+                      "discuss requires a non-blank question.")
+
+    answer = None
+    if args.answer is not None:
+        raw_answer = sys.stdin.read() if args.answer == "-" else args.answer
+        answer = raw_answer.strip() or None
+
+    synthetic_item = {"witness": {"kind": about["kind"], "operand": about["operand"],
+                                  "twostate": about["twostate"]},
+                      "mark": " "}
+    # `position` already located the block (if any) and knows this pass's own
+    # target; `evidence` itself was built before that, so `targetLevel` is
+    # threaded in here rather than recomputed a second way.
+    evidence = {**evidence, "targetLevel": position.get("targetLevel")}
+    measured = impl_position.derive([synthetic_item], evidence)[0]["derived"]
+    collides = _agreement_collides(target, name, about["operand"])
+    # An operand-less witness (`record`, the only one `_resolve_discuss_about`
+    # still lets through with none) means the search literally could not run
+    # -- `[]` alone would read exactly like "ran and found nothing", the same
+    # false confidence `agreements_state`'s own `absent` doctrine refuses to
+    # give a repository with no checklist at all.
+    collision_search = "performed" if about["operand"] else "unperformed"
+
+    status = "answered" if answer else "open"
+    recorded_at = _now_iso8601()
+    impl_position.append_event(
+        target / name / ".implementation" / "position.jsonl",
+        {"kind": "discuss", "about": about, "asked": question,
+         "answered": answer, "status": status, "at": recorded_at})
+
+    return {
+        "command": "discuss", "target": str(target), "name": name,
+        "status": status, "about": about, "measured": measured,
+        "collides": collides, "collisionSearch": collision_search,
+        "asked": question, "answered": answer,
+        "recordedAt": recorded_at,
+    }
+
+
+def _settle_discussed_events(target: Path, name: str, about: dict) -> list[dict]:
+    """Every `discuss` ledger event whose `about` names the identical
+    witness identity `(kind, operand)` this call was given, oldest first.
+
+    Matched by identity, never by ordinal (design "Discussion match"): a
+    sequence renumbers across `--reconcile` calls, but the witness pair a
+    step actually names does not, and `--reconcile` itself already matches
+    existing items the same way. `status` is deliberately not filtered
+    here -- `settle` needs to tell "never discussed" apart from
+    "discussed, never answered", and folding that distinction into this
+    helper would make the caller's own two refusal codes indistinguishable
+    from one read.
+    """
+    events = impl_position.read_events(
+        target / name / ".implementation" / "position.jsonl")
+    return [event for event in events
+            if event.get("kind") == "discuss"
+            and isinstance(event.get("about"), dict)
+            and event["about"].get("kind") == about["kind"]
+            and event["about"].get("operand") == about["operand"]]
+
+
+def _render_settled_line(text: str, witness: str | None, *,
+                          raw_line: bytes | None = None) -> bytes:
+    """The one construction of a settled checklist line's bytes, called
+    only from `cmd_settle` -- the sole write path a witness token has
+    (design D5, spec Group 5: "no other CLI surface edits one";
+    `AgreementWitnessSingleWritePathTests` holds this by an `ast` walk of
+    the whole CLI, the same discipline D3 already uses for
+    `impl_availability`'s call-site sets). `cmd_settle` calls this from
+    both of its own modes; the lock's own `ast` walk asserts the calling
+    FUNCTION, not the call count, so a second call site inside the same
+    function was never what it guarded.
+
+    **Placing a NEW item** (`raw_line=None`, `cmd_settle`'s create path):
+    builds `- [ ] {text}` from scratch. Byte-identical to the pre-witness
+    grammar when `witness` is falsy, so every existing caller that never
+    passes `--witness` keeps writing exactly the line it always wrote.
+    Always `[ ]`: this branch never authors a tick, witness or no witness.
+
+    **Attaching a witness to an EXISTING line** (`raw_line` given,
+    `cmd_settle --attach`'s path, design "attach, not place"): `text` is
+    ignored entirely. `raw_line` is the located line's own bytes, taken
+    verbatim from disk by `_locate_settled_text`, never reconstructed from
+    a regex-captured group -- reconstructing `- [ ] {text}` the way the
+    create branch does would silently normalize whatever the original
+    line's own bullet character, internal spacing or mark case happened to
+    be, and the design's own "byte-identical afterward, only the witness
+    is added" requirement holds only because this branch never parses and
+    rebuilds; it only appends. The trailing newline is preserved exactly
+    as `raw_line` carried one, or not, at end of file -- the witness token
+    is inserted before it, never after.
+    """
+    if raw_line is not None:
+        has_newline = raw_line.endswith(b"\n")
+        body = raw_line[:-1] if has_newline else raw_line
+        if witness:
+            body += f" `{witness}`".encode("utf-8")
+        return body + (b"\n" if has_newline else b"")
+    if witness:
+        return f"- [ ] {text} `{witness}`\n".encode("utf-8")
+    return f"- [ ] {text}\n".encode("utf-8")
+
+
+def _render_done_line(raw_line: bytes) -> bytes:
+    """The one construction of a ticked checklist line's bytes, called only
+    from `cmd_settle`'s own `--done` path -- the mirror of `_render_settled_
+    line`'s `--attach` branch, one mark over. `raw_line` is the located
+    line's own bytes, taken verbatim from disk by `_locate_settled_text`,
+    never reconstructed from a regex-captured group: rebuilding
+    `- [x] {text}` from scratch would silently normalize whatever the
+    original line's own bullet character, internal spacing, or trailing
+    witness token happened to be, the identical restraint `_render_settled_
+    line` already keeps for the identical reason.
+
+    Only the ONE byte inside the checklist mark's own brackets moves, at
+    the position `AGREEMENT_LINE`'s own `mark` group actually matched --
+    never a fixed offset, so a `*` bullet, extra leading whitespace, or a
+    witness token already appended can never shift which byte this writes
+    over. Every byte before and after that single position round-trips
+    through `str`/`bytes` unchanged, because nothing else in the line is
+    parsed or rebuilt -- only located.
+    """
+    has_newline = raw_line.endswith(b"\n")
+    body = raw_line[:-1] if has_newline else raw_line
+    decoded = body.decode("utf-8")
+    located = AGREEMENT_LINE.match(decoded)
+    start, end = located.span("mark")
+    new_body = (decoded[:start] + "x" + decoded[end:]).encode("utf-8")
+    return new_body + (b"\n" if has_newline else b"")
+
+
+def _locate_settled_text(data: bytes, text: str) -> list[dict]:
+    """Every full-line byte span in `data` whose `AGREEMENT_LINE` match has
+    a `text` group exactly equal to `text` -- the search space
+    `settle --attach` locates a witness attachment against, matched by
+    exact text the same way `locate_headings` matches `--under` by exact
+    heading equality (design "attach, not place").
+
+    **Found by shape, not narrowed by fencing.** Mirrors
+    `agreements_state`'s own doctrine (line 220): no fenced-code exclusion,
+    unlike `locate_headings`. `agreements_state` itself never excludes a
+    fenced region from its own scan, so a checklist-shaped line inside one
+    is already counted as an ordinary agreement today -- a line this
+    function can attach a witness to is exactly a line `agreements_state`
+    already counts, never a narrower set that would make the two disagree
+    about what "settled" means.
+
+    Byte-offset bookkeeping mirrors `locate_headings`
+    (`impl_position.py:268`): `data.split(b"\\n")` loses every newline
+    byte it split on, so it is put back per line (except a true final line
+    with none) before offsets are summed. Unlike `locate_headings`'s
+    zero-width insertion points, each returned span is the WHOLE matching
+    line, its own trailing newline included when it has one -- this span
+    is meant to be REPLACED by `impl_position.splice`, not opened.
+
+    The position block's own byte span, when one locates cleanly, is
+    excluded first -- the identical exclusion `_agreement_scan_text`
+    already applies before `agreements_state` and `_agreement_collides`
+    ever see a line, so a position sequence item's own `- [ ] N. ...`
+    (exactly `AGREEMENT_LINE`'s shape) is never mistaken for a settled
+    agreement here either. A block that will not locate is caught, not
+    propagated -- the same residual `_agreement_scan_text`'s own docstring
+    already accepts: the identical document raises through
+    `position_state` in the same `verify` call, so a malformed block is
+    never silently invisible end to end.
+
+    Returns a list, never raises -- the same "the caller owns both counts"
+    doctrine `locate_headings` already states for itself: zero hits and
+    more than one are both read off this list's own length by
+    `cmd_settle`, which names its own refusal codes over them
+    (`SETTLE_TEXT_ABSENT` / `SETTLE_TEXT_AMBIGUOUS`).
+    """
+    try:
+        block = impl_position.locate_block(data)
+    except Refused:
+        block = None
+    block_start = block["start"] if block else None
+    block_end = block["end"] if block else None
+
+    parts = data.split(b"\n")
+    count = len(parts)
+    lines = [parts[i] + (b"\n" if i < count - 1 else b"") for i in range(count)]
+
+    spans: list[dict] = []
+    offset = 0
+    for line in lines:
+        start = offset
+        end = offset + len(line)
+        offset = end
+        if block_start is not None and start < block_end and end > block_start:
+            continue
+        decoded = line.decode("utf-8").rstrip()
+        match = AGREEMENT_LINE.match(decoded)
+        if match and match.group("text") == text:
+            spans.append({"start": start, "end": end})
+    return spans
+
+
+#: Every `## <Heading>` section's own body in a document, keyed by the
+#: heading's exact stripped text -- `settle --remove`'s own reading of
+#: `## Reversed`, matched by exact equality the identical way `--under`
+#: already is (`locate_headings`'s own docstring: a substring rule already
+#: picks the wrong one of two sections on a real document). `(?m)` so `^`
+#: anchors every line, never only the string's start; `re.S` so a body
+#: spanning several lines is captured whole, up to the next `## ` heading
+#: or the end of the document. Deliberately ignorant of fenced regions,
+#: unlike `locate_headings`: this reads an existing paragraph, it never
+#: places anything inside one, so the one failure mode fencing exclusion
+#: guards against -- landing a NEW insertion inside a fence -- cannot
+#: happen here.
+_SECTION_BODY = re.compile(r"(?m)^##[ \t]+(?P<heading>.+?)[ \t]*$(?P<body>.*?)(?=^##[ \t]|\Z)",
+                          re.S)
+
+#: A bold-quoted span inside a section body: `**"..."**`, `re.S` so a
+#: quote that happens to wrap across a line inside the paragraph is still
+#: captured whole. Mirrors `BULLET_LINE`'s own comment on why `**bold**`
+#: is deliberately not treated as a checklist item -- this is the reverse
+#: reading of the identical fact: prose the agreement scanner already
+#: ignores is exactly the shape `## Reversed` uses to name what it turned
+#: over.
+_BOLD_QUOTE = re.compile(r'\*\*"(?P<quote>.*?)"\*\*', re.S)
+
+#: The two ways a truncated quote may end (design "the guard removal must
+#: pass", see `cmd_settle`'s own docstring): the three-dot form and the
+#: single Unicode ellipsis character. Checked longest-appropriate first is
+#: unnecessary here -- neither is a prefix of the other -- but both must be
+#: tried, since a human writing the `Reversed` paragraph by hand types
+#: whichever their editor or habit produces.
+_TRUNCATION_MARKS = ("...", "…")
+
+
+def _reversed_section_quotes(data: bytes) -> list[str]:
+    """Every bold-quoted span found under a literal `## Reversed` heading
+    anywhere in `data`, whitespace-collapsed and stripped. Never raises --
+    a document with no such heading, or one whose body quotes nothing,
+    simply contributes an empty list, the same "the caller owns the
+    count" doctrine `_locate_settled_text` already states for itself one
+    function up.
+
+    Only the SOURCE quote is normalized (internal whitespace runs
+    collapsed to one space) -- never the caller's own `--text`, which is
+    compared exactly as `_locate_settled_text` already located it. A bold
+    quote that happens to wrap across a markdown line inside the
+    `Reversed` paragraph must still read as the identical span a quote
+    typed on one line would; `--text` itself carries no such wrapping to
+    begin with, since it is either one `argparse` token or one exact
+    checklist line's own text.
+    """
+    text = data.decode("utf-8")
+    quotes: list[str] = []
+    for section in _SECTION_BODY.finditer(text):
+        if section.group("heading").strip() != "Reversed":
+            continue
+        for match in _BOLD_QUOTE.finditer(section.group("body")):
+            quotes.append(re.sub(r"\s+", " ", match.group("quote")).strip())
+    return quotes
+
+
+def _reversed_quote_matches_text(data: bytes, text: str) -> bool:
+    """Whether `text` is quoted (bold, under `## Reversed`, possibly
+    truncated) anywhere in `data` -- the single predicate `--remove`'s own
+    guard evaluates (design "the guard removal must pass").
+
+    A quote matches by exact equality, or -- since a long agreement is
+    plausible to elide in prose -- by prefix: the quote ends in one of
+    `_TRUNCATION_MARKS`, and what precedes the mark is a non-empty,
+    EXACT prefix of `text`. The mark alone proves nothing; a truncated
+    quote whose visible prefix does not actually match `text` is not
+    accepted merely for ending in "..." -- that would let an unrelated
+    reversed paragraph that happens to trail off authorize deleting an
+    agreement it never named. See `cmd_settle`'s own docstring for why
+    this guard exists at all, and why prefix matching -- not substring or
+    fuzzy matching -- is the line drawn.
+    """
+    for quote in _reversed_section_quotes(data):
+        if quote == text:
+            return True
+        for mark in _TRUNCATION_MARKS:
+            if quote.endswith(mark):
+                prefix = quote[: -len(mark)]
+                if prefix and text.startswith(prefix):
+                    return True
+    return False
+
+
+def _reversed_section_body_spans(data: bytes) -> list[dict]:
+    """Every `## Reversed` heading's own body byte span in `data`: from
+    immediately after the heading line through the byte before the next
+    `## ` heading, or through the end of the document when none follows.
+
+    Located by the identical `_SECTION_BODY` regex `_reversed_section_quotes`
+    already reads with -- never a second, parallel heading-matcher, so the
+    two can never disagree about where `## Reversed` starts or ends.
+    `_SECTION_BODY`'s own `re.Match` offsets are CHARACTER offsets; `data`
+    may hold multi-byte UTF-8 (a real `Reversed` paragraph already does, in
+    its own em dash and ellipsis), so each boundary is converted to a byte
+    offset by encoding the text up to it, the identical technique
+    `cmd_settle`'s `--reverse` path needs because `impl_position.splice`
+    only ever operates on bytes.
+
+    Deliberately NOT `impl_position.locate_headings`: that function's own
+    insertion point is the section's first CHECKLIST item, skipping past
+    any introductory prose -- exactly wrong here. Measured against a real
+    adopting target's own `## Reversed` section: its body opens with a
+    prose paragraph (not a checklist item), so `locate_headings` would walk
+    past every existing reversal entry looking for the first checklist-
+    shaped line, and find one -- the position block's own `- [x] 1. ...`
+    sequence item, sitting inside this same section. Reusing that offset
+    would splice a new reversal entry between the position block's own
+    opening comment and its first item, corrupting a structure this
+    function must never enter.
+
+    Zero hits, or more than one, are both read off this list's own length
+    by the caller, which reuses `SETTLE_HEADING_ABSENT` / `SETTLE_HEADING_
+    AMBIGUOUS` over them -- the identical codes the create path already
+    raises for a heading occurring zero or more than once anywhere across
+    the candidate holders; here the search is scoped to the one holder
+    `_locate_settled_text` already narrowed the call to, the same single-
+    file scope `_reversed_quote_matches_text` already reads its own quotes
+    within.
+
+    Deliberately ignorant of fenced regions, the same restraint
+    `_SECTION_BODY`'s own docstring already states for itself: this
+    function reads which section is `## Reversed`, by exact heading
+    equality, off the SAME regex `_reversed_section_quotes` already trusts
+    for that reading, so the two never drift apart over a document neither
+    one owns.
+    """
+    text = data.decode("utf-8")
+    spans: list[dict] = []
+    for section in _SECTION_BODY.finditer(text):
+        if section.group("heading").strip() != "Reversed":
+            continue
+        start = len(text[: section.start("body")].encode("utf-8"))
+        end = len(text[: section.end("body")].encode("utf-8"))
+        spans.append({"start": start, "end": end})
+    return spans
+
+
+def _render_reversed_entry(raw_line: bytes, paragraph: str) -> bytes:
+    """The one construction of a `## Reversed` entry's own bytes, called
+    only from `cmd_settle`'s `--reverse` path -- the identical single-
+    write-path discipline `_render_settled_line` already holds for a
+    settled line (design D5, spec Group 5), extended to the entry that
+    explains why one was turned over. `AgreementWitnessSingleWritePathTests`
+    holds this one too, by the same `ast` call-site walk.
+
+    The bold quote is DERIVED from `raw_line` -- the located line's own
+    bytes, taken verbatim from disk by `_locate_settled_text`, read through
+    `AGREEMENT_LINE`'s own `text` group the identical way `--attach`'s own
+    `located.group("text")` already reads it -- never reconstructed from
+    `--text` itself. The two are guaranteed equal the moment a span is
+    found at all (`_locate_settled_text` only ever returns a span whose
+    captured `text` group already equals the caller's `--text` exactly),
+    but deriving from the line keeps this function honest about WHERE the
+    quote actually comes from, the identical restraint `_render_settled_
+    line`'s own `--attach` branch already argues for itself: a caller-typed
+    value is never what gets quoted back into the record. One concrete
+    difference this buys: a witness token already bound to the located
+    line (`` `test_id` ``) is excluded from the quote, because
+    `AGREEMENT_LINE` captures it in its own separate group -- reconstructing
+    from `--text` alone could never have carried it in the first place, but
+    reading the wrong group could have.
+
+    `paragraph` is placed verbatim, one space after the closing `**` --
+    the shape every existing hand-written `Reversed` entry on a real
+    adopting target already uses. The caller's own reasoning for the
+    reversal is never authored here (see `cmd_settle`'s own docstring,
+    "The guard removal must pass": the engine validates and performs the
+    one write, it does not decide WHY an agreement was turned over).
+    Returns bytes ending in a blank line (`\\n\\n`), never a single `\\n`:
+    `cmd_settle` inserts this entry as a zero-width splice immediately
+    before whatever already follows it (a position block, a later heading,
+    or nothing at end of file), and that boundary supplies no separator of
+    its own.
+    """
+    located = AGREEMENT_LINE.match(raw_line.decode("utf-8").rstrip())
+    quote = located.group("text")
+    return f'**"{quote}"** {paragraph}\n\n'.encode("utf-8")
+
+
+def cmd_settle(args: argparse.Namespace) -> dict:
+    """Place one settled agreement, and only one, under a caller-named
+    heading (design "the placer" -- the third and last piece of "We
+    discuss an idea, it gets embodied, then you come in, and the skill
+    binds you so that it is placed in the contract") -- OR, with
+    `--attach`, bind a witness onto a line already placed, matched by its
+    exact `--text` (design "attach, not place") -- OR, with `--remove`,
+    delete a line already placed, matched the identical way (design "the
+    eraser") -- OR, with `--reverse`, write a NEW `## Reversed` entry and
+    delete that same line in ONE call (design "a reversal is one write")
+    -- OR, with `--done`, flip an already-settled line's own mark from
+    `[ ]` to `[x]`, matched the identical way once more (design "the tick
+    this class closes"). All five modes go through this one command; there
+    is still no second write path.
+
+    The agent drafts the discussion and a proposed sentence; the create
+    path validates, refuses, and performs the one write. It never authors:
+    the text placed is `--text`, verbatim, and the mark it writes is
+    always `[ ]`, never `[x]` -- a tick would assert the code already
+    carries something a human has not yet reviewed as reached. `--attach`
+    writes no new text and no new mark at all: it locates an existing line
+    by its own text and appends a witness token to it, leaving the mark
+    exactly as it already was -- a ticked item stays ticked, an open one
+    stays open. `--remove` writes nothing at all: it deletes the located
+    line's own bytes outright, including its trailing newline, and
+    touches no other byte in the document -- see `_reversed_quote_matches_text`,
+    below, for the guard that decides whether it may. `--done` writes no
+    new text either: it locates an existing line by its own text and
+    flips the ONE byte inside its checklist mark's own brackets, from
+    ` ` to `x` -- the text, any witness token it already carries, and
+    every other byte in the holder file are unchanged (`_render_done_
+    line`, below).
+
+    **`--done` is the last member of a class this programme already
+    closes the rest of.** Editing an agreement's own text is `--reverse`
+    (which explains why) followed by a fresh placement; moving one between
+    sections is `--remove` (once explained) followed by a placement under
+    the new heading. Both are compositions of verbs this file already had.
+    Ticking one had no composition at all: nothing --attach, --remove or
+    --reverse can do, alone or chained, ever changes a mark from `[ ]` to
+    `[x]`. `--done` closes that gap; it is not a sixth primitive bolted on
+    beside the other four, it is the one verb the other four's own
+    compositions could never reach.
+
+    **Why marking done requires a witness -- decided, not merely
+    present.** A tick asserts the work named by this line is DONE. Every
+    other guard in this command exists to make sure some assertion this
+    file writes rests on something (`SETTLE_NOT_DISCUSSED`: nothing is
+    PLACED without having been discussed; `SETTLE_NOT_REVERSED`: nothing
+    is REMOVED without having been explained). `--done` states the
+    identical discipline one level further in: nothing is marked DONE
+    without a witness -- a `` `test_<id>` `` token naming exactly what
+    would show the work was reached -- already bound to it. `settle
+    --attach` already exists to put one there; refusing `SETTLE_NOT_
+    WITNESSED` costs the caller nothing it did not already have a command
+    for. The alternative -- letting `--done` tick an unwitnessed line --
+    would make this command author the one assertion it has refused to
+    author since the create path's own docstring line above: "a tick
+    would assert the code already carries something a human has not yet
+    reviewed as reached." An unwitnessed tick reviews nothing; it is a
+    human's plain assertion with a command's authority behind it.
+
+    **Measured against the weighing this decision requires, not assumed.**
+    A real adopting target's `AGREED.md` carries agreements ticked with no
+    witness at all -- irreducible arguments (a design tradeoff, a scoping
+    decision) that no test could ever contradict, because nothing about
+    them is executable. A guard requiring a witness cannot mark THOSE done
+    through this command, ever -- and that is read here as correct, not as
+    a gap needing an escape hatch. Two reasons, not one: first, an
+    argument is not the kind of claim `[x]` was ever meant to certify in
+    this file's own grammar -- `disagrees`/`unmeasured` (`agreements_
+    state`, above) only exist for a claim a witness token could measure,
+    and an unwitnessed line already reports `unwitnessed`, a state this
+    file treats as legitimate and permanent, never as an error. Second,
+    the "unsupported, never technically prevented" doctrine this same
+    file already states for hand-typing a witness token (`--witness`'s
+    own CLI help, `usage.md`) already covers exactly this case: a human
+    may still tick an irreducible argument by hand, the identical way
+    those existing lines were ticked, and `verify`/`close` evaluate a
+    hand-ticked mark exactly the same as one this command would have
+    written. An escape flag on `--done` would not add a capability this
+    programme lacks; it would only let an AUTOMATED call assert "done"
+    over an argument nobody can measure, the one assertion this guard
+    exists to keep a human, not a command, responsible for.
+
+    **Un-ticking does not belong in this change.** `--done` closes a
+    measured gap: no composition of the other four modes could ever
+    produce a tick. The inverse has no equivalent gap to close -- a human
+    can already un-tick a line by hand today, the same "unsupported,
+    never technically prevented" doctrine that already governs every
+    hand edit this file does not itself perform, and nothing measured
+    against a real target found a ticked-in-error agreement this command
+    needed to correct. Un-ticking is also not this guard's mirror image:
+    `--done` asserts a fact came true and rests that assertion on a
+    witness; retracting a tick asserts a PRIOR assertion was wrong, which
+    is closer in shape to `--reverse` (a written admission that something
+    changed) than to any read this command already performs -- it would
+    need its own guard, arguably its own required explanation, designed
+    on its own terms rather than inherited from `--done`'s. Left open,
+    not overlooked.
+
+    **Why `--reverse` exists at all, and why it is not merely
+    `--remove` with extra steps.** `--remove` shipped guarded by
+    `SETTLE_NOT_REVERSED`: refused unless the document's own `## Reversed`
+    section ALREADY quotes the exact text being deleted. Measured after
+    shipping it: nothing could ever satisfy that guard except a hand
+    edit, because `settle` places `- [ ] {text}` checklist bullets, and a
+    `## Reversed` entry is bold-quoted prose in a different shape -- no
+    existing command could write one. The guard was correct; the gap was
+    that satisfying it required the one practice this whole programme
+    exists to eliminate. `--reverse` closes that gap by writing the entry
+    and performing the deletion in the SAME call, so the explanation and
+    the erasure land together or not at all -- see "One transaction,
+    never two separate writes," below, for how that atomicity is actually
+    achieved with no new write primitive beneath `impl_position.write_
+    spliced`'s own existing compare-and-swap.
+
+    **One transaction, never two separate writes.** Both the new `##
+    Reversed` entry and the deleted line are folded into ONE `spliced`
+    bytes value, computed entirely from the SAME pre-image `data`, before
+    the single shared `impl_position.write_spliced` call at the bottom of
+    this function ever runs. There is no intermediate state where one
+    edit has landed on disk and the other has not: either both changes are
+    present in the one written file, or the compare-and-swap itself
+    refused (`POSITION_HOLDER_MOVED`) and NEITHER is. Composing the two
+    edits reuses `impl_position.splice` twice over the SAME original
+    bytes -- once (with `block=None`) purely to borrow its own blank-line
+    normalization ahead of wherever the entry lands, and once more to
+    apply both the resulting insertion and the deletion as ordinary
+    located spans -- rather than hand-rolling a second blank-line rule
+    that could drift from the one `splice` already keeps for every other
+    caller that appends with `block=None`.
+
+    **Where the entry goes: appended last, in the section's own existing
+    order.** Measured against a real adopting target's `## Reversed`
+    section (2026-08-31): its four entries read oldest first, the newest
+    -- explicitly dated -- last, immediately before the position block
+    that closes the section. `--reverse` follows that same order: the new
+    entry is always inserted immediately before the position block, when
+    the located `## Reversed` section holds one, or at the section's own
+    end (immediately before the next `## ` heading, or end of document)
+    when it does not. Never first: a reversal explains something that
+    JUST happened, in a document a human reads top to bottom, and a
+    freshly-turned-over agreement prepended ahead of three-year-old ones
+    would misstate which is recent. See `_reversed_section_body_spans`,
+    above, for why this is deliberately NOT `impl_position.locate_
+    headings` -- that function's own insertion point would land inside
+    the position block itself on a document shaped like the real one just
+    measured.
+
+    **What happens when the section already quotes the text -- decided,
+    not deferred.** Measured on that same real target (2026-08-31): one of
+    its four existing `## Reversed` entries already quotes a checklist
+    line that is STILL PRESENT, ticked, under its own heading -- written
+    by hand before `--reverse` existed, with the deletion never performed.
+    `--reverse` refuses `SETTLE_ALREADY_REVERSED` in this state rather
+    than writing a SECOND explanation beside the first: the document
+    would otherwise carry two quotes of the same retired agreement, one
+    of them redundant the moment it lands. `--remove` remains the
+    reachable command for exactly this state -- its own guard
+    (`_reversed_quote_matches_text`) is ALREADY satisfied, because the
+    explanation already exists; only the deletion is still pending. This
+    is not `--remove` left in as decoration: it is the one legitimate path
+    for an already-explained-but-undeleted agreement, a state this
+    codebase's own adopted target carries today.
+
+    **What happens when `## Reversed` does not exist at all in a holder --
+    refused, not authored.** `--reverse` reuses `SETTLE_HEADING_ABSENT`
+    (the identical code the create path already raises for a missing
+    `--under` heading) rather than inventing the section. The create
+    path's own restraint already applies here: `settle` places items UNDER
+    a heading, it never authors headings, and a freshly-invented `##
+    Reversed` section would need its own preamble prose -- the real
+    target's own preamble ("Written rather than deleted...") is exactly
+    the kind of scoped, once-per-target writing this command has never
+    performed for any OTHER heading either. A human adds the heading (and
+    whatever preamble the target wants) once, the same one-time step
+    `--under` already requires for any other missing heading.
+
+    **Why `--attach` skips the discussion precondition -- decided, not
+    inherited from where the check happened to sit.** `SETTLE_NOT_DISCUSSED`
+    / `SETTLE_DISCUSSION_UNANSWERED` exist so that no agreement is PLACED
+    without having been discussed first. A line `--attach` matches was, by
+    construction, already placed by a prior `settle` call -- it already
+    passed that gate once, the moment it was written. Binding a witness
+    onto it afterward is not placing a new agreement; it is recording, for
+    an agreement that already exists, which test now measures it. Requiring
+    a fresh `discuss` per already-settled line would be ceremony with
+    nothing behind it: the discussion this precondition protects already
+    happened, and re-enacting it item by item for a batch of settled lines
+    would not produce a single new fact this command could check. If a
+    future caller finds a real need to re-litigate an already-settled
+    agreement, that is a different action than attaching a witness to it,
+    and belongs behind its own gate, not this one.
+
+    **The guard removal must pass -- decided, not merely present.**
+    Deleting a settled agreement is the single most destructive write this
+    command can make: unlike `--attach` (adds a token) or the create path
+    (adds a line), nothing `--remove` deletes is recoverable from anything
+    `settle` itself ever wrote. The guard is not invented for this
+    command; it is inherited from the document's own stated convention --
+    the `## Reversed` section's own preamble already says, in prose,
+    "Written rather than deleted: an agreement that was turned over is
+    part of the record, and removing it would lose exactly what this file
+    exists to keep." `--remove` therefore refuses `SETTLE_NOT_REVERSED`
+    unless the EXACT text it would delete is already quoted, bold, under a
+    `## Reversed` heading somewhere in the same holder file the line
+    itself lives in (`_reversed_quote_matches_text`, above). This forces
+    the write that explains WHY an agreement was turned over to exist
+    BEFORE the write that erases it can happen -- the identical ordering
+    the discussion gate already enforces one level up on the create path
+    (nothing is placed before it was discussed; nothing is removed before
+    it was explained), and `--remove` deliberately cannot author that
+    explanation itself, the same restraint `--supersedes`'s own "stated
+    gap" already states below for the create path's own narrative.
+
+    Matched by an exact bold quote, or a quote truncated with a trailing
+    ellipsis (`...` or `…`) whose visible prefix is an exact prefix of
+    `--text`: measured against a real adopting target's own `Reversed`
+    paragraphs, which quote every reversed agreement in full as of this
+    writing, but a long agreement is plausible to elide in prose, and a
+    guard that only ever accepted an exact full quote would refuse a
+    caller whose reversal note is perfectly good and merely trims a long
+    sentence's tail. A prefix match proves the identical fact an exact
+    match proves -- that a human wrote,
+    in this document, that this specific agreement (identified by its own
+    opening words) was turned over -- so it is accepted; a substring or
+    fuzzy match is not, because either would let an unrelated `Reversed`
+    paragraph that merely shares some words authorize deleting an
+    agreement it never actually reversed. This is deliberately narrower
+    than `--supersedes`'s own collision check: that flag only ever records,
+    in the ledger, that a NEW placement collides with an old one, and
+    already documents (see "The stated gap, left open on purpose" below)
+    that it never verifies the document itself says so. `--remove` closes
+    that identical gap for deletion, because deletion has no ledger
+    fallback the way a placement's own `collides` list does -- once the
+    line is gone, `agreements_state` can no longer even report it once
+    existed.
+
+    Checked in refusing-costs-nothing order, the same discipline `cmd_gate`
+    already states for itself: pure-argv shape first (including which mode
+    this call is even in), then whether a discussion actually happened
+    (create path only), then where the write would even go, then whether
+    the located line is already done or already reversed (`--done` /
+    `--reverse` paths only), then whether it collides with something
+    already on record (create path only), then whether a witness or a
+    removal is already bound or already explained in the document
+    (`--attach` / `--remove` paths only).
+
+    1. `SETTLE_STDIN_CONFLICT` -- `--text -` and `--supersedes -` cannot
+       both read stdin in the same call.
+    2. `SETTLE_EMPTY_TEXT` -- a blank `--text` is refused before anything
+       else is read from disk.
+    3. `SETTLE_ATTACH_CONFLICT` -- `--attach` combined with `--under` or
+       `--supersedes`: neither names anything in this mode (there is no
+       new item to place under a heading, and nothing new to collide with),
+       and silently ignoring a flag the caller bothered to type would be
+       exactly the kind of surprise `SETTLE_STDIN_CONFLICT` already refuses
+       one level up.
+    4. `SETTLE_REMOVE_CONFLICT` -- `--remove` combined with `--attach`,
+       `--under`, `--supersedes`, or `--witness`: `--remove` is one of
+       four other, mutually exclusive modes (never both `--attach` and
+       `--remove` in one call), places nothing new (`--under`,
+       `--supersedes` do not apply, the identical reasoning
+       `SETTLE_ATTACH_CONFLICT` already gives), and writes no witness
+       token at all -- the line is deleted, not edited, so a `--witness`
+       the caller bothered to type would otherwise be silently ignored,
+       the same surprise every other conflict code in this list already
+       refuses.
+    5. `SETTLE_REVERSE_CONFLICT` -- either `--reverse` combined with
+       `--attach`, `--remove`, `--under`, `--supersedes`, or `--witness`
+       (the identical reasoning `SETTLE_REMOVE_CONFLICT` already gives,
+       extended to a fourth mutually exclusive mode: `--reverse` deletes
+       the line, so `--witness` binds nothing; it writes no new item
+       under a heading, so `--under` and `--supersedes` do not apply), OR
+       `--paragraph` given WITHOUT `--reverse` -- that flag feeds a `##
+       Reversed` entry only `--reverse` ever writes, so giving it in any
+       other mode is the identical unused-flag surprise this whole list
+       already refuses rather than silently ignores.
+    6. `SETTLE_DONE_CONFLICT` -- `--done` combined with `--attach`,
+       `--remove`, `--reverse`, `--under`, `--supersedes`, `--witness` or
+       `--paragraph` -- the identical reasoning `SETTLE_REVERSE_CONFLICT`
+       already gives, extended to a fifth mutually exclusive mode:
+       `--done` places nothing new (`--under`, `--supersedes` do not
+       apply), writes no new witness token (`--witness` binds one
+       separately, by `--attach`, before this mode may ever reach it) and
+       writes no `## Reversed` entry (`--paragraph` does not apply).
+    7. `SETTLE_WITNESS_REQUIRED` -- `--attach` without `--witness`: binding
+       a witness is the entire point of this mode, so an `--attach` call
+       carrying none has nothing to do.
+    8. `SETTLE_PARAGRAPH_REQUIRED` -- `--reverse` without a non-blank
+       `--paragraph`: writing a NEW `## Reversed` entry is the entire
+       point of this mode, and the engine never authors the reasoning
+       behind one (see "Why `--reverse` exists at all," above) -- an
+       `--reverse` call carrying no paragraph has nothing to explain with.
+    9. `SETTLE_UNDER_REQUIRED` / `SETTLE_ABOUT_REQUIRED` -- the create path
+       (none of `--attach`, `--remove`, `--reverse` or `--done`) still
+       needs both; `argparse` no longer enforces either as unconditionally
+       required, because the other four modes need neither, so this
+       command enforces them itself once it knows which mode it is in.
+    10. `SETTLE_WITNESS_MALFORMED` -- an optional `--witness test_<id>`
+        (design D5, spec Group 3) that does not match `AGREEMENT_LINE`'s own
+        trailing-token grammar (`test_[A-Za-z0-9_]+`). Refused before the
+        write, not silently swallowed into plain text: a malformed value
+        would otherwise round-trip as inert prose, and a caller who typed
+        `--witness` believing it bound something would never learn it did
+        not. Checked in every mode that can still reach it (`--remove`,
+        `--reverse` and `--done` already refused `SETTLE_REMOVE_CONFLICT` /
+        `SETTLE_REVERSE_CONFLICT` / `SETTLE_DONE_CONFLICT` above if
+        `--witness` was given at all).
+    11. `SETTLE_NOT_DISCUSSED` / `SETTLE_DISCUSSION_UNANSWERED` -- create
+        path only (see "Why `--attach` skips..." above; the identical
+        reasoning excuses `--remove`, `--reverse` and `--done`, none of
+        which places anything new). `--about` is resolved the identical way
+        `discuss`'s own `--about` already is (`_resolve_discuss_about`),
+        then matched against the ledger by witness identity: ANY answered
+        event satisfies this, never newest-wins (design "Discussion
+        match") -- a later clarifying question must never retroactively
+        erase an earlier answer, which would teach a caller not to ask
+        one.
+    12. `SETTLE_HOLDER_ABSENT` -- `agreements_state`'s own already-computed
+        `holders` is the candidate set; a target with none has nowhere this
+        command may write (or, for `--remove`/`--reverse`/`--done`, nothing
+        to delete from or flip), and it never invents a file, the same
+        doctrine `_chosen_holder` already states for a fresh position
+        block. Checked in every mode.
+    13. Create path: `SETTLE_HEADING_ABSENT` / `SETTLE_HEADING_AMBIGUOUS` --
+        every holder's own `impl_position.locate_headings` hits, concatenated
+        across all of them: zero, or more than one anywhere (two hits in
+        one holder and one hit apiece in two holders read identically) --
+        the caller owns both counts, because the locator itself never
+        refuses (see its own docstring for why).
+        `--attach`, `--remove`, `--reverse` AND `--done` paths: `SETTLE_TEXT_
+        ABSENT` / `SETTLE_TEXT_AMBIGUOUS` -- the identical discipline, one
+        level down, and the identical helper (`_locate_settled_text`) all
+        four modes call: every holder's own hits for the exact `--text`,
+        concatenated; zero or more than one refuses the same way, for the
+        same reason -- which existing line receives the witness, is
+        deleted, is reversed, or is marked done, is not decidable without
+        a human choosing when more than one line reads identically.
+        Reused, not minted twice: none of `--remove`, `--reverse` or
+        `--done` mints a code of its own here.
+    14. `--reverse` path only, checked after the text search narrows to one
+        holder's own bytes: `SETTLE_ALREADY_REVERSED` -- see "What happens
+        when the section already quotes the text," above -- THEN
+        `SETTLE_HEADING_ABSENT` / `SETTLE_HEADING_AMBIGUOUS` over
+        `_reversed_section_body_spans(data)`, scoped to that one holder
+        (never aggregated across all of them the way the create path's own
+        `--under` search is, because by this point the search already
+        knows which single holder the located line lives in) -- see "Where
+        the entry goes," above. Reused codes, not minted twice: the create
+        path already names both for a missing or ambiguous heading; this
+        is the identical vocabulary applied to a heading this mode reads
+        rather than places under.
+    15. `--done` path only, checked after the identical text search
+        narrows to one holder's own bytes: `SETTLE_ALREADY_DONE` -- the
+        located line's own mark is already `x` or `X` -- THEN `SETTLE_NOT_
+        WITNESSED` -- the located line carries no `` `test_<id>` `` token
+        (see "Why marking done requires a witness," above, for the full
+        argument). Checked in this order, not the reverse: an already-done
+        line is refused on that fact alone, regardless of whether it also
+        happens to carry a witness, the identical "state check before
+        precondition check" ordering `--reverse`'s own `SETTLE_ALREADY_
+        REVERSED` (14, above) already keeps ahead of its own heading
+        checks.
+    16. Create path only: `SETTLE_COLLIDES_UNNAMED` / `SETTLE_SUPERSEDES_UNKNOWN`
+        -- the same `_agreement_collides` `discuss` already repairs
+        (excludes the position block's own item lines), run over the
+        witness's own operand. A caller naming a superseded item must name
+        one actually IN that computed list -- an unchecked string would be
+        a rubber stamp on a supersession this command cannot itself verify
+        happened in the document.
+    17. `--attach` path only: `SETTLE_ALREADY_WITNESSED` -- the one located
+        line already carries a `` `test_<id>` `` token. `--attach` never
+        replaces one; there is no separate flag that does, so the only way
+        to change an existing witness today is the same "unsupported,
+        never technically prevented" doctrine hand-typing already carries
+        (see `--witness`'s own help) -- adding a silent-replace path here
+        would let one automated call quietly overwrite a binding another
+        call, or a human, put there on purpose.
+    18. `--remove` path only: `SETTLE_NOT_REVERSED` -- the located line's
+        own exact text is not quoted (bold, possibly truncated) under any
+        `## Reversed` heading in the same holder file. See "The guard
+        removal must pass," above, for the full argument. The mirror image
+        of `--reverse`'s own `SETTLE_ALREADY_REVERSED` (14, above): one
+        refuses until the explanation exists, the other refuses once it
+        already does.
+
+    **The witness this places is a separate identity from `--about`.**
+    `--about` names the *position* witness this placement discusses and
+    matches against the ledger; `--witness`, when given, is the *agreement's
+    own* `test_<id>` in the declared-invariants suite, persisted into the
+    written line so `agreements_state` can read it back without consulting
+    the ledger. `_resolve_discuss_about` cannot itself carry a `test_<id>`
+    -- it raises `POSITION_WITNESS_UNKNOWN_KIND` for anything outside
+    `impl_position.WITNESS_KINDS`, which `test_<id>` is not a member of and
+    never becomes one; `--witness` is why this command needs no such
+    member. Omitted, the written line stays exactly as it always was.
+    `--attach` never resolves `--about` at all (it is not even required in
+    that mode) -- there is no discussion gate left to check it against, so
+    resolving it would validate a value this call never uses for anything.
+
+    `POSITION_HOLDER_MOVED` is reused, not minted fresh: it already names a
+    holder document's own compare-and-swap failure, and a placement's own
+    pre-image digest is exactly that same fact one level down --
+    `write_spliced` raises it unchanged. Reused identically for `--attach`.
+
+    **The stated gap, left open on purpose.** `--supersedes` names the
+    superseded item in the ledger event only. The document itself shows no
+    supersession until a human writes the `Reversed` paragraph -- the
+    alternative was letting this command author that narrative on its own,
+    the identical restraint `POSITION_PLACEHOLDER_TEXT`'s own docstring
+    already states for what a discovered step means. `settle` checks that
+    a name was given and that it is real; it does not, and cannot, check
+    that the document was actually updated to say so.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    require_named_product_dir(target, name)
+
+    if args.text == "-" and args.supersedes == "-":
+        raise Refused(
+            "SETTLE_STDIN_CONFLICT",
+            "--text and --supersedes cannot both read stdin in one call; "
+            "pass at most one of them as -.")
+
+    text = sys.stdin.read() if args.text == "-" else args.text
+    text = text.strip()
+    if not text:
+        raise Refused("SETTLE_EMPTY_TEXT", "settle requires non-blank --text.")
+
+    attach = bool(getattr(args, "attach", False))
+    remove = bool(getattr(args, "remove", False))
+    reverse = bool(getattr(args, "reverse", False))
+    done = bool(getattr(args, "done", False))
+
+    if attach and (args.under or args.supersedes is not None):
+        raise Refused(
+            "SETTLE_ATTACH_CONFLICT",
+            "--attach binds a witness onto a line already placed; --under "
+            "(where a NEW item goes) and --supersedes (what a NEW item "
+            "collides with) do not apply and must be omitted.")
+
+    witness = getattr(args, "witness", None)
+    witness = witness.strip() if witness else None
+    if remove and (attach or args.under or args.supersedes is not None or witness):
+        raise Refused(
+            "SETTLE_REMOVE_CONFLICT",
+            "--remove deletes a line already placed; --attach (a second, "
+            "mutually exclusive mode), --under and --supersedes (what a "
+            "NEW item needs), and --witness (nothing is written, so there "
+            "is no token to bind) do not apply and must be omitted.")
+    paragraph = getattr(args, "paragraph", None)
+    paragraph = paragraph.strip() if paragraph else None
+    if reverse and (attach or remove or args.under or args.supersedes is not None
+                    or witness):
+        raise Refused(
+            "SETTLE_REVERSE_CONFLICT",
+            "--reverse writes the ## Reversed entry and deletes the "
+            "settled line in one call; --attach and --remove (two other, "
+            "mutually exclusive modes), --under and --supersedes (what a "
+            "NEW item needs), and --witness (nothing is written to the "
+            "deleted line, so there is no token to bind) do not apply and "
+            "must be omitted.")
+    if done and (attach or remove or reverse or args.under
+                 or args.supersedes is not None or witness or paragraph):
+        raise Refused(
+            "SETTLE_DONE_CONFLICT",
+            "--done flips an already-settled line's own mark to done; "
+            "--attach, --remove and --reverse (three other, mutually "
+            "exclusive modes), --under and --supersedes (what a NEW item "
+            "needs), --witness (bound separately, by --attach, before a "
+            "line may ever be marked done through this command) and "
+            "--paragraph (only --reverse ever writes one) do not apply "
+            "and must be omitted.")
+    if paragraph and not reverse:
+        raise Refused(
+            "SETTLE_REVERSE_CONFLICT",
+            "--paragraph supplies the prose a NEW ## Reversed entry is "
+            "written with, and only --reverse ever writes one; it does "
+            "not apply -- and must be omitted -- in every other mode.")
+    if attach and not witness:
+        raise Refused(
+            "SETTLE_WITNESS_REQUIRED",
+            "--attach binds a witness onto an already-settled line; "
+            "--witness is the whole point of this mode and cannot be "
+            "omitted.")
+    if reverse and not paragraph:
+        raise Refused(
+            "SETTLE_PARAGRAPH_REQUIRED",
+            "--reverse writes a NEW ## Reversed entry, and the engine "
+            "never authors the reasoning behind one -- --paragraph is the "
+            "caller's own explanation of why the agreement was turned "
+            "over and cannot be omitted or blank.")
+    if not attach and not remove and not reverse and not done:
+        if not args.under:
+            raise Refused(
+                "SETTLE_UNDER_REQUIRED",
+                "--under is required to place a new item; it names where "
+                "the write goes and has no default. Omit it only together "
+                "with --attach, --remove, --reverse or --done, none of "
+                "which places a new item under a heading.")
+        if not args.about:
+            raise Refused(
+                "SETTLE_ABOUT_REQUIRED",
+                "--about is required to place a new item; it names the "
+                "discussion this placement is bound to. Omit it only "
+                "together with --attach, --remove, --reverse or --done, "
+                "none of which places anything new.")
+    if witness and not re.fullmatch(r"test_[A-Za-z0-9_]+", witness):
+        raise Refused(
+            "SETTLE_WITNESS_MALFORMED",
+            f"--witness {witness!r} does not match the grammar's own "
+            "`test_<id>` shape (test_[A-Za-z0-9_]+); a value that does not "
+            "match would round-trip as inert trailing text, never as a "
+            "witness `agreements_state` can read back.")
+
+    about = None
+    if not attach and not remove and not reverse and not done:
+        evidence = _position_write_evidence(target, name)
+        position = position_state(target, name, evidence, None, None)
+        about = _resolve_discuss_about(args.about, position)
+
+        discussed = _settle_discussed_events(target, name, about)
+        if not discussed:
+            raise Refused(
+                "SETTLE_NOT_DISCUSSED",
+                f"no discuss event names witness identity "
+                f"(kind={about['kind']!r}, operand={about['operand']!r}); a "
+                "placement must be discussed before it is placed.")
+        if not any(event.get("status") == "answered" for event in discussed):
+            raise Refused(
+                "SETTLE_DISCUSSION_UNANSWERED",
+                f"{len(discussed)} discuss event(s) name this witness "
+                "identity and none carries status \"answered\"; an open "
+                "question is not yet a settled agreement.")
+
+    holders = agreements_state(target, name)["holders"]
+    if not holders:
+        raise Refused(
+            "SETTLE_HOLDER_ABSENT",
+            f"no markdown file under {name}/ holds checklist items; "
+            "settle never invents a file to write into.")
+
+    heading = None
+    supersedes = None
+    collides: list[str] = []
+
+    if attach:
+        candidates: list[tuple[Path, bytes, dict]] = []
+        for holder in holders:
+            holder_path = target / holder
+            holder_data = holder_path.read_bytes()
+            for span in _locate_settled_text(holder_data, text):
+                candidates.append((holder_path, holder_data, span))
+
+        if not candidates:
+            raise Refused(
+                "SETTLE_TEXT_ABSENT",
+                f"{text!r} matches no existing checklist line across "
+                f"{len(holders)} holder(s) under {name}/.")
+        if len(candidates) > 1:
+            raise Refused(
+                "SETTLE_TEXT_AMBIGUOUS",
+                f"{text!r} matches {len(candidates)} existing checklist "
+                f"lines across {name}/'s holder(s); which one receives the "
+                "witness is not decidable without a human choosing.")
+        target_path, data, span = candidates[0]
+
+        raw_line = data[span["start"]:span["end"]]
+        located = AGREEMENT_LINE.match(raw_line.decode("utf-8").rstrip())
+        if located.group("witness"):
+            raise Refused(
+                "SETTLE_ALREADY_WITNESSED",
+                f"{text!r} already carries witness "
+                f"{located.group('witness')!r}; --attach never replaces "
+                "one.")
+
+        new_line = _render_settled_line(text, witness, raw_line=raw_line)
+        spliced = impl_position.splice(data, new_line, span)
+    elif remove:
+        candidates: list[tuple[Path, bytes, dict]] = []
+        for holder in holders:
+            holder_path = target / holder
+            holder_data = holder_path.read_bytes()
+            for span in _locate_settled_text(holder_data, text):
+                candidates.append((holder_path, holder_data, span))
+
+        if not candidates:
+            raise Refused(
+                "SETTLE_TEXT_ABSENT",
+                f"{text!r} matches no existing checklist line across "
+                f"{len(holders)} holder(s) under {name}/.")
+        if len(candidates) > 1:
+            raise Refused(
+                "SETTLE_TEXT_AMBIGUOUS",
+                f"{text!r} matches {len(candidates)} existing checklist "
+                f"lines across {name}/'s holder(s); which one this call "
+                "removes is not decidable without a human choosing.")
+        target_path, data, span = candidates[0]
+
+        if not _reversed_quote_matches_text(data, text):
+            raise Refused(
+                "SETTLE_NOT_REVERSED",
+                f"{text!r} is not quoted (bold, under a ## Reversed "
+                f"heading) anywhere in {target_path.name}; --remove only "
+                "deletes an agreement the document's own Reversed section "
+                "already explains turning over -- write that paragraph "
+                "first, the same discipline SETTLE_NOT_DISCUSSED already "
+                "enforces one level up for the create path.")
+
+        spliced = impl_position.splice(data, b"", span)
+    elif reverse:
+        candidates: list[tuple[Path, bytes, dict]] = []
+        for holder in holders:
+            holder_path = target / holder
+            holder_data = holder_path.read_bytes()
+            for span in _locate_settled_text(holder_data, text):
+                candidates.append((holder_path, holder_data, span))
+
+        if not candidates:
+            raise Refused(
+                "SETTLE_TEXT_ABSENT",
+                f"{text!r} matches no existing checklist line across "
+                f"{len(holders)} holder(s) under {name}/.")
+        if len(candidates) > 1:
+            raise Refused(
+                "SETTLE_TEXT_AMBIGUOUS",
+                f"{text!r} matches {len(candidates)} existing checklist "
+                f"lines across {name}/'s holder(s); which one this call "
+                "reverses is not decidable without a human choosing.")
+        target_path, data, span = candidates[0]
+
+        if _reversed_quote_matches_text(data, text):
+            raise Refused(
+                "SETTLE_ALREADY_REVERSED",
+                f"{text!r} is already quoted (bold, under a ## Reversed "
+                f"heading) in {target_path.name}; --reverse writes a NEW "
+                "explanation together with the deletion, and would "
+                "duplicate one the document already has. The explanation "
+                "already exists -- what is missing is only the deletion, "
+                "which plain --remove performs on its own.")
+
+        reversed_spans = _reversed_section_body_spans(data)
+        if not reversed_spans:
+            raise Refused(
+                "SETTLE_HEADING_ABSENT",
+                f"'## Reversed' occurs in none of {target_path.name}'s own "
+                "headings; --reverse places its entry under an existing "
+                "'## Reversed' section and never invents one, the "
+                "identical restraint the create path's own --under "
+                "already keeps for a heading it is given.")
+        if len(reversed_spans) > 1:
+            raise Refused(
+                "SETTLE_HEADING_AMBIGUOUS",
+                f"'## Reversed' occurs {len(reversed_spans)} times in "
+                f"{target_path.name}; which one receives this entry is "
+                "not decidable without a human choosing.")
+        body_start, body_end = reversed_spans[0]["start"], reversed_spans[0]["end"]
+
+        try:
+            position_block = impl_position.locate_block(data)
+        except Refused:
+            position_block = None
+        if position_block is not None and body_start <= position_block["start"] < body_end:
+            boundary = position_block["start"]
+        else:
+            boundary = body_end
+
+        raw_line = data[span["start"]:span["end"]]
+        entry = _render_reversed_entry(raw_line, paragraph)
+        prefixed = impl_position.splice(data[:boundary], entry, None)
+        insertion = prefixed[boundary:]
+
+        edits = sorted(
+            [(span, b""), ({"start": boundary, "end": boundary}, insertion)],
+            key=lambda edit: edit[0]["start"], reverse=True)
+        spliced = data
+        for edit_span, new_bytes in edits:
+            spliced = impl_position.splice(spliced, new_bytes, edit_span)
+    elif done:
+        candidates: list[tuple[Path, bytes, dict]] = []
+        for holder in holders:
+            holder_path = target / holder
+            holder_data = holder_path.read_bytes()
+            for span in _locate_settled_text(holder_data, text):
+                candidates.append((holder_path, holder_data, span))
+
+        if not candidates:
+            raise Refused(
+                "SETTLE_TEXT_ABSENT",
+                f"{text!r} matches no existing checklist line across "
+                f"{len(holders)} holder(s) under {name}/.")
+        if len(candidates) > 1:
+            raise Refused(
+                "SETTLE_TEXT_AMBIGUOUS",
+                f"{text!r} matches {len(candidates)} existing checklist "
+                f"lines across {name}/'s holder(s); which one this call "
+                "marks done is not decidable without a human choosing.")
+        target_path, data, span = candidates[0]
+
+        raw_line = data[span["start"]:span["end"]]
+        located = AGREEMENT_LINE.match(raw_line.decode("utf-8").rstrip())
+        if located.group("mark") in ("x", "X"):
+            raise Refused(
+                "SETTLE_ALREADY_DONE",
+                f"{text!r} is already marked done "
+                f"(`[{located.group('mark')}]`); --done never re-ticks an "
+                "already-ticked line.")
+        if not located.group("witness"):
+            raise Refused(
+                "SETTLE_NOT_WITNESSED",
+                f"{text!r} carries no witness token; --done refuses to "
+                "mark an agreement done that names nothing a test could "
+                "contradict -- bind one first with `settle --attach "
+                "--witness test_<id>`.")
+
+        new_line = _render_done_line(raw_line)
+        spliced = impl_position.splice(data, new_line, span)
+    else:
+        heading = args.under.strip()
+        candidates = []
+        for holder in holders:
+            holder_path = target / holder
+            holder_data = holder_path.read_bytes()
+            for span in impl_position.locate_headings(holder_data, heading):
+                candidates.append((holder_path, holder_data, span))
+
+        if not candidates:
+            raise Refused(
+                "SETTLE_HEADING_ABSENT",
+                f"{heading!r} occurs in none of {len(holders)} holder(s) "
+                f"under {name}/.")
+        if len(candidates) > 1:
+            raise Refused(
+                "SETTLE_HEADING_AMBIGUOUS",
+                f"{heading!r} occurs {len(candidates)} times across "
+                f"{name}/'s holder(s); which occurrence receives the item "
+                "is not decidable without a human choosing.")
+        target_path, data, span = candidates[0]
+
+        collides = _agreement_collides(target, name, about["operand"])
+        if args.supersedes is not None:
+            supersedes = sys.stdin.read() if args.supersedes == "-" else args.supersedes
+            supersedes = supersedes.strip()
+        if collides and not supersedes:
+            colliding_texts = sorted(collides)
+            listed = "; ".join(repr(t) for t in colliding_texts)
+            collision_question = (
+                f"{about['operand']!r} collides with existing agreement(s): "
+                f"{listed}. Which one, if any, does this placement "
+                "supersede?")
+            raise Refused(
+                "SETTLE_COLLIDES_UNNAMED",
+                "this witness's operand already appears in existing "
+                f"agreement(s): {listed}; name the one this placement "
+                "supersedes with --supersedes, or the write would "
+                "silently duplicate it. Ask which one with:\n" +
+                _discuss_command(target, name, about=_about_arg(about),
+                                 question=collision_question))
+        if supersedes is not None and supersedes not in collides:
+            raise Refused(
+                "SETTLE_SUPERSEDES_UNKNOWN",
+                f"--supersedes {supersedes!r} does not exact-match any of "
+                f"the {len(collides)} computed colliding agreement(s).")
+
+        new_line = _render_settled_line(text, witness)
+        spliced = impl_position.splice(data, new_line, span)
+
+    pre_digest = impl_position.digest_bytes(data)
+    impl_position.write_spliced(target_path, spliced, expect_digest=pre_digest)
+
+    recorded_at = _now_iso8601()
+    impl_position.append_event(
+        target / name / ".implementation" / "position.jsonl",
+        {"kind": "settle", "session": args.session, "about": about,
+         "text": text, "under": heading, "witness": witness, "attach": attach,
+         "remove": remove, "reverse": reverse, "done": done,
+         "paragraph": paragraph,
+         "holder": str(target_path.relative_to(target)),
+         "supersedes": supersedes, "collides": collides, "at": recorded_at})
+
+    return {
+        "command": "settle", "target": str(target), "name": name,
+        "status": "written", "holder": str(target_path.relative_to(target)),
+        "about": about, "text": text, "under": heading, "witness": witness,
+        "attach": attach, "remove": remove, "reverse": reverse, "done": done,
+        "paragraph": paragraph, "supersedes": supersedes,
+        "collides": collides, "recordedAt": recorded_at,
+    }
+
+
+#: The closed, forge-owned vocabulary an `offer` action's `id` may ever
+#: hold (spec "Action shape is closed and forge-owned"). Modelled on
+#: `impl_position.WITNESS_KINDS`, not on `probe`'s own scraped `nextStep`
+#: literals: this constant IS the roster, and `OfferCommandTests` in
+#: `tests/test_proposal_implementation.py` holds the *agreement* between
+#: this constant, the publisher's own source (every `"id"` literal it
+#: writes), and a runtime action set -- rather than carrying a second,
+#: independent copy of the list the way a scraped roster would.
+ACTION_IDS = frozenset({"launch", "run-step", "expand-contract"})
+
+
+def _launch_disagreements(position: dict) -> list:
+    """Which of `position["disagreements"]` are a false claim a launch may
+    not proceed against -- never the ones that are merely unreconciled.
+
+    `impl_position.derive()`'s `disagrees` fact is bidirectional
+    (`satisfied is not None and satisfied != (mark == "x")`), so it fires
+    on two measured shapes that are not equally dishonest:
+
+        blank box,  measurement says yes -> satisfied=True   disagrees=True
+        ticked box, measurement says no  -> satisfied=False  disagrees=True
+
+    Only the second is a false claim: a box ticked ahead of what its own
+    witness actually measured -- the same incident `unbacked` exists to
+    catch on the other side of one principle (a tick nothing measured, a
+    tick something measured against). The first is work already done whose
+    mark has not yet been reconciled (a later `position --reconcile` run
+    will tick it) -- a blank box asserts nothing, so it cannot be a false
+    assertion, and refusing a launch over it would refuse honesty itself.
+    `cmd_gate` and `_offer_launch_action` both call this, once, so neither
+    can compute a different answer to the identical question -- the same
+    single-shared-rule discipline `impl_availability.launch_available`
+    itself exists to enforce one layer down.
+    """
+    return [item for item in position["disagreements"] if item["mark"] == "x"]
+
+
+#: The eight fields "the same upcoming launch" reduces to, independently
+#: recomputed on both sides of the mint/verify boundary (design decision 3,
+#: extended by `the-pilot-decides-the-remote-strategy` decision D4):
+#: `_authorization_binding` (below, prospective -- computed at `offer`
+#: time) and `_verify_gate_authorization` (below, retrospective -- computed
+#: at `gate` time) each build this exact shape from their OWN freshly
+#: re-derived facts, never from each other's output and never from a value
+#: a ledger record merely repeats back. Held once here so the two
+#: derivations cannot drift on which eight keys the digest covers.
+#:
+#: `proposalDigest` (the 8th, added by D4) is the one exception to "freshly
+#: re-derived": `_authorization_binding` derives it fresh at MINT time
+#: (`_proposal_digest`, the newest proposal naming this job), but
+#: `cmd_gate`'s own `gate_binding` copy (below) is never compared against
+#: the record for it -- `_verify_gate_proposal` owns that verification,
+#: one layer down, against the RECORD's own frozen value, never a value
+#: re-derived here. It is present in `gate_binding` only so the three
+#: literals this key set is spelled in stay structurally equal (the
+#: structural test this change adds), and it still participates fully in
+#: the hash-consistency check below (`own_binding`, built entirely from
+#: `record`), which is what protects it from being edited after minting.
+#: Three literals must spell this exact key set: this tuple,
+#: `_authorization_binding`'s own return, and `cmd_gate`'s inline
+#: `gate_binding` dict -- nothing enforced their agreement before this
+#: change added a structural test for it.
+_AUTHORIZATION_BINDING_KEYS = (
+    "jobName", "commit", "entrypoint", "units", "rung",
+    "revisionSha256", "positionStatus", "proposalDigest",
+)
+
+
+def _verify_gate_authorization(events: list, token: str, binding: dict) -> dict:
+    """The full check behind `gate --authorization <token>` (design "What
+    `gate` refuses"), run once, immediately before `append_event`, over
+    `binding` -- THIS invocation's own fresh re-derivation of the seven
+    live-disk `_AUTHORIZATION_BINDING_KEYS` facts, never the minted event's
+    own recorded copy of them. Presence of `--authorization` at all is a
+    separate, earlier, pure-argv check (`GATE_AUTHORIZATION_REQUIRED`, at
+    the top of `cmd_gate`'s own ladder); by the time this runs, a token
+    string exists and this is the only place it is actually verified.
+    Returns the matched `record` on success, so a caller can verify the
+    proposal it names (`_verify_gate_proposal`, below) without a second
+    lookup by token.
+
+    Five refusals, checked in an order that answers a narrower question
+    each time (mismatch before stale, so presenting job A's token while
+    gating job B says exactly that, rather than blaming the world for
+    having moved):
+
+    - `GATE_AUTHORIZATION_UNKNOWN`: no `authorization` event on the ledger
+      carries this exact token, OR the event that does no longer re-digests
+      to its own `token` under the current 8-key shape, OR it does not
+      re-digest under the 8-key shape but genuinely re-digests under the
+      pre-`proposalDigest` 7-key shape too -- that last case is
+      distinguished as `GATE_AUTHORIZATION_SUPERSEDED` instead (D6,
+      below), never silently folded back into `UNKNOWN`.
+    - `GATE_AUTHORIZATION_SUPERSEDED`: a legitimate token minted before
+      `proposalDigest` joined the binding. Diagnostic only -- see the
+      dedicated check below; it refuses exactly as hard as `UNKNOWN` and
+      the remedy is identical (re-mint with `offer`).
+    - `GATE_AUTHORIZATION_MISMATCH`: a genuine record exists, but it names
+      a different job or a different operator-declared unit list than THIS
+      invocation's own.
+    - `GATE_AUTHORIZATION_STALE`: the record is this invocation's own job
+      and units, but the pin, entrypoint, rung, revision or position status
+      it was minted against no longer equal what this call just measured.
+      Never elapsed time -- `session`/`at` are mint discriminators baked
+      into the digest, not a clock this function reads.
+    - `GATE_AUTHORIZATION_CONSUMED`: an `authorization-consumed` event
+      already names this exact token. Single-use, and never a deletion --
+      the ledger keeps the record of what spent it, the same append-only
+      rationale `append_event`'s own docstring states.
+    """
+    record = next(
+        (e for e in events
+         if e.get("kind") == "authorization" and e.get("token") == token),
+        None)
+    if record is not None:
+        own_binding = {key: record.get(key) for key in _AUTHORIZATION_BINDING_KEYS}
+        # `mintOrdinal` is part of the digest payload `_find_or_mint_
+        # authorization` hashes (the timestamp-collision fix); it must be
+        # folded back in here too, or every genuinely minted token would
+        # fail this re-digest and be treated as tampered.
+        recomputed = hashlib.sha256(json.dumps(
+            {**own_binding, "session": record.get("session"),
+             "at": record.get("at"), "mintOrdinal": record.get("mintOrdinal")},
+            sort_keys=True).encode("utf-8")).hexdigest()
+        if recomputed != record.get("token"):
+            # D6: an 8-key mismatch alone does not mean tampered -- a
+            # legitimate pre-change token was minted over 7 keys and can
+            # never satisfy an 8-key recompute now that `proposalDigest`
+            # exists. Distinguish it with a SECOND hash, over a payload
+            # this function already has: if the record carries no
+            # `proposalDigest` key AT ALL (never merely `null` -- a
+            # post-change record with no proposal at mint time still
+            # stores the key, set to `null`, and its ORIGINAL digest was
+            # computed WITH that key present) and the 7-key recompute
+            # (the exact shape that predates this key) matches the
+            # record's own token, this is a measurement, not a guess: an
+            # editor who merely deleted `proposalDigest` from a
+            # post-change event would fail the 7-key recompute too,
+            # because that event's token was originally digested WITH
+            # the key. Diagnostic only -- both codes refuse identically
+            # hard, and the remedy is always re-minting with `offer`,
+            # never editing a stored event to fit the new shape.
+            if "proposalDigest" not in record:
+                seven_key_binding = {
+                    key: value for key, value in own_binding.items()
+                    if key != "proposalDigest"}
+                seven_key_recomputed = hashlib.sha256(json.dumps(
+                    {**seven_key_binding, "session": record.get("session"),
+                     "at": record.get("at"),
+                     "mintOrdinal": record.get("mintOrdinal")},
+                    sort_keys=True).encode("utf-8")).hexdigest()
+                if seven_key_recomputed == record.get("token"):
+                    raise Refused(
+                        "GATE_AUTHORIZATION_SUPERSEDED",
+                        f"token {token!r} was minted before `proposalDigest` "
+                        "joined the authorization binding, and re-digests "
+                        "correctly under the 7-key shape that predates this "
+                        "contract -- a legitimate pre-change token, not a "
+                        "tampered one, but refused exactly as hard: "
+                        "publish a fresh authorization with `offer`.")
+            record = None
+    if record is None:
+        raise Refused(
+            "GATE_AUTHORIZATION_UNKNOWN",
+            f"no authorization event on this target's ledger vouches for "
+            f"token {token!r} -- either nothing minted it, or the event "
+            "that once did has been edited since and no longer re-digests "
+            "to its own token. Publish (or re-publish) with `offer` first.")
+    if (record["jobName"] != binding["jobName"]
+            or record["units"] != binding["units"]):
+        raise Refused(
+            "GATE_AUTHORIZATION_MISMATCH",
+            f"token {token!r} was minted for job {record['jobName']!r} with "
+            f"units {record['units']!r}, not this invocation's own job "
+            f"{binding['jobName']!r} with units {binding['units']!r} -- a "
+            "token authorizes one exact launch, never a different one.")
+    if any(record[key] != binding[key] for key in
+           ("commit", "entrypoint", "rung", "revisionSha256", "positionStatus")):
+        raise Refused(
+            "GATE_AUTHORIZATION_STALE",
+            f"token {token!r} was minted against a pin, entrypoint, rung, "
+            "revision or position status that no longer match what this "
+            "gate call just re-derived -- a fact this launch depends on "
+            "moved, never merely elapsed time. Publish a fresh "
+            "authorization with `offer`.")
+    if any(e.get("kind") == "authorization-consumed" and e.get("token") == token
+           for e in events):
+        raise Refused(
+            "GATE_AUTHORIZATION_CONSUMED",
+            f"token {token!r} already authorized one successful `gate` "
+            "call and cannot be reused -- single-use, and never a "
+            "deletion. Publish a fresh authorization with `offer`.")
+    return record
+
+
+def _verify_gate_proposal(events: list, job: str, record: dict, campaign: dict) -> None:
+    """The campaign-proposal precondition (design D4, spec domain
+    `submission-proposal`), run immediately after `_verify_gate_authorization`
+    and before the `gate`/`authorization-consumed` events are appended --
+    never at the top of the ladder, and never over a `record` this
+    invocation has not already proven genuine and current.
+
+    Three refusals, checked in an order that answers a narrower question
+    each time -- exactly the same discipline `_verify_gate_authorization`
+    already keeps for its own four:
+
+    - `GATE_PROPOSAL_UNKNOWN`: `record`'s own `proposalDigest` is `None`
+      (a genuine token, minted while no proposal covered this job yet), or
+      no `proposal` event on the ledger carries that digest, or the event
+      that does no longer re-digests to its own `digest` -- edited after
+      publishing, so it cannot be trusted even though the string still
+      matches. All three are the same honest answer: nothing here vouches
+      for a campaign proposal behind this launch.
+    - `GATE_PROPOSAL_MISMATCH`: a genuine, current proposal exists -- but
+      it does not name THIS job in its own `jobs` list. A proposal
+      authorizes only the jobs it explicitly names, never every job on
+      the target.
+    - `GATE_PROPOSAL_STALE`: the proposal is genuine and names this job,
+      but its OWN frozen `campaign` (`commit`, `jobSet`) no longer equals
+      `campaign` -- `_campaign_identity()` re-derived fresh, THIS instant,
+      from live disk. The pin moved, or a job folder was added or removed,
+      since `propose` last ran. Deliberately never `entrypoint` or
+      `positionStatus` (those are `_AUTHORIZATION_BINDING_KEYS`' own
+      staleness keys, not the proposal's) -- a transient per-job failure
+      moves neither, which is the whole "survives a same-campaign retry"
+      guarantee (spec, domain `submission-proposal`).
+
+    No `GATE_PROPOSAL_CONSUMED`: deliberately absent. A campaign proposal
+    is multi-use by definition; nothing here ever marks one spent.
+    """
+    proposal_digest = record.get("proposalDigest")
+    proposal = None
+    if proposal_digest is not None:
+        candidate = next(
+            (e for e in events
+             if e.get("kind") == "proposal" and e.get("digest") == proposal_digest),
+            None)
+        if candidate is not None:
+            payload = {key: value for key, value in candidate.items()
+                       if key not in ("kind", "digest")}
+            recomputed = hashlib.sha256(json.dumps(
+                payload, sort_keys=True).encode("utf-8")).hexdigest()
+            if recomputed == candidate.get("digest"):
+                proposal = candidate
+    if proposal is None:
+        raise Refused(
+            "GATE_PROPOSAL_UNKNOWN",
+            "the authorization token names no campaign proposal this "
+            "target's ledger still vouches for -- either the token was "
+            "minted before any proposal covered this job, or the proposal "
+            "event that once did has been edited since and no longer "
+            "re-digests to its own digest. Publish a campaign proposal "
+            "with `propose` first.")
+    if job not in (proposal.get("jobs") or []):
+        raise Refused(
+            "GATE_PROPOSAL_MISMATCH",
+            f"the bound proposal names {proposal.get('jobs')!r}, not job "
+            f"{job!r} -- a proposal authorizes only the jobs it explicitly "
+            "names, never every job on the target.")
+    if proposal.get("campaign") != campaign:
+        raise Refused(
+            "GATE_PROPOSAL_STALE",
+            "the proposal's own campaign identity (commit, job set) no "
+            "longer matches what this gate call just re-derived from live "
+            "disk -- the pin moved, or a job folder was added or removed, "
+            "since `propose` last ran. Publish a fresh proposal with "
+            "`propose`.")
+
+
+def _verify_optional_election(job: str, necessity: str, elected: list | None) -> None:
+    """The human-election precondition (design D5, spec "Optional
+    Classification Requires Explicit Human Election"), run immediately
+    after `_verify_gate_proposal` and before the `gate` event is appended.
+
+    `gate` authorizes exactly one job (`args.job`) per call, so "the unit
+    this invocation concerns" is that one job, never the opaque `--unit`
+    work-unit list `campaign_consent_token()` binds separately. Two
+    refusals:
+
+    - `GATE_ELECTION_REQUIRED`: `job` classifies `optional`
+      (`classify_remote_necessity`'s own verdict -- the recorded facts do
+      not decide, never "you may skip it") and this invocation's own
+      `--elect` does not name it. There is no default and no
+      `--elect-all`: an election is argv, per invocation, never stored and
+      reused (design D5, "the operator's standing rule").
+    - `GATE_ELECTION_MISMATCH`: `--elect` names a job other than the one
+      this call is gating, or names this job while it does NOT classify
+      `optional` -- electing something that was never in question is its
+      own kind of mistake, refused rather than silently accepted.
+    """
+    elected = list(elected or [])
+    if necessity == "optional" and job not in elected:
+        raise Refused(
+            "GATE_ELECTION_REQUIRED",
+            f"job {job!r} classifies `optional` (the recorded facts do not "
+            "decide whether it needs a remote worker) and this invocation "
+            f"names no `--elect {job}` -- an optional job never launches "
+            "without an explicit human election, made fresh on every "
+            "gate call, never read back from an earlier one.")
+    for name in elected:
+        if name != job or necessity != "optional":
+            raise Refused(
+                "GATE_ELECTION_MISMATCH",
+                f"--elect {name!r} does not name job {job!r} classifying "
+                "`optional` on this invocation -- an election names "
+                "exactly the one job this gate call is about to authorize, "
+                "and only when its own necessity verdict is `optional`; "
+                "electing an unrelated job, or a job the facts already "
+                "decide, is refused rather than silently accepted.")
+
+
+def cmd_propose(args: argparse.Namespace) -> dict:
+    """The campaign proposal (design D4, spec domain `submission-
+    proposal`): one `kind: "proposal"` event scoped to a whole CAMPAIGN,
+    never a single job -- matching `gate --unit`'s own campaign scope, and
+    named every job it covers, its intended workers, its dependency edges
+    and a human-authored rationale, exactly the four facts the spec's own
+    "One Proposal Per Campaign" requirement names.
+
+    Multi-use by design: calling `propose` again appends a FRESH proposal
+    event rather than editing or replacing the last one (the ledger's own
+    append-only discipline, `append_event`'s own rationale) -- there is no
+    mint-if-absent here, unlike `offer`'s authorization tokens, because a
+    proposal is never consumed and reusing an unconsumed one is exactly
+    the point (spec "proposal survives a same-campaign retry"). The newest
+    proposal naming a given job is the one `_authorization_binding` binds
+    a freshly minted token to (`_proposal_digest`); older ones are simply
+    superseded by a later proposal naming the same job, never deleted.
+
+    `--job` (repeatable, required) is the human-declared subset of
+    currently discovered job folders THIS proposal actually authorizes --
+    checked at `gate` time for job MEMBERSHIP (`GATE_PROPOSAL_MISMATCH`).
+    `campaign` (`commit`, `jobSet`), by contrast, is never argv: it is
+    `_campaign_identity()`'s own live-disk snapshot of EVERY job folder
+    currently discovered, re-derived identically at `gate` time to detect
+    drift (`GATE_PROPOSAL_STALE`) -- the two are deliberately different
+    facts, checked in that order because they answer narrower questions
+    in turn (design "What `gate` refuses").
+
+    `--rationale` is required and non-blank, the same discipline `gate`'s
+    own `--justification` already keeps: a human-legible reason, recorded
+    on the transition, never inferred from a general "go ahead".
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    require_named_product_dir(target, name)
+
+    rationale = sys.stdin.read() if args.rationale == "-" else args.rationale
+    rationale = rationale.strip()
+    if not rationale:
+        raise Refused(
+            "EMPTY_RATIONALE",
+            "propose requires a non-blank rationale: a human-legible "
+            "reason for this campaign, recorded on the transition, never "
+            "inferred from a general 'go ahead' -- the same discipline "
+            "`gate`'s own --justification already keeps.")
+
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    events = impl_position.read_events(ledger_path)
+
+    rcli = _load_remote_execution_cli()
+    campaign = _campaign_identity(target, rcli)
+
+    depends_on = []
+    for edge in (args.depends_on or []):
+        job, _, dependency = edge.partition(":")
+        depends_on.append({"job": job, "on": dependency})
+
+    propose_ordinal = sum(1 for e in events if e.get("kind") == "proposal")
+    recorded_at = _now_iso8601()
+    # `mintOrdinal`'s exact rationale (`_find_or_mint_authorization`'s own
+    # docstring): `_now_iso8601()` has second-level precision, so an
+    # identical payload published twice inside the same second and the
+    # same session would otherwise digest identically. `proposeOrdinal`
+    # closes it here the same way, disk-derived and monotonic.
+    payload = {
+        "jobs": list(args.jobs), "workers": list(args.workers),
+        "dependsOn": depends_on, "rationale": rationale,
+        "campaign": campaign, "session": args.session, "at": recorded_at,
+        "proposeOrdinal": propose_ordinal,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    event = {"kind": "proposal", "digest": digest, **payload}
+    impl_position.append_event(ledger_path, event)
+
+    return {
+        "command": "propose", "target": str(target), "name": name,
+        "status": "recorded", "digest": digest, **payload,
+    }
+
+
+def cmd_gate(args: argparse.Namespace) -> dict:
+    """The launch authorization record (design §4, domain launch-authorization).
+
+    Binds `smokeReady`'s already-measured pass/fail to a human-drafted,
+    non-blank justification and appends the pair as one `gate` event -- the
+    record `remote_cli._verify_launch_authorization()` reads back before a
+    non-rehearsal `submit` may run. Prints no token: the whole
+    point of this mechanism is that a caller cannot mint the record by
+    computing a digest over its own argv (design §4.1) -- it can only exist
+    because a rehearsal already ran and was recorded, read back here
+    through `remote_execution_jobs_state()`'s own `smokeReady`.
+
+    `--unit`, repeatable, authorizes a CAMPAIGN launch instead of a
+    single-send one (PR8, `the-position-nobody-holds` -- design revision:
+    PR7 exempted campaign mode entirely, on the mistaken premise that no
+    ordered unit list was knowable at gate time; it is knowable, it is the
+    exact list the caller intends to pass `submit --unit ...`, the same
+    list `distribute --unit ...` already mints its own consent token
+    against). It binds the exact ordered list a later `submit --unit ...`
+    will carry -- the SAME derivation `remote_cli.campaign_consent_token()`
+    already uses for consent, never a second one invented for this record.
+    `--worker` and `--unit` are mutually exclusive here, mirroring
+    `remote_cli.cmd_submit()`'s own rule: campaign mode has no single named
+    account for `--worker` to authorize (`packer.distribute()` spreads
+    across every healthy account instead), so a campaign record's own
+    `worker` field is always `None` -- exactly what a campaign `submit`
+    invocation's own binding always is, and what
+    `_verify_launch_authorization()` therefore matches against.
+
+    Checked in refusing-costs-nothing order: the `--worker`/`--unit`
+    conflict and the justification first (both pure argv, no I/O at all),
+    then whether `--authorization` was given at all (also pure argv --
+    `GATE_AUTHORIZATION_REQUIRED`), then the revision, then whether a
+    position section exists and is current to reach a rung in, then
+    whether every tick already in it was derived rather than asserted
+    (`POSITION_UNBACKED`), then the un-forgeable readiness measurement,
+    then whether the rung this job's witness names has actually been
+    reached -- a launch that skips a rung is refused and the hole is
+    visible. Only once every one of those stands does the PRESENTED
+    token itself get verified (`_verify_gate_authorization`, design
+    "What `gate` refuses"), immediately before the record is appended --
+    the four-code check (`GATE_AUTHORIZATION_UNKNOWN`/`_MISMATCH`/
+    `_STALE`/`_CONSUMED`) runs last because it is the only one that needs
+    the binding this call is about to record, and running it any earlier
+    would mean re-deriving that binding twice.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    require_named_product_dir(target, name)
+
+    if args.units and args.worker is not None:
+        raise Refused(
+            "GATE_WORKER_UNIT_CONFLICT",
+            "--worker and --unit are mutually exclusive: campaign mode "
+            "(--unit) authorizes the ordered unit list a later `submit "
+            "--unit ...` will carry, and that launch names no single "
+            "account -- the same reason `submit` itself refuses --worker "
+            "together with --unit.")
+    if not args.units and args.worker is None:
+        raise Refused(
+            "GATE_WORKER_REQUIRED",
+            "gate requires --worker unless --unit authorizes a campaign: "
+            "a single-send or rehearsal launch names exactly one account, "
+            "and there is no auto-select shape for gate to authorize -- an "
+            "auto-selected submit invocation (no --worker) can never match "
+            "any gate record.")
+
+    justification = sys.stdin.read() if args.justification == "-" else args.justification
+    justification = justification.strip()
+    if not justification:
+        raise Refused(
+            "EMPTY_JUSTIFICATION",
+            "gate requires a non-blank justification: a human-legible reason "
+            "for this launch, recorded on the transition, never inferred "
+            "from a general 'go ahead'.")
+
+    if args.authorization is None:
+        raise Refused(
+            "GATE_AUTHORIZATION_REQUIRED",
+            "gate requires --authorization: a token minted by a prior "
+            "`offer` publish over this exact launch's binding (job, pin, "
+            "entrypoint, units, rung, revision, position status). There is "
+            "no default and no override -- a launch is authorized by a "
+            "distinct, engine-authored, prior act, never by omission. Run "
+            "`offer` first and pass the token its `launch` action's "
+            "`binding.authorization` names.")
+
+    source = revision_source(args.revision)
+    if source is None:
+        raise Refused(
+            "REVISION_UNREADABLE",
+            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            "a gate cannot be recorded against a revision that cannot be read.")
+    revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    evidence = _position_write_evidence(target, name)
+    position = position_state(target, name, evidence, args.revision, source)
+    smoke_ready = evidence["smokeReady"]
+    verdict = impl_availability.launch_available(
+        status=position["status"], unbacked=position["unbacked"],
+        disagreements=_launch_disagreements(position),
+        sequence=position["sequence"], ready=smoke_ready.get(args.job),
+        job=args.job, shards_declared=evidence["shardsArrived"] is not None,
+        levels=evidence["levels"], attained_level=position["attainedLevel"])
+    if not verdict["available"]:
+        code, facts = verdict["code"], verdict["facts"]
+        if code == "POSITION_ABSENT":
+            raise Refused(
+                "POSITION_ABSENT",
+                "no position section has been derived for this target; run "
+                "`position` (--sequence or --reconcile) before a launch can be "
+                "gated against it.")
+        if code == "POSITION_STALE":
+            raise Refused(
+                "POSITION_STALE",
+                "the position section is bound to a revision whose bytes no "
+                "longer match; run `position` again before gating a launch "
+                "against it.")
+        if code == "POSITION_UNBACKED":
+            # Ordered after stale/absent and before `NOT_READY` on purpose. The
+            # two above are about whether there is a position to read at all;
+            # this one is about whether the position that IS there says only
+            # what somebody measured. A gate whose entire premise is that the
+            # recorded sequence is honest cannot pass over a step asserted by a
+            # hand-typed `x` whose witness nothing has ever looked at -- that is
+            # the same forgery `NOT_READY` exists to refuse one rung further
+            # down, and refusing it here costs nothing but a list this call
+            # already computed.
+            raise Refused(
+                "POSITION_UNBACKED",
+                "item(s) "
+                f"{', '.join(str(o) for o in facts['unbackedOrdinals'])} "
+                "in the position section are ticked and their witnesses were "
+                "never measured; a launch is not authorized against an assertion "
+                "nobody checked. Run `position` (with `--shards` if a shard "
+                "witness needs it) so every tick is derived, or blank the mark "
+                "until its evidence exists.")
+        if code == "POSITION_SHARDS_UNDECLARED":
+            # A distinct fact from `POSITION_UNBACKED`, not a narrower
+            # spelling of it: this item's tick is not unmeasured because a
+            # declared location was checked and found silent -- nothing was
+            # ever told where to look at all. `gate` has no `--shards` flag
+            # of its own, so the only exit here is the target's own
+            # declaration; naming that, rather than repeating `POSITION_
+            # UNBACKED`'s "run position with --shards", is the entire point
+            # of this code.
+            raise Refused(
+                "POSITION_SHARDS_UNDECLARED",
+                "item(s) "
+                f"{', '.join(str(o) for o in facts['undeclaredOrdinals'])} "
+                "in the position section carry a `@shard` witness, and "
+                "nothing named where a returned shard lands -- this target "
+                "declares no `distribution.shardsRoot` (see "
+                "`assets/kit/src_benchmark/__init__.py`'s `distribution` "
+                "comment). A launch is not authorized against a witness "
+                "nothing can check at all -- ticked, so the mark asserts what "
+                "was never measured, or blank and leveled, so it holds "
+                "attainment below every rung; declare `shardsRoot` once, or run "
+                "`position --shards <dir>` against an explicit directory "
+                "before gating a launch.")
+        if code == "POSITION_DISAGREES":
+            # Ordered immediately after `POSITION_UNBACKED`, same rationale:
+            # both are honesty checks over what the sequence records, not
+            # over whether the world is ready. A ticked item whose own
+            # witness disagrees with the mark is not "reached", regardless
+            # of what its box says -- the reproduced incident this refusal
+            # closes (`mark=x`, `derive()` verdict `disagrees=True`) reached
+            # `available: True` before this check existed.
+            raise Refused(
+                "POSITION_DISAGREES",
+                "item(s) "
+                f"{', '.join(str(o) for o in facts['disagreeingOrdinals'])} "
+                "in the position section are ticked but their own witness "
+                "disagrees with the mark; a launch is not authorized against "
+                "a tick that contradicts its own measurement. Run `position` "
+                "again so the mark and the measurement agree.")
+        if code == "NOT_READY":
+            raise Refused(
+                "NOT_READY",
+                f"job {args.job!r} has no passing rehearsal recorded at its "
+                "current pin (`remote_execution_jobs_state()['smokeReady']` is "
+                "not True); a rehearsal must actually run and be recorded "
+                "before this launch can be authorized -- readiness cannot be "
+                "asserted, only measured.")
+        if code == "SEQUENCE_NOT_REACHED":
+            if facts["reason"] == "no_witness":
+                raise Refused(
+                    "SEQUENCE_NOT_REACHED",
+                    f"no sequence item names `@rehearsal {args.job}` as its "
+                    "witness; gate only authorizes a launch the sequence "
+                    "already names.")
+            raise Refused(
+                "SEQUENCE_NOT_REACHED",
+                f"item {facts['earliestOpenOrdinal']} in the sequence is not "
+                f"yet ticked; item {facts['jobOrdinal']} (`@rehearsal "
+                f"{args.job}`) cannot be gated ahead of it -- a launch that "
+                "skips a rung is refused.")
+        # code == "RUNG_NOT_ATTAINED" (spec "launch-rung-gate", checked
+        # strictly last by `launch_available` -- see that function's own
+        # docstring for why nothing above this branch could ever move).
+        raise Refused(
+            "RUNG_NOT_ATTAINED",
+            f"job {args.job!r}'s witness sits on a declared rung ladder "
+            f"({facts['levels']!r}), and the evidence currently attains "
+            + (f"{facts['attainedLevel']!r}" if facts["attainedLevel"] is not None
+               else "no rung at all")
+            + f", short of {facts['requiredLevel']!r} -- the rung this "
+            "launch requires. A launch is not authorized below the "
+            "ladder's own floor for attainment; run `position` again once "
+            f"the evidence reaches {facts['requiredLevel']!r}.")
+
+    rcli = _load_remote_execution_cli()
+    job_dir = run_config = None
+    for candidate in _discovered_job_folders(target, rcli):
+        try:
+            candidate_config = rcli.JOBFOLDER.read(candidate).run_config
+        except rcli.JOBFOLDER.JobFolderError:
+            continue
+        if candidate_config.get("jobName", candidate.name) == args.job:
+            job_dir, run_config = candidate, candidate_config
+            break
+    if job_dir is None:
+        # `smoke_ready.get(args.job) is True` above already requires this job
+        # to have been discovered and read successfully -- reaching here
+        # would mean the filesystem changed between those two reads.
+        raise Refused(
+            "NOT_READY",
+            f"job {args.job!r} passed its readiness check but could no "
+            "longer be located on disk; nothing to record a launch against.")
+
+    commit = run_config.get("commit")
+    entrypoint = str((job_dir / rcli.JOBFOLDER.RUNNER_FILENAME).relative_to(target))
+    if args.units:
+        # Campaign form: the operator-declared ordered list this record
+        # authorizes, hashed IN THE GIVEN ORDER by `campaign_consent_
+        # token()` too -- never sorted, never deduplicated, never read back
+        # from `run_config`, which never carries a campaign's dynamically
+        # distributed per-worker assignment (that split is `packer.
+        # distribute()`'s own decision at dispatch time, made after consent
+        # and authorization are both already given -- not anyone's to
+        # authorize in advance).
+        units = list(args.units)
+        worker = None
+    else:
+        # Single-send / rehearsal form: a job folder's own declared,
+        # static `units` field -- unrelated to a campaign's ordered
+        # `--unit` list, and empty on every job folder this forge
+        # generates today (no job-folder schema field named `units`
+        # exists), matching the empty binding a single-send `submit`
+        # invocation always carries.
+        units = list(run_config.get("units") or [])
+        worker = args.worker
+
+    # The full authorization check (design "What `gate` refuses"), over
+    # THIS invocation's own fresh re-derivation -- `rung` is the identical
+    # `jobOrdinal` fact `_offer_launch_action` bound when it minted, read
+    # off the SAME verdict this call already computed above, never
+    # recomputed a second, possibly-drifting way.
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    events = impl_position.read_events(ledger_path)
+    # `campaign` (design D4) is computed here, before `gate_binding`, so
+    # the SAME snapshot both feeds `gate_binding`'s own `proposalDigest`
+    # entry (below) and `_verify_gate_proposal`'s fresh STALE comparison
+    # -- never two separately re-derived copies inside one `gate` call.
+    campaign = _campaign_identity(target, rcli)
+    gate_binding = {
+        "jobName": args.job, "commit": commit, "entrypoint": entrypoint,
+        "units": units, "rung": verdict["facts"]["jobOrdinal"],
+        "revisionSha256": revision_sha256, "positionStatus": position["status"],
+        # `proposalDigest` is present here only so this literal's key set
+        # matches `_AUTHORIZATION_BINDING_KEYS` (the structural test this
+        # change adds); `_verify_gate_authorization` never compares it
+        # against the record -- `_verify_gate_proposal` (below) owns that
+        # verification, against the record's own frozen value, never this
+        # freshly re-derived one (see the comment beside
+        # `_AUTHORIZATION_BINDING_KEYS` itself).
+        "proposalDigest": _proposal_digest(events, campaign),
+    }
+    record = _verify_gate_authorization(events, args.authorization, gate_binding)
+
+    _verify_gate_proposal(events, args.job, record, campaign)
+
+    # The classification this job's own facts decide (design D3,
+    # `the-pilot-decides-the-remote-strategy`), computed the same
+    # already-tolerated way `cmd_probe` computes it -- one `search`/
+    # `probe_state`/`search_cost_forecast` call this command did not
+    # already need for anything else, over the SAME `run_config` this
+    # loop already opened, never a second `JOBFOLDER.read()`.
+    gate_resolved = resolve_benchmark_declaration(target, name)
+    gate_report = report_state(target, name, package_name(name))
+    gate_search = search_state(
+        gate_resolved["contract"],
+        list((gate_report.get("declared") or {}).get("records") or []),
+        target / name, declaration_status=gate_resolved["status"],
+        digest=source_digest(target, package_name(name)))
+    gate_state = probe_state(target, name, args.revision)
+    gate_cost_forecast = search_cost_forecast(
+        gate_state.get("reduction") or {}, declared_required_scale(gate_search))
+    gate_necessity = impl_execution_strategy.classify_remote_necessity(
+        jobs=[{"job": args.job, "accelerator": run_config.get("accelerator"),
+               "localBudget": run_config.get("localBudget"),
+               "smokeReady": smoke_ready.get(args.job, False)}],
+        results_status=gate_state["status"], cost_forecast=gate_cost_forecast)
+    necessity_verdict = gate_necessity["jobs"][args.job]["necessity"]
+    _verify_optional_election(args.job, necessity_verdict, args.elected)
+
+    recorded_at = _now_iso8601()
+    elected = list(args.elected or [])
+    event = {
+        "kind": "gate", "jobName": args.job, "worker": worker,
+        "commit": commit, "revision": args.revision,
+        "revisionSha256": revision_sha256, "entrypoint": entrypoint,
+        "units": units, "justification": justification,
+        "session": args.session, "at": recorded_at,
+        # Additive (design D5): a fact of this transition, read by
+        # nobody in this change -- `remote_cli`'s own fold selects on
+        # `kind == "gate"` and ignores unknown fields.
+        "elected": elected,
+    }
+    impl_position.append_event(ledger_path, event)
+    # Single-use, appended alongside the `gate` event it authorizes -- never
+    # a deletion of the `authorization` event itself (`append_event`'s own
+    # append-only rationale). A LATER gate call presenting the same token
+    # will fold this event in `_verify_gate_authorization` and refuse
+    # `GATE_AUTHORIZATION_CONSUMED`.
+    impl_position.append_event(ledger_path, {
+        "kind": "authorization-consumed", "token": args.authorization,
+        "session": args.session, "at": recorded_at,
+    })
+
+    return {
+        "command": "gate", "target": str(target), "name": name,
+        "status": "recorded", "job": args.job, "worker": worker,
+        "commit": commit, "revision": args.revision,
+        "revisionSha256": revision_sha256, "entrypoint": entrypoint,
+        "units": units, "justification": justification,
+        "session": args.session, "readiness": True, "recordedAt": recorded_at,
+        "elected": elected,
+    }
+
+
+def _offer_launch_action(target, name, args, rcli, position, evidence, job_dir):
+    """One `launch` action for `job_dir`, or `None` when it is absent.
+
+    Absence has three, unrelated causes, and none of them is an error:
+    the shared rule says this job's launch is not available yet; the job
+    folder's own `run-config.json` names no `commit` to launch against; or
+    the job names a `service` no reporter answers for (the registry was
+    never given one under that name, or the one it was given could not
+    read what is on disk right now -- see `adapter.py`'s fourth registry
+    for the contract every registered reporter keeps). Every one of the
+    three is silence, matching requirement 4: unavailable is omitted,
+    never disabled-with-a-reason.
+    """
+    try:
+        run_config = rcli.JOBFOLDER.read(job_dir).run_config
+    except rcli.JOBFOLDER.JobFolderError:
+        return None
+    job_name = run_config.get("jobName", job_dir.name)
+
+    verdict = impl_availability.launch_available(
+        status=position["status"], unbacked=position["unbacked"],
+        disagreements=_launch_disagreements(position),
+        sequence=position["sequence"],
+        ready=evidence["smokeReady"].get(job_name), job=job_name,
+        shards_declared=evidence["shardsArrived"] is not None,
+        levels=evidence["levels"], attained_level=position["attainedLevel"])
+    if not verdict["available"]:
+        return None
+
+    commit = run_config.get("commit")
+    if not commit:
+        return None
+
+    service = run_config.get("service")
+    if not service:
+        return None
+    # The identical dynamic-load path every other `remote_cli` command
+    # uses to reach a backend by name (design threat matrix, "Dynamic
+    # module load driven by file content"): `_BACKEND_NAME_RE` plus
+    # `relative_to(adapters_dir)`, unchanged, never a path built here.
+    rcli._load_backend_module(service)
+    reporter = rcli.ADAPTER.resolve_declared_capacity(service)
+    if reporter is None:
+        return None
+    capacity = reporter()
+    if capacity is None:
+        return None
+    workers, per_worker = capacity
+
+    entrypoint = str((job_dir / rcli.JOBFOLDER.RUNNER_FILENAME).relative_to(target))
+    # Operator-declared, never engine-substituted (design decision 3,
+    # "operator-declared unit list is preserved"): `--unit` at `offer` is
+    # the SAME ordered list a later `gate --unit ...` and `submit --unit
+    # ...` will carry, so the token minted for this binding covers exactly
+    # that list. Falling back to the job folder's own static `units` field
+    # (unrelated to a campaign, empty on every job folder this forge
+    # generates) only when the operator declares none, which keeps the
+    # single-send shape this action has always published. `gate_flags`
+    # mirrors `remote_cli.py`'s own campaign-vs-single-send command text
+    # (`campaign_consent_token()`'s caller) so a caller who declares a
+    # campaign here is handed a command shaped like the record that will
+    # actually authorize it, never `--worker <account>`, which `gate`'s own
+    # mutual exclusivity would refuse for a campaign.
+    if args.units:
+        units = list(args.units)
+        gate_flags = " ".join(f"--unit {unit!r}" for unit in units)
+    else:
+        units = list(run_config.get("units") or [])
+        gate_flags = "--worker <account>"
+
+    return {
+        "id": "launch",
+        "command": (
+            f"{CLI_INVOCATION} gate "
+            f"--target {target} --name {name} --revision {args.revision} "
+            f"--session {args.session} --job {job_name} {gate_flags} "
+            "--justification -"
+        ),
+        "establishes": f"records launch authorization for job {job_name!r}",
+        "binding": {
+            "workers": workers, "perWorker": per_worker,
+            "declaredCapacity": workers * per_worker,
+            "job": job_name, "commit": commit, "entrypoint": entrypoint,
+            "units": units, "rung": verdict["facts"]["jobOrdinal"],
+        },
+    }
+
+
+def _authorization_binding(action: dict, revision_sha256: str, position_status: str,
+                           events: list, campaign: dict) -> dict:
+    """The identity two mints of the SAME upcoming launch must agree on
+    (design decision 3, "mint-if-absent") -- everything the engine itself
+    re-derives about what is about to be launched, and nothing an agent's
+    own argv could vary independently.
+
+    `worker` is deliberately absent. `_offer_launch_action`'s published
+    command names `--worker <account>` as a placeholder because the engine
+    cannot derive which account a single-send `submit` will actually name
+    at publish time -- binding it here would require guessing an account or
+    minting one token per account, and this mechanism does neither. The
+    account is bound later, by the `gate` event itself, which
+    `remote_cli._verify_launch_authorization()` already matches against
+    separately -- this token does not authorize a particular account, only
+    the job/pin/entrypoint/units/rung/revision/position/proposal shape of
+    the launch. `justification` is likewise absent: it is authored at gate
+    time from argv, and digesting it would make the token partly
+    argv-derivable -- the exact defect class this mechanism exists to
+    close.
+
+    `proposalDigest` (design D4, `the-pilot-decides-the-remote-strategy`)
+    is engine-derived here too, from `events` and `campaign` (the SAME
+    `_campaign_identity()` snapshot `cmd_offer` computed once for every
+    action this call publishes) -- the newest CURRENTLY-matching
+    `proposal` event (`_proposal_digest`), never filtered by job name:
+    every job a campaign proposal names binds to the SAME proposal, the
+    same way `gate --unit` already authorizes the whole campaign, not one
+    job's slice of it. Never from argv; there is no `--proposal` flag
+    anywhere in this file.
+    """
+    binding = action["binding"]
+    return {
+        "jobName": binding["job"], "commit": binding["commit"],
+        "entrypoint": binding["entrypoint"], "units": list(binding["units"]),
+        "rung": binding["rung"], "revisionSha256": revision_sha256,
+        "positionStatus": position_status,
+        "proposalDigest": _proposal_digest(events, campaign),
+    }
+
+
+def _find_or_mint_authorization(ledger_path: Path, events: list, binding: dict,
+                                session: str, at: str) -> str:
+    """The authorization token for `binding`: an existing unconsumed one if
+    the ledger already carries one, or a freshly minted one appended now
+    (design decision 3, "mint-if-absent, not mint-on-every-publish" -- the
+    same discipline `cmd_close`'s own `prior_close` lookup already uses. A
+    repeat `offer` publish over unchanged state therefore appends no second
+    `authorization` event, matching the roster's narrowed "no second
+    *offer* event" prose).
+
+    The token is `sha256(json.dumps(payload, sort_keys=True))` over
+    `binding` plus `session` and `at` -- the same canonical digest form
+    `cmd_close` already uses for `positionDigest`. It is a digest, never a
+    secret: `offer` and `gate` run as separate one-shot processes, so
+    nothing stored in a file an agent reads could be kept secret from that
+    same agent. What a later `gate --authorization <token>` checks is
+    publication -- does an engine-authored ledger event exist that binds
+    THIS exact re-derived state -- never knowledge of a value; forging the
+    digest is free and useless without the matching event.
+
+    `session`/`at` are mint discriminators baked into the digest, never
+    compared against a clock: they are what lets a SECOND, distinct
+    authorization exist for an otherwise-unchanged binding once the first
+    has been consumed (`kind: "authorization-consumed"`, appended by a
+    later `gate`, Slice 2B) -- excluded here so a stale but still-unconsumed
+    mint is found and reused rather than duplicated.
+
+    `mintOrdinal` is a THIRD discriminator, additive to `session`/`at`
+    (Slice 2B, closing a defect Slice 2A's own apply session flagged rather
+    than fixed out of scope). `_now_iso8601()` has SECOND-level precision:
+    verified by execution, an identical `binding` + identical `session` +
+    identical wall-clock second reproduces the IDENTICAL digest. So a
+    caller who consumes a token and then re-publishes with `offer` again,
+    inside the same second and the same session, would otherwise re-mint
+    the exact token that was just consumed -- `gate` would then refuse a
+    genuinely fresh authorization as `GATE_AUTHORIZATION_CONSUMED`. Fails
+    CLOSED, not open (it can never authorize anything extra), but it is a
+    real defect, not a hypothetical one. `mintOrdinal` -- the count of
+    every PRIOR `authorization` event already on this exact ledger,
+    regardless of binding -- closes it without touching `_now_iso8601()`
+    (a pre-existing, forge-wide, shared timestamp convention this mechanism
+    does not own) and without comparing anything to a clock: each mint
+    appends exactly one `authorization` event before any later mint could
+    ever read the ledger again, so the count strictly increases across
+    mints and can never repeat. It is also deterministic and disk-derived
+    -- replaying the identical ledger from disk always reproduces the
+    identical ordinal, unlike a wall clock or a random value.
+    """
+    consumed = {e["token"] for e in events if e.get("kind") == "authorization-consumed"}
+    existing = next(
+        (e for e in reversed(events)
+         if e.get("kind") == "authorization" and e.get("token") not in consumed
+         and all(e.get(key) == value for key, value in binding.items())),
+        None)
+    if existing is not None:
+        return existing["token"]
+
+    mint_ordinal = sum(1 for e in events if e.get("kind") == "authorization")
+    payload = {**binding, "session": session, "at": at, "mintOrdinal": mint_ordinal}
+    token = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    event = {"kind": "authorization", "token": token, **payload}
+    impl_position.append_event(ledger_path, event)
+    events.append(event)
+    return token
+
+
+def cmd_offer(args: argparse.Namespace) -> dict:
+    """The state-derived action menu: a closed set of what may happen next,
+    published only when THIS call supplies an answer to the question this
+    branch asks: continue the flow as it stands, or change the experiment
+    contract first?
+
+    Records the answer as one `kind: "offer"` event -- the fifth ledger-
+    appending command, named after its own event kind the same way
+    `position`/`discuss`/`gate`/`close`/`step` already are. The answer is
+    a closed token (`yes`/`no`), never free text, and is checked as a
+    coded `Refused` rather than an argparse `choices=` list so a bad token
+    prints the identical JSON refusal shape every other refusal here
+    prints, not `argparse`'s own usage text.
+
+    **`--answer` is a precondition of this call, never a lookup into
+    history.** Refuses before publishing anything, in refusing-costs-
+    nothing order: `OFFER_UNANSWERED` first (pure argv, no ledger read at
+    all) when `--answer` is omitted, then the token check (also pure
+    argv), then the revision (I/O). No prior `offer` event's `answer`
+    field is ever read to satisfy an omitted `--answer` -- not the newest,
+    not any -- so the refusal is identical whether the ledger holds no
+    `offer` event, one, or many. Both checks sit above `resolve_target`/
+    `revision_source`, and that position is itself the proof: nothing
+    below either check could have been consulted before it fires.
+
+    **The appended event is write-only history** (see the comment at the
+    `impl_position.append_event` call below): once written, no code path
+    under `skills/**/*.py` ever reads a `kind: "offer"` event's
+    fields back into a later decision.
+
+    **`launch` is one per available job**, decided by the identical shared
+    rule `gate` itself calls (`impl_availability.launch_available` --
+    requirement 5, "no drift between callers": both call the same symbol,
+    so their verdicts cannot disagree by construction). `run-step` is
+    present iff the supplied token is `yes`; `expand-contract` iff it is
+    `no` -- the two describe only what that branch establishes, in branch
+    language, and name no specific experiment, notebook or run: which
+    ones run and in what order is this proposal's own decision, never
+    this command's to narrate.
+
+    **Every published `launch` action carries a minted authorization**
+    (design decision 3), a `binding.authorization` digest computed from the
+    engine's own re-derived binding facts, never from this call's argv
+    alone. Minting is mint-if-absent, not mint-on-every-publish: it runs on
+    EVERY call -- `actions` is rebuilt on every call -- but appends a fresh
+    `kind: "authorization"` event only when the ledger holds no unconsumed
+    one for that exact binding already; a repeat publish over unchanged
+    state therefore mints nothing new and republishes the same token.
+    `--unit` (repeatable) is the operator-declared ordered list that
+    binding covers for a campaign launch instead of a single-send one; the
+    engine never substitutes one of its own.
+
+    **The published `command` string now carries `--authorization
+    <token>`** (Slice 2B), appended after minting once the token is known.
+    `gate` accepts the flag as of this slice, so the command is directly
+    runnable rather than one that would refuse `GATE_AUTHORIZATION_REQUIRED`
+    on its own advice.
+    """
+    if args.answer is None:
+        raise Refused(
+            "OFFER_UNANSWERED",
+            "no --answer was supplied on this call; pass --answer yes|no "
+            "before an action set can be published. A prior call's answer "
+            "is never read back to satisfy this one -- the refusal is "
+            "identical whether the ledger holds no offer event at all, "
+            "one, or many.")
+    if args.answer not in {"yes", "no"}:
+        raise Refused(
+            "OFFER_ANSWER_NOT_A_TOKEN",
+            f"--answer {args.answer!r} is not one of the two closed tokens "
+            "yes/no; the offer answer is never free text.")
+
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    require_named_product_dir(target, name)
+
+    source = revision_source(args.revision)
+    if source is None:
+        raise Refused(
+            "REVISION_UNREADABLE",
+            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            "offer cannot publish an action set against a revision that "
+            "cannot be read.")
+    revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    events = impl_position.read_events(ledger_path)
+
+    evidence = _position_write_evidence(target, name)
+    position = position_state(target, name, evidence, args.revision, source)
+    rcli = _load_remote_execution_cli()
+
+    actions = []
+    for job_dir in _discovered_job_folders(target, rcli):
+        action = _offer_launch_action(target, name, args, rcli, position, evidence, job_dir)
+        if action is not None:
+            actions.append(action)
+
+    answer = args.answer
+    if answer == "yes":
+        actions.append({
+            "id": "run-step",
+            "command": (
+                f"{CLI_INVOCATION} step "
+                f"--target {target} --name {name} --session {args.session} "
+                "--step <step id>"
+            ),
+            "establishes": "runs the next declared step of the flow this "
+                          "call is continuing",
+            "binding": {},
+        })
+    else:
+        # Repoints a live harmful write (measured incident: an agent that
+        # followed this branch verbatim ran a published `position
+        # --reconcile` and appended a real sequence item for a notebook the
+        # sequence had never named -- the operator meant this branch as a
+        # conversation about what the experiment contract should still
+        # add, never a write of its own). `discuss` publishes the
+        # conversation instead: it appends only a `discuss` ledger event,
+        # never touches `AGREED.md` (spec "expand-contract publishes a
+        # runnable command").
+        #
+        # No `--session` here (design "expand-contract target"): `discuss`
+        # is the one write-adjacent command `main()` registers with no
+        # `--session` flag at all (only `position`/`gate`/`offer`/
+        # `close`/`step` take one). Copying the old string's
+        # `--session {args.session}` forward would publish a command
+        # argparse refuses outright -- see
+        # `OfferCommandTests.test_expand_contract_command_string_is_runnable_and_writes_nothing`,
+        # which runs this exact string as a subprocess rather than merely
+        # reading it, specifically to catch that trap.
+        #
+        # `--about record` names the operand-less witness kind: this
+        # branch asks what the contract should still add in general, not
+        # about one already-declared notebook, rehearsal or shard.
+        actions.append({
+            "id": "expand-contract",
+            "command": (
+                f"{CLI_INVOCATION} discuss "
+                f"--target {target} --name {name} --about record "
+                "--question 'what should the experiment contract still "
+                "add before a campaign may be gated?'"
+            ),
+            "establishes": "asks what the experiment contract should "
+                          "still add before a campaign may be gated, "
+                          "recorded as an open discussion rather than a "
+                          "write",
+            "binding": {},
+        })
+
+    recorded_at = _now_iso8601()
+
+    # Mint-if-absent (design decision 3): every published `launch` action's
+    # binding gets the authorization token that covers it -- minted now
+    # only when no unconsumed one already exists for that exact binding.
+    # Runs on every call: `actions` (and therefore what needs an
+    # authorization) is rebuilt every time `offer` is called. `campaign`
+    # (design D4) is computed ONCE here, shared by every action's own
+    # `proposalDigest` lookup -- the same live-disk snapshot every job's
+    # token binds to, never a second, possibly-drifting derivation per job.
+    campaign = _campaign_identity(target, rcli)
+    for action in actions:
+        if action["id"] != "launch":
+            continue
+        binding = _authorization_binding(
+            action, revision_sha256, position["status"], events, campaign)
+        token = _find_or_mint_authorization(
+            ledger_path, events, binding, args.session, recorded_at)
+        action["binding"]["authorization"] = token
+        # `gate` (Slice 2B) now accepts `--authorization`, so the published
+        # command is directly runnable rather than describing one that
+        # would refuse `GATE_AUTHORIZATION_REQUIRED` on its own advice.
+        # Appended, never interpolated earlier: the token is only known
+        # once minting above has run.
+        action["command"] += f" --authorization {token!r}"
+
+    # The `offer` event is write-only history (spec "The offer event is
+    # documented write-only history"): once this event is appended, no
+    # code path under `skills/**/*.py` ever reads a `kind: "offer"`
+    # event's fields back into any later decision -- unlike `gate`/
+    # `close`/`step`/`position`, whose events ARE read by later calls.
+    # This event exists only as a record of what was asked, by which
+    # session, against which revision, and what was published at that
+    # moment; the next `offer` call never consults it.
+    impl_position.append_event(ledger_path, {
+        "kind": "offer", "answer": answer, "revision": args.revision,
+        "revisionSha256": revision_sha256,
+        "actions": actions, "session": args.session, "at": recorded_at,
+    })
+
+    return {
+        "command": "offer", "target": str(target), "name": name,
+        "status": "recorded", "answer": answer, "revision": args.revision,
+        "revisionSha256": revision_sha256,
+        "actions": actions, "session": args.session, "recordedAt": recorded_at,
+    }
+
+
+def cmd_close(args: argparse.Namespace) -> dict:
+    """The finishing precondition (design §3.3): writing the position
+    becomes a precondition of finishing, not a courtesy. `close` refuses
+    while a transition has been made and not recorded -- the section never
+    generated, bound to a revision that has moved on, ticked over a
+    witness nothing could measure, or contradicted by its own measured
+    evidence -- and names which one, rather than always succeeding. The
+    ladder itself is `impl_availability.position_honest`, the identical
+    rule `gate` calls first (through `launch_available`) -- one order, one
+    set of codes, never a second refusal ladder this command writes for
+    itself.
+
+    **`AGREEMENT_DISAGREES` is a second, independent axis (spec Group 3).**
+    A ticked `AGREEMENTS.md`-style checklist item whose declared
+    `test_<id>` witness is absent from a fully-parsed `tests/` is refused
+    here, after the position ladder and before the refresh -- the only
+    place in the whole CLI this ever gates, since `verify`/`probe` only
+    ever report it.
+
+    **Checked against the position exactly as recorded, BEFORE the refresh
+    that follows.** Refreshing first would silently correct a disagreement
+    by rewriting the very mark this refusal exists to catch, which would
+    make `POSITION_DISAGREES` unreachable by construction -- `derive()`'s
+    own three-valued rule ties every disagreement to a definite verdict a
+    refresh would flip on the spot. So the check comes first, over the file
+    exactly as it stood when this call began.
+
+    **The refresh that follows a clean check does not only ever ADD
+    ticks.** It calls `cmd_position` again, whose own refresh loop writes
+    `" "` back over a mark whose witness is now measured and dissatisfied
+    -- the loop `continue`s only past a witness still unmeasured, never
+    past one that came back a definite `False`. That case cannot reach
+    here: the disagreement check immediately above already refused it one
+    step earlier, over the position exactly as it stood before any refresh
+    ran. So the refresh genuinely can only add ticks *from this point
+    forward*, but not because clearing a mark is impossible in general --
+    "a caller can never close over marks it never re-derived".
+
+    **`DISCUSSION_UNANSWERED` proves a decision reached the record, never
+    that the operator authored it.** The ledger holds an answer; it holds
+    nothing about whose it was. An agent can open a question and answer it
+    itself, and no check here or downstream can tell that apart from a
+    person answering -- the CLI cannot know who typed. Stated rather than
+    softened, because a refusal whose name is broader than what it proves
+    is read as the wider guarantee by everyone who did not write it.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    require_named_product_dir(target, name)
+    product = target / name
+
+    source = revision_source(args.revision)
+    if source is None:
+        raise Refused(
+            "REVISION_UNREADABLE",
+            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            "close cannot require a position true against a revision that "
+            "cannot be read.")
+    revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+    evidence = _position_write_evidence(target, name)
+    before = position_state(target, name, evidence, args.revision, source)
+    honesty = impl_availability.position_honest(
+        status=before["status"], unbacked=before["unbacked"],
+        disagreements=before["disagreements"],
+        shards_declared=evidence["shardsArrived"] is not None)
+    if not honesty["honest"]:
+        code, facts = honesty["code"], honesty["facts"]
+        if code == "POSITION_ABSENT":
+            raise Refused(
+                "POSITION_ABSENT",
+                "no position section has ever been generated for this target; "
+                "run `position` (--sequence or --reconcile) before close can "
+                "require it true.")
+        if code == "POSITION_STALE":
+            raise Refused(
+                "POSITION_STALE",
+                "the position section is bound to a revision whose bytes no "
+                "longer match this one; run `position` again to rebind it "
+                "before close can require it current.")
+        if code == "POSITION_UNBACKED":
+            raise Refused(
+                "POSITION_UNBACKED",
+                "item(s) "
+                f"{', '.join(str(o) for o in facts['unbackedOrdinals'])} "
+                "in the position section are ticked and their witnesses were "
+                "never measured; close requires the position to be true, not "
+                "merely written -- run `position` (with `--shards` if a shard "
+                "witness needs it) so every tick is derived, or blank the "
+                "mark until its evidence exists.")
+        if code == "POSITION_SHARDS_UNDECLARED":
+            raise Refused(
+                "POSITION_SHARDS_UNDECLARED",
+                "item(s) "
+                f"{', '.join(str(o) for o in facts['undeclaredOrdinals'])} "
+                "in the position section carry a `@shard` witness, and "
+                "nothing named where a returned shard lands -- neither an "
+                "explicit `--shards <dir>` at `position` nor this target's "
+                "own declared `distribution.shardsRoot` (see "
+                "`assets/kit/src_benchmark/__init__.py`'s `distribution` "
+                "comment). The tick is not unmeasured because nothing was "
+                "found; it is unmeasured because nothing was ever told where "
+                "to look. Declare `shardsRoot` once, or run `position "
+                "--shards <dir>` to tick it against an explicit directory.")
+        # code == "POSITION_DISAGREES"
+        raise Refused(
+            "POSITION_DISAGREES",
+            f"{len(facts['disagreeingOrdinals'])} item(s) disagree with "
+            "their own measured evidence; close requires the position to be "
+            "true, not merely written -- run `position` to see and correct "
+            "them, never close over a contradiction.")
+
+    # A second, independent axis from the position ladder above: an
+    # AGREEMENTS.md-style checklist item, ticked, whose own declared
+    # `test_<id>` witness (spec Group 3) is absent from a fully-parsed
+    # `tests/` -- a false claim the same shape as `POSITION_DISAGREES`, one
+    # level up. Reported by `verify`/`probe` and gated nowhere but here
+    # (spec "Gating stays at close"), so this is the one and only place the
+    # CLI ever refuses on it.
+    agreements = agreements_state(target, name)
+    agreement_disagreements = agreements["witness"]["disagrees"]
+    if agreement_disagreements:
+        raise Refused(
+            "AGREEMENT_DISAGREES",
+            "agreement(s) "
+            f"{'; '.join(repr(t) for t in agreement_disagreements)} "
+            "are ticked and their declared witness function is absent from "
+            "a fully-parsed tests/; close requires every ticked agreement's "
+            "witness to still name a real function, not merely to have "
+            "named one when it was settled.")
+
+    # A third, independent axis (spec Domain A `close-discussion-gate`,
+    # this change): the record proves a decision reached it, never that the
+    # operator authored it -- an agent can open a question and answer it
+    # itself, and nothing downstream can tell. `_open_discussions` buckets
+    # by exact trimmed question text and reads only the LAST event in
+    # ledger order per bucket (see its own docstring); positioned here,
+    # after `AGREEMENT_DISAGREES` and before the refresh below, so the
+    # refusal fires before any refresh side effect could run.
+    open_discussions = _open_discussions(target, name)
+    if open_discussions:
+        retirements = "\n".join(
+            _discuss_command(target, name, about=_about_arg(item["about"]),
+                             question=item["asked"], answer="<answer text>")
+            for item in open_discussions)
+        raise Refused(
+            "DISCUSSION_UNANSWERED",
+            "discussion(s) "
+            f"{'; '.join(repr(item['asked']) for item in open_discussions)} "
+            "were asked and never answered; close requires every opened "
+            "discussion to reach a recorded answer, not merely to have "
+            "been asked. Retire each with:\n" + retirements)
+
+    # Only unmeasured witnesses can still move here (see docstring): pick up
+    # anything that became measurable since the position was last written.
+    refresh_args = argparse.Namespace(
+        target=args.target, name=args.name, revision=args.revision,
+        session=args.session, sequence=None, reconcile=False, replace=False,
+        shards=None, target_level=None)
+    cmd_position(refresh_args)
+
+    evidence = _position_write_evidence(target, name)
+    after = position_state(target, name, evidence, args.revision, source)
+
+    position_digest = hashlib.sha256(
+        json.dumps(after["sequence"], sort_keys=True).encode("utf-8")).hexdigest()
+    events = impl_position.read_events(product / ".implementation" / "position.jsonl")
+    prior_close = next(
+        (e for e in reversed(events)
+         if e.get("kind") == "close" and e.get("session") == args.session
+         and e.get("revisionSha256") == revision_sha256
+         and e.get("positionDigest") == position_digest),
+        None)
+    if prior_close is not None:
+        # A second close over the identical, unmoved position closes
+        # nothing -- a state, not an error, the sibling deliberation
+        # service's own semantics preserved (design §3.3).
+        return {
+            "command": "close", "status": "not_open", "session": args.session,
+            "revision": args.revision, "revisionSha256": revision_sha256,
+            "position": after, "recordedAt": prior_close["at"],
+        }
+
+    recorded_at = _now_iso8601()
+    impl_position.append_event(
+        product / ".implementation" / "position.jsonl",
+        {"kind": "close", "session": args.session, "revision": args.revision,
+         "revisionSha256": revision_sha256, "positionDigest": position_digest,
+         "at": recorded_at})
+
+    return {
+        "command": "close", "status": "closed", "session": args.session,
+        "revision": args.revision, "revisionSha256": revision_sha256,
+        "position": after, "recordedAt": recorded_at,
+    }
+
+
+def cmd_step(args: argparse.Namespace) -> dict:
+    """Run one declared local step, isolated, under the target's own venv.
+
+    Closes the gap between the isolation rule ("executing a notebook needs
+    `PATH`") and any executor for it — before this, that rule was prose a
+    target's own steps.py had to obey correctly on its own, with nothing
+    checking. `impl_steps.run_step` supplies the isolation (the child's
+    `PATH` prefixed by the target's own `.venv/bin`, so a kernelspec's bare
+    `python` resolves the right interpreter — the measured motivation:
+    297/297 notebooks execute standalone, 15 fail when a bare `python`
+    resolves off the wrong environment); the target supplies the callable.
+
+    Runs EXACTLY one named step per invocation. There is no batch or
+    sequence flag, and this never consults `probe`'s `nextStep` — a step is
+    a unit of isolated execution, not a scheduler.
+
+    Refused in refusing-costs-nothing order, forge-side before target-side:
+    `DIRTY_WORKTREE` before anything spawns (a step mutates the target —
+    execution counts, cell outputs — so the same guard `plan`/`apply`
+    already call applies here, unscoped to migration alone); then
+    `STEPS_UNDECLARED` (nothing names any step at all) or `STEP_UNKNOWN`
+    (steps exist and this is not one of them) or `STEP_MALFORMED` (the named
+    entry is missing `module` or `function`) — all three read statically,
+    no import, no subprocess; then `INTERPRETER_ABSENT` (cf.
+    `target_interpreter`'s own callers) once a real subprocess is about to
+    be spawned. Only past all of those does `impl_steps.run_step` ever run,
+    and its own three target-side refusals (`STEP_MODULE_MISSING`/
+    `STEP_FUNCTION_MISSING`/`STEP_NOT_CALLABLE`) and `STEP_RUNNER_SILENT`
+    propagate unchanged — see its docstring for the full five-row verdict
+    state machine. Unchanged in code and detail; what they now leave behind
+    is a `refused` terminal ledger event rather than silence.
+
+    Every run past `INTERPRETER_ABSENT` appends a PAIR of `kind: "step"`
+    events to `.implementation/position.jsonl`: `outcome: "started"` the
+    instant before the subprocess spawns, and a terminal event once it
+    reports. The terminal event is `returned`/`raised`/`unknown` for a
+    resolved run — carrying `suiteDigest` (`suite_digest(target)`, computed
+    fresh at write time, unconditionally regardless of `outcome`, because a
+    stale-vs-fresh comparison is exactly as meaningful for a suite that just
+    failed as for one that passed) — or `refused` for one of the three
+    target-side resolution refusals, carrying `refusalCode` and no digest.
+
+    So the ledger's SHAPE, not only its content, is readable: no event at all
+    means this command never started; a `started` with no terminal event
+    after it means it started and was killed; a terminal event means it ran
+    and reported. See the two-write comment in the body for the incident that
+    made ambiguous silence unaffordable.
+
+    Every forge-side refusal above — `FORGE_DEFECT_OPEN` through
+    `INTERPRETER_ABSENT` — still appends nothing at all, which is what makes
+    "no event" mean one thing rather than two.
+
+    This reverses "no digest field" only for a step with no self-stamping
+    artifact of its own: a notebook already recomputes `source_digest`
+    fresh against its own `DIGEST_MARKER` output (`notebooks_state`), so a
+    ledger-carried copy there would be redundant and could drift the
+    moment the notebook is re-run outside this command. A bare runner step
+    — no notebook, no self-stamp — has no other record of what it ran
+    against; the ledger line is the only one there is.
+
+    That pair also pays for the one cost figure this command publishes.
+    `lastRun` folds the LAST completed `started` -> terminal pair for THIS
+    step name and reports its elapsed seconds, read before this call appends
+    anything of its own. Free, in the sense that matters here: nothing new is
+    declared and no target gains an obligation. A declared `expectedMinutes`
+    in `__steps__` would be a field this skill READS, and a field it reads is
+    one a repository built from zero must be made to ship -- kit template and
+    from-zero demand both -- which is an obligation nobody chose. Its limit is
+    published rather than implied (`status: "unmeasured"`): the run whose cost
+    surprises an operator is the first one, and the first one is exactly the
+    run no measurement exists for.
+
+    This never touches `gate`: it calls none of `_load_remote_execution_cli`
+    or its two siblings, appends a `kind` no `gate` reader ever selects on,
+    and reads no `gate` event either. A step's ledger line is invisible to
+    `_verify_launch_authorization` by construction, not by convention.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    require_named_product_dir(target, name)
+    require_clean_worktree(target)
+
+    steps = resolve_steps_declaration(target, name)
+    if not steps:
+        raise Refused(
+            "STEPS_UNDECLARED",
+            f"{name} declares no __steps__ at all; nothing here names a "
+            "callable this command could run.")
+    entry = steps.get(args.step)
+    if entry is None:
+        raise Refused(
+            "STEP_UNKNOWN",
+            f"{args.step!r} is not among this target's declared steps "
+            f"({sorted(steps)!r}).")
+    if (not isinstance(entry, dict)
+            or not entry.get("module") or not entry.get("function")):
+        raise Refused(
+            "STEP_MALFORMED",
+            f"__steps__[{args.step!r}] does not carry both 'module' and "
+            f"'function': {entry!r}")
+
+    # A step that says which rung it advances cannot be run ahead of that
+    # rung. The same refusal `cmd_gate` already applies to a launch, applied
+    # to local work for the same reason: an ordering that lives only in prose
+    # is an ordering nobody is stopped from skipping. Measured -- a pilot
+    # search ran through a hand-rolled invocation while the discussion that
+    # was supposed to precede every stage had never been held, and nothing in
+    # this command had anything to say about it.
+    #
+    # `advances` is the TARGET's word: this repository names which of its own
+    # position items a step produces evidence for, and the forge only compares
+    # ordinals. A step that declares none runs ungated, exactly as before --
+    # an ordering nobody declared is not one this command invents.
+    advances = entry.get("advances")
+    if advances is not None:
+        if not isinstance(advances, int):
+            raise Refused(
+                "STEP_MALFORMED",
+                f"__steps__[{args.step!r}]['advances'] must be a sequence "
+                f"ordinal, not {advances!r}.")
+        evidence = _position_write_evidence(target, name)
+        position = position_state(target, name, evidence, None, None)
+        if position["status"] == "absent":
+            raise Refused(
+                "POSITION_ABSENT",
+                f"{args.step!r} declares it advances item {advances}, but no "
+                "position section has been derived for this target; run "
+                "`position` first.")
+        earlier_open = [item["ordinal"] for item in position["sequence"]
+                        if item["ordinal"] < advances and item["mark"] != "x"]
+        if earlier_open:
+            raise Refused(
+                "STEP_SEQUENCE_NOT_REACHED",
+                f"item {min(earlier_open)} in the sequence is not yet ticked; "
+                f"{args.step!r} advances item {advances} and cannot run ahead "
+                "of it -- a step that skips a rung is refused.")
+
+    # The other optional sub-key, read exactly the way `advances` is: absent
+    # runs unmeasured (see `PRODUCES_UNDECLARED_CONSEQUENCE`), and PRESENT is
+    # held to a shape, because a declaration nobody validated is a check that
+    # silently grades nothing. A bare string is refused rather than wrapped:
+    # `__records__`'s `path` is one path and `__levels__` is a list, so a key
+    # that accepted both spellings would be the one grammar in this file with
+    # two.
+    produces = entry.get(PRODUCES_KEY)
+    if produces is not None:
+        if (not isinstance(produces, list) or not produces
+                or not all(isinstance(root, str) and root.strip()
+                           for root in produces)):
+            raise Refused(
+                "STEP_MALFORMED",
+                f"__steps__[{args.step!r}][{PRODUCES_KEY!r}] must be a "
+                "non-empty list of path roots relative to the product "
+                f"folder, not {produces!r}.")
+        if any(Path(root).is_absolute() or ".." in Path(root).parts
+               for root in produces):
+            raise Refused(
+                "STEP_MALFORMED",
+                f"__steps__[{args.step!r}][{PRODUCES_KEY!r}] names a root "
+                "outside the product folder; every root is relative to "
+                f"<name>/ and climbs out of nothing: {produces!r}.")
+
+    interpreter = target_interpreter(target)
+    if not interpreter.exists():
+        raise Refused(
+            "INTERPRETER_ABSENT",
+            f"no interpreter at {interpreter}: run `env` first.")
+
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    identity = {
+        "kind": "step", "step": args.step,
+        "callable": f"{entry['module']}.{entry['function']}",
+        "interpreter": str(interpreter), "session": args.session,
+    }
+    # Read BEFORE this call appends anything of its own, so the published
+    # figure is the LAST completed run of this step and never a fold over
+    # events this invocation just wrote.
+    last_run = _step_last_run(
+        _last_measured_run(impl_position.read_events(ledger_path), args.step))
+    # The before half of the write-scope comparison, taken here rather than
+    # after the pre-spawn ledger append so the append itself cannot show up as
+    # a write -- `.implementation/` is excluded either way, and taking it
+    # before costs nothing extra.
+    before_product = product_snapshot(target, name)
+
+    # The ledger is written TWICE, and that is the whole design -- the same
+    # two-write discipline `impl_steps.RUNNER` already keeps for its own
+    # verdict file ("a killed process still leaves this line behind"), lifted
+    # one level up to the ledger every other check in this skill rests on.
+    #
+    # Measured: a `step` invocation that never reached this line at all --
+    # a mis-resolved command that started no process, a harness timeout that
+    # killed this one mid-run -- left the ledger byte-identical to a step
+    # nobody ever asked for, and the flow read the missing line as nothing at
+    # all. `STEP_RUNNER_SILENT` cannot close that: it is raised inside
+    # `_verdict_result`, reached only once THIS process is alive and its
+    # child has already exited, so it answers "the child died before
+    # resolving" and never "the parent never got here".
+    #
+    # With the pre-spawn line the ledger says exactly one thing per shape:
+    # no event at all means the command never started; a `started` with no
+    # terminal event after it means it started and was killed; a terminal
+    # event means it ran and reported. Silence stops being ambiguous, which
+    # is the only reason it is worth an extra line.
+    impl_position.append_event(
+        ledger_path, {**identity, "outcome": "started", "at": _now_iso8601()})
+
+    try:
+        result = impl_steps.run_step(
+            interpreter, entry["module"], entry["function"],
+            cwd=target, pythonpath=target / "src")
+    except Refused as refused:
+        # Reverses "an unresolvable step appends nothing, because nothing
+        # ran", and for the reason above rather than a change of mind about
+        # what ran: a target-side refusal that appended nothing would leave
+        # the `started` line above with no partner, which is the exact shape
+        # a killed run leaves. The pairing invariant is worth more than the
+        # silence was. A refusal is not a measurement, so this event carries
+        # no `suiteDigest` -- `_step_verdicts` compares the digest BEFORE it
+        # reads the outcome, so a refusal folds to `None` there twice over.
+        impl_position.append_event(ledger_path, {
+            **identity, "outcome": "refused", "refusalCode": refused.code,
+            "error": refused.detail, "at": _now_iso8601(),
+        })
+        raise
+
+    wrote = _step_wrote(produces, before_product,
+                        product_snapshot(target, name))
+    recorded_at = _now_iso8601()
+    event = {
+        **identity,
+        "outcome": result["outcome"], "exitStatus": result["exitStatus"],
+        "error": result["error"], "at": recorded_at,
+        "suiteDigest": suite_digest(target),
+        # Durable, not merely printed. The incident this closes was found by
+        # a digest somebody compared by hand and thrown away; a reading that
+        # lives only in one process's stdout is the same thing with extra
+        # steps. The constant `note` is not carried -- it is the same
+        # sentence for every event and belongs where it is defined.
+        "wrote": {key: value for key, value in wrote.items() if key != "note"},
+    }
+    impl_position.append_event(ledger_path, event)
+
+    return {
+        "command": "step", "target": str(target), "name": name,
+        "step": args.step, "callable": event["callable"],
+        "interpreter": event["interpreter"], "outcome": result["outcome"],
+        "exitStatus": result["exitStatus"], "error": result["error"],
+        "session": args.session, "recordedAt": recorded_at,
+        "lastRun": last_run,
+        "wrote": wrote,
+        "next": _step_next_acts(target, name, args),
+    }
+
+
+def _step_next_acts(target: Path, name: str, args) -> list[dict]:
+    """What has to happen between this step and the next one, published where
+    the operator is standing when they need it.
+
+    The measured friction: every step leaves the target's tree dirty with its
+    own product, so the next step refuses `DIRTY_WORKTREE`; and nothing
+    re-derives the position marks, so an ordered next step refuses
+    `STEP_SEQUENCE_NOT_REACHED`. A declared six-step flow therefore needed
+    five hand-made commits and six hand-made `position` calls, and the skill
+    said so nowhere -- an agent composed both acts in prose, every time.
+
+    Both refusals already publish their own exits, but only AFTER they fire.
+    A reader who has just watched a step return is one command away from both,
+    and this is the only surface standing there. Published on every run,
+    including `raised` and `unknown`: a step that failed still left whatever
+    it wrote in the tree, and a step that was killed left MORE of it.
+
+    Commands, never a commit. `git status --porcelain` lists what the tree
+    now carries and the operator decides what belongs in the history --
+    the same division `_resolve_dirty_worktree` states, for the same reason:
+    a commit needs a message this file must never author.
+
+    The `position` act is omitted rather than faked when the product carries
+    no readable block: `cmd_position` refuses `REVISION_UNREADABLE` without a
+    revision, and there is no block to refresh anyway.
+    """
+    acts = [{
+        "kind": "command",
+        "command": _refusal_git_command(args, "status", "--porcelain"),
+        "establishes": "what this step left in the target's tree. Commit what "
+                       "belongs in the history before the next step -- every "
+                       "step dirties the tree with its own product, and the "
+                       "next one refuses DIRTY_WORKTREE until it is clean. "
+                       "The commit message is yours; this skill never writes "
+                       "one.",
+    }]
+    revision = _position_block_revision(target, name)
+    if revision is not None:
+        acts.append({
+            "kind": "command",
+            "command": _refusal_position_command(args, revision=revision),
+            "establishes": "re-derives the position marks against what this "
+                           "step just produced. `position` is the only writer "
+                           "into that section, so nothing else updates it -- "
+                           "and an ordered next step refuses "
+                           "STEP_SEQUENCE_NOT_REACHED while an earlier item's "
+                           "mark is still the one written before this run.",
+        })
+    return acts
+
+
+def cmd_defect(args: argparse.Namespace) -> dict:
+    """Declare that some forge file is currently broken (design decisions
+    1-4, `maintenance-blocks-it-does-not-mix`). `step`, `gate`, `offer`,
+    `close`, `settle`, `apply` and `admit` each refuse `FORGE_DEFECT_OPEN`
+    while `impl_position.open_defects` reads this declaration as still open
+    (`_require_no_open_defect`, design decision 5); `handoff` additionally
+    surfaces it.
+
+    Never gated on an already-open defect and calls no `require_clean_
+    worktree` (design decision 5): a second declaration while one is open
+    must stay possible, and the worktree is likely dirty precisely when
+    something is broken. Its own append lands under `.implementation/`,
+    which `impl_guards._is_own_bookkeeping` already excuses from
+    `DIRTY_WORKTREE` for every command that DOES check it.
+
+    Check order at declaration, each narrower than the one before it
+    (`_verify_gate_authorization`'s own ordering discipline): resolve the
+    path, non-strict -> containment under `FORGE_ROOT/skills`
+    (`DEFECT_FILE_NOT_FORGE_OWNED`) -> existence as a regular file
+    (`DEFECT_FILE_ABSENT`) -> digest. Containment precedes existence on
+    purpose -- this command never reports on the existence of anything
+    outside `skills/`.
+
+    `DEFECT_FILE_ABSENT` is design decision 1's whole point: an already-
+    absent `--file` is refused, never recorded with `ABSENT_FILE_DIGEST`.
+    Recording it would either deadlock (the sentinel compares equal to
+    itself at every future check, since the path stays absent) or, if
+    clearing were ever special-cased on absence instead, clear on the very
+    first check -- the reported bypass. Refusing here keeps both
+    unreachable by construction; see `impl_position.open_defects`'s own
+    docstring for the comparison this closes.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    require_named_product_dir(target, name)
+
+    resolved = Path(args.file).expanduser().resolve()
+    skills_root = (FORGE_ROOT / "skills").resolve()
+    try:
+        resolved.relative_to(skills_root)
+    except ValueError:
+        raise Refused(
+            "DEFECT_FILE_NOT_FORGE_OWNED",
+            f"{resolved} does not live under {skills_root}; a defect can "
+            "only be declared against a file this forge itself ships.")
+    if not resolved.is_file():
+        raise Refused(
+            "DEFECT_FILE_ABSENT",
+            f"{resolved} is not a regular file; `defect` computes "
+            "fileSha256 from --file's live bytes, and there are none here "
+            "to measure. The honest reading of a path nobody can find is a "
+            "typo or a stale citation -- declare against the file that "
+            "fails to find it instead, which exists.")
+
+    forge_relative = resolved.relative_to(FORGE_ROOT.resolve()).as_posix()
+    digest = impl_position.current_file_digest(resolved)
+    recorded_at = _now_iso8601()
+    event = {
+        "kind": "defect", "command": "defect", "file": forge_relative,
+        "fileSha256": digest, "session": args.session, "at": recorded_at,
+    }
+    if args.detail:
+        event["detail"] = args.detail
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    impl_position.append_event(ledger_path, event)
+
+    return {
+        "command": "defect", "target": str(target), "name": name,
+        "file": forge_relative, "fileSha256": digest,
+        "session": args.session, "at": recorded_at,
+        "detail": event.get("detail"),
+    }
+
+
+def _require_no_open_defect(target: Path, name: str) -> None:
+    """Refuse `FORGE_DEFECT_OPEN` while any declared forge defect for this
+    `<target>/<name>` is still open (design decisions 5 and 8,
+    `maintenance-blocks-it-does-not-mix`).
+
+    Reads the ledger and re-derives openness through the identical
+    `impl_position.open_defects` fold `cmd_handoff` reads for its own
+    report, so a refusal here and a surfaced defect there can never
+    disagree about what "open" means -- one derivation serves both.
+
+    Called only from `step`, `gate`, `offer`, `close`, `settle`, `apply` and
+    `admit`, immediately after `resolve_target`/`validate_name` and before
+    `require_clean_worktree` or any other target read -- the earliest point
+    at which a ledger path (`<target>/<name>/.implementation/`) exists to
+    consult at all. Never called from `defect` itself (declaring a second
+    defect while one is open must stay possible) or from any diagnostic
+    command (`probe`, `verify`, `position`, `plan`, `compose`, `handoff`,
+    `discuss`), which must keep answering while blocked.
+    """
+    ledger_path = target / name / ".implementation" / "position.jsonl"
+    events = impl_position.read_events(ledger_path)
+    open_defects = impl_position.open_defects(events, FORGE_ROOT)
+    if open_defects:
+        files = sorted({event.get("file") for event in open_defects})
+        raise Refused(
+            "FORGE_DEFECT_OPEN",
+            f"{len(files)} forge file(s) carry an open, un-cleared defect "
+            f"declaration blocking this command: {files}. A defect clears "
+            "only when the named file's current bytes no longer match the "
+            "digest recorded against it -- fix the file (or, if it was "
+            "moved or deleted, that absence itself clears it) and retry, "
+            "or run `handoff` to see every open defect's file, session and "
+            "detail.")
 
 
 def cmd_verify(args: argparse.Namespace) -> dict:
@@ -5348,15 +12644,35 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     ]
     # Static check, nothing is executed: does anything still address a product
     # folder that no longer exists?
-    stale_refs = scan_stale_references(target, name, paths)
+    stale_refs = scan_stale_references(target, name, paths,
+                                       (REFERENCE_RE, PATH_CHAIN_RE))
     # Gating, not merely reported. A file under `tests/` that cannot be parsed
     # cannot be collected, and `structure.status: "ok"` printed beside it is the
     # same silence as a headline reading `ok` beside a benchmark it had just
     # called `undeclared`.
     unparsable = unparsable_tests(target / "tests")
+    # The receipt-backed half: whether the destinations `materialize` writes
+    # still match what it wrote (SCAFFOLD_DRIFT), and whether one of them
+    # exists with no receipt entry explaining it (UNRECORDED_SCAFFOLD). Scoped
+    # to the eleven scaffold destinations only — the anchors' correctness is
+    # re-derived presence, already covered by `scaffold_gaps` above. The
+    # `objects` and `harness` stages get their own sibling checks, over their
+    # own three destinations each, so all seventeen kit destinations are
+    # accounted for — never only the eleven scaffold ones.
+    scaffold_recorded = scaffold_structure_gaps(target, name)
+    object_recorded = object_structure_gaps(target, name)
+    harness_recorded = harness_structure_gaps(target, name)
     structure_ok = (not missing_dirs and not stray and not stale_refs
                     and not unparsable
-                    and not scaffold_gaps(target, name))
+                    and not scaffold_gaps(target, name)
+                    and not scaffold_recorded["drift"]
+                    and not scaffold_recorded["unrecorded"]
+                    and not object_gaps(target, name)
+                    and not object_recorded["drift"]
+                    and not object_recorded["unrecorded"]
+                    and not harness_gaps(target, name)
+                    and not harness_recorded["drift"]
+                    and not harness_recorded["unrecorded"])
 
     package = target / "src" / package_name(name)
     modules: list[dict] = []
@@ -5430,10 +12746,17 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     bench_package = f"{package_name(name)}_Benchmark"
     unreached: list[dict] = []
     if resolved["status"] == "absent":
-        benchmark = {"status": "absent", "package": f"src/{bench_package}"}
+        # `note` on every branch, `distribution_state`'s own rule: a key that
+        # appears on some branches and not others vanishes for exactly the
+        # callers that took the early ones. `None` here and one line below is
+        # the honest answer -- `status` already carries the word, and
+        # `structure.scaffoldGaps` already names the file that is missing, so
+        # a second sentence would be one fact answered twice.
+        benchmark = {"status": "absent", "package": f"src/{bench_package}",
+                     "note": None}
     elif resolved["status"] == "undeclared":
         benchmark = {"status": "undeclared", "package": f"src/{bench_package}",
-                     "detail": resolved["detail"]}
+                     "detail": resolved["detail"], "note": None}
     else:
         declaration = resolved["contract"]
         built_against = declaration.get("revision")
@@ -5458,6 +12781,11 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "changedSections": moved,
             "armsReached": reached or None,
             "unreachedModules": unreached,
+            # Why `unreachedModules` is empty, where the reason is that no arm
+            # was declared to cross the modules against. Without it, "no arm
+            # reimplements what it claims" and "nobody declared an arm" print
+            # the same empty list.
+            "note": undeclared_arms_note(target, name, declaration, modules),
         }
 
     # The audit bridge: a defect in the mathematics is only reported when its
@@ -5519,10 +12847,21 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     if shards_root:
         shard_io = _load_remote_execution_shard_io()
         shards = shard_io.read_shards(Path(shards_root))
-        fields = list(((resolved["contract"] or {}).get("distribution") or {})
-                      .get("identicalAcrossShards") or [])
+        distribution_declaration = (
+            (resolved["contract"] or {}).get("distribution") or {})
+        fields = list(distribution_declaration.get("identicalAcrossShards") or [])
+        # Each shard's own stamp, kept rather than thrown away with the rest
+        # of the entry. `read_shards` already returns it, and it is the only
+        # thing that can say which code a shard reports on -- arrival says a
+        # folder exists. `source_digest` is reused verbatim, not recomputed:
+        # `notebooks_state` compares a report's stamp against that exact
+        # value, and two answers to "what is current" inside one `verify`
+        # would be worse than none.
         merged = {"disagreements": shard_io.disagreements(shards, fields),
-                  "shardsArrived": [entry["shard"] for entry in shards]}
+                  "shardsArrived": [entry["shard"] for entry in shards],
+                  "shardsCurrent": _shards_current(
+                      shards, distribution_declaration,
+                      source_digest(target, package_name(name)))}
     distribution = distribution_state(
         resolved["contract"],
         dimension_names if dimension_names is not None else {},
@@ -5565,6 +12904,82 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     else:
         fidelity_status = "ok"
 
+    # Computed once and reused for `"search"` below, rather than called twice
+    # for the same answer. `position_state`'s evidence is a plain dict of
+    # already-computed states (design §3.1) — nothing here is measured a
+    # second time, only handed to a reader that derives ticks from it.
+    search = search_state(
+        resolved["contract"],
+        list((report.get("declared") or {}).get("records") or []),
+        target / name, declaration_status=resolved["status"],
+        digest=source_digest(target, package_name(name)))
+    # Read once and used twice: the position evidence below grades every
+    # leveled item against this ladder, and `undeclaredLadder` reports the
+    # case where there is none. Two calls for one declaration inside one
+    # command is how the two answers come to disagree about what the target
+    # declared.
+    levels = resolve_levels_declaration(target, name)
+    # Read once and used twice, the identical constraint `levels` above
+    # states for itself: the position evidence below and `undeclaredRecords`
+    # (return, below) must read the same declaration or the two can disagree
+    # about what the target declared.
+    declared_records = resolve_records_declaration(target, name)
+    # Read once and used twice, the identical constraint `levels` above
+    # states for itself: the position evidence below grades every two-state
+    # `@record` witness against this scale, and `unfinishableFlow` (return,
+    # below) reports the flow that scale makes unwalkable. Two reads of one
+    # declaration inside one command is how the two come to disagree.
+    required_scale = declared_required_scale(search)
+    verify_digest = source_digest(target, package_name(name))
+    position = position_state(
+        target, name,
+        {"search": search, "requiredScale": required_scale,
+         "notebooks": notebooks,
+         "smokeReady": remote_execution_jobs_state(target)["smokeReady"],
+         "shardsArrived": merged["shardsArrived"] if merged else None,
+         "shardsCurrent": merged["shardsCurrent"] if merged else None,
+         "levels": levels,
+         "stepVerdicts": _step_verdicts(target, name),
+         # Design B5 (evidence wiring is three sites): the identical
+         # `named_records_state` call `_position_write_evidence` and
+         # `cmd_probe`'s own inline dict make, so `verify` never reports
+         # `unmeasured` for a `@record:level <name>` witness while `gate`
+         # reports it satisfied.
+         "records": named_records_state(
+             target, name, declared_records, verify_digest)},
+        revision, target_source)
+
+    # Computed once, before the return, and reused both inside `audit`
+    # (the bare id list) and at the top level (`toDiscuss`, one runnable
+    # command per id) -- design D1's new publication surface, spec Domain
+    # B "Verify publishes one discuss command per unwritten local remedy
+    # finding". Never `prose.staleRevisions`/`unresolvedSymbols` or
+    # `agreements.witness.unwitnessed`: both are excluded on their own
+    # documented semantics (spec), not by oversight.
+    local_remedies_not_written = [
+        f["id"] for f in findings
+        if finding_impact(f, source or "")["class"] == "local"
+        and not f.get("remedy_block")
+        and adoption_state(f, source or "")["state"] != "adopted"
+    ]
+    to_discuss = [_local_remedy_discuss_entry(target, name, finding_id)
+                  for finding_id in local_remedies_not_written]
+
+    # Resolved ONCE and threaded into both readers below. Two reads of one
+    # declaration in one command is how the two come to disagree about what
+    # the target declared -- `undeclared_ladder_state`'s own stated reason for
+    # taking `levels` as an argument.
+    declared_steps = resolve_steps_declaration(target, name)
+
+    # Computed before the return literal rather than inside it, because
+    # `undeclaredOptional` is this list SUBTRACTED from the unanswered ones:
+    # two calls in two slots would have each key deciding independently what
+    # the other holds, and a field reported by both is exactly the reading
+    # this change exists to stop.
+    blocking_undeclared = blocking_undeclared_state(
+        target, name, search, distribution, position["sequence"],
+        declared_steps)
+
     return {
         "command": "verify",
         "target": str(target),
@@ -5576,17 +12991,25 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "unparsableTests": unparsable,
             "staleReferences": stale_refs,
             "scaffoldGaps": scaffold_gaps(target, name),
+            "scaffoldDrift": scaffold_recorded["drift"],
+            "unrecordedScaffold": scaffold_recorded["unrecorded"],
+            "objectGaps": object_gaps(target, name),
+            "objectDrift": object_recorded["drift"],
+            "unrecordedObjects": object_recorded["unrecorded"],
+            "harnessGaps": harness_gaps(target, name),
+            "harnessDrift": harness_recorded["drift"],
+            "unrecordedHarness": harness_recorded["unrecorded"],
         },
         "priorWork": prior_work_state(target, package_name(name)),
         "agreements": agreements_state(target, name),
+        # A static fact, reported and never gating, exactly like `coupling`
+        # below: see `position_state`.
+        "position": position,
         # Reported whatever it says, and it drifts nothing: a historical mention
         # of an older revision is legitimate, and a configuration key quoted like
         # a symbol is not a defect. These are facts for a reader, not verdicts.
         "prose": prose_state(target, revision),
-        "search": search_state(
-            resolved["contract"],
-            list((report.get("declared") or {}).get("records") or []),
-            target / name, declaration_status=resolved["status"]),
+        "search": search,
         "distribution": distribution,
         "remoteExecution": remote_execution_state(target, name, package_name(name)),
         # A static fact, reported and never gating: see `notebook_coupling`.
@@ -5630,12 +13053,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             # A local remedy nobody wrote out is not a defect in the audit, but
             # it is the difference between a change that settles inline and one
             # that costs a session. Reported so it is a decision, not a silence.
-            "localRemediesNotWritten": [
-                f["id"] for f in findings
-                if finding_impact(f, source or "")["class"] == "local"
-                and not f.get("remedy_block")
-                and adoption_state(f, source or "")["state"] != "adopted"
-            ],
+            "localRemediesNotWritten": local_remedies_not_written,
             "remediesWithoutValidation": unvalidated,
             "remediesWithoutControl": uncontrolled,
             "migration": migration,
@@ -5658,13 +13076,1723 @@ def cmd_verify(args: argparse.Namespace) -> dict:
                               "unexecuted": [], "errors": []}),
             "notebooks": notebooks,
         },
+        # New top-level key (design D1), never nested under `audit`:
+        # `returned_keys` reads dict literals at the top level of a
+        # function's own return, so a key buried inside `audit` would ship
+        # undocumented and invisible to `VerifyStatusRosterTests`. One
+        # entry per `audit.localRemediesNotWritten` id -- see
+        # `_local_remedy_discuss_entry`.
+        "toDiscuss": to_discuss,
+        # Gap 1, "nothing the forge offers stays invisible": the identical
+        # constraint that decided `toDiscuss`'s own placement, above --
+        # top-level, never nested under `search`/`distribution`, or the
+        # entry ships invisible to the same roster test. See
+        # `undeclared_optional_state`'s own docstring for why this is
+        # reported and never demanded -- and why the blocking ones below are
+        # moved OUT of it rather than flagged inside it.
+        "undeclaredOptional": undeclared_optional_state(
+            search, distribution, blocking_undeclared),
+        # The other half of the same absence, and the half `undeclaredOptional`
+        # cannot honestly hold: a field the target's own declared sequence is
+        # waiting on, so its absence stops a declared step rather than
+        # narrowing a reading. Top-level for the identical `returned_keys`
+        # constraint, and computed BEFORE the key above because that key is
+        # what it is subtracted from. See `blocking_undeclared_state`'s own
+        # docstring for why the set is derived from the sequence and never
+        # listed, and why its exit is a question rather than a command.
+        "undeclaredBlocking": blocking_undeclared,
+        # The same gap, one declaration over: `__levels__` is the one thing
+        # the forge offers that nothing ever asks a target for, and an empty
+        # one takes the whole rung discipline out of reach silently. Its own
+        # top-level key rather than an `undeclaredOptional` entry -- a
+        # module-level literal sits in no `section` and names no `field`, so
+        # borrowing that shape would mean writing a section that does not
+        # exist. See `undeclared_ladder_state`'s own docstring for why this
+        # is reported and never demanded.
+        "undeclaredLadder": undeclared_ladder_state(target, name, levels),
+        # The other half of the same declaration, and the one `undeclaredLadder`
+        # cannot reach: a ladder that WAS named, long enough that the sequence
+        # beside it can never climb to the launch floor. Top-level for the
+        # identical `returned_keys` constraint, and absent from `probe` for the
+        # identical reason -- it names no work about to be run.
+        "unreachableLadder": unreachable_ladder_state(
+            position["sequence"], levels),
+        # The same gap, one declaration over: `__records__` is the other
+        # thing the forge offers that nothing ever asks a target for. Its
+        # own top-level key rather than an `undeclaredOptional` entry, for
+        # the identical reason `undeclaredLadder`'s own is -- see
+        # `undeclared_records_state`'s own docstring.
+        "undeclaredRecords": undeclared_records_state(target, name, declared_records),
+        # The same class of finding as `unreachableLadder`, one composition
+        # over: two declarations, each legible on its own, that cannot both
+        # be satisfied. Top-level for the identical `returned_keys`
+        # constraint, and absent from `probe` for the identical reason --
+        # it names no work about to be run, only a declaration to change.
+        # See `unfinishable_flow_state`'s own docstring.
+        "unfinishableFlow": unfinishable_flow_state(
+            declared_steps, position["sequence"], required_scale),
+        # The same gap, one sub-key deeper, and the one that lets a step write
+        # into another step's product unseen. Per-step rather than
+        # per-repository, because `__steps__` is a map: one entry naming its
+        # roots says nothing about its neighbour. See
+        # `undeclared_produces_state`'s own docstring for why this is reported
+        # with its consequence rather than refused, and where the from-zero
+        # demand lives.
+        "undeclaredProduces": undeclared_produces_state(
+            target, name, declared_steps),
     }
+
+
+def _crashing_forge_file(exc: BaseException) -> Path | None:
+    """The forge module that owns a crash, chosen from `exc`'s own traceback
+    (design decision 6, `maintenance-blocks-it-does-not-mix`): walk every
+    frame from `exc.__traceback__` toward where it was raised and keep the
+    LAST one whose `co_filename` resolves under `FORGE_ROOT/skills`
+    -- never the deepest frame outright, because the deepest frame can be
+    stdlib (a mocked callable's own `side_effect` raise, for one), and the
+    forge frame that called into it is the one actually responsible. `None`
+    when no frame ever qualifies, so a caller with nothing to name records
+    nothing rather than guessing.
+    """
+    skills_root = (FORGE_ROOT / "skills").resolve()
+    qualifying = None
+    frame = exc.__traceback__
+    while frame is not None:
+        candidate = Path(frame.tb_frame.f_code.co_filename).resolve()
+        try:
+            candidate.relative_to(skills_root)
+        except ValueError:
+            pass
+        else:
+            qualifying = candidate
+        frame = frame.tb_next
+    return qualifying
+
+
+def _record_engine_defect(args: argparse.Namespace, exc: BaseException) -> None:
+    """Auto-append one `kind: "defect"` event for a crash `main()` did not
+    expect (design decision 6): any exception that reaches `main()`'s
+    dispatch other than `Refused` is, by definition, a forge-side bug, and
+    this needs no agent cooperation to notice or declare it first.
+
+    `target`/`name` are read with `getattr(..., None)` rather than assumed
+    present: `env` never gets a `--name` and `name` never gets a `--target`,
+    so neither has a `<target>/<name>/.implementation/` ledger path to
+    write into at all -- a stated limit this does not close, see SKILL.md.
+    `session` is read the same way and, when absent (`apply` and `admit`
+    take none), the key is OMITTED from the event, never written as `null`
+    -- the identical discipline `cmd_defect`'s own `detail` already keeps.
+
+    Called only from `main()`'s own guard, itself wrapped in its own
+    `try/except Exception: pass` -- a failure in here must never replace
+    the original traceback with one about this function instead.
+    """
+    target_raw = getattr(args, "target", None)
+    name_raw = getattr(args, "name", None)
+    if target_raw is None or name_raw is None:
+        return
+    crashing_file = _crashing_forge_file(exc)
+    if crashing_file is None:
+        return
+
+    forge_relative = crashing_file.relative_to(FORGE_ROOT.resolve()).as_posix()
+    digest = impl_position.current_file_digest(crashing_file)
+    event = {
+        "kind": "defect", "command": args.command, "file": forge_relative,
+        "fileSha256": digest, "at": _now_iso8601(),
+        "detail": f"{type(exc).__name__}: {exc}",
+    }
+    session = getattr(args, "session", None)
+    if session is not None:
+        event["session"] = session
+
+    ledger_path = (Path(target_raw).expanduser().resolve() / name_raw
+                   / ".implementation" / "position.jsonl")
+    impl_position.append_event(ledger_path, event)
+def _materialize_plan_gate(target: Path, name: str, plan_path: str) -> None:
+    """The exact pattern `cmd_apply` runs: `PLAN_MISMATCH` when the approved
+    plan was produced for a different target/name, `PLAN_STALE` when the
+    repository's structure has moved since approval. `materialize --stage`
+    reuses it rather than minting a second gate over the same fact.
+    """
+    approved = json.loads(Path(plan_path).read_text(encoding="utf-8"))
+    if approved.get("target") != str(target) or approved.get("name") != name:
+        raise Refused("PLAN_MISMATCH",
+                      "The approved plan was produced for a different target or name.")
+    current = build_plan(target, name)
+    if any(current[key] != approved.get(key)
+           for key in ("renames", "moves", "createDirs", "referenceUpdates")):
+        raise Refused(
+            "PLAN_STALE",
+            "The repository changed since the plan was approved. Re-run `plan` and get approval again.",
+        )
+
+
+def _materialize_scaffold_destinations(target: Path, name: str) -> list[str]:
+    """The stage's destination set: `scaffold_destinations` minus whatever
+    already exists on disk. A path already present is never a destination,
+    so it can never conflict — see design D1. Factored out so a test can
+    monkeypatch this one seam to simulate a destination appearing between set
+    computation and the write loop, without weakening the real preflight.
+    """
+    return [d for d in scaffold_destinations(name) if not (target / d).exists()]
+
+
+def _stage_scaffold(target: Path, name: str, seed: str) -> dict:
+    package_init = f"src/{package_name(name)}/__init__.py"
+    destinations = _materialize_scaffold_destinations(target, name)
+
+    bodies: dict[str, str] = {}
+    for destination in destinations:
+        if destination == package_init:
+            continue
+        source = scaffold_kit_source(destination, name)
+        body = scaffold_substitute_body(
+            source.read_text(encoding="utf-8"), name, seed)
+        if destination.endswith(".py") and not writable_at_scaffold_time(body):
+            raise Refused(
+                "STAGE_CANNOT_ANSWER",
+                f"{destination} still carries an unresolved token after "
+                "scaffold-time substitution; its answer belongs to a later step.",
+            )
+        bodies[destination] = body
+
+    # Preflight, over the same set the write loop is about to use: a path
+    # that appeared here since `_materialize_scaffold_destinations` computed
+    # the set is the one genuine race this command can hit, and it refuses
+    # the whole stage before a single byte lands.
+    conflicts = [d for d in destinations if (target / d).exists()]
+    if conflicts:
+        raise Refused(
+            "DESTINATION_CONFLICT",
+            f"Destinations clash (existing file): {conflicts}. Materializing "
+            "would overwrite. Resolve with the user first.",
+        )
+
+    written: list[str] = []
+    try:
+        for destination in destinations:
+            full = target / destination
+            full.parent.mkdir(parents=True, exist_ok=True)
+            body = (authored_package_init(name) if destination == package_init
+                    else bodies[destination])
+            full.write_text(body, encoding="utf-8")
+            written.append(destination)
+
+        anchors = _materialize_scaffold_anchors(target, name)
+    except Exception as failure:  # noqa: BLE001 - the tree must not stay half-written
+        # `require_clean_worktree` proved the tree clean before this ran, so
+        # discarding everything just written restores exactly that state.
+        git(target, "reset", "-q", "--hard", check=False)
+        git(target, "clean", "-qfd", check=False)
+        raise Refused(
+            "APPLY_ABORTED",
+            f"{failure}. Nothing was recorded; the working tree was restored "
+            "to its pre-materialize state; re-run `plan` to see the current situation.",
+        ) from failure
+
+    recorded_at = _now_iso8601()
+    receipt = read_materialization_receipt(target)
+    receipt["name"] = name
+    for destination in written:
+        full = target / destination
+        source = scaffold_kit_source(destination, name)
+        set_receipt_entry(receipt, {
+            "path": destination,
+            "kind": "materialized",
+            "stage": "scaffold",
+            "kitSource": (str(source.relative_to(SKILL_ROOT)) if source else None),
+            "sourceSha256": (hashlib.sha256(source.read_bytes()).hexdigest()
+                             if source else None),
+            "writtenSha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+            "substitutions": {"PKG": package_name(name), "SEED": seed},
+            "recordedAt": recorded_at,
+        })
+    for anchor in anchors:
+        set_receipt_entry(receipt, anchor)
+    write_materialization_receipt(target, receipt)
+
+    return {
+        "command": "materialize", "mode": "stage", "stage": "scaffold",
+        "target": str(target), "name": name,
+        "status": "materialized",
+        "written": written,
+        "anchors": [a["path"] for a in anchors],
+        "note": "The receipt is git-ignored under .implementation/ and is "
+                "the only record of what this command wrote.",
+    }
+
+
+#: Mirrors what a fresh `pyproject.toml` looks like when a target has none
+#: yet — the same content `materialize.py` has always written, restated here
+#: rather than imported so this file never depends on the harness for its own
+#: production path (`test_the_production_engine_never_reaches_the_harness`).
+_DEFAULT_PYPROJECT = (
+    "[build-system]\n"
+    'requires = ["setuptools>=68"]\n'
+    'build-backend = "setuptools.build_meta"\n\n'
+    "[project]\n"
+    'name = "{distribution}"\n'
+    'version = "0.1.0"\n'
+    'requires-python = ">=3.9"\n'
+    'dependencies = ["numpy>=1.24"]\n\n'
+    "[tool.setuptools.packages.find]\n"
+    'where = ["src"]\n'
+)
+
+
+def _materialize_scaffold_anchors(target: Path, name: str) -> list[dict]:
+    """Merge the two anchors into whatever the target already has, never
+    writing over it — see design D4. Anchors get `kind: "anchor"` receipt
+    entries, no byte seal: a user editing `.gitignore` afterwards is not
+    drift, and their correctness check is re-derived presence.
+    """
+    entries: list[dict] = []
+    recorded_at = _now_iso8601()
+
+    missing_ignores = ignore_gaps(target)
+    if missing_ignores:
+        ignore_file = target / ".gitignore"
+        existing = ignore_file.read_text(encoding="utf-8") if ignore_file.exists() else ""
+        prefix = "" if not existing or existing.endswith("\n") else "\n"
+        ignore_file.write_text(
+            existing + prefix + "".join(f"{entry}\n" for entry in missing_ignores),
+            encoding="utf-8",
+        )
+        entries.append({"path": ".gitignore", "kind": "anchor", "stage": "scaffold",
+                        "added": missing_ignores, "recordedAt": recorded_at})
+
+    if pytest_anchor_missing(target):
+        pyproject = target / "pyproject.toml"
+        distribution = package_name(name).lower().replace("_", "-")
+        text = (pyproject.read_text(encoding="utf-8") if pyproject.exists()
+                else _DEFAULT_PYPROJECT.format(distribution=distribution))
+        if "[tool.pytest.ini_options]" not in text:
+            text += ('\n[tool.pytest.ini_options]\n'
+                     'testpaths = ["tests"]\n'
+                     'pythonpath = ["src"]\n')
+        pyproject.write_text(text, encoding="utf-8")
+        entries.append({
+            "path": "pyproject.toml", "kind": "anchor", "stage": "scaffold",
+            "added": ["[tool.pytest.ini_options] pythonpath"], "recordedAt": recorded_at,
+        })
+
+    return entries
+
+
+def _materialize_object_destinations(target: Path, name: str) -> list[str]:
+    """The `objects` stage's own destination set: `object_destinations` minus
+    whatever already exists on disk — the identical seam
+    `_materialize_scaffold_destinations` gives the scaffold stage, kept as a
+    separate function per stage so a test can monkeypatch one without
+    touching the others.
+    """
+    return [d for d in object_destinations(name) if not (target / d).exists()]
+
+
+def _materialize_harness_destinations(target: Path, name: str) -> list[str]:
+    """The `harness` stage's own destination set — see
+    `_materialize_object_destinations`."""
+    return [d for d in harness_destinations(name) if not (target / d).exists()]
+
+
+def harness_substitute_body(text: str, name: str) -> str:
+    """The one token a harness template might carry: `{{PKG}}`. None of the
+    three do today — `benchmark.py`/`verdict.py` carry no token at all, and
+    `probe.ipynb`'s tokens (`{{SEEDS}}`, `{{DATASET}}`, `{{EPOCHS}}`, ...) are
+    answered by a later step, not this one, and are left standing on purpose,
+    the same way `verification.ipynb`'s remaining tokens are. Substituting
+    `{{PKG}}` regardless is harmless and keeps this stage exercising the same
+    substitution path scaffold and objects do, rather than skipping it.
+    """
+    return text.replace("{{PKG}}", package_name(name))
+
+
+def _write_kit_stage(target: Path, name: str, stage: str, destinations: list[str],
+                     bodies: dict[str, str], kit_source_fn) -> dict:
+    """The write-conflict-preflight / write-loop / abort / receipt sequence
+    shared by the `objects` and `harness` stages — the same shape
+    `_stage_scaffold` established for `scaffold`, factored out once a second
+    and third stage needed it rather than tripled by copy. `_stage_scaffold`
+    keeps its own inlined copy: it alone carries the anchor merge and the
+    authored `__init__.py` special case, neither of which `objects`/`harness`
+    have.
+
+    Deliberately carries no `writable_at_scaffold_time`/`ast.parse` gate —
+    see `_stage_objects`'s own docstring for why applying scaffold's gate
+    here would make a stage refuse unconditionally, forever.
+    """
+    conflicts = [d for d in destinations if (target / d).exists()]
+    if conflicts:
+        raise Refused(
+            "DESTINATION_CONFLICT",
+            f"Destinations clash (existing file): {conflicts}. Materializing "
+            "would overwrite. Resolve with the user first.",
+        )
+
+    written: list[str] = []
+    try:
+        for destination in destinations:
+            full = target / destination
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(bodies[destination], encoding="utf-8")
+            written.append(destination)
+    except Exception as failure:  # noqa: BLE001 - the tree must not stay half-written
+        # `require_clean_worktree` proved the tree clean before this ran, so
+        # discarding everything just written restores exactly that state.
+        git(target, "reset", "-q", "--hard", check=False)
+        git(target, "clean", "-qfd", check=False)
+        raise Refused(
+            "APPLY_ABORTED",
+            f"{failure}. Nothing was recorded; the working tree was restored "
+            "to its pre-materialize state; re-run `plan` to see the current situation.",
+        ) from failure
+
+    recorded_at = _now_iso8601()
+    receipt = read_materialization_receipt(target)
+    receipt["name"] = name
+    for destination in written:
+        full = target / destination
+        source = kit_source_fn(destination, name)
+        set_receipt_entry(receipt, {
+            "path": destination,
+            "kind": "materialized",
+            "stage": stage,
+            "kitSource": (str(source.relative_to(SKILL_ROOT)) if source else None),
+            "sourceSha256": (hashlib.sha256(source.read_bytes()).hexdigest()
+                             if source else None),
+            "writtenSha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+            "recordedAt": recorded_at,
+        })
+    write_materialization_receipt(target, receipt)
+
+    return {
+        "command": "materialize", "mode": "stage", "stage": stage,
+        "target": str(target), "name": name,
+        "status": "materialized",
+        "written": written,
+        "note": "The receipt is git-ignored under .implementation/ and is "
+                "the only record of what this command wrote.",
+    }
+
+
+def _stage_objects(target: Path, name: str, seed: str) -> dict:
+    """Writes the three step-9 kit destinations as raw, `{{PKG}}`/`{{SEED}}`-
+    substituted templates — deliberately NOT gated by
+    `writable_at_scaffold_time`.
+
+    Unlike scaffold's eleven, all three of these templates carry tokens
+    (`{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`, `{{EXPECTATION}}`, ...) sitting
+    inside Python identifiers that only step 9's own authoring can answer —
+    no CLI flag supplies them, and none should, since answering them IS the
+    mathematics step 9 exists to write (confirmed:
+    `MaterializeWritesStageOneTests` already establishes these three do not
+    survive `ast.parse` after only `{{PKG}}`/`{{SEED}}` are substituted).
+    Applying scaffold's `ast.parse` gate here would make this stage refuse
+    `STAGE_CANNOT_ANSWER` unconditionally, forever — a refusal no invocation
+    could ever satisfy. So these three are written as scaffolding for the
+    agent to author over, exactly the destinations `--authored` (design
+    decision D2) was built to release the seal on afterward.
+
+    Gated on the step-8 object map having been approved and recorded:
+    SKILL.md step 8 requires `revision`/`premises` to be written into
+    `src/<Package>_Benchmark/__init__.py` before any step-9 code, and
+    `resolve_benchmark_declaration` is the one place that fact is already
+    read from disk — reused rather than inventing a second way to ask it.
+    """
+    declared = resolve_benchmark_declaration(target, name)
+    contract = declared["contract"]
+    # The two blocks the message names, asked for by name. This gated on
+    # `status != "declared"`, and that status is `"undeclared"` only when
+    # `_declaration_is_blank` holds -- when ALL SEVEN blocks still carry their
+    # scaffold value. So a declaration answering any single one of them opened
+    # this gate, and `search` is exactly the block a target can answer long
+    # before step 8: measured with `revision: ""`, `premises: {}` and only
+    # `search` written, the status is `"declared"`, the gate opened, and the
+    # refusal's own sentence described the state that was true and did not
+    # refuse. The name of the code and this function's own docstring both say
+    # the object map is what is gated on, so the check moved to the message
+    # rather than the other way round.
+    unwritten = [block for block in ("revision", "premises")
+                 if not contract.get(block)]
+    if declared["status"] != "declared" or unwritten:
+        # Named one by one, never as "revision/premises": a refusal that lists
+        # a block already fully written sends somebody to re-read what is
+        # already right. On an absent or blank declaration both are unwritten
+        # and the sentence reads as it always did.
+        raise Refused(
+            "OBJECT_MAP_NOT_APPROVED",
+            "The step-8 object map has not been approved yet: "
+            f"src/{package_name(name)}_Benchmark/__init__.py declares no "
+            + " and no ".join(unwritten or ["revision", "premises"])
+            + ". --stage objects writes scaffolding for step "
+            "9's authoring, not before that approval is recorded.",
+        )
+
+    destinations = _materialize_object_destinations(target, name)
+    bodies = {
+        destination: scaffold_substitute_body(
+            object_kit_source(destination, name).read_text(encoding="utf-8"),
+            name, seed)
+        for destination in destinations
+    }
+    return _write_kit_stage(target, name, "objects", destinations, bodies,
+                            object_kit_source)
+
+
+def _stage_harness(target: Path, name: str) -> dict:
+    """`benchmark.py`/`verdict.py` carry no unresolved token at all;
+    `probe.ipynb` carries several (`{{DATASET}}`, `{{EPOCHS}}`, ...) left
+    standing on purpose — it is never `.py`, so no `ast.parse` gate ever
+    reaches it, the same way `verification.ipynb` is exempt in the scaffold
+    stage. `{{SEED}}` itself is not among them (`probe.ipynb` carries
+    `{{SEEDS}}`, a distinct token this stage does not answer), so unlike
+    scaffold/objects this stage needs no `--seed`.
+    """
+    destinations = _materialize_harness_destinations(target, name)
+    bodies = {
+        destination: harness_substitute_body(
+            harness_kit_source(destination, name).read_text(encoding="utf-8"), name)
+        for destination in destinations
+    }
+    return _write_kit_stage(target, name, "harness", destinations, bodies,
+                            harness_kit_source)
+
+
+def _kit_destination_stage(path: str, name: str) -> str | None:
+    """Which stage's destination list `path` belongs to, or `None` outside
+    all three. Used so `--adopt`'s receipt entry records the stage it
+    actually adopted into rather than a hardcoded one."""
+    if path in scaffold_destinations(name):
+        return "scaffold"
+    if path in object_destinations(name):
+        return "objects"
+    if path in harness_destinations(name):
+        return "harness"
+    return None
+
+
+def _materialize_authored(target: Path, name: str, path: str) -> dict:
+    if path not in all_kit_destinations(name):
+        raise Refused("NOT_A_KIT_DESTINATION",
+                      f"{path} is not one of this stage's kit destinations.")
+    full = target / path
+    if not full.exists():
+        raise Refused("MATERIALIZE_PATH_ABSENT",
+                      f"{path} does not exist; there is nothing to declare authored.")
+    receipt = read_materialization_receipt(target)
+    entry = receipt_entry(receipt, path)
+    if entry is None:
+        raise Refused("NO_RECEIPT_ENTRY",
+                      f"{path} carries no receipt entry; the engine never wrote "
+                      "it, so there is no seal to release. Use --adopt instead.")
+
+    new_sha256 = hashlib.sha256(full.read_bytes()).hexdigest()
+    entry = dict(entry)
+    entry["kind"] = "authored"
+    entry["writtenSha256"] = new_sha256
+    entry["recordedAt"] = _now_iso8601()
+    set_receipt_entry(receipt, entry)
+    write_materialization_receipt(target, receipt)
+
+    return {"command": "materialize", "mode": "authored", "target": str(target),
+            "name": name, "path": path, "status": "authored",
+            "writtenSha256": new_sha256}
+
+
+def _materialize_adopt(target: Path, name: str, path: str) -> dict:
+    if path not in all_kit_destinations(name):
+        raise Refused("NOT_A_KIT_DESTINATION",
+                      f"{path} is not one of this stage's kit destinations.")
+    full = target / path
+    if not full.exists():
+        raise Refused("MATERIALIZE_PATH_ABSENT",
+                      f"{path} does not exist; there is nothing to adopt.")
+    receipt = read_materialization_receipt(target)
+    if receipt_entry(receipt, path) is not None:
+        raise Refused("ALREADY_RECORDED",
+                      f"{path} already carries a receipt entry; adoption is not "
+                      "a re-seal. Use --authored to release a drifted seal.")
+
+    new_sha256 = hashlib.sha256(full.read_bytes()).hexdigest()
+    set_receipt_entry(receipt, {
+        "path": path, "kind": "adopted", "stage": _kit_destination_stage(path, name),
+        "writtenSha256": new_sha256, "recordedAt": _now_iso8601(),
+        # Stated where the operator reads it: adoption records who is
+        # responsible for the bytes, not that the bytes came from the kit.
+        # For an adopted destination the guarantee is "the record names who
+        # wrote them", not "the engine owns the bytes" -- not equivalent
+        # protection to a `materialized` entry, and `kind` is what keeps the
+        # two distinguishable forever.
+        "guarantee": "the record names who wrote them, not that the engine owns the bytes",
+    })
+    write_materialization_receipt(target, receipt)
+
+    return {"command": "materialize", "mode": "adopt", "target": str(target),
+            "name": name, "path": path, "status": "adopted",
+            "writtenSha256": new_sha256,
+            "guarantee": "the record names who wrote them, not that the engine owns the bytes"}
+
+
+def cmd_materialize(args: argparse.Namespace) -> dict:
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+
+    modes_given = [flag for flag in ("stage", "authored", "adopt")
+                  if getattr(args, flag, None)]
+    if not modes_given:
+        raise Refused("MATERIALIZE_MODE_REQUIRED",
+                      "Exactly one of --stage, --authored, --adopt is required.")
+    if len(modes_given) > 1:
+        raise Refused("MATERIALIZE_MODE_CONFLICT",
+                      f"--{'/--'.join(modes_given)} were given together; the "
+                      "three modes are mutually exclusive.")
+
+    if args.stage:
+        # The writer: plan-gated, clean worktree required -- files land on
+        # disk and the receipt is written last, atomically.
+        require_clean_worktree(target)
+        if not args.plan:
+            raise Refused("PLAN_REQUIRED", "--stage requires --plan <approved plan JSON>.")
+        _materialize_plan_gate(target, name, args.plan)
+        # `--seed` substitutes `{{SEED}}`, and only `scaffold`/`objects`
+        # templates carry that token (`tests/test_smoke.py`,
+        # `tests/test_synthetic.py`); `harness`'s three carry `{{SEEDS}}`
+        # instead, a distinct token this command never answers, so demanding
+        # `--seed` there would be a decorative requirement with no effect.
+        if args.stage in ("scaffold", "objects") and not args.seed:
+            raise Refused("SEED_REQUIRED", f"--stage {args.stage} requires --seed.")
+        if args.stage == "scaffold":
+            return _stage_scaffold(target, name, args.seed)
+        if args.stage == "objects":
+            return _stage_objects(target, name, args.seed)
+        return _stage_harness(target, name)
+
+    # `--authored`/`--adopt`: ledger-only, no file write, no plan gate and
+    # deliberately no clean-worktree requirement -- the file the agent just
+    # authored is by definition an uncommitted modification. Precedent:
+    # `_is_own_bookkeeping` in `_core/implementation/impl_guards.py`.
+    if args.authored:
+        return _materialize_authored(target, name, args.authored)
+    return _materialize_adopt(target, name, args.adopt)
+
+
+#: The commands that refuse on the repository's own state rather than only on
+#: what was typed: every one of them reads the target before it will proceed,
+#: and every one can stop a session dead. `GatingRefusalRosterTests` walks
+#: exactly these functions for the codes they raise, so adding a command here
+#: forces its refusals through the roster below.
+#:
+#: `position` is here for the reason the criterion states rather than by
+#: history: it reads the target before it will write, and every one of its
+#: refusals stops a session -- `POSITION_HOLDER_AMBIGUOUS` and
+#: `POSITION_LEVELS_UNDECLARED` sat outside this roster and therefore reached
+#: their reader as a bare code, which is the exact defect the roster exists to
+#: make impossible. It is also the only place `POSITION_RUNG_SKIPPED` can be
+#: raised: the rung is decided where the header is sealed, not where a later
+#: command reads it back.
+GATING_COMMANDS = ("apply", "admit", "gate", "offer", "close", "step",
+                   "settle", "materialize", "position")
+
+#: The caller typed something the caller can retype. The detail already names
+#: the flag, the token or the mutual exclusion, so nothing is published beside
+#: it: a `resolve` key on every refusal is the shape a reader learns to skip,
+#: which is how a real one stops being read.
+INVOCATION_DEFECT = "invocation"
+
+#: Nothing the caller can type clears this. Somebody has to act on the
+#: repository, and the engine says what -- as a command that runs unedited, or
+#: as the question a human answers. This is the half that was missing: fifty-
+#: four of the fifty-six codes reached a reader as a bare code, `POSITION_
+#: DISAGREES` among them, and the agent driving the CLI composed the next
+#: question in prose. A harness that must sit above that agent cannot leave the
+#: next act to it.
+WORK_STATE = "work-state"
+
+#: Every refusal REACHABLE FROM a gating command, classified by one derivable
+#: test: **can the caller clear it by changing the invocation alone, without
+#: touching the repository?**
+#:
+#: "Reachable from", not "raised inside", and the difference is a measured
+#: defect rather than a nicety. This map was first populated from a walk over
+#: the `cmd_*` bodies alone, which cannot see a refusal a command reaches
+#: through a helper -- and a third of them are raised in `_core/implementation/`
+#: or in a module-level helper of this file. A live session running the declared
+#: flow got `STEP_SEQUENCE_NOT_REACHED` with its `resolve` and `DIRTY_WORKTREE`
+#: with nothing, from the same `step` call, and the agent driving the CLI
+#: composed the next act in prose. `reachable_refusal_codes` in the suite now
+#: derives the set by following calls out of the `cmd_*` bodies and out of this
+#: file, and states exactly what it over-approximates.
+#:
+#: The "already" codes (`SETTLE_ALREADY_DONE`, `_ALREADY_WITNESSED`,
+#: `_ALREADY_REVERSED`) sit on the invocation side and the reading is worth
+#: stating: the repository is already in the state the call asked for, so
+#: nothing in it has to change -- what has to change is the call, or the
+#: decision to make it at all. `SETTLE_TEXT_ABSENT` is invocation for the same
+#: reason `SETTLE_TEXT_AMBIGUOUS` is not: a more exact `--text` reaches the
+#: intended line, while two lines that both match exactly cannot be told apart
+#: by any argument this command accepts.
+GATING_REFUSALS: dict[str, str] = {
+    # --- apply -------------------------------------------------------------
+    "PLAN_MISMATCH": INVOCATION_DEFECT,      # point --plan at the right file
+    "PLAN_STALE": WORK_STATE,                # the repository moved; re-plan
+    "DESTINATION_CONFLICT": WORK_STATE,      # a human decides where they go
+    "UNCLASSIFIED_FILES": WORK_STATE,        # a human says where they belong
+    "APPLY_ABORTED": WORK_STATE,             # the tree was restored; re-plan
+    # --- admit -------------------------------------------------------------
+    "REVISION_UNREADABLE": INVOCATION_DEFECT,  # name a revision that reads
+    "NO_FINDINGS": WORK_STATE,               # the findings have to be written
+    # --- gate --------------------------------------------------------------
+    "GATE_WORKER_UNIT_CONFLICT": INVOCATION_DEFECT,
+    "GATE_WORKER_REQUIRED": INVOCATION_DEFECT,
+    "EMPTY_JUSTIFICATION": INVOCATION_DEFECT,
+    # No token exists to pass: one is minted by a prior `offer` publish, which
+    # is an act on the ledger. The arguable one -- the detail does name a flag
+    # -- and it is a work state because naming the flag is not the same as
+    # being able to fill it.
+    "GATE_AUTHORIZATION_REQUIRED": WORK_STATE,
+    "SEQUENCE_NOT_REACHED": WORK_STATE,
+    "NOT_READY": WORK_STATE,
+    # A rung is declared in the target's own `__levels__`, not in any
+    # argument `gate` accepts -- no flag names one; clearing this means the
+    # evidence actually reaching the rung the ladder requires.
+    "RUNG_NOT_ATTAINED": WORK_STATE,
+    "POSITION_ABSENT": WORK_STATE,
+    "POSITION_STALE": WORK_STATE,
+    "POSITION_UNBACKED": WORK_STATE,
+    "POSITION_SHARDS_UNDECLARED": WORK_STATE,
+    "POSITION_DISAGREES": WORK_STATE,
+    # --- close -------------------------------------------------------------
+    "AGREEMENT_DISAGREES": WORK_STATE,
+    "DISCUSSION_UNANSWERED": WORK_STATE,
+    # --- step --------------------------------------------------------------
+    "STEPS_UNDECLARED": WORK_STATE,          # the target declares them
+    "STEP_UNKNOWN": INVOCATION_DEFECT,       # the detail lists the real ones
+    "STEP_MALFORMED": WORK_STATE,            # the declaration is wrong
+    "INTERPRETER_ABSENT": WORK_STATE,        # run `env`
+    "STEP_SEQUENCE_NOT_REACHED": WORK_STATE,
+    # --- offer -------------------------------------------------------------
+    "OFFER_UNANSWERED": INVOCATION_DEFECT,
+    "OFFER_ANSWER_NOT_A_TOKEN": INVOCATION_DEFECT,
+    # --- settle ------------------------------------------------------------
+    "SETTLE_STDIN_CONFLICT": INVOCATION_DEFECT,
+    "SETTLE_EMPTY_TEXT": INVOCATION_DEFECT,
+    "SETTLE_ATTACH_CONFLICT": INVOCATION_DEFECT,
+    "SETTLE_REMOVE_CONFLICT": INVOCATION_DEFECT,
+    "SETTLE_REVERSE_CONFLICT": INVOCATION_DEFECT,
+    "SETTLE_DONE_CONFLICT": INVOCATION_DEFECT,
+    "SETTLE_WITNESS_REQUIRED": INVOCATION_DEFECT,
+    "SETTLE_PARAGRAPH_REQUIRED": INVOCATION_DEFECT,
+    "SETTLE_UNDER_REQUIRED": INVOCATION_DEFECT,
+    "SETTLE_ABOUT_REQUIRED": INVOCATION_DEFECT,
+    "SETTLE_WITNESS_MALFORMED": INVOCATION_DEFECT,
+    "SETTLE_SUPERSEDES_UNKNOWN": INVOCATION_DEFECT,
+    "SETTLE_TEXT_ABSENT": INVOCATION_DEFECT,
+    "SETTLE_ALREADY_WITNESSED": INVOCATION_DEFECT,
+    "SETTLE_ALREADY_DONE": INVOCATION_DEFECT,
+    "SETTLE_ALREADY_REVERSED": INVOCATION_DEFECT,
+    "SETTLE_NOT_DISCUSSED": WORK_STATE,
+    "SETTLE_DISCUSSION_UNANSWERED": WORK_STATE,
+    "SETTLE_HOLDER_ABSENT": WORK_STATE,
+    "SETTLE_TEXT_AMBIGUOUS": WORK_STATE,
+    "SETTLE_NOT_REVERSED": WORK_STATE,
+    "SETTLE_HEADING_ABSENT": WORK_STATE,
+    "SETTLE_HEADING_AMBIGUOUS": WORK_STATE,
+    "SETTLE_COLLIDES_UNNAMED": WORK_STATE,
+    "SETTLE_NOT_WITNESSED": WORK_STATE,
+    # --- materialize -------------------------------------------------------
+    "MATERIALIZE_MODE_REQUIRED": INVOCATION_DEFECT,
+    "MATERIALIZE_MODE_CONFLICT": INVOCATION_DEFECT,
+    "PLAN_REQUIRED": INVOCATION_DEFECT,
+    "SEED_REQUIRED": INVOCATION_DEFECT,
+    # --- position ----------------------------------------------------------
+    "POSITION_SEQUENCE_AND_RECONCILE": INVOCATION_DEFECT,  # drop one of the two
+    "POSITION_SEQUENCE_UNREADABLE": INVOCATION_DEFECT,     # fix the JSON typed
+    "POSITION_SEQUENCE_EMPTY": INVOCATION_DEFECT,          # pass a real sequence
+    "POSITION_BLOCK_EXISTS": INVOCATION_DEFECT,            # pass --replace
+    # The second arguable one, and it lands the other side of the line from
+    # `GATE_AUTHORIZATION_REQUIRED`: the rung names are the target's own, so a
+    # caller may have to go read `__levels__` before typing one -- but reading
+    # is not acting, nothing in the repository has to change, and the same call
+    # with the flag added goes through. `POSITION_ABSENT`'s own resolution
+    # already publishes that reading as a question, at the command that can
+    # answer it.
+    "POSITION_TARGET_LEVEL_REQUIRED": INVOCATION_DEFECT,
+    "POSITION_TARGET_LEVEL_UNKNOWN": INVOCATION_DEFECT,    # the detail lists them
+    # A ladder is declared in the target's own benchmark package, so no
+    # argument this command accepts can supply one.
+    "POSITION_LEVELS_UNDECLARED": WORK_STATE,
+    # Two files carry the block; which one holds the section is a decision
+    # about the documents, and no flag names a holder.
+    "POSITION_HOLDER_AMBIGUOUS": WORK_STATE,
+    # Nothing about the invocation clears a skipped rung: the work the rung
+    # below asks for has to actually happen, and until it does every spelling
+    # of the call is refused. So the exit published is the rung this target CAN
+    # seal next, read from its own ladder.
+    "POSITION_RUNG_SKIPPED": WORK_STATE,
+    # An `@step` operand names a position ITEM's declared step, and that
+    # declaration lives in AGREED.md, not in any argument `position` accepts
+    # -- no flag names a step; clearing this means editing the document or
+    # declaring the step in `__steps__` (design "The new refusal is a work
+    # state, raised in `cmd_position`", a measured correction to the
+    # proposal's `INVOCATION_DEFECT`).
+    "POSITION_STEP_UNKNOWN": WORK_STATE,
+    # A named entry lives in the target's own `__records__`, not in any
+    # argument `position` accepts -- no flag names a record; clearing this
+    # means declaring the entry, the identical reasoning
+    # `POSITION_STEP_UNKNOWN` states just above.
+    "POSITION_RECORD_UNKNOWN": WORK_STATE,
+    # The shape half of the same declaration. A work state for the identical
+    # reason: nothing in the invocation can fix an entry the target wrote.
+    "POSITION_RECORD_MALFORMED": WORK_STATE,
+
+    # --- the guards every gating command runs before it does anything -------
+    # `resolve_target`, `require_clean_worktree` and `require_non_forge_
+    # interpreter` live in `impl_guards`, one file over, which is why none of
+    # these was ever classified.
+    #
+    # The three that are pure argument judgements. `OUTSIDE_WORKSPACE` is made
+    # from the string alone, before anything on disk is read. `NOT_A_GIT_REPO`
+    # reads one path and reports that it is not a target; the detail names it,
+    # and a caller who meant a clone retypes the flag. `FORGE_INTERPRETER` is
+    # cleared by launching the same call with a different interpreter -- the
+    # invocation in the most literal sense, and nothing in any repository moves.
+    "OUTSIDE_WORKSPACE": INVOCATION_DEFECT,
+    "NOT_A_GIT_REPO": INVOCATION_DEFECT,
+    "FORGE_INTERPRETER": INVOCATION_DEFECT,
+    # The code from the incident this map was widened for. No spelling of the
+    # call clears somebody else's uncommitted work; the tree has to change.
+    "DIRTY_WORKTREE": WORK_STATE,
+    # `git` itself refused, and the detail carries its stderr verbatim. What
+    # that condition is, this engine does not know -- but it is a condition of
+    # the repository, never of the flags.
+    "GIT_FAILED": WORK_STATE,
+    # An open forge defect blocks the command, and it clears only when the
+    # named file's bytes stop matching the digest recorded against it.
+    "FORGE_DEFECT_OPEN": WORK_STATE,
+
+    # --- the name normalizer, reached through `impl_naming` -----------------
+    # All five judge `--name` and nothing else. `cmd_name` converts the four
+    # `NAME_*` ones out of a `NameRefused`, which is why the literal walk lost
+    # them at the conversion.
+    "INVALID_NAME": INVOCATION_DEFECT,
+    "NAME_EMPTY": INVOCATION_DEFECT,
+    "NAME_HAS_NO_WORDS": INVOCATION_DEFECT,
+    "NAME_NOT_ALPHANUMERIC": INVOCATION_DEFECT,
+    "NAME_STARTS_WITH_DIGIT": INVOCATION_DEFECT,
+
+    # --- the position grammar itself, reached through `impl_position` -------
+    # Every one of these describes a malformed declaration in a document the
+    # target owns, and no argument any command accepts edits a document.
+    "POSITION_BLOCK_NOT_UNIQUE": WORK_STATE,
+    "POSITION_BLOCK_MALFORMED": WORK_STATE,
+    "POSITION_ITEM_MALFORMED": WORK_STATE,
+    "POSITION_ITEM_WITHOUT_WITNESS": WORK_STATE,
+    "POSITION_WITNESS_NOT_LEVELABLE": WORK_STATE,
+    # The one code with two sources, and the classification follows the
+    # dominant one. It is raised both by the grammar (a witness token written
+    # into the agreement, which no flag reaches) and by `--about`'s own parse
+    # (which a flag does reach). A work state, because publishing a question
+    # over the rarer invocation case costs a sentence, while publishing nothing
+    # over the document case is the defect on record; the question names both
+    # spellings.
+    "POSITION_WITNESS_UNKNOWN_KIND": WORK_STATE,
+    # A read/write race: the holder changed between the read that located the
+    # section and the write. The tree moved, so the measurement is taken again.
+    "POSITION_HOLDER_MOVED": WORK_STATE,
+    # No document under the product holds checklist items at all -- the
+    # identical fact `SETTLE_HOLDER_ABSENT` already classifies as a work state.
+    "POSITION_HOLDER_ABSENT": WORK_STATE,
+
+    # --- `gate`'s authorization, proposal and election checks ---------------
+    # All five authorization codes fail the same way: an authorization exists
+    # only as a recorded `offer` publish over exactly this binding, and no
+    # argument `gate` accepts mints one. `GATE_AUTHORIZATION_MISMATCH` is the
+    # arguable member -- a caller COULD retype the launch to match the token it
+    # holds -- and it lands here anyway, because the honest exit is an
+    # authorization for the launch that was intended, not a launch bent to fit
+    # a token.
+    "GATE_AUTHORIZATION_UNKNOWN": WORK_STATE,
+    "GATE_AUTHORIZATION_MISMATCH": WORK_STATE,
+    "GATE_AUTHORIZATION_STALE": WORK_STATE,
+    "GATE_AUTHORIZATION_CONSUMED": WORK_STATE,
+    "GATE_AUTHORIZATION_SUPERSEDED": WORK_STATE,
+    # A campaign proposal is recorded by `propose`, which takes a rationale no
+    # argument here can supply.
+    "GATE_PROPOSAL_UNKNOWN": WORK_STATE,
+    "GATE_PROPOSAL_MISMATCH": WORK_STATE,
+    "GATE_PROPOSAL_STALE": WORK_STATE,
+    # The election pair sits the other side of the line, and the reasoning is
+    # `POSITION_TARGET_LEVEL_REQUIRED`'s exactly: an election is made fresh on
+    # every `gate` call and read back from nothing, so the same call with
+    # `--elect` added goes through and nothing in the repository has to change.
+    # That a human must DECIDE before typing it does not make it a work state
+    # -- deciding is not acting, the same way reading `__levels__` is not.
+    "GATE_ELECTION_REQUIRED": INVOCATION_DEFECT,
+    "GATE_ELECTION_MISMATCH": INVOCATION_DEFECT,
+
+    # --- `materialize`'s stage helpers --------------------------------------
+    # Three that name their own flag, so the detail is already the whole exit.
+    "NOT_A_KIT_DESTINATION": INVOCATION_DEFECT,
+    "NO_RECEIPT_ENTRY": INVOCATION_DEFECT,       # the detail says: use --adopt
+    "ALREADY_RECORDED": INVOCATION_DEFECT,       # the detail says: use --authored
+    # And one that does not: the path IS a kit destination (that check runs
+    # first) and simply has not been written, so no other spelling of the call
+    # finds a file nobody authored.
+    "MATERIALIZE_PATH_ABSENT": WORK_STATE,
+    # The approval lives in the target's own benchmark package.
+    "OBJECT_MAP_NOT_APPROVED": WORK_STATE,
+    # A scaffold destination still carries a token this stage cannot answer.
+    "STAGE_CANNOT_ANSWER": WORK_STATE,
+
+    # --- the ledger's own root, shared by every write verb ------------------
+    # Arguable, and decided rather than noticed. Re-typing `--name` with the
+    # detected folder's spelling DOES clear the call, which reads like an
+    # invocation defect -- but it is only one of the two exits, and it is the
+    # wrong one whenever the folder on disk is the misnamed half. Choosing
+    # between them is a reading of the repository the engine cannot take, and
+    # the detected folder's spelling is not always even a legal `--name`
+    # (`detect_product_dir` reports whatever the tree carries;
+    # `validate_name` accepts a narrower alphabet). So the repository act is
+    # published: `plan`, whose output names the rename it would propose.
+    "PRODUCT_DIR_MISNAMED": WORK_STATE,
+
+    # --- the shared readers -------------------------------------------------
+    # The malformed half of `NO_FINDINGS`, and a work state for the same
+    # reason: the declaration is the target's, and no flag rewrites it.
+    "MALFORMED_FINDINGS": WORK_STATE,
+    # `--about`'s own two parse refusals, reached from the gating commands that
+    # take one. Both details name the exact spelling that would have worked.
+    "DISCUSS_ABOUT_NOT_FOUND": INVOCATION_DEFECT,
+    "DISCUSS_ABOUT_OPERAND_REQUIRED": INVOCATION_DEFECT,
+
+    # --- `step`'s subprocess runner, reached through `impl_steps` -----------
+    # The three resolution failures are `STEP_MALFORMED`'s neighbours: a
+    # declaration in the target's own `__steps__` names something that is not
+    # there, and no argument `step` accepts supplies it. They are also the
+    # three codes NO walk over string literals can see -- `impl_steps` raises
+    # them off a lookup table.
+    "STEP_MODULE_MISSING": WORK_STATE,
+    "STEP_FUNCTION_MISSING": WORK_STATE,
+    "STEP_NOT_CALLABLE": WORK_STATE,
+    # The process died without a verdict. Nothing typed here makes it write one.
+    "STEP_RUNNER_SILENT": WORK_STATE,
+}
+
+
+def _refusal_target_args(args) -> list[str]:
+    """`--target <t> --name <n>`, read off the call being refused."""
+    return ["--target", str(getattr(args, "target", "")),
+            "--name", str(getattr(args, "name", ""))]
+
+
+def _refusal_position_command(args, *extra: str, revision: str | None = None) -> str:
+    """The `position` invocation that re-derives the block this refusal read.
+
+    `--session` is not decoration: `position` requires it, so a published
+    command that dropped it would refuse on its own advice. Every gating
+    command that can raise a position code carries `--session` itself, and the
+    caller's own is reused rather than invented.
+
+    `revision` is the same argument for `--revision`, and it exists because
+    `step` is the one gating command that raises a position code while
+    carrying no `--revision` flag at all (`main()`'s own per-command table).
+    `cmd_position` refuses `REVISION_UNREADABLE` without one, so a command
+    published from `step`'s arguments alone would refuse on its own advice --
+    the exact trap `test_expand_contract_command_string_is_runnable_and_
+    writes_nothing` was written for. The caller supplies the revision the
+    block is ALREADY bound to (`_position_block_revision`), never one this
+    file picks.
+    """
+    parts = ["position", *_refusal_target_args(args),
+             "--session", str(getattr(args, "session", "") or "")]
+    resolved = revision or getattr(args, "revision", None)
+    if resolved:
+        parts += ["--revision", str(resolved)]
+    return _cli_command(*parts, *extra)
+
+
+def _refusal_question(args, question: str) -> dict:
+    """A published question, and the `discuss` command that opens it.
+
+    `--about` is the caller's own when the refused command carries one
+    (`settle` does), and the bare `record` bucket otherwise -- the same
+    identity every other publication point in this file uses.
+    """
+    about = getattr(args, "about", None)
+    return {
+        "kind": "question",
+        "question": question,
+        "command": _discuss_command(
+            Path(str(getattr(args, "target", ""))),
+            str(getattr(args, "name", "")),
+            about=str(about) if about else "record", question=question),
+    }
+
+
+def _refusal_command(command: str) -> dict:
+    return {"kind": "command", "command": command}
+
+
+def _resolve_position_disagrees(args) -> dict:
+    """The code from the incident, and the only resolution named rather than
+    derived: a tick whose own witness disagrees is a measurement that has to be
+    taken again, so the verification notebook is re-executed and `position`
+    re-read.
+
+    `PATH` is the whole point of the first half and dropping it is the obvious
+    mistake -- a notebook names a kernelspec, not an interpreter, and the
+    ordinary `python3` kernelspec's `argv` begins with a bare `python` resolved
+    off `PATH` when the kernel starts. Every part is built from what the engine
+    already holds: the target path it was given, `target_interpreter`, and
+    `PROBE_NOTEBOOK`. No target-specific string can enter this file through it.
+    """
+    target = Path(str(getattr(args, "target", "")))
+    interpreter = target_interpreter(target)
+    execution = " ".join(shlex.quote(part) for part in (
+        f"PATH={interpreter.parent}:$PATH", str(interpreter), "-m", "jupyter",
+        "nbconvert", "--to", "notebook", "--execute", "--inplace",
+        str(target / str(getattr(args, "name", "")) / "Notebooks" / PROBE_NOTEBOOK)))
+    return _refusal_command(
+        f"{execution} && {_refusal_position_command(args)}")
+
+
+def _position_attained_level(target: Path, name: str) -> str | None:
+    """The rung the evidence reaches, rebuilt at the moment of refusal from
+    `target`/`name` alone: the `except Refused` chokepoint is handed nothing
+    but `args`, so the fact is re-read here rather than threaded out of the
+    command that already had it. Nothing raises on the way out -- a resolution
+    that failed while being built would cost the reader both it and the
+    refusal it explains.
+
+    This replaced a reader of the block's own recorded rung, which had no
+    caller left once the resolution stopped publishing `recorded + 1`: reading
+    the header, this builder answered a refusal about an over-reaching aim by
+    naming a rung one higher still.
+
+    `shards_root` is deliberately not threaded through from `args`. The refusal
+    being answered was raised against evidence `cmd_position` built with
+    whatever `--shards` it was given, and this rebuild sees only the target's
+    own declared `distribution.shardsRoot` -- so an explicit `--shards` that
+    named a directory the declaration does not can make this read LOWER than
+    the one that refused. Lower is the safe direction: it publishes a rung at
+    or below the one that would go through, never above it, and the published
+    command is run by the operator, who can name their own directory again.
+    """
+    product = target / name
+    if not product.is_dir():
+        return None
+    try:
+        # Found by shape, exactly as `position_state` finds it and for the
+        # same reason: no fixed filename decides which markdown file holds the
+        # block, here or anywhere else in this file. First block wins, and
+        # ambiguity is not re-refused -- this builder answers a refusal that
+        # already happened, and `POSITION_HOLDER_AMBIGUOUS` is the code for
+        # that fact when it is the one being reported.
+        for path in sorted(product.glob("*.md")):
+            if not path.is_file():
+                continue
+            block = impl_position.locate_block(path.read_bytes(),
+                                               allow_legacy=True)
+            if block is None:
+                continue
+            return impl_position.attained_level(
+                impl_position.parse_items(block["body"]),
+                _position_write_evidence(target, name))
+    except Exception:
+        # Deliberately every one of them: a block that will not parse, a
+        # benchmark package that will not import, a declaration that refuses.
+        # Each is a fact the refusal being built already carries or the next
+        # command will raise on its own; none is worth costing the reader the
+        # refusal itself, and the caller below simply names no rung when this
+        # answers nothing.
+        return None
+    return None
+
+
+def _resolve_position_rung_skipped(args) -> dict:
+    """The rung this target can seal next, and the question of what has to run
+    before the one above it can be claimed.
+
+    A question rather than a command, for the reason `POSITION_ABSENT`'s own
+    resolution states: the command that would clear this is the one that
+    refused, and publishing the caller's own call back to them is advice that
+    refuses on its own advice. What can be named concretely is the next rung --
+    one above what the evidence currently ATTAINS, or the floor when it attains
+    nothing -- so that is what the question carries, together with the seal
+    command for it.
+
+    Read from attainment and never from the header, the same separation the
+    refusal itself is built on. Reading the block's recorded rung, this would
+    publish the rung above whatever was last AIMED at -- and on exactly the
+    repository this refusal fires for, that rung is refused for the identical
+    reason the call being answered was. A resolution that refuses on its own
+    advice is the one thing this builder exists not to be.
+
+    Every rung name here is read off the target's own `__levels__` at the
+    moment of refusal. The forge holds no rung vocabulary of its own (see
+    `resolve_levels_declaration`), so when a ladder cannot be read at all the
+    question still asks the same thing and simply names no rung, rather than
+    inventing one on the repository's behalf.
+    """
+    target = Path(str(getattr(args, "target", "")))
+    name = str(getattr(args, "name", ""))
+    levels = resolve_levels_declaration(target, name)
+    attained = impl_position.level_index(
+        levels, _position_attained_level(target, name))
+    following = None
+    if levels:
+        following = levels[0] if attained is None else levels[
+            min(attained + 1, len(levels) - 1)]
+    named = (
+        f" The next rung this target can seal is {following!r}: run `"
+        + _refusal_position_command(args, "--target-level", following) + "`."
+        if following else "")
+    return _refusal_question(
+        args,
+        "this pass aims at a rung whose predecessor on the target's own "
+        "ladder is not attained by anything measurable now, and a position "
+        "never skips a rung going forward; what has to run before the rung "
+        "above it can be claimed, and why?" + named)
+
+
+def _resolve_position_step_unknown(args) -> dict:
+    """The steps this target's own `__steps__` actually declares, or the
+    fact that it declares none at all, read fresh at the moment of
+    refusal (`_resolve_position_rung_skipped`'s own pattern: re-derive from
+    `target`/`name` rather than thread the specific unknown operand through
+    `args`, which carries none).
+
+    A question, never a command: no flag this command accepts can name a
+    step, and clearing this means either editing AGREED.md's `@step`
+    operand or adding an entry to `__steps__` -- both decisions only a
+    human can make.
+    """
+    target = Path(str(getattr(args, "target", "")))
+    name = str(getattr(args, "name", ""))
+    steps = resolve_steps_declaration(target, name)
+    named = (f" This target currently declares: {sorted(steps)!r}."
+             if steps else " This target currently declares no __steps__ at all.")
+    return _refusal_question(
+        args,
+        "an `@step` witness in this position sequence names a step this "
+        "target's __steps__ does not declare; which callable should it "
+        "name, and does __steps__ need a new entry first?" + named)
+
+
+def _resolve_rung_not_attained(args) -> dict:
+    """The rung this launch requires, read fresh at the moment of refusal
+    from the target's own `__levels__` -- `_resolve_position_rung_skipped`'s
+    own pattern (attainment, never a header, and never invented), applied to
+    the gate-time floor (`levels[-2]`) instead of `position`'s own
+    predecessor rung.
+
+    A question, never a command: the command that would clear this is the
+    one that just refused, and republishing the caller's own call back to
+    them is advice that refuses on its own advice.
+    """
+    target = Path(str(getattr(args, "target", "")))
+    name = str(getattr(args, "name", ""))
+    levels = resolve_levels_declaration(target, name)
+    attained = _position_attained_level(target, name)
+    floor = levels[len(levels) - 2] if len(levels) >= 2 else None
+    named = f" This launch requires {floor!r}." if floor is not None else ""
+    return _refusal_question(
+        args,
+        "this job's witness sits on a declared rung ladder, and the "
+        "evidence does not yet attain the rung a launch requires (the "
+        "refusal detail names it); the evidence currently attains "
+        + (f"{attained!r}" if attained is not None else "no rung at all")
+        + ". What has to run before that rung is reached, and why?" + named)
+
+
+def _resolve_position_record_unknown(args) -> dict:
+    """The records this target's own `__records__` actually declares, or the
+    fact that it declares none at all, read fresh at the moment of refusal
+    (`_resolve_position_step_unknown`'s own pattern: re-derive from
+    `target`/`name` rather than thread the specific unknown operand through
+    `args`, which carries none).
+
+    A question, never a command: no flag this command accepts can name a
+    record, and clearing this means either editing AGREED.md's
+    `@record:level` operand or adding an entry to `__records__` -- both
+    decisions only a human can make.
+    """
+    target = Path(str(getattr(args, "target", "")))
+    name = str(getattr(args, "name", ""))
+    records = resolve_records_declaration(target, name)
+    named = (f" This target currently declares: {sorted(records)!r}."
+             if records else " This target currently declares no __records__ at all.")
+    return _refusal_question(
+        args,
+        "a leveled `@record:level` witness in this position sequence names "
+        "a record this target's __records__ does not declare; which named "
+        "record should it address, and does __records__ need a new entry "
+        "first?" + named)
+
+
+def _refusal_git_command(args, *parts: str) -> str:
+    """A `git -C <target> ...` a reader pastes unedited.
+
+    The same `shlex.quote` discipline `_cli_command` keeps, for the one exit
+    that is not this CLI's own: the guard that refuses a dirty tree is git's
+    reading of the tree, so the command that shows the reader what it saw is
+    git's too.
+    """
+    return " ".join(shlex.quote(str(part)) for part in
+                    ("git", "-C", str(getattr(args, "target", "")), *parts))
+
+
+def _position_block_revision(target: Path, name: str) -> str | None:
+    """The revision `<Name>/AGREED.md`'s position block is already bound to,
+    read straight off its own header.
+
+    Rebuilt at the moment of refusal from `target`/`name` alone, for the
+    reason `_position_attained_level` states: the `except Refused` chokepoint
+    is handed nothing but `args`, and `step`'s `args` carry no revision at
+    all. Nothing raises on the way out -- a resolution that failed while being
+    built would cost the reader both it and the refusal it explains.
+
+    `allow_legacy=True` so a block written by the prior boolean-only grammar
+    still yields its revision: this reads a header field, it does not decide
+    whether the block is current, and refusing to name a revision here would
+    silently downgrade the published command for exactly the documents
+    `position` exists to rewrite.
+    """
+    product = target / name
+    if not product.is_dir():
+        return None
+    try:
+        for path in sorted(product.glob("*.md")):
+            if not path.is_file():
+                continue
+            block = impl_position.locate_block(path.read_bytes(),
+                                               allow_legacy=True)
+            if block is None:
+                continue
+            return block["revision"] or None
+    except Exception:
+        # Deliberately every one of them, `_position_attained_level`'s own
+        # rule: a malformed opener, two openers, a file that will not read.
+        # The caller falls back to the question below, which needs nothing.
+        return None
+    return None
+
+
+def _resolve_step_sequence_not_reached(args) -> dict:
+    """The refusal the declared six-step flow hit between EVERY pair of steps,
+    and the act the operator had to compose by hand each time.
+
+    Measured: a step ran and returned, and the next step refused this code --
+    because the sequence check reads the TICK in the target's own `AGREED.md`,
+    and nothing had re-derived it since the run. The operator called
+    `position` between every pair, by hand, and the flow said that nowhere.
+
+    **Why `step` does not simply re-derive it itself**, which is the obvious
+    fix and the wrong one. `cmd_position` is "the only writer into
+    `<Name>/AGREED.md`'s position section" -- its own first line, and a
+    single-writer invariant rather than a note about scheduling. A `step` that
+    re-derived would be a second writer into the agreement document, from a
+    command whose entire contract is "run one declared callable, isolated".
+    (`cmd_step`'s own stated non-goal -- "this never consults `probe`'s
+    `nextStep`" -- is about choosing WHAT to run next, which is a different
+    question; the invariant above is the one that decides this.) It is not
+    even reachable without inventing arguments: `position` refuses
+    `REVISION_UNREADABLE` without a `--revision`, and `step` registers no such
+    flag.
+
+    So the exit is published instead of performed, and published RUNNABLE: a
+    bare `position` refresh, bound to the revision the block already names,
+    which mutates `mark` in place and nothing else. That is the same
+    publication `POSITION_STALE` and `POSITION_UNBACKED` already make, and it
+    is safe for the same reason -- every mark is DERIVED on every read, so a
+    refresh over work that genuinely has not happened re-derives the same open
+    mark and this refusal simply restates itself. It cannot tick anything into
+    existence.
+
+    The question survives as the fallback for a call with no readable block
+    (a `--target` that does not exist, an unparsable opener): there is no
+    revision to bind a command to there, and a `position` command without one
+    would refuse on its own advice.
+    """
+    revision = _position_block_revision(
+        Path(str(getattr(args, "target", ""))), str(getattr(args, "name", "")))
+    if revision is None:
+        return _refusal_question(
+            args, "this step is not the next rung of the position sequence "
+                  "(the refusal detail names which item is open), and no "
+                  "readable position block was found to re-derive; do that "
+                  "rung's work now, or install the sequence, and why?")
+    return _refusal_command(_refusal_position_command(args, revision=revision))
+
+
+def _abandoned_step(args) -> dict | None:
+    """The `step` run that started and never reported, or `None`.
+
+    Read from the ledger's own shape rather than from anything a target
+    declares: `cmd_step` writes `outcome: "started"` before its subprocess
+    spawns and a terminal event once it reports, so the LATEST `kind: "step"`
+    event being a bare `started` is exactly the state "a step was killed
+    partway through" and nothing else. A ledger whose latest step event is
+    terminal answers `None` here even when an earlier run was abandoned --
+    that earlier partial has already been superseded by a run that reported.
+
+    Nothing raises on the way out, `_position_attained_level`'s own rule: a
+    resolution that failed while being built would cost the reader both it and
+    the refusal it explains.
+    """
+    try:
+        target = Path(str(getattr(args, "target", "")))
+        name = str(getattr(args, "name", ""))
+        events = impl_position.read_events(
+            target / name / ".implementation" / "position.jsonl")
+    except Exception:
+        # A path that will not resolve, a ledger line that will not parse.
+        # Either way the diagnosis below is simply not offered; the refusal
+        # it would have decorated is published unchanged.
+        return None
+    steps = _ledger_step_events(events)
+    if steps and steps[-1].get("outcome") == "started":
+        return steps[-1]
+    return None
+
+
+def _resolve_product_dir_misnamed(args) -> dict:
+    """`plan`, and deliberately not a question.
+
+    A question would publish a `discuss` invocation, and `discuss` is one of
+    the nine write verbs this same guard now stands in front of -- so the
+    published exit would refuse on its own advice, the exact trap
+    `_refusal_position_command`'s `revision` argument exists for.
+
+    `plan` is the right command anyway, not merely the reachable one: it is
+    read-only, it takes only the two arguments every refused call already
+    carries, and its `renames` entry is where the detected folder is named
+    together with what renaming it would carry. The refusal detail names both
+    exits; this publishes the one that is a command.
+    """
+    return _refusal_command(_cli_command(
+        "plan", *_refusal_target_args(args)))
+
+
+def _resolve_dirty_worktree(args) -> dict:
+    """The code from the incident that widened this roster. `step` refused it
+    mid-flow with nothing published, and the agent driving the CLI invented
+    "commit or stash" in prose.
+
+    A question rather than a command, and the reason is the same one
+    `POSITION_ABSENT` states: the engine cannot author the decision. Which of
+    those changes is product that belongs in the history, and which is scratch,
+    is a reading of the tree nobody here can take -- and a commit needs a
+    message this file must never write. So the tree is published (git's own
+    listing, runnable) and the decision is asked.
+
+    **Two questions, because the tree is dirty for two different reasons and
+    only one of them is work.** The measured incident: a campaign step was
+    killed by a timeout at 48 runs of 60, leaving an unsealed shard behind;
+    the next command refused this code, and the operator had to work out on
+    their own that the tree was dirty BECAUSE a step had died, that the
+    product was partial rather than finished, and that a relaunch would not
+    resume it. Every one of those facts is in this skill's own ledger
+    (`_abandoned_step`), so when it is there the question names the step,
+    says the product is partial, and publishes `git clean -nd` -- a DRY RUN,
+    listing exactly what a cleanup would remove and removing nothing. The
+    engine still never authors the removal itself: which of those paths is
+    salvage and which is debris is the same reading it cannot take above.
+    """
+    listing = _refusal_git_command(args, "status", "--porcelain")
+    abandoned = _abandoned_step(args)
+    if abandoned is not None:
+        return _refusal_question(
+            args, "the target's working tree carries uncommitted or untracked "
+                  "changes, and this skill never mutates a dirty repository. "
+                  f"The ledger says why: step {abandoned.get('step')!r} "
+                  f"({abandoned.get('callable')}) started at "
+                  f"{abandoned.get('at')} and never recorded an outcome, so "
+                  "it was killed partway through and what it left behind is "
+                  "PARTIAL product, not finished product -- re-running the "
+                  "step does not resume it, so the partial has to go before "
+                  "it can be run again. `" + listing + "` lists the tree and "
+                  "`" + _refusal_git_command(args, "clean", "-nd")
+                  + "` dry-runs exactly which untracked paths a cleanup would "
+                    "remove, without removing any of them. Which of them is "
+                    "that dead run's leftovers, and why?")
+    return _refusal_question(
+        args, "the target's working tree carries uncommitted or untracked "
+              "changes, and this skill never mutates a dirty repository -- "
+              "`" + listing
+              + "` lists them. Commit what belongs in the history and stash "
+                "or drop the rest now, or record why the tree stays dirty, "
+                "and why?")
+
+
+def _gate_authorization_question(reason: str):
+    """One builder shape for the five ways a launch authorization fails.
+
+    Five separate entries rather than one shared code, because the reader has
+    to know WHICH of the five happened to know whether anything but a fresh
+    `offer` is called for -- but the exit is identical in all five, so it is
+    written once. The tail is `GATE_AUTHORIZATION_REQUIRED`'s own, verbatim in
+    shape: an authorization is minted by a publish, never by a flag.
+    """
+    return lambda args: _refusal_question(
+        args, reason + " An authorization is minted only by an `offer` publish "
+        "over exactly this binding, and no argument this command accepts can "
+        "supply one; does every declared pilot run before this campaign is "
+        "gated? Answer here, then run `offer --answer <yes|no>` and pass the "
+        "token its launch action names.")
+
+
+def _gate_proposal_question(reason: str):
+    """The same shape for the three ways a campaign proposal fails. `propose`
+    takes a human-legible rationale (`EMPTY_RATIONALE` is how it says so), so
+    the published exit is the question that rationale answers, never a
+    `propose` command with the rationale left blank."""
+    return lambda args: _refusal_question(
+        args, reason + " A campaign proposal is recorded only by `propose`, "
+        "which takes a human-legible rationale no argument here can supply; "
+        "what is this campaign for, and why is it being run now? Answer here, "
+        "then run `propose` with that rationale.")
+
+
+def _step_declaration_question(reason: str):
+    """The three resolution failures `impl_steps` raises off its lookup table,
+    published in `STEP_MALFORMED`'s own shape: the declaration is the target's,
+    so the exit is either the missing thing or a corrected declaration."""
+    return lambda args: _refusal_question(
+        args, reason + " A step names a module and a function in the target's "
+        "own `__steps__`, and no argument this command accepts substitutes for "
+        "either; provide what is missing now, or correct the declaration, and "
+        "why?")
+
+
+#: One builder per work state. Every one of them is reached only by its own
+#: code, and every one publishes something a reader runs unedited -- a code
+#: with nothing real to publish is a misclassification, not an empty field, and
+#: `GatingRefusalRosterTests` asserts the content rather than the key.
+_WORK_STATE_RESOLUTIONS = {
+    "PLAN_STALE": lambda args: _refusal_command(
+        _cli_command("plan", *_refusal_target_args(args))),
+    "APPLY_ABORTED": lambda args: _refusal_command(
+        _cli_command("plan", *_refusal_target_args(args))),
+    "DESTINATION_CONFLICT": lambda args: _refusal_question(
+        args, "the reorganization has destinations that clash -- an existing "
+              "file, or two sources onto one path (the refusal detail names "
+              "them); where does each one belong, and why?"),
+    "UNCLASSIFIED_FILES": lambda args: _refusal_question(
+        args, "the reorganization covers files no rule classifies (the "
+              "refusal detail names them); where does each one belong, and "
+              "why?"),
+    "NO_FINDINGS": lambda args: _refusal_question(
+        args, "tests/findings.py declares no finding to rule on; write the "
+              "findings now, or record why admissibility is deferred, and "
+              "why?"),
+    "GATE_AUTHORIZATION_REQUIRED": lambda args: _refusal_question(
+        args, "this launch carries no authorization, and one is minted only "
+              "by a prior `offer` publish over exactly this binding; does "
+              "every declared pilot run before this campaign is gated? Answer "
+              "here, then run `offer --answer <yes|no>` and pass the token "
+              "its launch action names."),
+    "SEQUENCE_NOT_REACHED": lambda args: _refusal_question(
+        args, "this launch is not the next rung of the position sequence (the "
+              "refusal detail names which item is open); do that rung's work "
+              "now, or re-derive the sequence, and why?"),
+    "STEP_SEQUENCE_NOT_REACHED": _resolve_step_sequence_not_reached,
+    "NOT_READY": lambda args: _refusal_question(
+        args, "this job has no passing rehearsal recorded at the commit it is "
+              "pinned to, and readiness is measured rather than asserted; "
+              "rehearse it through the remote-execution skill now, or record "
+              "why the launch is deferred, and why?"),
+    "RUNG_NOT_ATTAINED": _resolve_rung_not_attained,
+    # A question rather than a command, and measured rather than assumed: the
+    # published `position --reconcile` was RUN, and it refused
+    # `POSITION_TARGET_LEVEL_REQUIRED` -- a fresh header cannot be written
+    # without stating which rung the pass is aiming at, and only the target's
+    # own `__levels__` name the rungs. So the open decision is published, with
+    # the command that takes it, rather than a command that would refuse on its
+    # own advice. The refresh codes below keep a plain command because they
+    # inherit the existing block's own target level.
+    "POSITION_ABSENT": lambda args: _refusal_question(
+        args, "no position section has been derived for this target, and a "
+              "fresh one cannot be written without naming the rung this pass "
+              "aims at; which of the target's own declared `__levels__` is "
+              "it? Then run `"
+              + _refusal_position_command(args, "--reconcile", "--target-level")
+              + " <rung>`."),
+    "POSITION_STALE": lambda args: _refusal_command(
+        _refusal_position_command(args)),
+    "POSITION_UNBACKED": lambda args: _refusal_command(
+        _refusal_position_command(args)),
+    "POSITION_SHARDS_UNDECLARED": lambda args: _refusal_question(
+        args, "a ticked item's witness is a shard and nothing names where a "
+              "returned shard lands; declare `distribution.shardsRoot` in the "
+              "benchmark package now, or name the directory to measure "
+              "against, and why?"),
+    "POSITION_DISAGREES": _resolve_position_disagrees,
+    "POSITION_RUNG_SKIPPED": _resolve_position_rung_skipped,
+    "POSITION_STEP_UNKNOWN": _resolve_position_step_unknown,
+    "POSITION_RECORD_UNKNOWN": _resolve_position_record_unknown,
+    "POSITION_RECORD_MALFORMED": lambda args: _refusal_question(
+        args, "a leveled `@record:level <name>` witness addresses a "
+              "__records__ entry the reader cannot use -- not a mapping, or "
+              "a mapping with no `path` string (the refusal detail names "
+              "which); write the entry as `{\"path\": ..., "
+              "\"requiredScale\": {...}}` now, or say why that record is "
+              "not addressable yet, and why?"),
+    "POSITION_LEVELS_UNDECLARED": lambda args: _refusal_question(
+        args, "an item in this sequence is marked as reaching a rung and the "
+              "target's benchmark package declares no `__levels__` ladder for "
+              "it to reach; which rungs does this target climb, in order, and "
+              "why?"),
+    "POSITION_HOLDER_AMBIGUOUS": lambda args: _refusal_question(
+        args, "more than one markdown file under this product carries a "
+              "`<!-- position -->` block, and no argument this command takes "
+              "can tell them apart; which file holds the section, and should "
+              "the other block be removed, and why?"),
+    "AGREEMENT_DISAGREES": lambda args: _refusal_question(
+        args, "a ticked agreement names a witness function that is absent "
+              "from a fully-parsed tests/ (the refusal detail names it); "
+              "restore the witness now, or reverse the agreement, and why?"),
+    "DISCUSSION_UNANSWERED": lambda args: _refusal_question(
+        args, "discussion(s) were opened here and never answered, and the "
+              "refusal detail carries the exact retirement command for each; "
+              "answer them now, or record why they stay open, and why?"),
+    "STEPS_UNDECLARED": lambda args: _refusal_question(
+        args, "this target declares no __steps__ at all, so nothing here "
+              "names a callable to run; declare them now, or record why the "
+              "work runs outside this command, and why?"),
+    "STEP_MALFORMED": lambda args: _refusal_question(
+        args, "the declared step does not carry what a step declaration needs "
+              "(the refusal detail names what is missing or wrong); correct "
+              "the declaration now, or record why the step is deferred, and "
+              "why?"),
+    "INTERPRETER_ABSENT": lambda args: _refusal_command(
+        _cli_command("env", "--target", str(getattr(args, "target", "")))),
+    "SETTLE_NOT_DISCUSSED": lambda args: _refusal_question(
+        args, "this placement was never discussed, and a placement is "
+              "discussed before it is placed; what is being agreed here, and "
+              "why?"),
+    "SETTLE_DISCUSSION_UNANSWERED": lambda args: _refusal_question(
+        args, "this placement's discussion was asked and never answered, and "
+              "an open question is not yet a settled agreement; what is the "
+              "answer, and why?"),
+    "SETTLE_HOLDER_ABSENT": lambda args: _refusal_question(
+        args, "no markdown file under this product holds checklist items, and "
+              "settle never invents a file to write into; which file holds "
+              "the agreements, and why?"),
+    "SETTLE_TEXT_AMBIGUOUS": lambda args: _refusal_question(
+        args, "this text matches more than one existing checklist line, and "
+              "no argument this command takes can tell them apart; which line "
+              "is meant, or should the duplicates be reconciled first, and "
+              "why?"),
+    "SETTLE_NOT_REVERSED": lambda args: _refusal_question(
+        args, "this agreement is not explained under a '## Reversed' heading, "
+              "and the engine never authors that reasoning; why is it being "
+              "turned over? Write that explanation with `settle --reverse "
+              "--paragraph <reasoning>`."),
+    "SETTLE_HEADING_ABSENT": lambda args: _refusal_question(
+        args, "the heading this write goes under occurs in none of the "
+              "product's holders, and settle never invents one; which "
+              "existing heading holds it, or should the holder gain that "
+              "heading first, and why?"),
+    "SETTLE_HEADING_AMBIGUOUS": lambda args: _refusal_question(
+        args, "the heading this write goes under occurs more than once, and "
+              "no argument this command takes can tell the occurrences apart; "
+              "which one receives it, or should the duplicates be reconciled "
+              "first, and why?"),
+    "SETTLE_COLLIDES_UNNAMED": lambda args: _refusal_question(
+        args, "this placement's operand already appears in existing "
+              "agreement(s) (the refusal detail names them); which one, if "
+              "any, does it supersede, and why?"),
+    "SETTLE_NOT_WITNESSED": lambda args: _refusal_question(
+        args, "this agreement names nothing a test could contradict, and a "
+              "line is not marked done until it does; which `test_<id>` "
+              "witnesses it? Bind it with `settle --attach --witness "
+              "test_<id>` before marking it done."),
+
+    # --- the guards, one file over -----------------------------------------
+    "PRODUCT_DIR_MISNAMED": _resolve_product_dir_misnamed,
+    "DIRTY_WORKTREE": _resolve_dirty_worktree,
+    "GIT_FAILED": lambda args: _refusal_question(
+        args, "git itself refused the command this skill ran, and the refusal "
+              "detail carries git's own stderr verbatim; clear that condition "
+              "in the target repository now, or record why it cannot be "
+              "cleared, and why?"),
+    "FORGE_DEFECT_OPEN": lambda args: _refusal_question(
+        args, "an open, un-cleared forge defect declaration blocks this "
+              "command (the refusal detail names the file(s)); a defect clears "
+              "only when the named file's current bytes stop matching the "
+              "digest recorded against it, so fix the forge file now, or "
+              "record why the defect stays open, and why?"),
+
+    # --- the position grammar ----------------------------------------------
+    "POSITION_HOLDER_ABSENT": lambda args: _refusal_question(
+        args, "no markdown file under this product holds checklist items, and "
+              "the position section is never written into a file this command "
+              "invents; which file holds it, and why?"),
+    # A retry, and the only one in this table. The tree moved under a read that
+    # had already located the section, so the section is measured again -- the
+    # same command `POSITION_STALE` and `POSITION_UNBACKED` publish, for the
+    # same reason: it is the write that re-derives the block.
+    "POSITION_HOLDER_MOVED": lambda args: _refusal_command(
+        _refusal_position_command(args)),
+    "POSITION_BLOCK_NOT_UNIQUE": lambda args: _refusal_question(
+        args, "one document carries more than one `<!-- position ... -->` "
+              "opener and this delimiter must occur exactly once; which one is "
+              "the section, and should the others be removed, and why?"),
+    "POSITION_BLOCK_MALFORMED": lambda args: _refusal_question(
+        args, "the position block's own delimiters do not parse -- a missing "
+              "field in the opener, or no matching closer (the refusal detail "
+              "names which); repair the block now, or say why it should be "
+              "re-derived from scratch, and why?"),
+    "POSITION_ITEM_MALFORMED": lambda args: _refusal_question(
+        args, "a line inside the position block does not parse as a sequence "
+              "item (the refusal detail carries the line); correct it now, or "
+              "say why the block should be re-derived, and why?"),
+    "POSITION_ITEM_WITHOUT_WITNESS": lambda args: _refusal_question(
+        args, "a sequence item does not carry exactly one witness token "
+              "anchored to the end of its line (the refusal detail names it), "
+              "and an item nothing measures is not an item; which witness "
+              "holds it, and why?"),
+    "POSITION_WITNESS_UNKNOWN_KIND": lambda args: _refusal_question(
+        args, "a witness names a kind this engine does not know (the refusal "
+              "detail lists the kinds it does); correct the witness -- in the "
+              "agreement, or in the `--about` spelling that named it -- now, "
+              "or say why that kind should exist, and why?"),
+    "POSITION_WITNESS_NOT_LEVELABLE": lambda args: _refusal_question(
+        args, "an item is marked as reaching a rung and its witness kind has "
+              "no deriver for that reading (the refusal detail lists the kinds "
+              "that do); change the witness now, or drop the rung claim from "
+              "the item, and why?"),
+
+    # --- `gate`'s authorization and proposal bindings ----------------------
+    "GATE_AUTHORIZATION_UNKNOWN": _gate_authorization_question(
+        "no authorization event on this target's ledger vouches for the token "
+        "this launch carries -- either nothing minted it, or the event that "
+        "once did has been edited since and no longer re-digests to its own "
+        "token."),
+    "GATE_AUTHORIZATION_MISMATCH": _gate_authorization_question(
+        "the token this launch carries was minted for a different job or a "
+        "different set of units (the refusal detail names both), and a token "
+        "authorizes one exact launch."),
+    "GATE_AUTHORIZATION_STALE": _gate_authorization_question(
+        "a fact the token was minted against -- pin, entrypoint, rung, "
+        "revision or position status -- has moved since, so the token no "
+        "longer describes this launch."),
+    "GATE_AUTHORIZATION_CONSUMED": _gate_authorization_question(
+        "the token this launch carries already authorized one successful "
+        "`gate` call, and an authorization is single-use."),
+    "GATE_AUTHORIZATION_SUPERSEDED": _gate_authorization_question(
+        "the token this launch carries predates the current authorization "
+        "binding and re-digests only under the older shape -- legitimate, not "
+        "tampered, and refused exactly as hard."),
+    "GATE_PROPOSAL_UNKNOWN": _gate_proposal_question(
+        "the authorization names no campaign proposal this target's ledger "
+        "still vouches for -- either the token predates any proposal covering "
+        "this job, or the proposal event that once did has been edited since."),
+    "GATE_PROPOSAL_MISMATCH": _gate_proposal_question(
+        "the bound proposal names other jobs than this one (the refusal detail "
+        "names both), and a proposal authorizes only the jobs it explicitly "
+        "names."),
+    "GATE_PROPOSAL_STALE": _gate_proposal_question(
+        "the proposal's own campaign identity -- commit, job set -- no longer "
+        "matches what this call just re-derived from live disk."),
+
+    # --- `materialize`'s stage helpers --------------------------------------
+    "MATERIALIZE_PATH_ABSENT": lambda args: _refusal_question(
+        args, "this kit destination is a legal one and has not been written, "
+              "and nothing here declares an absent file authored or adopts "
+              "one; write it now, or name the destination that was written, "
+              "and why?"),
+    "OBJECT_MAP_NOT_APPROVED": lambda args: _refusal_question(
+        args, "the object map is not approved -- the target's benchmark "
+              "package declares no revision or premises (the refusal detail "
+              "names which) -- and this stage writes scaffolding for the "
+              "authoring that follows that approval; record the approval now, "
+              "or say why the scaffolding runs ahead of it, and why?"),
+    "STAGE_CANNOT_ANSWER": lambda args: _refusal_question(
+        args, "a scaffold destination still carries an unresolved token after "
+              "this stage substituted everything it can answer (the refusal "
+              "detail names the destination); which later step answers that "
+              "token, and should this stage run before it, and why?"),
+
+    # --- the shared readers -------------------------------------------------
+    "MALFORMED_FINDINGS": lambda args: _refusal_question(
+        args, "tests/findings.py does not read as a findings declaration (the "
+              "refusal detail names how); correct it now, or record why "
+              "admissibility is deferred, and why?"),
+
+    # --- `step`'s subprocess runner ----------------------------------------
+    "STEP_MODULE_MISSING": _step_declaration_question(
+        "the declared step names a module that does not import under the "
+        "target's own interpreter (the refusal detail names it)."),
+    "STEP_FUNCTION_MISSING": _step_declaration_question(
+        "the declared step names a function its module does not define (the "
+        "refusal detail names it)."),
+    "STEP_NOT_CALLABLE": _step_declaration_question(
+        "the declared step resolves to an attribute that is not callable (the "
+        "refusal detail names it)."),
+    "STEP_RUNNER_SILENT": lambda args: _refusal_question(
+        args, "the step's own process exited without ever writing a verdict, "
+              "so nothing here can say whether the step ran (the refusal "
+              "detail names how it ended); find what kills it and make it "
+              "write one, or record why the step cannot run, and why?"),
+}
+
+
+def refusal_resolution(code: str, args) -> dict | None:
+    """What clears `code`, or `None` when nothing has to be published.
+
+    Read at the one `except Refused` every refusal in this engine passes
+    through, so a code is answered once rather than at each of the hundred and
+    sixty-five sites that raise one. `None` on three separate grounds, all of
+    them deliberate: the code is an invocation defect (its detail already names
+    the flag), the refused CALL is not a gating one (this roster is the gating
+    commands' own and never hands a resolution to a refusal it was not
+    classified for), or `args` is not a shape this can read.
+
+    The command is checked rather than assumed, and that is not decoration.
+    The roster is derived from what a gating command can REACH, and reach
+    crosses helpers that non-gating commands share: `plan` runs the same
+    dirty-tree guard `apply` does, `compose` reads findings through the same
+    reader `admit` does, and `cmd_name` -- the one command with no `--target`
+    at all -- raises `INVALID_NAME` out of the same module. Publishing off the
+    code alone would hand those calls a `discuss` command built from arguments
+    they never carried, which is a published exit that does not run.
+
+    Never raises. A crash inside a refusal handler would turn a clean exit 2
+    into a traceback, and the reader would lose both the refusal and the
+    resolution -- so the whole build is guarded, and a resolution that could
+    not be built is simply not published.
+    """
+    if getattr(args, "command", None) not in GATING_COMMANDS:
+        return None
+    if GATING_REFUSALS.get(code) != WORK_STATE:
+        return None
+    builder = _WORK_STATE_RESOLUTIONS.get(code)
+    if builder is None:                     # unreachable while the roster test
+        return None                         # holds; not a licence to omit one
+    try:
+        return builder(args)
+    except Exception:                       # noqa: BLE001 -- see the docstring
+        return None
 
 
 COMMANDS = {"env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_apply,
             "admit": cmd_admit, "handoff": cmd_handoff, "compose": cmd_compose,
             "probe": cmd_probe,
-            "verify": cmd_verify}
+            "verify": cmd_verify,
+            "position": cmd_position,
+            "discuss": cmd_discuss,
+            "propose": cmd_propose,
+            "gate": cmd_gate,
+            "offer": cmd_offer,
+            "close": cmd_close,
+            "step": cmd_step,
+            "settle": cmd_settle,
+            "defect": cmd_defect,
+            "materialize": cmd_materialize}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -5692,30 +14820,470 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--name", required=True, help="package name chosen by the user")
         if name == "apply":
             p.add_argument("--plan", required=True, help="path to the approved plan JSON")
-        if name == "verify":
-            # `verify` only. `admit`, `handoff` and `probe` read no shard
-            # directory, and giving them a flag they ignore would be a promise
-            # this file does not keep.
+        if name in {"verify", "position"}:
+            # `admit`, `handoff`, `discuss`, `gate`, `close` and `probe`
+            # carry no `--shards` flag of their own, and giving them one
+            # they ignore would be a promise this file does not keep. That
+            # no longer means they read no shard directory at all, though:
+            # once a target declares `distribution.shardsRoot`
+            # (`DISTRIBUTION_OPTIONAL`), `_position_write_evidence` and
+            # `_resolve_shard_evidence` resolve it for every one of them, so
+            # `@shard` reads a real answer everywhere the declaration is
+            # read, not only at the one command that happens to carry this
+            # flag. Undeclared, `@shard` still reads `unmeasured` for them,
+            # exactly as before this fallback existed. `position` DOES
+            # thread `--shards` into every write mode, not only `--reconcile`
+            # — a bare refresh or `--sequence` install with `--shards` also
+            # measures any `@shard` witness already in the block, the same
+            # evidence `--reconcile` uses to both discover and measure; an
+            # explicit `--shards` here always overrides the declaration.
+            # `verify`'s own `--shards` stays explicit-only, deliberately: it
+            # is a report over whichever directory an operator names, not a
+            # gate the declaration should widen on its own.
             p.add_argument("--shards", default=None,
                            help="a directory of returned shards; each "
-                                "subdirectory holds a shard.json stamp. Given, "
-                                "verify reports which declared-identical "
+                                "subdirectory holds a shard.json stamp. For "
+                                "verify, reports which declared-identical "
                                 "fields the shards disagree on, and which "
-                                "shards arrived")
-        if name in {"verify", "admit", "handoff", "probe"}:
+                                "shards arrived. For position, measures every "
+                                "@shard witness against the same directory "
+                                "(refresh, --sequence install and --reconcile "
+                                "alike); --reconcile additionally discovers "
+                                "one @shard witness per arrived shard")
+        if name in {"verify", "admit", "handoff", "probe", "position", "gate",
+                   "offer", "close"}:
             p.add_argument("--revision", default=None,
                            help="pin the revision to check against; "
                                 "omit it and verify discovers the newest of "
-                                "the family the bench declares")
+                                "the family the bench declares. admit, "
+                                "handoff, position, gate, offer and close "
+                                "discover nothing and refuse "
+                                "REVISION_UNREADABLE if it is missing or "
+                                "unreadable")
+        if name in {"position", "propose", "gate", "offer", "close", "step",
+                   "settle", "defect"}:
+            p.add_argument("--session", required=True,
+                           help="identity stamped into the ledger event(s) "
+                                "this call appends, and into the block's "
+                                "header for position")
+        if name == "position":
+            p.add_argument("--sequence", default=None,
+                           help="install a fresh section: an ordered JSON "
+                                "array of {text, witness:{kind,operand,"
+                                "twostate}}, or - to read stdin. witness."
+                                "twostate defaults to true (two-state) when "
+                                "omitted -- pass false to opt a witness into "
+                                "the declared level ladder. Omitted, "
+                                "position refreshes the marks of whatever "
+                                "block is already there")
+            p.add_argument("--replace", action="store_true",
+                           help="with --sequence, overwrite an existing "
+                                "position block instead of refusing "
+                                "POSITION_BLOCK_EXISTS")
+            p.add_argument("--reconcile", action="store_true",
+                           help="reconstruct the sequence from what the "
+                                "target already has: the declared record, "
+                                "discovered job folders, Notebooks/*.ipynb "
+                                "and, with --shards, arrived shards. "
+                                "Existing items are matched by witness "
+                                "identity and kept untouched; only unmatched "
+                                "steps are appended")
+            p.add_argument("--target-level", default=None,
+                           help="the rung this pass is aiming at, one of "
+                                "this target's own __levels__ (see the "
+                                "benchmark package's __init__.py/config.py). "
+                                "Required only for a fresh header with no "
+                                "existing block to inherit one from; a "
+                                "refresh reuses the existing block's own "
+                                "target when this is omitted. A mark then "
+                                "means \"reached the level this pass asks "
+                                "for\" for a leveled (`:level`-marked) "
+                                "witness; a two-state witness ignores it "
+                                "entirely and is satisfied or not on its "
+                                "own")
+        if name == "discuss":
+            p.add_argument("--about", required=True,
+                           help="an ordinal in the position sequence, or a "
+                                "bare witness spec ('kind' or 'kind operand')")
+            p.add_argument("--question", required=True,
+                           help="the question text, or - to read stdin")
+            p.add_argument("--answer", default=None,
+                           help="the answer text, or - to read stdin; omit "
+                                "to leave the discussion open")
+        if name == "propose":
+            p.add_argument("--job", dest="jobs", action="append", required=True,
+                           help="repeatable, at least one: a job this "
+                                "campaign proposal covers. Checked at "
+                                "`gate` time for job membership -- distinct "
+                                "from `campaign.jobSet`, the full live-disk "
+                                "job-folder inventory `_campaign_identity()` "
+                                "snapshots for staleness detection, never "
+                                "argv-declared")
+            p.add_argument("--worker", dest="workers", action="append", required=True,
+                           help="repeatable, at least one: an intended "
+                                "worker account for this campaign. Recorded "
+                                "write-only history, like `offer`'s own "
+                                "`answer`; read by nobody in this change")
+            p.add_argument("--depends-on", dest="depends_on", action="append",
+                           default=None,
+                           help="repeatable, optional: one dependency edge "
+                                "as 'job:dependency' (job depends on "
+                                "dependency). Omit for a campaign with no "
+                                "ordering constraints")
+            p.add_argument("--rationale", required=True,
+                           help="the campaign rationale text, or - to read "
+                                "stdin; refused EMPTY_RATIONALE if it is "
+                                "blank -- the same discipline `gate`'s own "
+                                "--justification already keeps")
+        if name == "gate":
+            p.add_argument("--job", required=True,
+                           help="the job name a `@rehearsal` witness names")
+            p.add_argument("--worker", default=None,
+                           help="the account this launch is being authorized "
+                                "for; required unless --unit authorizes a "
+                                "campaign instead, and refused together with "
+                                "--unit -- a campaign has no single named "
+                                "account")
+            p.add_argument("--unit", dest="units", action="append", default=None,
+                           help="repeatable: authorize a CAMPAIGN launch "
+                                "instead of a single-send one, binding the "
+                                "exact ordered unit list a later `submit "
+                                "--unit ...` will carry -- the same "
+                                "derivation remote_cli's own consent token "
+                                "uses. Mutually exclusive with --worker")
+            p.add_argument("--justification", required=True,
+                           help="the launch justification text, or - to read "
+                                "stdin; refused if it is blank")
+            p.add_argument("--authorization", default=None,
+                           help="a token minted by a prior `offer` publish "
+                                "over this exact launch's binding (job, "
+                                "pin, entrypoint, units, rung, revision, "
+                                "position status) -- required, no default. "
+                                "Refused GATE_AUTHORIZATION_REQUIRED when "
+                                "omitted, _UNKNOWN when no ledger record "
+                                "vouches for it, _MISMATCH when it was "
+                                "minted for a different job or unit list, "
+                                "_STALE when a bound fact has since moved "
+                                "(never merely elapsed time), _CONSUMED "
+                                "when it already authorized one successful "
+                                "gate call")
+            p.add_argument("--elect", dest="elected", action="append", default=None,
+                           help="repeatable: elects --job for launch "
+                                "despite its own facts not deciding "
+                                "necessity. Required (and must name "
+                                "exactly --job) when --job classifies "
+                                "`optional`; refused "
+                                "GATE_ELECTION_REQUIRED when omitted, "
+                                "GATE_ELECTION_MISMATCH when --elect names "
+                                "a different job, or names --job while it "
+                                "does not classify `optional`. Never "
+                                "stored and reused -- argv, every call")
+        if name == "offer":
+            p.add_argument("--answer", default=None,
+                           help="yes or no, answering whether every declared "
+                                "pilot runs before a campaign is gated; "
+                                "checked as a coded refusal, never argparse "
+                                "choices, so a bad token prints the same "
+                                "JSON refusal shape every other refusal "
+                                "here does. Required on EVERY call -- never "
+                                "read back from a prior offer event, "
+                                "refused OFFER_UNANSWERED when omitted, "
+                                "regardless of what any earlier call "
+                                "recorded")
+            p.add_argument("--unit", dest="units", action="append", default=None,
+                           help="repeatable: the ordered unit list a `launch` "
+                                "action is about to authorize a CAMPAIGN for "
+                                "instead of a single-send one -- the SAME "
+                                "list a later `gate --unit ...` and `submit "
+                                "--unit ...` will carry. Every published "
+                                "`launch` action's binding is minted against "
+                                "exactly this operator-declared list; the "
+                                "engine never substitutes one of its own. "
+                                "Omit it for a single-send launch")
+        if name == "step":
+            p.add_argument("--step", required=True,
+                           help="the declared __steps__ entry to run; no "
+                                "flag runs more than one")
+        if name == "settle":
+            # No --revision: settle binds to no revision, and a flag it
+            # ignores would be a promise this file does not keep (design
+            # "settle takes --session").
+            p.add_argument("--about", default=None,
+                           help="an ordinal in the position sequence, or a "
+                                "bare witness spec ('kind' or 'kind "
+                                "operand') -- the identical shape discuss's "
+                                "own --about takes, matched against an "
+                                "answered discuss event by witness identity "
+                                "(kind, operand). Required unless --attach "
+                                "or --remove is given (refused "
+                                "SETTLE_ABOUT_REQUIRED); neither mode ever "
+                                "resolves or requires it -- there is no "
+                                "discussion gate left to check it against")
+            p.add_argument("--text", required=True,
+                           help="without --attach/--remove: the "
+                                "caller-authored agreement text, or - to "
+                                "read stdin; written verbatim as one "
+                                "unticked `- [ ]` line -- never authored or "
+                                "ticked by this command. With --attach: the "
+                                "EXACT existing text of an already-settled "
+                                "line this call attaches --witness to. "
+                                "With --remove: the EXACT existing text of "
+                                "an already-settled line this call deletes "
+                                "outright. Both modes match by exact "
+                                "equality against AGREEMENT_LINE's own text "
+                                "group -- refused SETTLE_TEXT_ABSENT or "
+                                "SETTLE_TEXT_AMBIGUOUS when it matches zero "
+                                "or more than one line; --remove additionally "
+                                "refuses SETTLE_NOT_REVERSED unless that "
+                                "exact text is already quoted, bold, under "
+                                "a ## Reversed heading in the same holder "
+                                "file")
+            p.add_argument("--under", default=None,
+                           help="the exact heading line this item is "
+                                "placed under, hash marks included (e.g. "
+                                "'## Ladder'); refused SETTLE_HEADING_ABSENT "
+                                "or SETTLE_HEADING_AMBIGUOUS when it occurs "
+                                "zero or more than one time across the "
+                                "product's holder file(s). Required unless "
+                                "--attach or --remove is given (refused "
+                                "SETTLE_UNDER_REQUIRED); refused "
+                                "SETTLE_ATTACH_CONFLICT if given together "
+                                "with --attach, or SETTLE_REMOVE_CONFLICT "
+                                "if given together with --remove -- neither "
+                                "mode places anything new and so neither "
+                                "names a heading")
+            p.add_argument("--supersedes", default=None,
+                           help="the exact text of an existing colliding "
+                                "agreement this placement supersedes, or - "
+                                "to read stdin; required when the new "
+                                "item's witness collides with an existing "
+                                "one, recorded in the ledger event only -- "
+                                "the document itself still needs a "
+                                "human-written Reversed paragraph to show "
+                                "the supersession. Refused "
+                                "SETTLE_ATTACH_CONFLICT if given together "
+                                "with --attach, or SETTLE_REMOVE_CONFLICT "
+                                "if given together with --remove -- neither "
+                                "mode places anything new and so neither "
+                                "collides with anything")
+            p.add_argument("--witness", default=None,
+                           help="test_<id> naming this agreement's own "
+                                "function in the declared-invariants suite "
+                                "-- a separate identity from --about, which "
+                                "names the position witness this placement "
+                                "discusses. Persisted verbatim into the "
+                                "written line as a trailing "
+                                "`` `test_<id>` `` token. Without --attach: "
+                                "optional; omitted, the line stays "
+                                "byte-identical to the pre-witness grammar. "
+                                "With --attach: required (refused "
+                                "SETTLE_WITNESS_REQUIRED if omitted -- "
+                                "binding a witness is the whole point of "
+                                "that mode); refused SETTLE_ALREADY_WITNESSED "
+                                "if the located line already carries one -- "
+                                "--attach never replaces one. With --remove: "
+                                "refused SETTLE_REMOVE_CONFLICT if given at "
+                                "all -- the line is deleted outright, so "
+                                "there is no witness token left to bind. "
+                                "Refused SETTLE_WITNESS_MALFORMED in every "
+                                "mode that reaches this check if given and "
+                                "not test_[A-Za-z0-9_]+. settle is the only "
+                                "command that ever writes this token -- "
+                                "there is no patch or edit subcommand, and "
+                                "hand-typing one into the file is "
+                                "unsupported (evaluated exactly like a "
+                                "skill-written one by verify, never "
+                                "technically prevented)")
+            p.add_argument("--attach", action="store_true",
+                           help="bind --witness onto a line ALREADY "
+                                "settled, matched by its exact --text, "
+                                "instead of placing a new `- [ ]` line "
+                                "(design 'attach, not place'). The mark "
+                                "is never touched -- a ticked item stays "
+                                "ticked, an open one stays open; only the "
+                                "witness token is added. Skips the "
+                                "discussion precondition entirely (see "
+                                "cmd_settle's own docstring for why): a "
+                                "line this matches was already placed by a "
+                                "prior settle call, so it was already "
+                                "discussed once. --under and --supersedes "
+                                "do not apply with --attach and are refused "
+                                "SETTLE_ATTACH_CONFLICT if given. Refused "
+                                "SETTLE_REMOVE_CONFLICT if given together "
+                                "with --remove -- the two write modes are "
+                                "mutually exclusive; --attach combined with "
+                                "--reverse or --done is refused SETTLE_"
+                                "REVERSE_CONFLICT / SETTLE_DONE_CONFLICT "
+                                "instead, checked on that other flag's own "
+                                "side")
+            p.add_argument("--remove", action="store_true",
+                           help="delete a line ALREADY settled outright, "
+                                "matched by its exact --text, instead of "
+                                "placing or attaching anything (design "
+                                "'the eraser'). Refused SETTLE_NOT_REVERSED "
+                                "unless that exact text is already quoted, "
+                                "bold, under a ## Reversed heading in the "
+                                "same holder file (see cmd_settle's own "
+                                "docstring, 'The guard removal must pass', "
+                                "for the full argument) -- deleting a "
+                                "settled agreement is the one destructive "
+                                "write this command can make, and it is "
+                                "refused until the document itself already "
+                                "explains why. This remains the reachable "
+                                "command when that explanation was ALREADY "
+                                "written -- by hand, or by a prior "
+                                "--reverse call -- and only the deletion is "
+                                "still pending; --reverse itself refuses "
+                                "SETTLE_ALREADY_REVERSED rather than write a "
+                                "second explanation over an existing one. "
+                                "Skips the discussion precondition for the "
+                                "identical reason --attach does: a line "
+                                "this matches was already discussed once, "
+                                "when it was first placed. --under, "
+                                "--supersedes and --witness do not apply "
+                                "with --remove and are refused "
+                                "SETTLE_REMOVE_CONFLICT if given, and so "
+                                "are --attach and --reverse themselves; "
+                                "--done combined with --remove is refused "
+                                "SETTLE_DONE_CONFLICT instead, checked on "
+                                "--done's own side")
+            p.add_argument("--reverse", action="store_true",
+                           help="one transaction that WRITES a new ## "
+                                "Reversed entry and DELETES the settled "
+                                "line matched by its exact --text, instead "
+                                "of requiring the two as separate steps "
+                                "(design 'a reversal is one write'). The "
+                                "bold quote is derived from the located "
+                                "line itself, never retyped by the caller; "
+                                "--paragraph supplies the caller-authored "
+                                "prose that follows it and is required "
+                                "(refused SETTLE_PARAGRAPH_REQUIRED if "
+                                "omitted or blank -- the engine never "
+                                "authors the reasoning). Refused "
+                                "SETTLE_TEXT_ABSENT / SETTLE_TEXT_AMBIGUOUS "
+                                "the identical way --attach and --remove "
+                                "already are; refused SETTLE_HEADING_ABSENT "
+                                "/ SETTLE_HEADING_AMBIGUOUS if the holder "
+                                "carries zero or more than one '## "
+                                "Reversed' heading -- this mode places its "
+                                "entry under an EXISTING heading and never "
+                                "invents one. Refused SETTLE_ALREADY_"
+                                "REVERSED if the exact text is already "
+                                "quoted there (use plain --remove instead "
+                                "-- the explanation already exists). "
+                                "Skips the discussion precondition for the "
+                                "identical reason --attach and --remove "
+                                "do. --under, --supersedes and --witness do "
+                                "not apply and are refused SETTLE_REVERSE_"
+                                "CONFLICT if given, and so are --attach and "
+                                "--remove themselves; --done combined with "
+                                "--reverse is refused SETTLE_DONE_CONFLICT "
+                                "instead, checked on --done's own side")
+            p.add_argument("--paragraph", default=None,
+                           help="the caller-authored prose placed after the "
+                                "derived bold quote in a new ## Reversed "
+                                "entry; required with --reverse (refused "
+                                "SETTLE_PARAGRAPH_REQUIRED if omitted or "
+                                "blank), and ignored -- refused SETTLE_"
+                                "REVERSE_CONFLICT if given at all -- in "
+                                "every other mode, since none of them write "
+                                "one")
+            p.add_argument("--done", action="store_true",
+                           help="flip an already-settled line's own mark "
+                                "from `[ ]` to `[x]`, matched by its exact "
+                                "--text, instead of placing, attaching or "
+                                "removing anything (design 'the tick this "
+                                "class closes'). Refused SETTLE_NOT_"
+                                "WITNESSED unless the located line already "
+                                "carries a `` `test_<id>` `` token -- a "
+                                "tick asserts the work is done, and this "
+                                "command refuses to author that assertion "
+                                "for a line nobody can point a test at; "
+                                "bind one first with `settle --attach`. "
+                                "Refused SETTLE_ALREADY_DONE if the located "
+                                "line's own mark is already `x` or `X`. "
+                                "--under, --supersedes, --witness and "
+                                "--paragraph do not apply with --done and "
+                                "are refused SETTLE_DONE_CONFLICT if given, "
+                                "and so are --attach, --remove and "
+                                "--reverse themselves")
+        if name == "defect":
+            p.add_argument("--file", required=True,
+                           help="path to the forge file this declares "
+                                "broken; must resolve under "
+                                "skills/. Refused "
+                                "DEFECT_FILE_NOT_FORGE_OWNED outside that "
+                                "tree, DEFECT_FILE_ABSENT if it is not a "
+                                "regular file -- containment is checked "
+                                "before existence")
+            p.add_argument("--detail", default=None,
+                           help="free text describing what is broken; "
+                                "omitted from the ledger event entirely "
+                                "(never written as null) when not given")
+        if name == "materialize":
+            p.add_argument(
+                "--stage", choices=["scaffold", "objects", "harness"], default=None,
+                help="write one stage's kit destinations over an approved, "
+                     "structurally-compliant target. 'scaffold' and "
+                     "'objects' require --plan and --seed; 'objects' also "
+                     "refuses OBJECT_MAP_NOT_APPROVED until the step-8 "
+                     "declaration is recorded. 'harness' requires --plan "
+                     "only -- its templates carry no {{SEED}} token. "
+                     "Mutually "
+                     "exclusive with --authored/--adopt")
+            p.add_argument(
+                "--authored", default=None, metavar="PATH",
+                help="release the drift seal on one receipt-recorded "
+                     "destination after the agent authored over it: no file "
+                     "write, no plan gate, a dirty tree is fine. Refuses "
+                     "NO_RECEIPT_ENTRY if the engine never wrote that path "
+                     "(use --adopt instead). Mutually exclusive with "
+                     "--stage/--adopt")
+            p.add_argument(
+                "--adopt", default=None, metavar="PATH",
+                help="record an unrecorded kit destination's current bytes "
+                     "into the receipt as adopted. Degrades the guarantee: "
+                     "the record names who is responsible for the bytes, "
+                     "never that they came from the kit. Refuses "
+                     "ALREADY_RECORDED on a path the receipt already carries "
+                     "(use --authored instead). Mutually exclusive with "
+                     "--stage/--authored")
+            p.add_argument(
+                "--plan", default=None,
+                help="path to the approved plan JSON; required with --stage")
+            p.add_argument(
+                "--seed", default=None,
+                help="the suite's fixed seed, substituted into {{SEED}}; "
+                     "required with --stage scaffold")
 
     args = parser.parse_args(argv)
     try:
         result = COMMANDS[args.command](args)
-    except Refused as refused:
-        json.dump({"status": "refused", "code": refused.code, "detail": refused.detail},
-                  sys.stdout, indent=2)
+    except Refused as refused:             # unchanged: exit 2, appends nothing
+        # The one place every refusal in this engine reaches a reader, and so
+        # the one place the roster is read. `resolve` is present exactly when
+        # `GATING_REFUSALS` calls the code a work state -- somebody has to act
+        # on the repository, and this says what -- and absent otherwise, so its
+        # presence is itself the classification rather than a field to skim.
+        payload = {"status": "refused", "code": refused.code,
+                   "detail": refused.detail}
+        resolution = refusal_resolution(refused.code, args)
+        if resolution is not None:
+            payload["resolve"] = resolution
+        json.dump(payload, sys.stdout, indent=2)
         sys.stdout.write("\n")
         return 2
+    except Exception:                      # NOT BaseException -- Refused(Exception) is
+                                            # caught above, so this ordering is load-
+                                            # bearing: KeyboardInterrupt/SystemExit must
+                                            # never be read as a forge-side defect
+                                            # (design decision 6,
+                                            # maintenance-blocks-it-does-not-mix)
+        try:
+            _record_engine_defect(args, sys.exc_info()[1])
+        except Exception:
+            pass                            # a failing recorder must stay invisible
+        raise                              # the original propagates unchanged
     json.dump(result, sys.stdout, indent=2)
     sys.stdout.write("\n")
     return 0

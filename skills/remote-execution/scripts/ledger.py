@@ -352,11 +352,16 @@ def fold(lines: Iterable[str], live_digest: str | Callable[[], str]) -> LedgerSt
 
     by_id: dict[str, dict] = {}
     latest: dict[str, dict] = {}
-    terminal_by_id: dict[str, dict] = {}
-    returned_events: list[dict] = []
+    latest_position: dict[tuple[str, str], int] = {}
+    terminal_by_id: dict[str, tuple[int, dict]] = {}
+    # Position travels with each `returned` event too (mirrors
+    # `terminal_by_id`, Part B): the verdicts loop below needs it for the
+    # same reason the entrypoints-settle loop does — see that loop's verdict
+    # override for why.
+    returned_events: list[tuple[int, dict]] = []
     unreadable_lines = 0
 
-    for raw_line in lines:
+    for position, raw_line in enumerate(lines):
         line = raw_line.strip()
         if not line:
             continue
@@ -377,6 +382,16 @@ def fold(lines: Iterable[str], live_digest: str | Callable[[], str]) -> LedgerSt
 
         kind = event.get("kind")
         if kind == "submitted":
+            # Last-write-wins by submissionId is intentional, not a defect
+            # (Part C1): on an identity-stable backend `by_id[id]` means
+            # "the most recent submission under this id", which models a
+            # mutable remote object (a Kaggle kernel gets overwritten in
+            # place by each resubmission) rather than one execution per id.
+            # `cmd_fetch` fetches BY id, and the service's current output
+            # belongs to its newest run under that id — so resolving to the
+            # last record read is correct here; append position (Part B)
+            # is what the fold's ENTRYPOINT-keyed state needs instead, and
+            # is threaded separately via `latest_position`.
             by_id[event["submissionId"]] = event
             # Overwritten every time a submitted event for this EXACT
             # (entrypoint, worker) pair is seen, in the order this loop
@@ -387,16 +402,27 @@ def fold(lines: Iterable[str], live_digest: str | Callable[[], str]) -> LedgerSt
             # are five independent "latest" facts, one per worker, not one
             # fact where the fourth and fifth submissions read as
             # superseding the first three.
-            latest[(event["entrypoint"], event["worker"])] = event
+            latest_key = (event["entrypoint"], event["worker"])
+            latest[latest_key] = event
+            latest_position[latest_key] = position
         elif kind in _TERMINAL_KINDS:
-            terminal_by_id[event["submissionId"]] = event
+            # Position travels WITH the event in one tuple so the two can
+            # never diverge (Part B): an identity-stable backend (Kaggle)
+            # mints the SAME submissionId across repeated submissions of
+            # one (entrypoint, worker) pair, so a terminal event recorded
+            # here can belong to an EARLIER submission than the one
+            # `latest` now holds for that pair. The entrypoints-settle loop
+            # below compares this position against `latest_position` to
+            # tell "settles the latest submission" apart from "stale
+            # terminal from a submission that was since superseded".
+            terminal_by_id[event["submissionId"]] = (position, event)
             if kind == "returned":
-                returned_events.append(event)
+                returned_events.append((position, event))
         # Any other kind parses cleanly and is simply one this fold does not
         # act on yet — forward-compatible, not corrupted.
 
     verdicts: dict[str, str] = {}
-    for event in returned_events:
+    for position, event in returned_events:
         submission = by_id.get(event["submissionId"])
         if submission is None:
             # A returned event naming a submission this log never recorded
@@ -404,14 +430,41 @@ def fold(lines: Iterable[str], live_digest: str | Callable[[], str]) -> LedgerSt
             # this fold's) — the line parsed cleanly, so it is not counted
             # as unreadable. It simply contributes no verdict.
             continue
-        verdicts[event["submissionId"]] = currency_verdict(submission, latest, live)
+        verdict = currency_verdict(submission, latest, live)
+        if verdict == "current":
+            # currency_verdict()'s id-equality half is structurally inert on
+            # an identity-stable backend (Part C2): `submission` came from
+            # `by_id`, which is last-write-wins (Part C1), so `submission`
+            # is already the SAME record `latest[key]` holds and the id
+            # comparison inside currency_verdict can never disagree with
+            # itself. That half's guarding duty — catching a `returned`
+            # event that settles an EARLIER submission than the one now on
+            # record — relocates here: THIS event's own append position,
+            # compared against the latest `submitted` position recorded for
+            # its (entrypoint, worker) pair, is the fact that still tells
+            # "settles the latest submission" apart from "stale result from
+            # a submission since superseded". Applying it only when
+            # currency_verdict already said "current" leaves a digest-moved
+            # verdict (the OTHER, backend-independent half) untouched — this
+            # is an additional check, not a replacement for that one.
+            key = (submission["entrypoint"], submission["worker"])
+            if position < latest_position[key]:
+                verdict = "fromStaleSubmission"
+        verdicts[event["submissionId"]] = verdict
 
     entrypoints: dict[tuple[str, str], EntrypointState] = {}
     for key, submission in latest.items():
-        terminal = terminal_by_id.get(submission["submissionId"])
-        if terminal is None:
+        entry = terminal_by_id.get(submission["submissionId"])
+        # A terminal event whose append position precedes this pair's
+        # latest `submitted` event settled an EARLIER submission that has
+        # since been superseded — it never gets to promote this entrypoint
+        # out of "pending", even though `terminal_by_id` is keyed by the
+        # (colliding) submissionId alone. Without this check, an
+        # identity-stable backend's stale terminal would misread as
+        # settling the resubmission it precedes.
+        if entry is None or entry[0] < latest_position[key]:
             state = "pending"
-        elif terminal["kind"] == "returned":
+        elif entry[1]["kind"] == "returned":
             state = "returned"
         else:
             state = "errored"
@@ -447,20 +500,46 @@ def currency_verdict(
     rule, not a second reimplementation of it that could quietly drift from
     this one.
 
-    Both halves below are load-bearing ON THEIR OWN, not redundant with each
-    other:
+    Both halves below are load-bearing, but not for every backend equally
+    (Part C2) — each covers a different class:
 
     - `superseded` (id-equality) catches a resubmission at an UNCHANGED
       digest — a retry after a service failure, where the source never
       moved but an older submission id is no longer the one that matters.
       Digest-equality alone would miss this: the old submission's recorded
       digest still equals the live one, so a digest-only check would call
-      its result current.
+      its result current. This half is load-bearing for a FRESH-ID-PER-CALL
+      backend (every `submit()` mints a new, distinct id) — proved
+      reachable by `test_resubmission_at_unchanged_digest_still_marks_
+      earlier_result_stale`. On an IDENTITY-STABLE backend (Kaggle-shaped:
+      the same `(worker, entrypoint)` always mints the same id), this half
+      is structurally INERT: `by_id[id]` and `latest[(entrypoint, worker)]`
+      resolve to the SAME record once ids repeat, so `latest_for_key !=
+      submission` can never be true — pinned by
+      `test_retry_at_unchanged_digest_under_a_stable_id_reads_current`. Its
+      guarding duty does not vanish there; it relocates to `fold()`'s
+      append-position checks — BOTH of them, not just one: the
+      `entrypoints`-settle loop (Part B) protects `pending_for()`/the
+      packer clamp, and a SEPARATE positional check in the verdicts loop
+      (immediately after this function is called, guarding only its
+      `"current"` answers) protects `LedgerState.verdicts` and
+      `from_stale_submission` — the field `remote_cli.py` surfaces
+      directly as the CLI's `"quarantined"` output. An earlier version of
+      this docstring named only the `entrypoints` relocation; that
+      understated the claim; verify report `sdd/the-id-that-repeats-
+      by-construction/verify-report` (engram #1134) traced the gap to a
+      consumer this docstring had not accounted for. Both relocations are
+      proved by the SAME test,
+      `test_positional_guard_catches_what_id_equality_
+      would_catch_on_a_fresh_id_backend`, which asserts on
+      `entrypoints`, `verdicts`, AND `from_stale_submission` together.
     - `sourceMoved` (digest-equality) catches the opposite: the same
       submission is still the latest one on record — no resubmission
       happened — yet the source has moved again since it was submitted.
       Id-equality alone would miss this: the id still matches the latest
-      one, so an id-only check would call this result current too.
+      one, so an id-only check would call this result current too. This
+      half is load-bearing for BOTH backend classes: it is orthogonal to
+      how ids are minted.
 
     `latest` is keyed by `(entrypoint, worker)` (Decision 6): this reads
     only the SAME worker's own latest submission for this entrypoint, so a

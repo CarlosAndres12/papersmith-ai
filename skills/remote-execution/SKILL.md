@@ -1,6 +1,6 @@
 ---
 name: remote-execution
-description: "Trigger: durable record of what a repository has submitted to a remote worker, what came back, and how much to submit at once. This skill ships the append-only ledger (write path and the fold that derives per-entrypoint state), the backend-agnostic adapter seam (ABC + frozen shapes + registry), the packer's capacity clamp and worker auto-selection, the full `remote_cli` front door (`submit` with its path guard, optional `--worker` and `--smoke`, repeatable `--unit` for full-spread campaign mode, `status`, `poll`, `fetch` with quarantine, `reconcile`, `distribute`, `generate-job`, `smoke record`, `readiness`), and one concrete backend: `adapters/kaggle.py` — the ONLY file in this entire skill allowed to name a service. It shells out to `adapters/kaggle_driver.py`, the ONLY file in this skill permitted to import the packaged `kagglesdk` client (pinned `kagglesdk==0.1.37`, a standalone distribution since 2025-07-11 -- NOT vendored inside the `kaggle` CLI, a claim that was true of the retired `kaggle==1.7.4.5` and does not carry forward) rather than the `kaggle` CLI's own Basic-auth path, which the stored token shape cannot authenticate against at all; derives worker identity solely from kaggle-accounts' own sanctioned `list --json` command, and accepts credentials only as a `CredentialHandle(worker_id, token_path)` — read at exactly one expression, in that one file, and put on `KAGGLE_API_TOKEN` for one child process, because `kagglesdk`'s own `_try_fill_auth()` reads that variable by value with no path check at all — the CLI itself authenticates neither a path nor that variable. A rehearsal run (`smoke.jsonl`, a distinct file from the main ledger) proves readiness from evidence-completeness, never a human assertion, and never a clock. Stdlib-only except that one named driver script."
+description: "Trigger: durable record of what a repository has submitted to a remote worker, what came back, and how much to submit at once. This skill ships the append-only ledger (write path and the fold that derives per-entrypoint state), the backend-agnostic adapter seam (ABC + frozen shapes + registry), the packer's capacity clamp and worker auto-selection, the full `remote_cli` front door (`submit` with its path guard, optional `--worker` and `--smoke`, repeatable `--unit` for full-spread campaign mode, `status`, `poll`, `fetch` with quarantine, `reconcile`, `distribute`, `generate-job`, `smoke`, `record`, `readiness`), and one concrete backend: `adapters/kaggle.py` — the ONLY file in this entire skill allowed to name a service. It shells out to `adapters/kaggle_driver.py`, the ONLY file in this skill permitted to import the packaged `kagglesdk` client (pinned `kagglesdk==0.1.37`, a standalone distribution since 2025-07-11 -- NOT vendored inside the `kaggle` CLI, a claim that was true of the retired `kaggle==1.7.4.5` and does not carry forward) rather than the `kaggle` CLI's own Basic-auth path, which the stored token shape cannot authenticate against at all; derives worker identity solely from kaggle-accounts' own sanctioned `list --json` command, and accepts credentials only as a `CredentialHandle(worker_id, token_path)` — read at exactly one expression, in that one file, and put on `KAGGLE_API_TOKEN` for one child process, because `kagglesdk`'s own `_try_fill_auth()` reads that variable by value with no path check at all — the CLI itself authenticates neither a path nor that variable. A rehearsal run (`smoke.jsonl`, a distinct file from the main ledger) proves readiness from evidence-completeness, never a human assertion, and never a clock. Stdlib-only except that one named driver script."
 ---
 
 # Remote Execution
@@ -13,6 +13,46 @@ decision asserting the other's fact. Nothing here yet talks to a real
 service — that is a concrete adapter, still to come — but the CLI a user
 would invoke directly (`submit`, `status`, `poll`, `fetch`, `reconcile`) is
 in place today, exercised against a `FakeAdapter` only.
+
+## What this skill cannot see
+
+**It does not know how much time budget a worker has left, and it has no way
+to find out.** The adapter seam exposes `capacity` -- how many submissions may
+run at once -- and `list_active`. Neither is a time budget. `distribute` plans
+in concurrency slots, so its answer is "how many can run simultaneously",
+never "how many hours remain this week".
+
+**A refusal inside the capacity op still misattributes the fault, and only
+the `reconcile` half of that is closed.** `reconcile` makes exactly one remote
+call, `adapter.list_active(worker)`, which reaches a zero-argument capacity op
+that issues one status request per ref the service enumerates -- with no
+per-ref exception handling. `reconcile` itself no longer dies on that: it
+degrades the way `packer.plan()` already did and reports `remote.status:
+"unavailable"` (see the `reconcile` bullet under Current Scope). What is still
+unwritten is the per-ref handling INSIDE the capacity op, in
+`adapters/kaggle.py`. One refusal anywhere in that loop is reported as the
+enumeration having failed structurally, when the enumeration succeeded and a
+downstream per-ref call did not, and it recommends a fallback a `reconcile`
+caller does not have -- so the message a degraded `reconcile` now passes
+through is still describing the wrong side of the problem. Reproducing that
+costs a service call, so the correct per-ref handling is named here and not
+yet written.
+
+**Any plan that reasons in weekly hours takes that number from the operator.**
+Ask; do not assume, and never read one out of this repository.
+
+This is stated first because getting it wrong is not hypothetical. A comment
+in `adapters/kaggle.py` once recorded one rehearsal's cost as `75s of a
+21600s/week (6h) per-account quota`. No constant held that figure, no code
+read it, no test covered it -- an aside wearing the shape of a documented
+service property. Two sessions built arithmetic on it and produced a two-week
+schedule for work that fits in an afternoon; the operator's real figure was
+four to five times larger.
+
+**The tell was available the whole time.** Before believing a number that
+governs spending, look for the constant that holds it, the code that reads it,
+and the test that covers it. A number nothing enforces is a sentence, not a
+limit.
 
 ## Current Scope
 
@@ -228,6 +268,74 @@ Three modules exist so far, each service-blind and stdlib-only:
     already knew the exact pin and entrypoint), bound (to exactly that
     launch), and unstored (nothing here ever carries it forward to a
     later invocation).
+  - **Launch authorization, a SECOND and INDEPENDENT precondition**
+    (design §4, `the-position-nobody-holds`): the consent gate above
+    refuses correctly, but its own single-send refusal safely PRINTS the
+    token it needs — safe only because `campaign_consent_token()` is a
+    sha256 over this invocation's OWN public argv, so any caller who can
+    run `submit` can already compute it. That is not a flaw in the token;
+    it is what a public digest can never be — an authorization. Editing
+    that payload to add readiness or a justification would not close the
+    gap, it would only give the printed refusal one more field to echo
+    back, and it repeats the exact defect class already recorded above
+    (F2: a real field left out of the digest once let three different
+    accounts mint an identical token).
+
+    `_verify_launch_authorization()` reads a DIFFERENT record instead: a
+    `gate` transition, written by `implementation_cli gate` — a separate
+    command, run beforehand, by a separate invocation — into
+    `<target>/<product>/.implementation/position.jsonl`
+    (`proposal-implementation`'s own append-only ledger, folded through
+    `_core/implementation/impl_position.py`, never re-derived here). A
+    non-rehearsal `submit` now refuses unless the newest `gate` event
+    matches this invocation's own pin, relative entrypoint, ordered unit
+    list and named worker (or its absence), and carries a non-blank
+    justification.
+
+    **Readiness is the un-forgeable half.** `gate` only ever appends its
+    record after `readiness` (above) reads `True` for that job at its
+    CURRENT pin — a fact only a real rehearsal, actually run and recorded,
+    can produce; no caller can type it into existence. **Justification is
+    legible, not verified** — `gate` requires one be present, but nothing
+    here checks who wrote it or whether a human read it. What this DOES
+    make true, honestly: the approval is a distinct recorded act, and
+    re-running the identical refused `submit` invocation, any number of
+    times, never substitutes for it.
+
+    Scoped deliberately, not universally: a rehearsal (`--smoke`) is
+    exempt — gating it would deadlock the very mechanism that makes
+    readiness measurable. The legacy `<Name>/Notebooks/**.ipynb` shape is
+    exempt — it has no job folder, so nothing ever promised a runner a
+    commit and no `@rehearsal` witness could ever name one. Both exemptions
+    are structural: readiness cannot exist before a rehearsal has run, and
+    a shape with no job folder has nothing for `gate` to bind to.
+
+    **Campaign mode (`--unit`) is NOT exempt** — a design revision on top
+    of what shipped first (`the-position-nobody-holds` PR8). The original
+    reasoning here claimed `gate`'s own CLI took no `--unit` flag, so a
+    campaign launch could never be matched by any `gate` record; requiring
+    one would make it permanently unauthorizable rather than an adoption
+    cost. That premise was wrong, and the consequence inverted this whole
+    mechanism's purpose: the single send ended up gated and the campaign —
+    the full-scale, multi-worker, hours-long launch this change exists to
+    gate in the first place — did not. `gate` now takes the identical
+    repeatable `--unit` `distribute`/`submit` already declare, and binds
+    the SAME three facts `campaign_consent_token()` binds for consent: pin,
+    relative entrypoint, and the exact ordered unit list, computed from the
+    caller's own argv before `packer.distribute()` ever runs — never the
+    per-worker assignment `distribute()` computes later, which
+    `_verify_launch_authorization()` never sees at all. A campaign
+    authorization's `worker` field is always `None`, matching what a
+    campaign `submit` invocation's own binding always is (`cmd_submit`'s
+    own `--worker`/`--unit` mutual exclusivity, mirrored by `cmd_gate`'s
+    own refusal on the same conflict).
+
+    Fail-closed for everything else, on purpose: a job-folder product with
+    no `.implementation/position.jsonl` at all refuses exactly like one
+    with events but no match — the one-time adoption cost this accepts
+    rather than reproduce today's hole for every target that never adopts
+    the position mechanism. The refusal names the exact `gate` invocation
+    that pays it.
   - `status` folds the ledger and reports per-entrypoint state, what is
     `staleInFlight`, what is quarantined, and `unreadableLines`. It accepts
     no `adapter` parameter at all — a structural fact, not a convention —
@@ -245,7 +353,12 @@ Three modules exist so far, each service-blind and stdlib-only:
     entirely and is fetched into
     `<target>/<Name>/.remote-execution/quarantine/<submissionId>/` instead
     — structurally outside `Results/shards/`, so it is parked and
-    auditable, never merged. Every `returned` event also carries
+    auditable, never merged. `fetch --smoke` computes its own destination
+    the same way, into `<target>/<Name>/.remote-execution/rehearsal/
+    <submissionId>/` — `--dest` is refused (not merely unused) under
+    `--smoke`, and a real fetch with no `--dest` is refused symmetrically;
+    both directions closed by one pure-argv pairing check, above every
+    filesystem call. Every `returned` event also carries
     `observedConcurrency`: `LedgerState.pending_for(worker)` read from the
     ledger state at the top of the call, so a service throttling below the
     packer's own grant becomes a visible, different number instead of an
@@ -260,6 +373,26 @@ Three modules exist so far, each service-blind and stdlib-only:
     `orphanLocal` — reported, and `--resolve` (human-invoked only, default
     `False`) is the one path that appends `errored(reason="not-found-at-service")`
     for it.
+
+    **Its one remote call degrades rather than crashing, and says which
+    happened.** `adapter.list_active()` failing — unreachable, refusing,
+    timing out — returns `remote: {"status": "unavailable", "reason": …}`
+    with both orphan tuples empty and `--resolve` appending nothing at all,
+    instead of killing the one command an operator runs precisely because
+    something has already gone wrong. The empty tuples alone would have
+    said the OPPOSITE of the truth — `orphanLocal: []` from a service that
+    answered is the strongest all-clear this command can give — so the
+    status field carries the difference and the payload's emptiness never
+    does, exactly as `packer.plan()` reports `in_flight_source` rather than
+    a bare number, and as `prior_work_state()` reports `recordStatus` so an
+    unreadable record cannot pass for a clean one. A service that answered
+    reports `remote: {"status": "read", "reason": null}`.
+    `WorkerUnauthorized` is the one `list_active()` failure that still
+    refuses, re-raised untouched: a revoked credential is a
+    decision-bearing fact, and `plan()` re-raises it out of the identical
+    call for the same reason. Everything outside that single call — an
+    absent `--target`, an unresolved product, an unreadable ledger — still
+    refuses exactly as before, because none of it ever reached the service.
   - `product_for(target, entrypoint, explicit=None, *, command=None)` resolves
     which product's ledger an entrypoint belongs to — explicit, never guessed.
     Replaces the narrower `name_for()`: an explicit `--product` wins over
@@ -297,7 +430,30 @@ Three modules exist so far, each service-blind and stdlib-only:
   env built from an allowlist (`PATH` plus, when a credential is involved,
   `KAGGLE_API_TOKEN`), and an explicit timeout on every call; a non-zero
   exit or an expired timeout is a refusal (`KaggleAdapterError`), never a
-  fabricated `Status`, `Submission` or `Fetched`. `poll()` translates the
+  fabricated `Status`, `Submission` or `Fetched`.
+
+  **`fetch()` owns its own time budget, `KAGGLE_FETCH_TIMEOUT_SECONDS`
+  (1800s) — a SEPARATE constant from `SUBPROCESS_TIMEOUT_SECONDS` (120s),
+  never the same one reused.** This is the same finding as
+  `jobfolder.py`'s `PIN_PUBLISHED_TIMEOUT_SECONDS` above, in a second
+  place. The 120s constant times the control plane — worker listing, the
+  submit push, `poll`, `capacity` — where every call is a small request the
+  service answers immediately and failing fast is exactly right. `fetch()`
+  is the one call that moves bulk bytes, and its SIZE IS DECIDED BY THE
+  REMOTE JOB, not by anything this process can see beforehand; measured
+  link throughput against this service varies by more than an order of
+  magnitude (2.1 MB/s in one measurement, 0.06 MB/s in another). Under the
+  shared budget that combination does not merely fail slowly, it
+  MISDIAGNOSES: a 256 MB artifact from a completed 75-minute GPU run was
+  killed at 120s and read as a broken fetch, exactly as the pin probe's
+  slow run once read as an unpublished commit. 1800s is generous at the
+  slow end of that range and still BOUNDED — a hung child must still die.
+  The refusal names whichever budget actually expired, never the other, or
+  the message sends the reader hunting for a limit that was not enforced.
+  Both are constructor parameters (`timeout=`, `fetch_timeout=`) so a test
+  can inject small values.
+
+  `poll()` translates the
   driver's own reported `KernelWorkerStatus` member name into the seam's
   five-value vocabulary and never passes it through; the raw name goes in
   `Status.detail` only. `CredentialHandle(worker_id, token_path)` is
@@ -621,6 +777,19 @@ executable — no test in this suite reaches the network or a real account).
     actually turns on. Omitted entirely, no `accelerator` block is
     written and a job behaves exactly as it did before this field
     existed — additive, `schemaVersion` stays 1.
+  - **A job may also declare its own local-sufficiency budget.**
+    `generate-job --local-budget-seconds N` writes `run-config.json`'s
+    additive `localBudget: {seconds: N}` block, in the identical
+    conditional-block site the `accelerator` block above already uses —
+    written only when the flag is passed, silence otherwise, never a
+    forge-invented default of zero. `the-pilot-decides-the-remote-
+    strategy`'s `classify_remote_necessity` (`_core/implementation/
+    impl_execution_strategy.py`) compares this declared seconds figure
+    against the pilot-projected cost to decide whether a job needs a
+    remote worker at all; a job with no `accelerator` and no
+    `--local-budget-seconds` classifies `optional` — the recorded facts
+    do not decide, and `proposal-implementation`'s `gate` then requires
+    an explicit `--elect` naming it, on every gate call.
   - **The from-zero gap, closed (session addition): a job generated with
     no caller-declared accelerator at all is not left unprotected
     anymore.** `generate-job` exposes `--accelerator-kind`/
@@ -700,6 +869,190 @@ executable — no test in this suite reaches the network or a real account).
   `unresolvedImports` instead of guessing, converting a silence into a
   recorded, reportable decision. `--accept-unresolved` never bypasses a
   `computedNotDeclared` refusal — only `unresolved`.
+
+  **Undeclared-read detection (Unit 1, same-file).** The field incident this
+  exists to catch: a job declared its imports correctly and still failed,
+  because a module-level `Path` constant chain it never imported anything
+  about was READ from at runtime — a resume record, a cached result file —
+  and nothing checked whether that resolved path was covered by a declared
+  clone path at all. `resolve_clone_paths()` now reuses the SAME parsed
+  `ast.Module` tree its import walk already holds for every transitively-
+  reached file (no new file traversal) and reads two more node families off
+  it: module-level `ast.Assign` (`_fold_module_constants()`, building a
+  constant -> `Path` table per file, each constant folded on top of the ones
+  already folded above it in the same file) and `ast.Call`/`ast.Attribute`
+  (`_scan_read_call_sites()`, classifying every call site against a closed
+  read/write/neutral roster).
+
+  The returned dict gains three keys (the corrective batch below added the
+  third): `computedReadsNotDeclared` (a folded, target-contained read whose
+  resolved path is not covered by a declared clone path — `Path.
+  is_relative_to`, never exact-match-only, since a data file legitimately
+  nests under a declared directory rather than naming it exactly, AND
+  which nothing in the same walked file set writes — see the
+  reclassification below), `producedReadsNotDeclared` (the SAME
+  containment/coverage test, but the resolved path IS also targeted by a
+  WRITE call site somewhere in the same walked file set), and
+  `unresolvedReads` (a read call site whose path could not be folded, or a
+  folded, target-contained path used in a call this walk cannot classify).
+  All three are always present, even empty — never absent.
+  `computedReadsNotDeclared` non-empty always refuses generation
+  unconditionally, exactly like `computedNotDeclared` — never a warning.
+  `producedReadsNotDeclared` non-empty refuses generation unless the
+  caller passes **`--accept-produced-reads`**. `unresolvedReads` non-empty
+  refuses generation unless the caller passes
+  **`--accept-unresolved-reads`**. All three accept-flags
+  (`--accept-unresolved`, `--accept-unresolved-reads`,
+  `--accept-produced-reads`) are SEPARATE — passing one never waives
+  another's refusal. The severity asymmetry that makes these separate
+  flags rather than one shared flag: an accepted uncertain IMPORT dies
+  loudly in the kernel minutes later (`_refuse_absent_clone_paths`); an
+  accepted uncertain READ is reported by nobody — the field incident ran
+  green. A shared flag would let the loud hatch cover the quiet ones.
+  Each acceptance is recorded verbatim in `run-config.json`
+  (`unresolvedReads`, `acceptedProducedReads`), mirroring
+  `unresolvedImports`'s own omit-when-empty convention exactly — a job
+  folder generated before a field existed simply omits it, and
+  `validate_run_config()` checks required fields with no key allowlist, so
+  an existing job folder stays a valid, readable job folder regardless.
+  There is no declared `reads` field: `_refuse_absent_clone_paths` already
+  verifies every declared path at the pin, data file or module alike, so
+  only the INFERENCE side was missing.
+
+  **The generation-deadlock CRITICAL, and why `producedReadsNotDeclared`
+  exists.** A job whose own purpose is to PRODUCE a file it also reads
+  back (a resumable record, exactly the real target's
+  `config.<RECORD>` shape: written by `search_record()`'s own run,
+  read back by a later one) could not be generated at all under Unit 1 +
+  Unit 2 alone: leaving the read undeclared refused unconditionally via
+  `computedReadsNotDeclared` (no hatch); declaring it as the file or its
+  parent directory instead refused via `_refuse_absent_clone_paths` (no
+  tree object at the pin, since the file has never yet been produced).
+  Declaring refused; not declaring refused; no third option existed for a
+  job's first-ever run. The fix is RECLASSIFICATION using the write
+  signal, not suppression: `_scan_read_call_sites()` also collects every
+  folded, target-contained path targeted by a WRITE call site anywhere in
+  the same walked file set. An undeclared read whose resolved path is
+  ALSO written somewhere in that same walk moves from
+  `computedReadsNotDeclared` into `producedReadsNotDeclared` — still a
+  refusal by default, but now with an escape hatch
+  (`--accept-produced-reads`) that lets the job be generated WITHOUT
+  declaring the not-yet-existent file, because an undeclared clone path is
+  never checked against the pin by `_refuse_absent_clone_paths` at all.
+  The operator is still told and still decides — nothing disappears
+  silently. This is deliberately NOT the exclusion proposed and REJECTED
+  below (Decision 5): that one would have silently dropped the read from
+  candidacy entirely, with no refusal and no record, based only on the
+  mkdir-then-write shape. Reclassification with a recorded acceptance
+  keeps the operator in the loop; silent exclusion would not have.
+
+  Containment FILTERS, it never accuses: a path outside `target`
+  (`.resolve()` + `relative_to`) is dropped entirely — not a candidate and
+  not an uncertainty — the same `external` posture `_classify_import()`
+  gives a non-local import, and the same absolute-path refusal
+  `validate_clone_paths()` already applies to a declared clone path. This
+  containment drop applies only to a folded MODULE-LEVEL constant: an
+  absolute path bound to a module-level constant and never re-assigned is
+  dropped silently, never proposed and never a refusal. It does NOT apply
+  the same way to a read whose absolute path is built through a LOCAL
+  variable — `_fold_module_constants()` never folds locals by design, so
+  that shape does not reach the containment test at all; it instead lands
+  in `unresolvedReads` (refuses by default, `--accept-unresolved-reads`
+  available) via the read-shaped-method-name fallback. The real target's
+  own battery probe (`harness.py:167-169`,
+  `online = Path("/sys/class/power_supply/AC/online")` then
+  `online.read_text()`) is exactly this LOCAL-variable case — it refuses
+  by default and takes the hatch, it is never silently dropped by
+  containment. (A prior revision of this doctrine and its covering test
+  claimed the two shapes were equivalent "regardless of which name holds
+  the Path" — measured false; corrected here and in the test that used to
+  make that claim.) A write call site (`.write_text`/`.write_bytes`/a
+  write-mode `.open`/`.mkdir`/`.touch`/`.unlink`/`.rename`) is never a
+  READ candidate — the roster IS that exclusion, and there is deliberately
+  NO separate "run-produced output" exclusion layered on top of THAT
+  roster (Decision 5, unchanged): a write call site collected for
+  `producedReadsNotDeclared` (above) is a completely different mechanism
+  — it never removes a read from candidacy, it only moves an already-
+  surfaced, already-refusing candidate into the hatch-bearing bucket. That
+  exclusion was proposed and REJECTED on measurement: a real target's own
+  resume-artifact record is built under a directory the same run also
+  `mkdir`s and writes on a later invocation — the same walked file set
+  both writes AND reads that constant, so excluding "a path the run
+  creates" from candidacy entirely would have suppressed the exact read
+  this detector exists to catch, with no record and no refusal at all.
+  Under Unit 1 alone that resume-artifact read was cross-module (the
+  constant is folded in a DIFFERENT file than the one calling
+  `.read_text()` on it) and therefore unfoldable, landing in
+  `unresolvedReads` — refusing by default, never silently excused, but
+  only via the weakest of the (then two, now three) refusal paths. Unit 2
+  resolves exactly this cross-module shape, so that same read now folds
+  fully; the corrective batch above is what then keeps that fully-folded
+  read generation-reachable at all, by moving it to
+  `producedReadsNotDeclared` (write-backed) instead of leaving it in the
+  hatch-less `computedReadsNotDeclared`.
+
+  The admitted grammar `_fold_path_expr()` folds is CLOSED and documented,
+  never implied complete: `Path(__file__)` and `.resolve()`/`.parent`
+  chains off it; `Path(__file__).resolve().parents[N]` with `N` a
+  non-negative int literal; `Path("<string literal>")`; a bare `Name`
+  already folded earlier in the same file's table; `BinOp(Div)` with a
+  string-literal right operand, chained (`X / "a" / "b"`); and
+  `.joinpath("a", "b", ...)` with every argument a string literal.
+  Everything outside this roster returns `None` from `_fold_path_expr()`,
+  never a guess, and is documented here as the same list the helper's own
+  docstring carries: f-strings, `%`/`+`/`str.format` string building,
+  `os.path.join(...)`, `os.environ[...]`, `sys.argv[...]`,
+  `.with_name(...)`/`.with_suffix(...)`/`.stem`/`.glob(...)`, `Path(x)` for
+  any `x` other than `__file__` or a string literal, a ternary
+  (`ast.IfExp`), `AugAssign`, a tuple-unpack assignment target, and
+  `.parents[N]` with a non-literal index. A name assigned twice at module
+  level is dropped from the table entirely, never last-wins. A name bound
+  ANYWHERE in a non-module scope (a function/lambda parameter, or a local
+  assignment/`for`/`with`/comprehension/`except` target) is never folded
+  through the table at all, even at its module-scope occurrence of the
+  same spelling — a shadowed name lands in `unresolvedReads`, never
+  silently resolved to a module constant it happens to share a spelling
+  with. An evaluator whose limits are undocumented is a detector that
+  implies completeness.
+
+  **The limitation, measured — not a proof about every target.** This check
+  finds a read whose path folds from module-level constants. It does not
+  find a read of a pinned repository input whose path is built from a
+  runtime parameter. Measured on one target: every runtime-parameterized
+  path there was a run-produced output, so at that instance the
+  unresolvable class and the defect class did not overlap. That is one
+  target, not a proof about all targets. Do not inherit a scarier caveat
+  than this. All five of one real target's `shard_paths()` consumers are
+  write-first: `write_shard_stamp` writes; `seal_shard_stamp` reads back
+  what it just wrote; `_partial_path` takes the static branch;
+  `<search_entrypoint>` reads a resume artifact a prior run of the same shard
+  wrote (this one becomes an `unresolvedReads` entry, not a silent miss);
+  `campaign`/`smoke` `mkdir` then open for writing.
+
+  **Cross-module attribute reads (Unit 2).** `sibling.CONSTANT.read_text()`
+  — a constant folded in a DIFFERENT file than the one doing the read
+  (the real, cited target's own `search_record()` reading
+  `config.<RECORD>.read_text()`, the constant folded in `config.py`
+  rather than the file calling it) — now resolves too. Chosen as
+  LAZY-FOLD-ON-DEMAND, not two-pass: `_resolve_module_constant()` reuses
+  `_classify_import()` UNCHANGED (the same function import classification
+  already calls) to turn the local name an import bound (`_import_alias_
+  map()`) into a sibling file, purely from the filesystem — independent of
+  whether the main walk's own queue has visited that sibling yet. This is
+  what makes resolution correct regardless of visit order: an entry
+  module is always scanned for its own read call sites before its
+  transitively-imported siblings are ever popped off the queue, so a
+  same-file-only, visit-order-dependent design would have missed exactly
+  the shape this Unit exists to catch. A per-`resolve_clone_paths()`-call
+  cache memoizes each sibling file's folded table by resolved file path,
+  so a repeatedly-referenced constant is folded once, not once per
+  reference, and doubles as a cycle guard for a circular cross-module
+  reference (an edge case no cited target exhibits). A module that does
+  not resolve to this repository's own code (`_classify_import()`'s
+  `"unresolved"` or `"external"` postures, unchanged) folds to `None`
+  exactly like any other unfoldable receiver — the read call site still
+  reaches `unresolvedReads` by its own read-shaped method name, never
+  silently dropped.
 
   `validate_clone_paths()` gained an optional `target` argument: when
   given, each clone path is also resolved against it and refused if that
@@ -798,9 +1151,32 @@ executable — no test in this suite reaches the network or a real account).
   slice builds it); once it does, it will route through `read()` the same
   way.
 
+## The commands
+
+`remote_cli.py` accepts exactly nine top-level subcommands; this table is the
+closed roster `skill-audit`'s `roster` move derives against, driving the CLI
+with a nonce it cannot accept and reading the accepted set out of its own
+refusal.
+
+| Command | What it does |
+| --- | --- |
+| `submit` | submit one notebook to a registered backend's worker |
+| `status` | report the fold for one product's ledger; resolves nothing |
+| `distribute` | report how opaque work units would spread across every healthy worker account right now; issues no work and records nothing |
+| `poll` | ask the adapter for one submission's status |
+| `fetch` | materialize one submission's result, quarantining it when it is not current |
+| `reconcile` | compare the ledger against the adapter's `list_active()` in both directions |
+| `generate-job` | generate a forge-owned job folder at `<target>/tools/<service>/<job-name>/` |
+| `smoke` | smoke-run bookkeeping: recording a rehearsal's evidence-derived verdict |
+| `readiness` | state whether a job is ready for a full submission on a worker; reports only, issues no submission |
+
 ## Smoke — a readiness gate, evidence-derived
 
 A smoke run is a rehearsal, not a submission whose result feeds any report.
+
+| Smoke subcommand | What it records |
+| --- | --- |
+| `record` | a `smokeResult` event: pass/fail derived from `shard_io.completeness()`, never a human assertion |
 
 **A distinct file, not a fourth ledger `kind`.**
 `<target>/<product>/.remote-execution/smoke.jsonl` lives beside
@@ -850,9 +1226,23 @@ reads a timestamp — a record's usefulness expires the moment the job
 re-pins to a different commit or the worker changes, never after elapsed
 time.
 
-`probe` states the fact and submits nothing — `readiness` reports only.
-`piloted` (a `proposal-implementation` concept) is untouched, and neither
-state implies the other.
+`probe` states the fact and submits nothing — `readiness` still reports
+only and still issues nothing: its own signature takes no `adapter`
+parameter, exactly as before. What changed (design §4,
+`the-position-nobody-holds`): a non-rehearsal `submit` now READS this same
+three-fact bind — through `gate`'s own recorded transition, never through
+`readiness` directly — so a job whose `smokeReady` is not `True` cannot be
+gated, and an ungated job cannot be submitted at full scale. `piloted` (a
+`proposal-implementation` concept) remains untouched and still implies
+nothing.
+
+This is narrower than it may first read, and the distinction is
+load-bearing: `probe`'s own ECHO of `smokeReady` still gates nothing —
+that row above is unedited, and reading it is still purely informational.
+What now gates is `readiness`'s underlying THREE-FACT MEASUREMENT, reached
+only through a separately-recorded `gate` transition — permitting the
+rehearsal to unlock authorization is not the same as branching on the
+reported fact itself.
 
 ## Why append, not a status record
 

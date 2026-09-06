@@ -1,3 +1,3 @@
 import assert from 'node:assert/strict'; import path from 'node:path'; import test from 'node:test'; import { pathToFileURL } from 'node:url';
-const {createJiti}=await import('jiti'); const jiti=createJiti(import.meta.url); const smoke=await jiti.import(path.resolve('skills/proposal-deliberation/engine/smoke-runner.ts'));
+const {createJiti}=await import('jiti'); const jiti=createJiti(import.meta.url); const smoke=await jiti.import(path.resolve('skills/_core/deliberation/engine/smoke-runner.ts'));
 test('runs chained V2 smoke with a real restart',async()=>{const result=await smoke.runProposalDeliberationSmoke();assert.match(result.latest,/r\d+\.md$/);assert.equal(result.consistency.status,'PASS');assert.equal(result.selfAudit.runtimeStatus,'PASS');assert.equal(result.selfAudit.criticalFailures.length,0);assert.ok(result.metrics.maxObservedParallelModelCalls<=1);assert.ok(result.metrics.maxObservedParallelWrites<=1);assert.equal(result.locks.activeMutationLocks,0);});

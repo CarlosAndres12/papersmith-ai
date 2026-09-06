@@ -157,6 +157,22 @@ class PathGuardError(RemoteCLIError):
     """An entrypoint failed this forge's own file-kind policy for what may run remotely."""
 
 
+class AuthorizationError(RemoteCLIError):
+    """A non-rehearsal `submit` refused for lack of a matching `gate`
+    transition record (design §4, domain launch-authorization) -- a
+    SEPARATE and INDEPENDENT precondition from `ConsentError` below, never
+    a payload this class shares with it.
+
+    `campaign_consent_token()` binds *what* is launched and is computed
+    entirely from this invocation's own argv -- which is exactly why it can
+    never be an authorization: any caller who can run `submit` can also
+    compute its own consent. This error exists for the other half:
+    *someone with standing said yes, at this readiness, for this reason* --
+    a fact that has to be recorded before, and independently of, the
+    launching invocation, never derivable from it.
+    """
+
+
 class ConsentError(RemoteCLIError):
     """ANY `submit` refused for lack of, or a mismatch in, the consent
     token this invocation needs -- campaign, single send, and rehearsal
@@ -178,6 +194,12 @@ NOTEBOOK_SUFFIX = ".ipynb"
 LEDGER_DIRNAME = ".remote-execution"
 LEDGER_FILENAME = "ledger.jsonl"
 QUARANTINE_DIRNAME = "quarantine"
+
+# A rehearsal's (`fetch --smoke`) landing directory -- distinct from
+# QUARANTINE_DIRNAME above, which is for a REAL fetch judged not current.
+# Before this existed, `fetch --smoke` landed wherever `--dest` said, the
+# same tree a shard reader enumerates, and nothing ever quarantined it.
+REHEARSAL_DIRNAME = "rehearsal"
 PARTIAL_SUFFIX = ".partial"
 TOOLS_DIRNAME = "tools"
 RUN_CONFIG_FILENAME = "run-config.json"
@@ -557,6 +579,212 @@ def _verify_launch_consent(
                 "exact invocation needs"
             )
         )
+
+
+def _load_impl_position():
+    """Path-import `_core/implementation/impl_position.py` -- the ONE fold
+    of `.implementation/position.jsonl` `_verify_launch_authorization()`
+    below is allowed to read.
+
+    Same `sys.modules`-reuse technique as every other `_load_sibling` load
+    in this module, extended one skill boundary further: `impl_position.py`
+    lives outside this skill's own `remote_cli -> packer -> ledger ->
+    adapter` chain, in neutral ground `proposal-implementation` already
+    reaches into the same way (`implementation_cli.py`'s own `import
+    impl_position`, after a `sys.path.insert` of this exact directory).
+    Reusing an already-loaded copy under the SAME `sys.modules` key that
+    caller uses is not merely an optimization here: `impl_position.py`
+    defines no class either module would need `isinstance` for, but
+    re-executing it under a second key would still leave two modules
+    disagreeing about `sys.modules["impl_position"]`, which is the one
+    piece of global state a caller elsewhere in the same process might
+    already depend on.
+
+    `_core/implementation/` is inserted onto `sys.path` before the exec,
+    because `impl_position.py` itself does `from impl_refusals import
+    Refused` with no path setup of its own -- it is written to be reached
+    the way `implementation_cli.py` reaches it, and a spec-loaded exec
+    still runs that same top-level import line, which needs
+    `impl_refusals` importable at that moment.
+
+    Loaded lazily, called only from inside `_verify_launch_authorization()`
+    -- same discipline `_load_source_digest()` documents for its own
+    cross-skill reach: every OTHER `submit` path (a rehearsal, a legacy
+    entrypoint, campaign mode -- see that function's own docstring) never
+    needs this module at all, so importing it at module load time would
+    cost every caller a `sys.path` mutation and a file read they may never
+    use.
+    """
+    module_name = "impl_position"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    core_dir = Path(__file__).resolve().parents[2] / "_core" / "implementation"
+    if str(core_dir) not in sys.path:
+        sys.path.insert(0, str(core_dir))
+    script = core_dir / "impl_position.py"
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _verify_launch_authorization(
+    *,
+    smoke: bool,
+    target: Path,
+    product: str,
+    pin_commit: str | None,
+    relative_entrypoint: Path,
+    units: Sequence[str] | None,
+    worker: str | None,
+) -> None:
+    """The SECOND, independent precondition `cmd_submit` enforces (design
+    §4.2) -- separate from `_verify_launch_consent()` above, never a second
+    check bolted onto that one's payload.
+
+    The finding this repairs: `_verify_launch_consent()` refuses every
+    unauthorized launch correctly, but its refusal message prints back the
+    exact token the caller passes in on the next call -- `campaign_consent_
+    token()` is a sha256 over THIS INVOCATION'S OWN public argv, so any
+    caller who can run `submit` can also compute it. Editing that payload
+    to add readiness or a justification would not close that gap; it would
+    only give the refusal one more field to print back, and it repeats the
+    exact defect class already recorded at `_verify_launch_consent()`'s own
+    docstring (F2): three named `--worker <account>` invocations once
+    minted an identical token because a real field was left out of the
+    digest. This function is deliberately NOT that kind of change: it reads
+    a record written BEFORE and INDEPENDENTLY of this invocation, by a
+    different act -- `implementation_cli gate`, run against a REHEARSAL
+    that actually happened -- never anything this invocation's own argv
+    could have produced.
+
+    Readiness is the un-forgeable half: `gate` only ever appends its record
+    after `remote_execution_jobs_state()['smokeReady']` reads `True` for
+    that job at its CURRENT pin, and that fact can only become true by a
+    rehearsal actually running and being recorded (`cmd_readiness`'s own
+    three-fact bind) -- no caller can type it into existence. Justification
+    is legible, not verified: this function checks only that one is present
+    on the matching record, never who wrote it or whether a human read it.
+    What is enforceable, and IS enforced here, is narrower and honest: the
+    approval is a distinct recorded act, and re-running this exact launch
+    command a second time can never substitute for it -- only a `gate`
+    record, minted by a separate invocation of a separate command, can.
+
+    Strengthened once more, additively (Slice 2B, design decision 3): the
+    `gate` command that appends a matching record now also requires its own
+    SEPARATE `--authorization` precondition -- a token minted by a prior
+    `offer` publish, verified and consumed at gate time
+    (`implementation_cli._verify_gate_authorization`). This function does
+    not read that token, or any `authorization`/`authorization-consumed`
+    event -- it still folds only `kind: "gate"` events, exactly as before,
+    and it cannot tell a record written before that mechanism existed from
+    one written after. That is deliberate, not an oversight: the
+    strengthening is a property of how a `gate` record now comes to exist
+    (the command that writes it refuses to run without a verified token),
+    never a property this function itself checks. A `gate` record written
+    before this mechanism existed therefore authorizes exactly as it always
+    did here -- it is not migrated, and it is not invalidated.
+
+    Scope, stated rather than left implicit:
+
+    - `smoke=True` returns immediately. A rehearsal is never gated by this
+      function -- gating it would deadlock the very mechanism that makes
+      readiness measurable (`smokeReady` becomes `True` only once a
+      rehearsal has run). `--smoke` still needs its own consent token
+      (`_verify_launch_consent` above), so a rehearsal stays deliberate.
+    - `pin_commit is None` returns immediately too: the legacy
+      `<Name>/Notebooks/**.ipynb` shape has no job folder and therefore no
+      `run-config.json` for `gate` to have read a commit from, and no
+      `@rehearsal <jobName>` witness a position sequence could ever name
+      for it -- the exact "nothing here promised a runner a commit"
+      discriminator `_gate_job_folder_pin()`'s own docstring already uses,
+      applied to the same reason.
+    - Campaign mode (`units` truthy) is NOT exempt (design revision,
+      `the-position-nobody-holds` PR8 -- corrected: the original pass here
+      exempted it, reasoning that `gate`'s own CLI took no `--unit` flag to
+      bind against. That reasoning inverted this change's whole purpose: the
+      single send ended up authorized and the campaign -- the full-scale,
+      multi-worker, hours-long launch this mechanism exists to gate -- did
+      not. The premise was also simply wrong: `units`, at THIS call site, is
+      the exact ordered list `cmd_submit`'s OWN caller passed via `--unit`,
+      computed before `packer.distribute()` ever runs -- the same value
+      `campaign_consent_token()` already binds, never the per-worker
+      assignment `distribute()` computes later, which this function never
+      sees at all. `gate` now takes the identical repeatable `--unit`, so a
+      campaign authorization binds the same (pin, entrypoint, ordered unit
+      list) `campaign_consent_token()` binds, with `worker` always absent --
+      campaign mode never names one (`cmd_submit`'s own `--worker`/`--unit`
+      mutual exclusivity above), the same reason `campaign_consent_token()`
+      itself omits `worker` from its payload whenever the caller named none.
+
+    For every other launch, this folds `<target>/<product>/.implementation/
+    position.jsonl` and requires the NEWEST `gate` event whose `commit`,
+    `entrypoint` and `units` match this invocation's own binding exactly,
+    whose `worker` matches this invocation's own `worker` (which is why an
+    auto-selected single-send launch -- no `--worker` named -- can never
+    match a `gate` record: `gate`'s own `--worker` flag is required for that
+    shape, so a record always names one account, and an invocation that has
+    not yet chosen one has nothing to match against; a campaign launch's
+    `worker` is structurally always `None`, and a campaign `gate` record's
+    `worker` is `None` too, by the same mutual-exclusivity rule on both
+    sides), and whose `justification` is non-blank. Fail-closed by design
+    (§4.5): a product with no `.implementation/position.jsonl` at all folds
+    to zero events and refuses exactly like one with events but no match,
+    reproducing today's hole for NO target -- the one-time adoption cost
+    this accepts on purpose, and the refusal below names the exact command
+    that pays it.
+    """
+    if smoke:
+        return
+    if pin_commit is None:
+        return
+
+    impl_position = _load_impl_position()
+    ledger_path = (
+        Path(target).resolve() / product / ".implementation" / "position.jsonl"
+    )
+    events = impl_position.read_events(ledger_path)
+    expected_units = list(units or ())
+    expected_entrypoint = str(relative_entrypoint)
+
+    for event in reversed(events):
+        if event.get("kind") != "gate":
+            continue
+        if (
+            event.get("commit") == pin_commit
+            and event.get("entrypoint") == expected_entrypoint
+            and list(event.get("units") or []) == expected_units
+            and event.get("worker") == worker
+            and str(event.get("justification") or "").strip()
+        ):
+            return
+
+    # A campaign refusal must hand the caller a command shaped like the
+    # record that could actually authorize it -- naming `--worker <account>`
+    # here would send the caller toward a record `gate`'s own mutual
+    # exclusivity refuses to write (a campaign record's `worker` is always
+    # `None`), so the campaign branch names `--unit` instead, never a
+    # worker flag.
+    if units:
+        worker_note = ""
+        gate_flags = " ".join(f"--unit {unit!r}" for unit in expected_units)
+    else:
+        worker_note = (
+            f" for worker {worker!r}" if worker is not None else " (no --worker named)"
+        )
+        gate_flags = f"--worker {worker!r}" if worker is not None else "--worker <account>"
+    raise AuthorizationError(
+        "submit refuses: no `gate` transition record authorizes this exact "
+        f"launch (pin {pin_commit!r}, entrypoint {expected_entrypoint!r}, "
+        f"units {expected_units!r}){worker_note}. Run `implementation_cli "
+        f"gate --target <workspace-clone> --name {product} --job <jobName> "
+        f"{gate_flags} --justification <text-or--> --revision "
+        "<revision> --session <id>` first, at this exact pin, then re-run "
+        "this exact submit invocation -- re-running submit itself is "
+        "never the approval; only that separate, recorded act is."
+    )
 
 
 def _gate_job_folder_pin(resolved_entrypoint: Path) -> None:
@@ -957,8 +1185,9 @@ def cmd_submit(
     # above guarantees it is None whenever `units` is truthy, so passing
     # it straight through binds an explicit single-send worker and leaves
     # campaign/auto-select derivation untouched, in one expression.
+    pin_commit = _job_folder_commit(resolved_entrypoint)
     expected_consent = campaign_consent_token(
-        pin_commit=_job_folder_commit(resolved_entrypoint),
+        pin_commit=pin_commit,
         relative_entrypoint=relative_entrypoint,
         units=units or (),
         worker=worker,
@@ -966,6 +1195,17 @@ def cmd_submit(
     _verify_launch_consent(
         consent=consent, expected_consent=expected_consent, units=units,
         worker=worker,
+    )
+
+    # A second, INDEPENDENT precondition (design §4.2) -- never folded into
+    # the consent check above, and never sharing its payload. Runs right
+    # after consent and before the digest walk, so a refusal here costs
+    # exactly as little as a consent refusal does: no digest, no plan, no
+    # adapter call, no ledger line.
+    _verify_launch_authorization(
+        smoke=smoke, target=target, product=resolved_product,
+        pin_commit=pin_commit, relative_entrypoint=relative_entrypoint,
+        units=units, worker=worker,
     )
 
     digest_fn = source_digest or _load_source_digest()
@@ -1273,10 +1513,11 @@ def cmd_fetch(
     target: str | Path,
     entrypoint: str | Path,
     submission_id: str,
-    dest: str | Path,
+    dest: str | Path | None,
     adapter: "ADAPTER.Adapter",
     source_digest: Callable[[Path, str], str] | None = None,
     force: bool = False,
+    smoke: bool = False,
 ) -> dict:
     """Materialize one submission's result, quarantining it structurally
     when it is not judged current — never discarding it, and never merging
@@ -1368,6 +1609,24 @@ def cmd_fetch(
        — retryable, never a false `returned` — because nothing before this
        line ever wrote to the ledger.
     """
+    # Pure-argv pairing check, above every filesystem call: a rehearsal's
+    # destination is computed and cannot be chosen, and a real fetch has no
+    # computed destination to fall back to. `--dest` losing `required=True`
+    # on the parser (so `--smoke` can omit it) opens the second half of
+    # this hole the instant it happens, so both directions are checked
+    # together here, not as two separate smoke-only refusals.
+    if smoke and dest is not None:
+        raise RemoteCLIError(
+            "fetch --smoke computes its own rehearsal destination -- "
+            "--dest is refused under --smoke, never merely defaulted away "
+            "from"
+        )
+    if not smoke and dest is None:
+        raise RemoteCLIError(
+            "fetch requires --dest for a real (non-smoke) fetch -- only "
+            "--smoke computes its own destination"
+        )
+
     target = Path(target).resolve()
     if not target.is_dir():
         raise RemoteCLIError(
@@ -1382,14 +1641,34 @@ def cmd_fetch(
     # recorded by `submit --smoke` into `smoke.jsonl` — this used to hardcode
     # `LEDGER_FILENAME` and could never find one, at all, no matter how
     # complete the artifact it was asked to fetch.
-    ledger_path, state = resolve_submission_ledger(target, product, submission_id, live)
+    ledger_path, state, arbitration = resolve_submission_ledger(
+        target, product, submission_id, live, smoke=smoke
+    )
     submission = state.by_id[submission_id]
 
     verdict = LEDGER.currency_verdict(submission, state.latest, live)
-    if verdict == "current":
+    if smoke:
+        final_dest = target / product / LEDGER_DIRNAME / REHEARSAL_DIRNAME / submission_id
+    elif verdict == "current":
         final_dest = Path(dest).resolve()
     else:
         final_dest = target / product / LEDGER_DIRNAME / QUARANTINE_DIRNAME / submission_id
+
+    # `submission_id` originates from the remote service's response (the
+    # ledger's own recorded `submitted` event, ultimately from
+    # `adapter.submit()`'s returned id) and reaches this path join
+    # unguarded otherwise -- the filesystem-destination-from-service-
+    # supplied-`submission_id` threat-matrix row. `.resolve()` collapses
+    # any `..` component; a result that escaped `LEDGER_DIRNAME` proves the
+    # id was shaped to break out, so refuse before `adapter.fetch()` ever
+    # runs and before anything is written.
+    if smoke or verdict != "current":
+        ledger_root = (target / product / LEDGER_DIRNAME).resolve()
+        if ledger_root != final_dest.resolve() and ledger_root not in final_dest.resolve().parents:
+            raise RemoteCLIError(
+                f"submission id {submission_id!r} does not resolve to a "
+                f"path under {ledger_root} -- refusing before any fetch"
+            )
 
     partial_dest = final_dest.with_name(final_dest.name + PARTIAL_SUFFIX)
 
@@ -1431,6 +1710,7 @@ def cmd_fetch(
             "path": partial_dest,
             "event": None,
             "staleness": staleness,
+            "arbitration": arbitration,
         }
 
     final_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1449,6 +1729,7 @@ def cmd_fetch(
         "path": final_dest,
         "event": event,
         "staleness": staleness,
+        "arbitration": arbitration,
     }
 
 
@@ -1460,6 +1741,7 @@ def cmd_reconcile(
     adapter: "ADAPTER.Adapter",
     resolve: bool = False,
     source_digest: Callable[[Path, str], str] | None = None,
+    smoke: bool = False,
 ) -> dict:
     """Compare the ledger's pending submissions for `worker` against what
     `adapter.list_active(worker)` reports right now, in both directions,
@@ -1496,6 +1778,46 @@ def cmd_reconcile(
     again — never assumed to be the main one). `resolve=False`, the
     default, appends nothing at all: an orphan-remote id is reported
     without a single ledger write, on every call.
+
+    **The one remote call degrades rather than crashing, and says which
+    happened.** `adapter.list_active()` is the only expression here that
+    reaches a service, and it used to be unguarded -- so an unreachable
+    host, a refusal, a timeout or a rotated token killed the one command an
+    operator runs precisely BECAUSE something has already gone wrong.
+    `packer.plan()` wraps the identical call, degrades, and reports
+    `in_flight_source` so a live count is never mistaken for a fallback
+    estimate; this function now does the same thing in its own currency.
+
+    Degrading alone would have been worse than crashing. `orphanLocal: ()`
+    from a service that answered means "every pending submission this
+    ledger expects is still accounted for" -- the strongest all-clear this
+    command can give. From a service that could not be asked it means
+    nothing whatsoever, and it is the same empty tuple. So the difference
+    is carried by a field and never by the payload's emptiness: `remote`
+    is `{"status": "read", "reason": None}` when the service answered and
+    `{"status": "unavailable", "reason": <why>}` when it did not, the same
+    discipline `_staleness_for()` applies by returning a verdict of
+    `unknown` rather than raising, and the same one
+    `implementation_cli.prior_work_state()` applies through `recordStatus`
+    so an unreadable record can never pass for a clean one. On an
+    unavailable read both orphan tuples are empty, and the function returns
+    BEFORE the `resolve` block rather than relying on that block to iterate
+    an empty tuple: `--resolve` appends `errored` events on the strength of
+    the service having said those ids are gone, and a read that never
+    happened said nothing.
+
+    `WorkerUnauthorized` is the ONE `list_active()` failure that still
+    refuses, re-raised untouched. `plan()` re-raises it out of the identical
+    call for the reason the seam states on the exception itself: a revoked
+    or expired credential is a decision-bearing fact, not a service that is
+    merely unreachable right now. Reporting it as "could not be asked"
+    would send an operator to retry a command that cannot succeed until the
+    token is replaced, in the same words used for a transient blip.
+
+    Everything OUTSIDE that single call still refuses exactly as before. A
+    `--target` that names nothing, an unresolvable product, an unreadable
+    ledger: none of those reached the service, and answering "the service
+    could not be asked" about them would name the wrong side of the fault.
     """
     target = Path(target).resolve()
     if not target.is_dir():
@@ -1528,18 +1850,58 @@ def cmd_reconcile(
             and folded.entrypoints[(entrypoint, submission_worker)].state == "pending"
         }
 
-    remote_active = set(adapter.list_active(worker))
+    # Computed before the remote call so the degraded return below can
+    # still carry it: a job folder's staleness is read from this disk and
+    # is exactly as true whether or not the service answered.
+    staleness = _job_folder_staleness(Path(entrypoint).resolve())
+
+    try:
+        remote_active = set(adapter.list_active(worker))
+    except ADAPTER.WorkerUnauthorized:
+        # NOT degraded, for the reason the seam states on the exception:
+        # a revoked credential is a decision-bearing fact, never a mere
+        # "service unreachable" one. `packer.plan()` re-raises it out of
+        # this identical call, and reporting it here as an unavailable
+        # read would describe a dead token in the words used for a blip.
+        raise
+    except Exception as exc:
+        # Unreachable, refusing, timing out, or answering with something
+        # unusable. Bare `Exception` rather than `ADAPTER.AdapterError`
+        # deliberately, and identically to `plan()`: a concrete adapter
+        # shells out to a driver process, so a transport-level failure
+        # arrives as itself and never as the seam's own type. The single
+        # decision-bearing case is caught above, so nothing that a
+        # traceback is for is being swallowed here -- a defect inside this
+        # function's own body is outside this `try` entirely.
+        return {
+            "orphanRemote": (),
+            "orphanLocal": (),
+            "resolved": (),
+            "remote": {
+                "status": "unavailable",
+                "reason": (
+                    f"adapter.list_active({worker!r}) failed, so nothing "
+                    f"below says what the service considers active: {exc}"
+                ),
+            },
+            "staleness": staleness,
+            "arbitration": (),
+        }
+
     local_pending = _pending_ids(main_state) | _pending_ids(smoke_state)
 
     orphan_remote = tuple(sorted(remote_active - local_pending))
     orphan_local = tuple(sorted(local_pending - remote_active))
 
     resolved_events: list[dict] = []
+    arbitrations: list[str] = []
     if resolve:
         for submission_id in orphan_local:
-            orphan_ledger_path, _ = resolve_submission_ledger(
-                target, product, submission_id, live
+            orphan_ledger_path, _, arbitration = resolve_submission_ledger(
+                target, product, submission_id, live, smoke=smoke
             )
+            if arbitration is not None:
+                arbitrations.append(arbitration)
             event = LEDGER.errored_event(
                 submission_id=submission_id, reason="not-found-at-service"
             )
@@ -1550,7 +1912,9 @@ def cmd_reconcile(
         "orphanRemote": orphan_remote,
         "orphanLocal": orphan_local,
         "resolved": tuple(resolved_events),
-        "staleness": _job_folder_staleness(Path(entrypoint).resolve()),
+        "remote": {"status": "read", "reason": None},
+        "staleness": staleness,
+        "arbitration": tuple(arbitrations),
     }
 
 
@@ -1582,7 +1946,8 @@ def _read_ledger_lines(path: Path) -> list[str]:
 
 def resolve_submission_ledger(
     target: Path, product: str, submission_id: str, live_digest: str,
-) -> tuple[Path, "LEDGER.LedgerState"]:
+    *, smoke: bool = False,
+) -> tuple[Path, "LEDGER.LedgerState", str | None]:
     """The one place in this module that answers "which ledger holds THIS
     submission id" — `ledger.jsonl` or `smoke.jsonl` — for every command
     that needs to act on one specific submission afterward (`cmd_fetch`,
@@ -1609,13 +1974,33 @@ def resolve_submission_ledger(
     remember which one goes with which.
 
     A submission id absent from BOTH files is refused: there is nothing on
-    record for it anywhere this module looks. A submission id present in
-    BOTH is also refused, defensively — an id is only ever supposed to be
-    issued once, by one `adapter.submit()` call, into one file (`cmd_submit`
-    picks exactly one destination per call, never both); a submission id
-    that somehow reached both logs is a corruption this function has no
-    safe basis to arbitrate, and guessing which file is authoritative would
-    hide that corruption instead of surfacing it.
+    record for it anywhere this module looks.
+
+    A submission id present in BOTH is NOT, on its own, refused. A backend
+    is free to mint an id deterministically from a worker/entrypoint pair,
+    so a legitimate rehearse-then-launch pair — `submit --smoke` followed
+    by a real `submit` of the identical job — can reuse the identical id BY
+    CONSTRUCTION. A shared id is an expected condition on such a backend,
+    not corruption. Only the two `submitted` records' recorded `entrypoint`
+    and `worker` fields are compared (never the id string itself —
+    `adapter.py` permits the ledger exactly equality and dict-key use on an
+    id, and forbids splitting, parsing, or pattern-matching any part of
+    it):
+
+    - DISAGREE on `entrypoint` or `worker` → still refused, unconditionally
+      (even under `smoke=True`): one record lies about what was actually
+      submitted, and picking either file to act on would be guessing. This
+      is the genuine corruption case — a hand-edited ledger line, a ledger
+      file copied across targets, or an adapter whose id no longer encodes
+      worker/entrypoint.
+    - AGREE → resolves to the main ledger by default, with a returned
+      arbitration note (the caller decides whether/where to surface it —
+      this function never writes to stderr; every `file=sys.stderr` call
+      in this module lives in `main()`). `smoke=True` (mirroring `submit
+      --smoke`) overrides that precedence and resolves to the smoke ledger
+      instead, with no note. `smoke` overrides PRECEDENCE only, never
+      COHERENCE: the disagreement refusal above still fires regardless of
+      `smoke`.
     """
     main_path = _main_ledger_path(target, product)
     smoke_path = _smoke_ledger_path(target, product)
@@ -1626,16 +2011,38 @@ def resolve_submission_ledger(
     in_smoke = submission_id in smoke_state.by_id
 
     if in_main and in_smoke:
-        raise RemoteCLIError(
+        main_record = main_state.by_id[submission_id]
+        smoke_record = smoke_state.by_id[submission_id]
+        if main_record["entrypoint"] != smoke_record["entrypoint"]:
+            raise RemoteCLIError(
+                f"submission {submission_id!r} is recorded in both "
+                f"{main_path} and {smoke_path}, and the two records "
+                f"disagree on entrypoint ({main_record['entrypoint']!r} vs "
+                f"{smoke_record['entrypoint']!r}); refusing to guess which "
+                "one is authoritative"
+            )
+        if main_record["worker"] != smoke_record["worker"]:
+            raise RemoteCLIError(
+                f"submission {submission_id!r} is recorded in both "
+                f"{main_path} and {smoke_path}, and the two records "
+                f"disagree on worker ({main_record['worker']!r} vs "
+                f"{smoke_record['worker']!r}); refusing to guess which one "
+                "is authoritative"
+            )
+        if smoke:
+            return (smoke_path, smoke_state, None)
+        note = (
             f"submission {submission_id!r} is recorded in both {main_path} "
-            f"and {smoke_path}; refusing to guess which one is authoritative"
+            f"and {smoke_path} with agreeing entrypoint/worker; resolved to "
+            f"the main ledger {main_path}"
         )
+        return (main_path, main_state, note)
     if not in_main and not in_smoke:
         raise RemoteCLIError(
             f"no submitted event on record for submission {submission_id!r} "
             f"in {main_path} or {smoke_path}"
         )
-    return (main_path, main_state) if in_main else (smoke_path, smoke_state)
+    return (main_path, main_state, None) if in_main else (smoke_path, smoke_state, None)
 
 
 def cmd_smoke_record(
@@ -2036,7 +2443,11 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--target", required=True, type=Path)
     fetch.add_argument("--entrypoint", required=True, type=Path)
     fetch.add_argument("--submission-id", required=True)
-    fetch.add_argument("--dest", required=True, type=Path)
+    fetch.add_argument(
+        "--dest", required=False, default=None, type=Path,
+        help="required for a real fetch; refused (not merely optional) "
+        "under --smoke, which computes its own rehearsal destination",
+    )
     fetch.add_argument(
         "--backend",
         required=True,
@@ -2052,6 +2463,13 @@ def _build_parser() -> argparse.ArgumentParser:
     fetch.add_argument(
         "--credential-dir", type=Path, default=None,
         help="override: use this directory instead of lazily materializing one by worker id",
+    )
+    fetch.add_argument(
+        "--smoke", action="store_true",
+        help="when the submission id is recorded in both ledgers with "
+        "agreeing entrypoint/worker, resolve to smoke.jsonl instead of the "
+        "default main ledger.jsonl; does not suppress the refusal when the "
+        "two records disagree",
     )
 
     reconcile = subparsers.add_parser(
@@ -2079,6 +2497,13 @@ def _build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument(
         "--credential-dir", type=Path, default=None,
         help="override: use this directory instead of lazily materializing one by worker id",
+    )
+    reconcile.add_argument(
+        "--smoke", action="store_true",
+        help="within --resolve: when an orphan's submission id is recorded "
+        "in both ledgers with agreeing entrypoint/worker, resolve it to "
+        "smoke.jsonl instead of the default main ledger.jsonl; does not "
+        "suppress the refusal when the two records disagree",
     )
 
     generate_job = subparsers.add_parser(
@@ -2131,6 +2556,30 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     generate_job.add_argument(
+        "--accept-unresolved-reads", action="store_true",
+        help=(
+            "record uncertain reads found by resolve_clone_paths() in "
+            "run-config.json's unresolvedReads instead of refusing; a "
+            "SEPARATE flag from --accept-unresolved and --accept-produced-reads "
+            "— neither waives the other's refusal, and this never bypasses a "
+            "computedReadsNotDeclared or producedReadsNotDeclared refusal"
+        ),
+    )
+    generate_job.add_argument(
+        "--accept-produced-reads", action="store_true",
+        help=(
+            "record an undeclared read as an accepted produced-file "
+            "candidate in run-config.json's acceptedProducedReads instead "
+            "of refusing, for a read whose resolved path the SAME walked "
+            "file set also writes (the job may exist to produce that file "
+            "on its first run); a SEPARATE flag from --accept-unresolved "
+            "and --accept-unresolved-reads — neither waives the other's "
+            "refusal, and this never bypasses a genuine "
+            "computedReadsNotDeclared refusal (a read of a path nothing in "
+            "the walk writes)"
+        ),
+    )
+    generate_job.add_argument(
         "--accelerator-kind", dest="accelerator_kind", default=None,
         help="override: the expected accelerator kind (e.g. 'cuda'). Omitted "
         "together with --accelerator-architecture, the service adapter's own "
@@ -2154,6 +2603,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--environment-index-url", dest="environment_index_url", default=None,
         help="optional index URL for --environment-requirement; given "
         "without at least one --environment-requirement, refused.",
+    )
+    generate_job.add_argument(
+        "--local-budget-seconds", dest="local_budget_seconds", type=int, default=None,
+        help="the target's own declared threshold, in seconds, for whether "
+        "this job's pilot-projected cost is locally tolerable — recorded "
+        "verbatim as localBudget.seconds, never judged here. Omitted, no "
+        "localBudget block is written; that silence is never read as a "
+        "budget of zero.",
     )
 
     smoke = subparsers.add_parser(
@@ -2225,27 +2682,31 @@ def main(argv: list[str] | None = None) -> int:
             # Campaign mode's own JSON shape -- `assignments[]`/
             # `unplaced[]`/`skipped[]`, mirroring `distribute`'s own CLI
             # rendering, never the single-submission shape below.
-            print(
-                json.dumps(
-                    {**result, "ledgerPath": str(result["ledgerPath"])},
-                    sort_keys=True,
-                )
-            )
+            # `default=str` rather than naming each `Path` key by hand:
+            # naming keys one at a time is what left a nested one
+            # unreachable; naming none makes the next one harmless.
+            print(json.dumps(result, sort_keys=True, default=str))
             if not result["assignments"] and result["unplaced"]:
                 return 1
             return 0
 
+        # Same six keys as ever -- this shape is reshaped, not spread, so
+        # the reshaping stays. Only the hand-naming goes: `default=str`
+        # rather than one named `Path` key, because naming keys one at a
+        # time is what left a nested one unreachable; naming none makes the
+        # next one harmless.
         print(
             json.dumps(
                 {
                     "submissionId": result["submission"].id,
                     "worker": result["submission"].worker,
                     "granted": result["plan"].granted,
-                    "ledgerPath": str(result["ledgerPath"]),
+                    "ledgerPath": result["ledgerPath"],
                     "staleness": result["staleness"],
                     "smoke": result["smoke"],
                 },
                 sort_keys=True,
+                default=str,
             )
         )
         return 0
@@ -2257,7 +2718,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
-        print(json.dumps({**result, "ledgerPath": str(result["ledgerPath"])}, sort_keys=True))
+        # `default=str` rather than naming each `Path` key by hand: the
+        # hand-named form stringified the top-level `ledgerPath` and left
+        # `smoke.ledgerPath` a `Path`, so this command could never print at
+        # all. Naming keys one at a time is what made a nested one
+        # unreachable; naming none makes the next one harmless.
+        print(json.dumps(result, sort_keys=True, default=str))
         return 0
 
     if args.command == "distribute":
@@ -2334,21 +2800,31 @@ def main(argv: list[str] | None = None) -> int:
                 dest=args.dest,
                 adapter=_construct_adapter(adapter_cls, provider),
                 force=args.force,
+                smoke=args.smoke,
             )
         except (RemoteCLIError, LEDGER.LedgerError, ADAPTER.AdapterError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
 
+        arbitration = result["arbitration"]
+        if arbitration is not None:
+            print(arbitration, file=sys.stderr)
+
+        # Same five keys as ever; only the hand-naming goes. `default=str`
+        # rather than one named `Path` key, because naming keys one at a
+        # time is what left a nested one unreachable; naming none makes the
+        # next one harmless.
         print(
             json.dumps(
                 {
                     "verdict": result["verdict"],
                     "complete": result["complete"],
-                    "path": str(result["path"]),
+                    "path": result["path"],
                     "event": result["event"],
                     "staleness": result["staleness"],
                 },
                 sort_keys=True,
+                default=str,
             )
         )
         return 0
@@ -2371,10 +2847,15 @@ def main(argv: list[str] | None = None) -> int:
                 worker=args.worker,
                 adapter=_construct_adapter(adapter_cls, provider),
                 resolve=args.resolve,
+                smoke=args.smoke,
             )
         except (RemoteCLIError, LEDGER.LedgerError, ADAPTER.AdapterError) as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
+
+        arbitration = result.pop("arbitration")
+        for note in arbitration:
+            print(note, file=sys.stderr)
 
         print(json.dumps(result, sort_keys=True))
         return 0
@@ -2407,10 +2888,13 @@ def main(argv: list[str] | None = None) -> int:
                 smoke_required_evidence=args.smoke_required_evidence or None,
                 regenerate=args.regenerate,
                 accept_unresolved=args.accept_unresolved,
+                accept_unresolved_reads=args.accept_unresolved_reads,
+                accept_produced_reads=args.accept_produced_reads,
                 accelerator_kind=args.accelerator_kind,
                 accelerator_architectures=args.accelerator_architectures,
                 environment_requirements=args.environment_requirements,
                 environment_index_url=args.environment_index_url,
+                local_budget_seconds=args.local_budget_seconds,
             )
         except (JOBFOLDER.JobFolderError, ADAPTER.AdapterError, KeyError) as exc:
             print(f"error: {exc}", file=sys.stderr)
@@ -2458,15 +2942,20 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: {exc}", file=sys.stderr)
                 return 1
 
+            # Same four keys as ever; only the hand-naming goes.
+            # `default=str` rather than one named `Path` key, because
+            # naming keys one at a time is what left a nested one
+            # unreachable; naming none makes the next one harmless.
             print(
                 json.dumps(
                     {
                         "result": result["result"],
                         "missing": result["missing"],
                         "requiredEvidence": result["requiredEvidence"],
-                        "smokeLedgerPath": str(result["smokeLedgerPath"]),
+                        "smokeLedgerPath": result["smokeLedgerPath"],
                     },
                     sort_keys=True,
+                    default=str,
                 )
             )
             return 0

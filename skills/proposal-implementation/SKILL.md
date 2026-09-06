@@ -10,12 +10,61 @@ runs, in a target repository, and then prove it: smoke, invariants, synthetic
 data. Text is not the deliverable — code with a traceable link back to the
 mathematics is.
 
+## What this skill has not written down
+
+**The ledger is ignored whole, and half of it deserves better.** `.implementation/`
+is a required `.gitignore` entry, so nothing under it reaches a clone. That is
+right for one half of what it holds: a `gate` event is a launch authorization,
+and an approval that arrives in a clone is an approval nobody in that clone
+gave. It is wrong for the other half. Since `discuss` and `settle` landed, the
+same file also carries the deliberation -- what was asked, what was answered,
+and what was placed into the record because of it. That is project history, and
+a clone gets none of it.
+
+Nothing here separates the two. A future version should: the authorizations are
+machine-local state, the deliberation is the reason the agreements say what they
+say, and one `.gitignore` line currently decides both. Recorded rather than
+resolved, because splitting a ledger is a change to what every reader of it
+already expects to find in one place.
+
 ## Non-negotiable isolation
 
 Every run works inside `implementations/<repo>/` and uses **that repository's own
 `.venv`**. Never the forge's virtualenv, never system Python for target code.
 `implementations/` is gitignored; the CLI refuses any target outside it, and refuses to
 create a venv from a forge interpreter.
+
+### Executing a notebook needs `PATH`, not just the right `python`
+
+```bash
+cd implementations/<repo>
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python -m jupyter nbconvert \
+  --to notebook --execute --inplace <Name>/Notebooks/<notebook>.ipynb
+```
+
+The `PATH` prefix is the whole point of that line, and dropping it is the
+obvious mistake. A notebook does not name an interpreter; it names a
+**kernelspec**, and a kernelspec is resolved when the kernel starts. The
+ordinary `python3` kernelspec's `argv` begins with a bare `"python"` — no
+absolute path — so the kernel launches whatever `python` is first on `PATH` at
+that moment. Which interpreter launched `jupyter` has nothing to do with it.
+So `.venv/bin/python -m jupyter nbconvert --execute` reads as isolated and is
+not: the cells run under whatever the shell would have run, commonly a system
+Python several minor versions back.
+
+It fails as badly as it can: measured on a real target, a suite passing 297/297
+standalone produced fifteen failures inside the notebook, and **not one line of
+the failure text named an interpreter**. The reader is handed fifteen defects
+that do not exist.
+
+`verify` reports the fact rather than leaving it to prose: `validation.notebooks`
+carries `interpreterVersion` (the target venv's own, read from `pyvenv.cfg`) and
+per notebook `executedBy` with `interpreterMatch`, plus `foreignInterpreter`
+naming every executed notebook that ran under something else. `interpreterMatch:
+null` means unmeasured — no venv to compare against, or a notebook whose
+metadata records no version — never a pass. It reports and never gates: a
+foreign interpreter is not a wrong number, it is a reason to distrust the
+numbers, and folding the two into one status destroys the distinction.
 
 ## Activation Contract
 
@@ -25,6 +74,13 @@ proposal itself — that is `proposal-deliberation`.
 
 ## Hard Rules
 
+- **Reply in the language the user is writing in.** Every artifact stays English --
+  code, comments, commit messages, reports, every file written. The conversation
+  does not. This rule is stated here, first, because it is broken by drift rather
+  than by decision: this file is two thousand lines of English procedure, and
+  reading it is not an instruction to speak it. It is also restated under `## How a
+  gate is asked`, where it reads as being about gate questions; it is not. It
+  governs every reply.
 - Bind to the revision `proposal-deliberation`'s `STATUS` reports as `latest`. Never
   guess the base and never read `proposals/` by hand.
 - Never write implementation code before the user approves the mapping from
@@ -413,10 +469,20 @@ exactly what stops a launcher from being able to claim it implements anything.
 | `probe` reports `nextStep: "declare-first"` | The benchmark has no `src/<Package>_Benchmark/` at all, or has one whose every block is still at its scaffolded empty value: report before offering a run built on a declaration that has not happened |
 | `probe` reports `nextStep: "poll-first"` | A submission is already out to a remote worker with no result back yet: report before offering another run |
 | `probe` reports `nextStep: "search-first"` | A declared search's record is absent from disk: the run has no chosen configuration yet, report before offering it |
+| `probe` reports `nextStep: "pilot-first"` | The ordered flow the target declared has steps that have not finished at pilot — `pilotCompleteness.incomplete` names them: report those, and never the declared scale, because nothing has been produced yet for anybody to read |
+| `probe` reports `nextStep: "pilot-decisions"` | The flow finished at pilot and each of its steps now owes its own decision about how the full run carries it: publish the per-step questions, read `remoteExecution.necessity` beside them, and decide one step at a time |
 | `probe` reports a job with `smokeReady: false` | A job folder exists that no rehearsal has ever passed on its pinned commit: read it before offering a campaign, because a rehearsal finds cheaply what the long run would find expensively |
 | `probe` reports a job whose `staleness` is `drift` | The repository moved past the commit that job is pinned to: regenerate the job, or say plainly that the run measures the older code, before offering a campaign |
 | `probe` reports `remoteExecution: "drift"` | The ledger and the service no longer agree, or a stale result arrived: run `remote_cli reconcile` before reading anything else out of that ledger. Waiting fixes nothing |
 | `probe` reports `remoteExecution: "unreliable"` | A line of the ledger could not be read, so nothing about what is out there is trustworthy: run `remote_cli reconcile` and report what it finds before offering a run |
+| `verify`/`probe` report `position: "stale"` | The section's header is bound to a revision whose bytes no longer match: run `position` again to rebind it before trusting any tick on it |
+| `verify`/`probe` report `position.disagreements` | A recorded mark contradicts its own measured evidence: report before gating or closing anything on it, and run `position` to correct it |
+| `verify`/`probe`/`position` report `position.unbacked` | A mark is ticked and nothing measured it: an assertion, not a reading, and `gate`/`close` refuse on it. **A refresh does not clear it** — `position` deliberately never rewrites a mark it could not measure, which is what makes a derived mark worth reading. The exit is a reinstall of the same sequence (`--sequence - --replace`), which installs every item blank and re-derives it in the same call, so measured marks come straight back and only the assertions go. Run `position` and paste the `resolve.command` it prints: the array that command consumes is already inside it, so it runs unedited. `verify` and `probe` report the finding and publish no command for it — a `position` write is stamped with the caller's own `--session`, and neither of those commands carries one to stamp |
+| `gate` refuses `POSITION_DISAGREES` | A ticked sequence item disagrees with its own witness's measurement — the same fact the `position.disagreements` row above reports, refused here specifically because the tick is a launch's own premise. Remedy is identical: run `position` to correct it, then gate again. Never a blank, unreconciled item — that direction is honest, not a false claim, and does not refuse |
+| `position` refuses `POSITION_HOLDER_MOVED` | The holder document changed between the read that located its section and this write: re-run the command that measures the section fresh, never retry blind against offsets that were computed against bytes no longer on disk |
+| `gate` refuses `NOT_READY` | No passing rehearsal is on file for this job at its current pin: rehearse it first — readiness cannot be asserted, only measured |
+| `offer` refuses `OFFER_UNANSWERED` | No `--answer` was supplied on this call — required every call, never read back from a prior one: pass `--answer yes` or `--answer no` before an action set can be published |
+| `gate` refuses `GATE_AUTHORIZATION_REQUIRED`/`_UNKNOWN`/`_MISMATCH`/`_STALE`/`_CONSUMED` | `--authorization <token>` is missing, names nothing on the ledger, was minted for a different job or unit list, was minted against a pin/entrypoint/rung/revision/position status that has since moved, or already authorized one successful `gate` call: publish (or re-publish) with `offer` first, then gate with the token its `launch` action names. A stale token means a bound fact moved, never that time passed |
 | `priorWork` reports `modified` | Say what changed and that correcting prior work belongs to a session of its own |
 | `priorWork` reports `reaching` | The change moves what an arm computes: the record is stale, report before any run |
 | `search` reports `incomplete` | A value is chosen by outcome and the search does not say enough about itself to be an experiment: report before quoting anything it chose |
@@ -449,7 +515,7 @@ date. Drift is Flow B's fourth step, not a reason to start over.
 
 ## Flow A — first pass
 
-1. `node skills/proposal-deliberation/engine/cli.mjs '{ "operation": "STATUS" }'` → take `latest`.
+1. `node skills/proposal-deliberation/cli.mjs '{ "operation": "STATUS" }'` → take `latest`.
 2. **Ask for the repository URL** and clone it:
    `GIT_LFS_SKIP_SMUDGE=1 git clone <url> implementations/<repo>` (or `git init`), pin the
    LFS skip in the clone's local config (see `references/usage.md`), then `env`.
@@ -471,14 +537,23 @@ date. Drift is Flow B's fourth step, not a reason to start over.
      this long is approved without being read, and an unread approval is not one.
      Say so, and hand the user a self-contained prompt that performs exactly this
      reorganization in a separate session. Then continue without it.
-5. **Fill every scaffold gap.** `plan`'s `scaffoldFiles` and `verify`'s
-   `structure.scaffoldGaps` report the same thirteen, and every one of them is
-   written from the kit at `assets/kit/`. Writing four of them leaves a target
-   `verify` reports incomplete, and the cheapest reading of that is that the
-   checker is wrong. `scripts/materialize.py` — the forge's own harness, never
-   a step of Flow A — performs this exact mapping for all thirteen: the two
-   rows marked `authored:` are written rather than copied, and the `.gitignore`
-   is merged into whatever the repository already has instead of written over it.
+5. **Fill every scaffold gap.** Run `materialize --stage scaffold --plan <path
+   to the approved plan> --seed <the suite's fixed seed>`. `plan`'s
+   `scaffoldFiles` and `verify`'s `structure.scaffoldGaps` report the same
+   thirteen, and the command writes every one of them from the kit at
+   `assets/kit/`, then records what it wrote in `<Name>/.implementation/
+   materialization.json` — the receipt a later hand-edit is checked against
+   (`SCAFFOLD_DRIFT`), and the reason a target scaffolded before this command
+   existed reads `UNRECORDED_SCAFFOLD` until an operator runs `materialize
+   --adopt <path>` on each of its scaffold destinations, deliberately, one at
+   a time. The agent never copies these files by hand: a target `verify`
+   reports incomplete after this command runs means the command refused, not
+   that four rows were skipped. `scripts/materialize.py` — the forge's own
+   harness, never a step of Flow A — performs this exact mapping for all
+   thirteen, so the test suite can examine a freshly scaffolded target the
+   identical way: the two rows marked `authored:` are written rather than
+   copied, and the `.gitignore` is merged into whatever the repository
+   already has instead of written over it.
 
    | Gap `plan` and `verify` report | Written from |
    | --- | --- |
@@ -502,7 +577,10 @@ date. Drift is Flow B's fourth step, not a reason to start over.
    not collected at all. `admissibility.py` belongs in `tests/` specifically —
    it reads the ruling from beside itself, which is where `admit` writes it.
 
-   Substitute the `{{TOKEN}}` placeholders as `references/usage.md` lists them.
+   `materialize --stage scaffold` substitutes the scaffold-time `{{TOKEN}}`
+   placeholders (`{{PKG}}`, `{{SEED}}`) itself; the step-9 tokens are left
+   standing on purpose — see `references/usage.md` for the full token table
+   and when each one is answered.
 6. **Ask for the name.** Run `name --name "<whatever they typed>"` and show both
    forms it returns — the `<Name>/` directory and the `src/<Package>/` package —
    then **[GATE]** confirm before writing anything with them.
@@ -528,7 +606,11 @@ date. Drift is Flow B's fourth step, not a reason to start over.
    agreed is part of the gate, not a chore that follows it. The other four blocks
    — `arms`, `search`, `report`, `distribution` — are **not** filled here: they
    are read off the work as it happens, and step 9 onward is where that happens.
-9. Write one module per object with `__provenance__`, plus its invariant tests.
+9. **Materialize the object scaffolding, then write one module per object with
+   `__provenance__`, plus its invariant tests.** Run `materialize --stage objects
+   --plan <path to the approved plan> --seed <the suite's fixed seed>`. It refuses
+   `OBJECT_MAP_NOT_APPROVED` until step 8's `revision`/`premises` are recorded in
+   `src/<Package>_Benchmark/__init__.py` — this stage cannot run before that gate.
 
    | Written into | Written from |
    | --- | --- |
@@ -539,10 +621,15 @@ date. Drift is Flow B's fourth step, not a reason to start over.
    None of the three is a scaffold gap, and step 5's table does not name them on
    purpose: their tokens — `{{MODULE}}`, `{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`,
    `{{SECTION}}`, `{{EQUATION}}`, `{{EXPECTATION}}` — are answers to the map step 8
-   has just approved, and nothing could have answered them before that. This is
-   also why `tests/test_smoke.py`, which the scaffold does write, fails until this
-   step runs: its `MODULES` names a module that does not exist yet. That failure is
-   the question being asked, not a defect to suppress.
+   has just approved, and nothing could have answered them before that.
+   `materialize --stage objects` writes these three exactly as the kit ships them,
+   tokens still standing inside identifiers — unlike the scaffold stage, this write
+   is not gated on the result parsing, because nothing could make it parse yet.
+   The agent authors the real module and tests over this scaffolding, then declares
+   each path with `materialize --authored <path>` so `verify` stops reading it as
+   drift. This is also why `tests/test_smoke.py`, which the scaffold does write,
+   fails until this step runs: its `MODULES` names a module that does not exist yet.
+   That failure is the question being asked, not a defect to suppress.
 10. Audit: sweep 200 configurations, declare each finding in `tests/findings.py`
     with its kind, status, measured rate and proposed remedy.
 11. `admit --revision <latest>`: rule on admissibility before anything is
@@ -560,7 +647,13 @@ date. Drift is Flow B's fourth step, not a reason to start over.
     builds the replacement, and `CREATE_SUCCESSOR` publishes the next revision.
     See `references/usage.md`. Publishing advances the user's real lineage, so it
     happens only behind this gate.
-15. Run the suite with the target interpreter, then execute the notebook.
+15. Run the suite with the target interpreter, then execute the notebook —
+    with the target venv's `bin` prepended to `PATH`, not merely as the
+    interpreter that launches jupyter. See "Executing a notebook needs
+    `PATH`, not just the right `python`" under Non-negotiable isolation:
+    the kernelspec resolves a bare `python` off `PATH` at kernel start, so
+    the obvious invocation runs the cells under a foreign interpreter and
+    says nothing about having done so.
 16. **Final check.** `verify --revision <latest>` → report `structure`, `fidelity`,
     `audit` and `validation`.
     - `--revision` is optional and pins the check. Omitted, `verify` discovers the
@@ -592,6 +685,11 @@ date. Drift is Flow B's fourth step, not a reason to start over.
       arrived rather than on what the repository holds, and would leave them to
       re-invoke just to be told what comes next. `probe` is read-only and instant;
       what it reports is a question, not work, and the gate is where they stop.
+    - **Then `close`.** `close --revision <latest> --session <your-session-id>` —
+      writing the position becomes a precondition of finishing, not a courtesy.
+      It refuses `POSITION_ABSENT`, `POSITION_STALE` or `POSITION_DISAGREES` and
+      names which one, rather than ending a session with the position still only
+      in the agent's own memory.
 
 ## How a gate is asked
 
@@ -748,6 +846,16 @@ the file exists to prevent, one level down.
 Append to it at every gate, before writing any code the gate authorized. And never
 report the work done while an item is open: say which, and why it is still open.
 
+**The append is a command, not a hand edit.** `discuss` records the question and,
+once answered, the conversation itself as a fact with a ledger line; `settle` then
+places exactly one `- [ ] <text>` line under a named heading — the write, performed
+by the skill rather than narrated by the agent, is what "the skill binds you so
+that it is placed in the contract" means in practice. `settle` refuses unless an
+answered `discuss` event already names the identical thing, and refuses again on
+an unnamed collision with what is already there. It never authors the sentence and
+never ticks the box: both are still the agent's, or the human's, to decide — see
+[Flow B step 8](#flow-b--every-later-pass) for the exact invocation.
+
 **And when implementation collides with one, that is a gate, not a detail.** The
 collision is real and worth reporting — a package missing, a rendering that is far
 easier as text than as a picture, an interface that will not take the shape agreed.
@@ -843,6 +951,20 @@ design decisions.
    broken: every provenance intact, every id matched, `fidelity` clean, and a claim
    failing underneath. That gap is widest right after a change of backend, which
    rewrites how every number is computed while leaving every declaration untouched.
+
+   **A module's revision binding is by name, not by content.** `verify` marks a
+   module `stale` only when its own declared `revision` names a file other than
+   `latest` — `__provenance__` carries a filename, never a content hash. Editing
+   `latest` itself in place, while every module still names it correctly, passes
+   the suite and `verify` clean: nothing this step reads compares the file's
+   current bytes against anything. That edit is invisible here, not fixed here —
+   it surfaces later, at `gate`/`close`, as `POSITION_STALE` (the position
+   section's own header carries a `sha256` of the revision it was measured
+   against, and re-checks it there): a refusal, not an overwrite. Nothing already
+   recorded is touched; the old evidence stays on disk and simply stops counting
+   until `position` is run again to rebind it. A green suite and a clean `verify`
+   at THIS step are never proof that `latest`'s bytes are the ones any earlier
+   position was measured against.
 3. **Suite green and no differences** → report both, then run `probe --revision <latest>`
    before asking anything and follow its `nextStep`. See
    [Conversion, then benchmark](#conversion-then-benchmark). On `nothing-to-compare`
@@ -875,6 +997,42 @@ design decisions.
      match an older proposal.
    - **They did not** → the code has drifted. Correct it and re-run the validations,
      bounded by the same three passes as Flow A step 16.
+6. **A target declaring `__steps__` can run one of them, isolated, under its own
+   venv:** `step --target <repo> --name <Name> --step <name> --session <your-session-id>`.
+   This is the executor for the isolation rule stated at the top of this file
+   ("Non-negotiable isolation") — a `PATH` prefixed by the target's own `.venv/bin`
+   so a notebook's kernelspec resolves the right interpreter rather than a bare
+   `python` off whatever launched it. Refuses `DIRTY_WORKTREE` before anything
+   runs (a step mutates the target, same as `plan`/`apply`), `STEPS_UNDECLARED`/
+   `STEP_UNKNOWN`/`STEP_MALFORMED` when the name does not resolve statically, and
+   `STEP_MODULE_MISSING`/`STEP_FUNCTION_MISSING`/`STEP_NOT_CALLABLE`/
+   `INTERPRETER_ABSENT` when it does not resolve inside the venv. Every resolved
+   run — pass or fail — appends one `kind: "step"` event; it never sequences,
+   never dispatches `probe`'s `nextStep`, and it neither reads nor writes a
+   `gate` event.
+7. **Run `offer`** once the position sequence exists: `offer --target <repo>
+   --name <Name> --session <your-session-id> --revision <latest> --answer
+   yes|no` on EVERY call (answering: continue the flow as it stands, or
+   change the experiment contract first?) — required every time, never read
+   back from a prior call. It refuses `OFFER_UNANSWERED` whenever `--answer`
+   is omitted, then publishes a closed action set — one `launch` per job the
+   shared availability rule already says `gate` would not refuse, plus
+   `run-step` or `expand-contract` depending on the answer just supplied.
+   Present it as a menu; nothing here runs on its own.
+8. **Once a `discuss` question is answered, place it — do not hand-edit
+   `AGREED.md`.** `settle --target <repo> --name <Name> --session
+   <your-session-id> --about <ordinal|witness> --text "<what was settled>"
+   --under "<exact heading>"` writes exactly one `- [ ] <text>` line,
+   verbatim, under that heading. It refuses `SETTLE_NOT_DISCUSSED` /
+   `SETTLE_DISCUSSION_UNANSWERED` unless an answered `discuss` event already
+   names the identical witness, and `SETTLE_COLLIDES_UNNAMED` when the same
+   thing already appears to be on record — name the item it supersedes with
+   `--supersedes "<exact existing text>"` to proceed. This is the mechanical
+   half of the doctrine above ("What happens to an agreement after it is
+   made"): the tool never authors the sentence and never ticks the box —
+   both are still yours — it only performs the write once you have decided
+   what to write and confirmed it was discussed.
+
 ## Conversion, then benchmark
 
 Run `probe --revision <latest>` and follow its `nextStep`. The order it reports is
@@ -1055,6 +1213,18 @@ alone, which cleared the way to a run the environment could not perform. The
 entry module is what actually pulls the target's runtime in, so its own
 failure is the truthful verdict.
 
+**What this rung is never for.** `env` installs packages; it writes no module
+and edits no import, so a rung whose only exit is that command must never be
+reached by a file being absent. Two ways it was: the constants `writtenSelections`
+is derived from used to be imported from `<Package>_Benchmark.config`
+unconditionally, and the kit ships no `config.py`; and the kit's own
+`benchmark.py` imported `verdict` flat, which does not resolve under the dotted
+`entry.module` the kit's own example declares. A repository built exactly as
+step 9 prescribes hit both, in that order, and looped here. `report.constants`
+now names which module the constants were read from (`config` first, then the
+kit's `benchmark`), or says `absent` when there was none — a fact, never this
+rung.
+
 **Report it, and stop there.** Run `env` — its `nextCommand` lists the
 target's own declared manifests beside the forge's dev requirements — install
 what it prints, and probe again. There is nothing here to correct in the
@@ -1062,10 +1232,30 @@ repository itself: the fix is provisioning, not code.
 
 ### `nextStep: "wiring-first"` — an arm declares mathematics it never calls
 
+**The `wiring` draft is in this payload.** It used to be guarded on
+`next_step == "benchmark"` alone, and the override that sets `wiring-first` runs
+before that guard — so at the one answer that names missing wiring, the draft of
+how each module becomes trainable came back `null` and whoever was reading had
+to compose the plan in prose. `PROBE_NEXT_STEPS` now says which answers carry
+it, and both of the two that describe the wiring do.
+
 `unreachedModules` names each module of the method that no arm reaches, directly or
 through another module, while at least one arm declares its sections. Each entry
 carries the equations it implements and the arms that claim them, because the section
 is where it lives and the equation is what the reader acts on.
+
+**And an empty `arms` switches the whole crossing off, silently, so
+`fidelity.benchmark.note` says so.** `unreachedModules` is built FROM `arms`:
+with none declared it answers `[]` on every run whatever the modules hold and
+whatever the harness calls, `armsReached` answers `null`, `benchmark.status` can
+never read `unfaithful`, and `wiring-first` can never be reached. `note` names
+the file, counts the modules that declare sections and go uncrossed, and names
+each reader that goes quiet. It is `null` the moment an arm is declared, and
+`null` for a repository whose modules declare no sections at all — there is no
+crossing to lose there, and `missingProvenance` already names those modules.
+Reported and never demanded: one arm and nothing to compare is a legitimate
+resting state, and which comparison a repository runs is not the forge's to
+decide.
 
 This blocks the run, ahead of an already-pending submission, a missing search
 configuration and a report in drift, and behind only a declaration that has not
@@ -1130,7 +1320,7 @@ belongs here is which reported state routes to which one:
 | `submit` | None. This flow offers a campaign to a human and never sends one itself | `--backend`, `--entrypoint`, `--target` | the `remote-execution` skill |
 | `status` | `remoteExecution` on any target: it folds the same ledger `probe` reports, for when you want it fresher than the last read | `--entrypoint`, `--target` | the `remote-execution` skill |
 | `poll` | `nextStep: "poll-first"` — a submission is out and its answer has not come back | `--backend`, `--submission-id` | the `remote-execution` skill |
-| `fetch` | A submission the ledger calls returned whose result is not on disk yet | `--backend`, `--dest`, `--entrypoint`, `--submission-id`, `--target` | the `remote-execution` skill |
+| `fetch` | A submission the ledger calls returned whose result is not on disk yet | `--backend`, `--entrypoint`, `--submission-id`, `--target` | the `remote-execution` skill |
 | `reconcile` | `remoteExecution` reporting `drift` or `unreliable`: the ledger and the service disagree, or a line of the log could not be read | `--backend`, `--entrypoint`, `--target`, `--worker` | the `remote-execution` skill |
 | `generate-job` | No job folder for the campaign about to be offered — `remoteExecution.jobs` empty, or naming none that matches | `--job-name`, `--product`, `--repo-ref`, `--repo-url`, `--run-function`, `--run-module`, `--service`, `--target` | the `remote-execution` skill |
 | `generate-job` | A job folder exists and its declared pin no longer matches what the clone paths hold — `staleness` reports `drift`: regenerate (`--regenerate`) rather than offer a run against a repository that has moved | `--job-name`, `--product`, `--repo-ref`, `--repo-url`, `--run-function`, `--run-module`, `--service`, `--target` | the `remote-execution` skill |
@@ -1159,7 +1349,99 @@ service disagreement, and it maps to the second `generate-job` row — the same
 command, run with `--regenerate` against the existing folder rather than a
 fresh one.
 
+### `nextStep: "pilot-first"` — the declared flow has not finished at pilot
+
+**The pilot is a gate, not a step.** A target may declare an ordered flow: every
+`__steps__` entry that carries an `advances` ordinal is one of its steps, and the
+ordinal is the order. This rung fires while any of those steps has not finished,
+and it withholds the offer of the declared scale until they all have.
+
+Two facts are asked of each step, and only two. It has to have **run and
+returned** — the same `@step` reading the position grammar already performs, so a
+run recorded against a suite that has since moved reads as unmeasured rather than
+as a pass. And when its own sequence item names a notebook, that notebook has to
+be **executed against these sources** — `status: "executed"` and `sourcesMatch:
+true` together, the same `@notebook` reading. Existence proves nothing: a file
+copied into place and an executed report are indistinguishable until the
+execution counts are read.
+
+**How the notebook a step owes is known, and why nothing new is declared for
+it.** Nothing here reads the target's own Python to find which file a step
+executes; it does not have to. `advances` is the target saying which position
+item a step produces evidence for, and that item already names its own witness.
+So the notebook is the operand of the item at that step's ordinal, whenever that
+item's witness names one — a link the target already writes, in the vocabulary it
+already uses. A second declaration beside it would be one more thing that can
+disagree with the first.
+
+**An item whose witness is not a notebook adds nothing to its step**, and that
+restraint is what keeps this rung reachable. A record must meet its own declared
+scale and a campaign run short leaves no shard at all, so both are evidence only
+the full run produces. Demanding either here would deadlock the flow on exactly
+the evidence it is withholding permission to go and get.
+
+**A target that declares no ordered flow reaches none of this.** `status:
+"undeclared"` means the rule does not apply, and the ladder answers precisely
+what it answered before this rung existed. A repository that never opted into an
+ordering is not an unfinished one.
+
+**Why it sits after `poll-first` and before `search-first`.** A submission
+already out keeps its place: an answer on its way outranks anything this
+repository could be told to start, and asking again would spend real quota on a
+question the first send is already answering. Everything below it is about
+machine time that has not been spent yet, and the pilot comes before the scale.
+`search-first` fires on "the record is absent or short", which is a true fact and
+a different one: a target can have run one step of six, produced nothing anybody
+can read, and satisfy that condition exactly. Measured, on a real target: one
+step of six had run, six of its seven notebooks carried zero executed cells and
+zero outputs, and the flow offered the full declared scale anyway. A question
+that offers the expensive run at that point is an invitation to say yes.
+
+**The published question names the steps, never a count.** `resolve` and
+`toDiscuss` carry the runnable `discuss` command; the sentence names each step
+still short, the same shape `POSITION_RUNG_SKIPPED`'s own detail uses when it
+names the items that came up short. It asks the repair choice — do it now, or
+record why it is deliberately deferred — and never the flow question, because
+the flow question is the offer this rung exists to withhold.
+
+### `nextStep: "pilot-decisions"` — every step ran, and each one owes its own decision
+
+**What a finished pilot unlocks is not permission to launch.** The flow runs as
+it stands, which proves that it runs; its notebooks run, which proves that it
+shows what was agreed; and only then does the flow return to its first step and
+go one step at a time, deciding for each one how the full run carries it — sent
+to a worker for the steps that need one, kept local for the steps that do not.
+This rung is the start of that pass, and the offer of the declared scale waits
+behind it.
+
+**One question per step, each retiring on its own.** `toDiscuss` carries the
+rung's own question first — what state the flow is in, and where its outputs are
+— and then one entry per step that has not been decided yet. Every entry is a
+runnable `discuss` command, and `discuss` buckets by exact question text, so
+answering one retires one. Nothing new records the answers: `discuss` already
+does, and building a second approval surface beside it would give two places to
+look for the same decision.
+
+**Never-asked is not decided.** A step whose question nobody has asked appears in
+no open bucket either, so the pass reads which texts were ANSWERED rather than
+which are open. Reading the absence as agreement is silence taken for consent.
+
+**Which steps need a worker is not answered here.** `remoteExecution.necessity`
+classifies job folders — must-remote, local-sufficient, or optional with the
+missing fact named — and a job folder is not a step: nothing declared ties one to
+the other, and inventing the link would be the forge deciding a repository's own
+layout for it. Read that classification beside this pass; it informs the
+decisions and never makes them.
+
 ### `nextStep: "search-first"` — a declared search has not chosen anything yet
+
+**This rung asks the flow question, and used to publish nothing.** A search is
+an experiment, declared as one, with a scale of its own — so this is one of the
+three answers where the standing rule applies: continue the flow toward the
+declared scale, or complement the experiments first. `resolve` and `toDiscuss`
+carry the runnable `discuss` command that opens it; the question names the
+DECLARED scale and never the achieved one, so it stays byte-identical across
+polls while the decision has not changed.
 
 `search` carries the same reading `verify` already reports (see the hard rule on a
 search being an experiment, declared as one, under
@@ -1313,13 +1595,21 @@ the reported common environment would be an intersection with that list rather t
 the environment the prior results came from. `build_data` belongs to the wiring for
 the same reason the builders do.
 
-Place these three, fill in the reduction, and execute the notebook:
+Materialize these three, fill in the reduction, and execute the notebook. Run
+`materialize --stage harness --plan <path to the approved plan>` — no `--seed`: none
+of the three carries a `{{SEED}}` token (`probe.ipynb` carries `{{SEEDS}}` instead,
+answered later, at probe time). Unlike `objects`, this stage needs no step-8
+precondition and its two `.py` destinations parse cleanly the moment they land:
 
 | Written into | Written from |
 | --- | --- |
 | `src/<Package>_Benchmark/benchmark.py` | `assets/kit/nb/benchmark.py` |
 | `src/<Package>_Benchmark/verdict.py` | `assets/kit/nb/verdict.py` |
 | `<Name>/Notebooks/probe.ipynb` | `assets/kit/nb/probe.ipynb` |
+
+The agent never copies these three by hand — the same `materialize` discipline step 5
+and step 9 use, and `wiring.py` above stays the one bespoke-authored exception: it is
+never a kit destination and this command never touches it.
 
 `assets/kit/nb/` stages what the notebooks need; it does not mirror where any of it
 ends up. Python that lives beside a notebook is a
@@ -1334,8 +1624,10 @@ parameter count, and writes `<Name>/Results/Probe_results.json`.
 **[GATE]** ask before running: it is quick by design, but it is still the user's
 machine, and it downloads a dataset.
 
-Execute the notebook with the target repository's own interpreter, as with the suite.
-`benchmark.py` refuses under any other and says which one to use — for this file that
+Execute the notebook with the target repository's own interpreter, as with the suite —
+and with that venv's `bin` on `PATH`, for the reason the isolation section gives:
+the kernel resolves its own interpreter off `PATH`, never off whatever launched
+jupyter. `benchmark.py` refuses under any other and says which one to use — for this file that
 is not a hygiene rule but the measurement itself: wall time and peak memory describe
 whichever environment ran them, so a foreign interpreter produces a correct
 measurement of the wrong thing and the summary would attribute it to this repository.
@@ -1708,6 +2000,37 @@ apart, and each is cheap enough that skipping it is never the economical choice.
   exactly like a merge nobody objected to, and that is what this flag exists to
   separate.
 
+  **Arrival is not evidence that a shard reports on the code you are running.**
+  A shard folder is a file left behind by whatever ran; its presence says
+  nothing about which code wrote it, and ticking a step because a directory
+  exists is an attribution nobody measured. The declaration may name where a
+  shard records its own code identity — `currentWhen`, an optional dotted path
+  into the `shard.json` stamp, e.g. `"currentWhen": "evidence.sourcesDigest"` —
+  and then a shard counts only while the value there still matches the code as
+  it stands; one that arrived from code the repository has moved past reads as
+  unmeasured, never as a step reached and never as a step that never started.
+  Declare nothing and arrival alone decides, exactly as before. Which field
+  holds that identity is the repository's to say: the forge only compares, the
+  same division `identicalAcrossShards` already keeps.
+
+  **`gate`, `close`, `discuss` and `probe` carry no `--shards` flag of their
+  own, so a `@shard` witness ticked by `position --shards <dir>` used to read
+  `unmeasured` at every one of them forever — permanently, since none of them
+  has a flag to re-supply the evidence `position` already looked at once.**
+  The declaration may name where returned shards land — `shardsRoot`, a
+  sibling optional key to `currentWhen`, e.g. `"shardsRoot": "<Name>/Results/
+  shards"` — and every command that reads a position section resolves that
+  same directory automatically, exactly as if `--shards <dir>` had been given
+  to it. A tick written from real evidence stays checkable everywhere that
+  evidence is read, not only at the one command that happened to carry the
+  flag. Declare nothing and a `@shard` tick still reads `unmeasured`
+  everywhere, exactly as before this key existed — but `gate` and `close`
+  now refuse it with `POSITION_SHARDS_UNDECLARED`, not `POSITION_UNBACKED`:
+  the tick was never told where to look, which is a different, narrower fact
+  than "looked, and found silent". `verify`'s own `--shards` stays
+  explicit-only, deliberately: it reports over whichever directory an
+  operator names, not a gate the declaration should widen on its own.
+
   **What refuses here and what averages is a division of labour, not an
   oversight.** This skill refuses and stops. It never averages, pools or merges
   a shard result, because a refusal is general — it needs only the fields the
@@ -1736,7 +2059,8 @@ apart, and each is cheap enough that skipping it is never the economical choice.
 - **And a search is an experiment, declared as one.** The moment a value is chosen
   by looking at outcomes, the thing that chose it needs everything a run needs, and
   three of those are invisible until somebody walks into them. `verify` reports
-  `search`: what is being chosen, its `requiredScale`, its `role`, its `tieRule`.
+  `search`: what is being chosen, its `requiredScale`, its `role`, its `tieRule`,
+  and — optional, and the one every later reading hangs off — its `record`.
 
   **Its own scale, declared apart from the one it is running at.** Lowering a
   search to test the pipeline cheaply writes a value found in a landscape nothing
@@ -1906,7 +2230,7 @@ have to count rows to learn the answer.
 
 Report: the bound revision, the target path, the migration commit hash (if
 any), the object → module map, the test result, and every verification status
-`verify` returns, separately. There are thirteen of them, and a list written
+`verify` returns, separately. There are twenty-two of them, and a list written
 inline is a list that loses one — two of these were computed, returned and named
 in no doctrine at all, so a reader met them first in the JSON:
 
@@ -1914,7 +2238,8 @@ in no doctrine at all, so a reader met them first in the JSON:
 | --- | --- | --- |
 | `structure` | Missing directories, stray modules, unparsable tests, stale references and scaffold gaps | Yes — `drift` is a layout that no longer matches |
 | `priorWork` | That prior work is untouched | Reported whatever it says |
-| `agreements` | The state of `AGREEMENTS.md`, item by item | Yes — never report work done while an item is `open` |
+| `agreements` | The state of `AGREEMENTS.md`, item by item, plus a nested `witness` dimension: `unwitnessed`/`unmeasured`/`disagrees` texts and a `summary` field ("N of M witnessed") printed on every run, including "0 of 0 witnessed" | `open` items: yes — never report work done while one is `open`. `witness.disagrees`: **never here** — reported only; `close` is the sole place that refuses `AGREEMENT_DISAGREES` |
+| `position` | The execution sequence's derived state, read from `<Name>/AGREED.md`'s own position section: which steps are measured done, which disagree with their disk mark, which this invocation could not measure at all | **Never** — a derived fact, reported so a human can decide about it |
 | `prose` | Historical revision mentions and symbol-shaped configuration keys | Reported whatever it says; these are facts, not verdicts |
 | `search` | Whether a declared search says enough about itself for its chosen value to mean anything | Yes |
 | `distribution` | What a run split across shards declares, and whether the shards that arrived agree | Yes |
@@ -1925,6 +2250,14 @@ in no doctrine at all, so a reader met them first in the JSON:
 | `report` | Whether the document a human reads obeys the rules the numbers already do | Yes |
 | `audit` | Findings, their evidence, their remedies, admissibility and compatibility | Yes |
 | `validation` | Smoke test, invariant tests, trivial assertions and every notebook of the product | Yes |
+| `toDiscuss` | One directly runnable, `shlex.quote`-escaped `discuss` command per `audit.localRemediesNotWritten` finding id, asking whether its local remedy is written now or deliberately deferred (and why) | **Never** — a published action naming an already-computed undecided thing, not a verdict; publishing it lowers the friction to ask, and does not prove whoever answers is the operator (see "Neither half proves who answered," below) |
+| `undeclaredOptional` | Every optional key a DECLARED `search`/`distribution` block left unanswered (`SEARCH_OPTIONAL`/`DISTRIBUTION_OPTIONAL` — `search.record`, `search.currentWhen`, `distribution.currentWhen`, `distribution.shardsRoot`), each entry naming its `section`, `field` and the exact `consequence` its absence carries — MINUS every field `undeclaredBlocking` reports, which is not optional in any sense this word carries and is named there with the steps it stops. Reported, never demanded — a target with no search, or no split run, is asked nothing here either | **Never** — an optional field left unanswered is a legitimate resting state, not a defect; this only makes the option visible and names what it costs |
+| `undeclaredBlocking` | The other half of `undeclaredOptional`, and the half that key cannot honestly hold: every undeclared optional field a witness in the target's OWN declared sequence cannot be measured without, so its absence stops a declared step rather than narrowing a reading. Each entry names its `section`, `field`, the `evidence` key the field produces, `blockedBy` (each sequence item whose `measuredBy` head is that key, with its witness), `blockedSteps` (every `__steps__` entry whose `advances` ordinal sits above the earliest of them, and which `step` therefore refuses `STEP_SEQUENCE_NOT_REACHED` on every call), the `consequence` — which composes in the field's own — and an `exit`. The set is DERIVED from the sequence, never listed: a roster of load-bearing fields would go stale the first time a witness kind changed what it reads. Matching on the `measuredBy` head and never the whole string is what keeps a corroborator out — `search.currentWhen` and `distribution.currentWhen` narrow a reading and stay in `undeclaredOptional` — and what sorts the record kinds for free, since a named `@record:level <name>` is measured through its own `__records__` entry. `[]` when the target declares no ordered flow, when no unanswered field's key is named by any item, and when every such item sits at or above the furthest ordinal any step advances | **Never** — the refusal it reports ahead of is unchanged; it only says before the first step runs what `step` would otherwise say four ordinals in. Its `exit` is a **question**, never a command: the one act that clears it is an edit to the target's own benchmark declaration, and the forge authors no target declaration — so what is published is the question and the directly runnable `discuss` command that opens it |
+| `undeclaredLadder` | The ordered rung ladder `__levels__` names, when it names none: the declaration, the file that would carry it, and the exact `consequence` its absence carries — `POSITION_RUNG_SKIPPED` can never fire, `position.attainedLevel` stays `null` forever, every item stays two-state because a `:level` witness is refused, and a header's `--target-level` is compared against nothing. `null` when a ladder is declared, and when the target has no benchmark package to declare one in | **Never** — a repository whose steps are all two-state needs no ladder and is not defective for having none; this only makes the option visible and names what it costs |
+| `unreachableLadder` | A declared ladder the sequence beside it can never climb to the launch floor of: `levels`, `requiredLevel`, `highestAttainable`, `cappedBy`, and the consequence. Fires from four rungs up with a leveled `@rehearsal` item, which `smokeReady` bounds at the floor plus one | Never — reported so a `RUNG_NOT_ATTAINED` nothing can answer is legible before it is met |
+| `undeclaredRecords` | The named records `__records__` names, when it names none: the declaration, the file that would carry it, and the exact `consequence` its absence carries — a leveled `@record:level <name>` witness can only ever derive `None` (unmeasured), and `position` refuses `POSITION_RECORD_UNKNOWN` outright before that state is ever written to a mark. `null` when at least one record is declared, and when the target has no benchmark package to declare one in | **Never** — a repository whose only leveled `@record` witness is the bare, operand-less one needs no named record and is not defective for having none; this only makes the option visible and names what it costs |
+| `unfinishableFlow` | An ordered flow the target's own declared scale makes unwalkable: `requiredScale` (the scale that decides), `blockedBy` (each sequence item a run below that scale can never tick — a two-state `@record` witness, which `impl_position._derive_record` grades against `search.scaleSatisfied`), `blockedSteps` (every `__steps__` entry whose `advances` ordinal sits above the earliest of them, and which `step` therefore refuses `STEP_SEQUENCE_NOT_REACHED` on every call) and the consequence, which names the exit: a leveled `@record:level <name>` witness backed by one `__records__` entry per record the flow produces, each with its own `requiredScale`. `null` when no scale is declared, when no item is graded against one, and when no step waits behind such an item | Never — the refusal it reports ahead of is unchanged; this only says before the first step runs what `step` would otherwise say several steps in |
+| `undeclaredProduces` | One entry per declared `__steps__` step that names no `produces`: the `step`, the exact `declaration` key that would carry it, the file that would carry it, and the `consequence` its absence carries — `step` snapshots the product folder before and after every run, so with no declared root it can tell neither a run that returned having written nothing from one that produced its whole output, nor a run that stayed in its own tree from one that wrote into a neighbour's. `[]` when every declared step names its roots, when the target declares no steps at all, and when it has no benchmark package to declare them in | **Never** — an absent declaration switches a reading off; it does not make the step defective, and a refusal here would grade an act whose subprocess has already run. The kit ships the key in its own `__steps__` example so a repository built from zero meets the question rather than defaulting past it |
 
 Column one is read by the suite against `verify`'s own return, so a status added
 to the command fails the tests until it has a row here. Columns two and three are
@@ -1941,9 +2274,17 @@ remedy with the equations the remedy would change. State scope left out. Never
 claim verification passed without the `verify` output and a green suite, and
 never report a finding whose remedy validation did not run.
 
+**Neither half proves who answered.** `close`'s `DISCUSSION_UNANSWERED` gate,
+and the `discuss` commands `toDiscuss` above and `settle`'s
+`SETTLE_COLLIDES_UNNAMED` refusal now publish, prove only that a decision
+reached the record — never that the operator authored it. An agent can open
+a question and answer it itself, and nothing downstream can tell. That
+happened in this very session. Publishing a runnable command lowers the
+friction to ask; it does not raise the bar on who is allowed to answer.
+
 ### What `probe` reports, and why none of the job facts is a gate
 
-`probe` answers `nextStep` and reports thirteen facts around it. The ladder
+`probe` answers `nextStep` and reports sixteen facts around it. The ladder
 that chooses `nextStep` reads most of them; the rest are read by a human
 before deciding what to do with the answer, and a fact nobody was told about
 is a fact nobody reads:
@@ -1954,15 +2295,20 @@ is a fact nobody reads:
 | `baselines` | The prior implementations there are to compare against | Yes — nothing to compare against outranks everything else on the ladder |
 | `comparable` | Whether that list is non-empty, stated once so nobody re-derives it | Reported whatever it says |
 | `coupling` | Which notebook cells reach into the target's internals instead of its declared surface | **Never** — a static fact, reported so somebody can decide about it |
-| `harnessStatus` | Where the target's own declaration says its harness module is: `undeclared`, present at `path`, or `declaredMissing` naming `declaredModule` and `searchedPath` | Reported whatever it says |
+| `harnessStatus` | Where the target's own declaration says its harness module is: `undeclared`, present at `path`, or `declaredMissing` naming `declaredModule` and `searchedPath`. `declaredFunction` echoes `entry.function` beside it, and `note` names what a blank one costs: nothing in this skill reads that field, but `generate-job --run-function` is a required argument with no default, and this declaration is where its value comes from | Reported whatever it says |
 | `nextStep` | The one thing to do next | This is the answer, not a fact feeding it |
 | `notebook` | Where the pilot notebook is, or `null` | Reported whatever it says |
+| `position` | The execution sequence's derived state, read from `<Name>/AGREED.md`'s own position section. `probe` takes no `--shards`, so every `@shard` witness reports `unmeasured` here, never a false "did not arrive" | **Never** — a derived fact, reported so a human can decide about it |
+| `pilotCompleteness` | Whether the ordered flow the target declared has actually finished at pilot, step by step: `status` (`undeclared` when no `__steps__` entry carries an `advances` ordinal), one row per step naming its ordinal, whether it ran and returned, the notebook its own sequence item names and whether that notebook is executed against these sources, and `incomplete` — the steps still short, in declared order | Yes — an unfinished flow is `pilot-first`, and a finished one whose steps have not each been decided is `pilot-decisions` |
+| `walk` | Where this repository stands in its own declared flow, step by step: `status` (`undeclared`/`notStarted`/`walking`/`walked`), the declared `levels` and `topRung`, one row per declared step (`walk` — `notWalked`, `unfinished` (a `started` ledger event with no terminal partner, a run that was killed) or `walked` — plus `lastOutcome`, `lastAt`, the `rung` its position item grades at, `atTopRung`, and the output roots it `renders`), and one row per result-rendering artefact in the product tree, each inheriting the state of the step that renders it (`renderedBy`, `walk`, `rung`, `witnessed`). An artefact no declared step renders reads `outsideTheWalk` — a description of that artefact, not an accusation about it. Every input is already held: the ledger's step events, the position sequence and its rungs, and each step's own `produces` roots; **no target declaration is introduced** | **Never** — a walk report answers *where am I*, not *what is broken*. Nothing in it is a finding: a step nobody has walked is a state, a flow that has not started is where every repository begins, and reporting either as a defect would greet an operator with noise on their first clean run |
 | `remoteExecution` | The ledger's fold, plus the job folders that exist on disk right now | Yes — a submission already out is `poll-first` |
 | `report` | Whether the document a human reads agrees with the run | Yes — a document in drift is `report-first` |
+| `resolve` | What to do about `nextStep`, published by the engine rather than composed by whoever reads it: `{kind: "command", command}` for a step this flow can name completely, `{kind: "question", question, command}` for a step whose next act is a decision, and `null` only for the two steps the roster declares terminal | **Never** — a published action, not a verdict; publishing it proves the decision reached the record, never that the operator took it |
 | `results` | What the last pilot measured, and at what scale | Yes — below scale is `piloted`, at scale is `already-benchmarked` |
 | `search` | Whether a declared search chose anything, and what a full run would cost | Yes — a record absent from disk, or its `scaleSatisfied` short of `true`, is `search-first` |
+| `toDiscuss` | The question-shaped half of `resolve`, as a list: one directly runnable, `shlex.quote`-escaped `discuss` command for every `nextStep` whose next act is a decision, naming the target/name pair and — for `piloted` and `search-first` — the DECLARED (never the achieved) scale. Empty for the two terminal steps and for `env-first`, whose exit is a command nobody has to decide about | **Never** — a published action naming an already-computed undecided thing, not a verdict (see "Neither half proves who answered," above) |
 | `unreachedModules` | Arms declaring mathematics they never call | Yes — that is `wiring-first` |
-| `wiring` | The proposed wiring, present only when the answer is `benchmark` | Reported whatever it says |
+| `wiring` | The proposed wiring, present at the two answers `PROBE_NEXT_STEPS` marks as carrying it: `benchmark`, the offer to run, and `wiring-first`, where an arm declares mathematics it never calls. It used to be guarded on `benchmark` alone, so the one answer that named missing wiring withheld the draft of how to wire it | Reported whatever it says |
 
 Column one is read by the suite against `probe`'s own return, exactly as the
 table above is read against `verify`'s: a fact added to the command fails the
@@ -2031,8 +2377,172 @@ remote-execution CLI at all — and permitting the rehearsal is not the same as
 branching on the fact. What routes a reader here is the Decision Gates row,
 which is prose a reader follows, not a rung the ladder computes.
 
+### The smoke proves the pipe, the pilot proves the science
+
+**The smoke proves the pipe. The pilot proves the science.** A rehearsal's
+readiness measurement — the service accepted the submission, the kernel ran,
+the shard came down carrying the agreed fields — is a different fact from a
+pilot's production: the whole flow ran, and what it produced satisfies what
+was agreed. Passing one MUST NOT be read as passing the other. This is why
+`@step:level <name>` refuses `POSITION_WITNESS_NOT_LEVELABLE` rather than
+reporting a rung: `_derive_step` reads `run_step`'s `raised`/`returned`
+outcome, which is identical whether the callable ran at pilot scale or full
+scale — it measures completion, never production. A step earns no rung this
+way, on purpose: a witness that cannot see what its own prose claims to
+describe would be worse than one that refuses to claim it at all.
+
+## Command Roster
+
+Two tables, and together they are the whole of `implementation_cli.py`'s
+dispatch surface. The first is the write-verb half: every command that writes
+into `<Name>/AGREED.md`, into `.implementation/`'s ledger, or into both, rather
+than only reporting. The second is everything else the CLI accepts.
+
+Column one of both is read against `COMMANDS`' own keys, in both directions: a
+new command fails the tests until it has a row, and a row no command backs
+fails them too.
+
+**`settle`'s class is closed at five modes**, stated once here rather than
+re-derived by measurement: place (the default), attach a witness
+(`--attach`), remove (`--remove`), reverse (`--reverse`), and mark done
+(`--done`). Two of those five are compositions of the other three, not
+gaps of their own: editing an agreement's text is `--reverse` (write the
+explanation and delete the line in one call) followed by a fresh
+placement; moving one between sections is `--remove` (once the removal is
+already explained) followed by placement under the new heading. Nothing
+else in this file writes into `AGREED.md`'s checklist body.
+
+| Command | What it writes | Refuses on |
+| --- | --- | --- |
+| `position` | No flag: re-derives the marks of the block already in `<Name>/AGREED.md`, touching nothing else about it. `--sequence -`: installs a fresh section from stdin JSON (each entry's `witness.twostate` defaults to `true` when omitted). `--reconcile`: reconstructs the sequence from what the target already has (declared record, discovered job folders, `Notebooks/*.ipynb`, and one `@shard` per arrived shard with `--shards`), matching existing items by witness identity and appending only unmatched ones — every discovered witness is two-state. `--shards <dir>` also measures every `@shard` witness against that directory in every write mode, not `--reconcile` alone — without it `@shard` reads `unmeasured`, never `False`. `--target-level <level>` names the rung this pass is aiming at (one of the target's own `__levels__`, read from the benchmark package's `__init__.py`/`config.py`); required only for a fresh header, sticky (reused) across a bare refresh. **A rung is never skipped going forward:** to seal at rung N, every leveled item must already grade as satisfied at rung N-1 — derived from the evidence as it currently stands, never from the ledger, since a target that never ran this command has no ledger and a history check would pass vacuously on exactly the repositories the rule exists to stop. The rung compared against is the one the EVIDENCE attains, never the one the header records: `target=` states what a pass aims at, legitimately one rung above what is reached, so an aim reaches at most one rung above attainment and where a pass came from is not consulted — a retreat and a re-seal assert that N-1 is reached exactly as a climb does. The first rung needs no predecessor, which is what keeps an operator whose evidence collapsed from ever being cornered; two-state items never participate; and a target that declares no `__levels__` is unaffected — nothing here ever asks one for a ladder, so `verify`'s `undeclaredLadder` reports the absence and what it costs instead. `position`'s state publishes `attainedLevel` beside `targetLevel`, so the gap between the two is readable without tripping a refusal. A mark means "reached the level this pass asks for" for a leveled (`:level`-marked) witness, or a plain pass/fail for a two-state (unmarked, the default) one — see `impl_position.derive`'s own docstring. Every real write appends one event to `.implementation/position.jsonl` | `REVISION_UNREADABLE`, `POSITION_BLOCK_EXISTS` (install over an existing block without `--replace`), `POSITION_SEQUENCE_AND_RECONCILE`, `POSITION_HOLDER_ABSENT` (nothing to append into), `POSITION_HOLDER_AMBIGUOUS`, `POSITION_BLOCK_NOT_UNIQUE`, `POSITION_BLOCK_MALFORMED` (also raised for a block written by the pre-level-grammar revision, which carries no `target=` field and is never silently migrated), `POSITION_ITEM_MALFORMED`, `POSITION_ITEM_WITHOUT_WITNESS`, `POSITION_WITNESS_UNKNOWN_KIND`, `POSITION_SEQUENCE_UNREADABLE`, `POSITION_SEQUENCE_EMPTY`, `POSITION_TARGET_LEVEL_REQUIRED` (a fresh header with no `--target-level` and no existing block to inherit one from), `POSITION_TARGET_LEVEL_UNKNOWN` (`--target-level` names something `__levels__` never declared), `POSITION_LEVELS_UNDECLARED` (a `:level`-marked witness exists but `__levels__` declares no ladder), `POSITION_RUNG_SKIPPED` (a seal at a rung whose predecessor on the declared ladder is not currently attained by the evidence — see below), `STEPS_UNDECLARED` (an `@step` witness exists in the sequence and the target declares no `__steps__` at all — the identical code and wording `step` itself raises for the same fact), `POSITION_STEP_UNKNOWN` (an `@step` witness names an operand absent from `__steps__`; the detail lists what the target actually declares — `parse_items` validates only the witness kind, never this string), `POSITION_RECORD_UNKNOWN` (a leveled `@record:level <name>` witness names an operand absent from `__records__`, whether it declares others or none at all), `POSITION_RECORD_MALFORMED` (that operand IS declared and its entry cannot be read: not a mapping, so the reader drops it while this refusal calls it declared, or a mapping with no `path` string, so nothing can ever be looked for — `__steps__`'s own `STEP_MALFORMED`, one literal over), `POSITION_HOLDER_MOVED` (the holder file's bytes changed between the read that located its section and the write; offsets computed against the earlier read are refused rather than spliced into bytes they were never actually located against — re-run, never retry blind), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `discuss` | One `discuss` event per call to `.implementation/position.jsonl` — the question, the computed collision list, and (once given) the answer. Never touches `<Name>/AGREED.md`. Never gates: an unanswered question is a reported `status`, not a refusal. The response also carries `collisionSearch`: `"performed"` when the witness names an operand the search actually ran against, `"unperformed"` for the one operand-less kind (`record`) — an empty `collides` alone would read exactly like a search that ran and found nothing | `DISCUSS_STDIN_CONFLICT` (`--question -` and `--answer -` together), `DISCUSS_EMPTY_QUESTION`, `DISCUSS_ABOUT_NOT_FOUND` (an `--about` ordinal outside the sequence), `POSITION_WITNESS_UNKNOWN_KIND` (an `--about` witness spec naming an unknown kind), `DISCUSS_ABOUT_OPERAND_REQUIRED` (a bare `--about notebook`/`rehearsal`/`shard`/`step` with no operand — the collision search this call would otherwise run cannot know what to search for, so it refuses rather than silently returning an empty result), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `propose` | One `proposal` event to `.implementation/position.jsonl`, scoped to a whole CAMPAIGN, never a single job: `jobs` (repeatable `--job`, at least one — the subset THIS proposal covers), `workers` (repeatable `--worker`, at least one — write-only history), `dependsOn` (repeatable `--depends-on job:dependency`), `rationale` (required, non-blank) and `campaign: {commit, jobSet}` — never argv, a live-disk snapshot of every job folder currently discovered. Multi-use by design: calling `propose` again appends a fresh event rather than editing the last one; a bound proposal is never consumed, so a single job's transient failure never forces re-proposing the whole campaign | `EMPTY_RATIONALE`, `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `gate` | One `gate` event to `.implementation/position.jsonl`: job, worker, commit, revision, entrypoint, units, the justification and `elected` (the `--elect` list, additive), plus one `authorization-consumed` event naming the presented token. Prints no token of its own — nothing here can be minted from the caller's own argv; `--authorization <token>` (required) must instead name a token an earlier `offer` publish already minted. `--worker <account>` authorizes a single-send or rehearsal launch for exactly that account; repeatable `--unit` authorizes a CAMPAIGN launch instead, binding the exact ordered unit list a later `submit --unit ...` will carry — the same derivation `campaign_consent_token()` uses for consent — and records `worker: null`, since a campaign names no single account. The two flags are mutually exclusive. Once the authorization token itself verifies, `gate` also requires a bound campaign proposal naming this job (published by `propose`) and, when this job classifies `optional` (`classify_remote_necessity`'s own verdict — the recorded facts do not decide), a matching `--elect <job>` on this exact invocation | `EMPTY_JUSTIFICATION`, `REVISION_UNREADABLE`, `POSITION_ABSENT`, `POSITION_STALE`, `POSITION_UNBACKED` (a sequence item is ticked and its witness was never measured — a blank box claims nothing, a ticked one asserts a step was reached, and no launch is authorized against an assertion nobody checked), `POSITION_SHARDS_UNDECLARED` (the ticked item's witness is `@shard` and nothing named where a returned shard lands — no declared `distribution.shardsRoot`, and `gate` carries no `--shards` of its own to override with; a different fact from `POSITION_UNBACKED`, since this tick was never told where to look at all), `POSITION_DISAGREES` (a sequence item is ticked but its own witness measured the opposite — never a blank, unreconciled item, only a tick that is itself a false claim), `NOT_READY` (no passing rehearsal on file at the job's current pin), `SEQUENCE_NOT_REACHED` (an earlier item in the sequence is still open, or no item names this job at all), `GATE_WORKER_UNIT_CONFLICT` (`--worker` and `--unit` both given), `GATE_WORKER_REQUIRED` (neither given — there is no auto-select shape for `gate` to authorize), `GATE_AUTHORIZATION_REQUIRED` (`--authorization` omitted), `GATE_AUTHORIZATION_UNKNOWN` (no ledger record vouches for the token, or it no longer re-digests to its own recorded fields), `GATE_AUTHORIZATION_SUPERSEDED` (a legitimate token minted before `proposalDigest` joined the binding — diagnostic only, refused exactly as hard as `UNKNOWN`), `GATE_AUTHORIZATION_MISMATCH` (the record names a different job or unit list), `GATE_AUTHORIZATION_STALE` (a bound fact has moved since minting — never merely elapsed time), `GATE_AUTHORIZATION_CONSUMED` (the token already authorized one successful `gate` call; single-use, never reusable), `GATE_PROPOSAL_UNKNOWN` (the token names no campaign proposal this ledger still vouches for), `GATE_PROPOSAL_MISMATCH` (a genuine, current proposal exists but does not name this job), `GATE_PROPOSAL_STALE` (the proposal's own campaign identity no longer matches live disk — the pin moved, or a job folder was added or removed), `GATE_ELECTION_REQUIRED` (this job classifies `optional` and no `--elect` names it), `GATE_ELECTION_MISMATCH` (`--elect` names a different job, or names this job while it does not classify `optional`), `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code above), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `offer` | Records the flow-continuation answer (`--answer yes` or `--answer no`, a closed token) as one `offer` event to `.implementation/position.jsonl`, then publishes a closed action set: one `launch` per job the shared availability rule (`gate` reads the identical verdict) says is available, plus `run-step` when the recorded answer is `yes` or `expand-contract` when it is `no`. Every action is exactly `{id, command, establishes, binding}`; an unavailable action is omitted entirely, never disabled-with-a-reason. `expand-contract`'s own `command` publishes a `discuss --about record --question <text>` invocation, never a write — it carries no `--session` (`discuss` registers none) and, run verbatim, only appends a `discuss` event; it never touches `AGREED.md`. `--answer` is required on EVERY call — never read back from a prior `offer` event, no matter how many exist or what they contain; a supplied answer is always honored and always appends a new event. Repeatable `--unit` is the operator-declared ordered list a `launch` action binds instead of a single-send one, switching its published command to campaign form (`--unit ...`, never `--worker <account>`) — the engine never substitutes its own list. Every published `launch` action's `binding` also carries an `authorization` token: a digest minted over the engine's own re-derived binding (job, commit, entrypoint, units, rung, revision, position status), never over this call's argv alone. Minting is mint-if-absent — a fresh `kind: "authorization"` event is appended only when the ledger holds no unconsumed one already covering that exact binding, the same discipline `cmd_close`'s own `prior_close` lookup uses — so a repeat publish over unchanged state mints nothing new and republishes the same token. The published `command` string carries the minted token as `--authorization <token>`, so it is directly runnable | `OFFER_ANSWER_NOT_A_TOKEN` (`--answer` given something other than `yes`/`no`), `REVISION_UNREADABLE`, `OFFER_UNANSWERED` (`--answer` omitted on this call — refuses identically whether the ledger holds no offer event, one, or many; checked above `resolve_target`, so it wins over `FORGE_DEFECT_OPEN` too), `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked immediately after resolving target/name, before `REVISION_UNREADABLE`), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `close` | Refreshes the position (see `position`), then one `close` event to `.implementation/position.jsonl` binding session, revision and a digest of the resulting sequence | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before `REVISION_UNREADABLE`), `REVISION_UNREADABLE`, `POSITION_ABSENT`, `POSITION_STALE`, `POSITION_UNBACKED` (a sequence item is ticked and its witness was never measured), `POSITION_SHARDS_UNDECLARED` (the ticked item's witness is `@shard` and nothing named where a returned shard lands — a different fact from `POSITION_UNBACKED`: never told where to look, rather than looked and found silent), `POSITION_DISAGREES` (checked against the position exactly as recorded, before the refresh) — the identical ladder `gate` calls first (`impl_availability.position_honest`), never a second refusal ladder this command writes for itself; `AGREEMENT_DISAGREES` (a separate axis, checked right after the ladder: a ticked `AGREEMENTS.md`-style item whose declared `test_<id>` witness is absent from a fully-parsed `tests/` — the only place this ever gates, `verify`/`probe` only ever report it); `DISCUSSION_UNANSWERED` (a third, independent axis, checked right after `AGREEMENT_DISAGREES` and before the position refresh: at least one distinct `discuss` question text — grouped by exact trimmed text, never by witness identity — has no answer as its last event in ledger order; names every open text and prints one runnable `discuss --answer` retirement command per text), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `step` | Runs exactly one declared `__steps__` entry as a subprocess under the target's own `.venv/bin/python`, `PATH` prefixed by that interpreter's own directory — see [Non-negotiable isolation](#non-negotiable-isolation). A PAIR of `step` events to `.implementation/position.jsonl` on every run past `INTERPRETER_ABSENT`: `outcome: "started"` the instant before the subprocess spawns, then a terminal event. The ledger's shape is therefore readable on its own — **no event at all means the command never started, a `started` with no partner means it started and was killed (partial product), a terminal event means it ran and reported** — so a step's success is read off this pair, never off an exit code or stdout. The terminal event is `refused` (carrying `refusalCode`, no digest) for the four target-side refusals, and otherwise carries name, dotted callable, interpreter, outcome, exit status, error (when raised), and `suiteDigest` (`suite_digest(target)` — `src/`, `tests/`, and five fixed environment manifests, computed fresh at write time, unconditionally regardless of outcome). This reverses "no digest field" only for a bare runner step with no self-stamping artifact of its own; a notebook still recomputes `source_digest` fresh against its own `DIGEST_MARKER` output, so a ledger-carried copy there would still be redundant. An `@step` witness in `position`'s own sequence reads this ledger's latest event per step name (latest wins) and folds `True`/`False`/`unmeasured` from it — stale digest or a pre-change event with none of its own both read as `unmeasured`, never a false `True`/`False`. **Stated non-goal:** this witness does not distinguish a fully-executed suite from one that skipped tests — `pytest` exits 0 on skips, so `returned` grades green over a skipped suite exactly as a notebook report already does; closing assert-forgetting is not closing skip-laundering. Every successful call publishes `next`: the two runnable acts that stand between this step and the following one, so the loop is read where it is needed rather than remembered. `next[0]` is `git status --porcelain` over the target — **a step's product is committed before the next step runs**, because every step dirties the target with its own product and the next one refuses `DIRTY_WORKTREE` until it is clean; the listing is published and the commit message stays the operator's, this skill never authors one. `next[1]`, present only when the product carries a readable position block, is the exact `position` refresh bound to that block's own revision, because nothing else updates the marks an ordered next step reads. Published on every run including `raised` and `unknown` — a step that failed still left what it wrote in the tree, and a killed one left more of it. A declared six-step flow is therefore six `step` calls, five commits and five refreshes. Every successful call also publishes `wrote` — what this run changed in the product folder, split by whether the step owns it: `status` (`own`/`nothing`/`foreign`/`undeclared`), the `declared` roots, the `inside` and `outside` paths, and a note. `foreign` is the reading nothing else in this skill can take: a step that wrote into another step's product tree reports `outcome: "returned"`, passes every other check, and changes only a field inside a file nobody opens. The same block minus its note is written into the terminal ledger event, so the reading is durable rather than printed once. Paths are compared by `(size, mtime)` per file — every write a filesystem records moves it — with `.implementation/` excluded for the reason the dirty-tree guard excuses it. A step naming no `produces` reports `undeclared` and is graded against nothing; `verify`'s own `undeclaredProduces` is where that is said per step. Every successful call also publishes `lastRun`: the elapsed seconds of the LAST completed run of this same step, folded from the `started`/terminal pair already on the ledger. It is a MEASUREMENT and never a budget, it costs the target no declaration at all — an `expectedMinutes` in `__steps__` would be a field this skill reads and therefore one a from-zero repository would have to be made to ship — and its limit is published rather than implied: `status: "unmeasured"` on a step nobody has run yet, which is exactly the run whose cost surprises somebody. A run that started and never reported measured nothing and is skipped, so the field agrees with the ledger's own shape. Never appends, reads or alters a `gate` event, and calls none of the remote-execution loaders — there is no call path from here to a launch | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before `DIRTY_WORKTREE`), `DIRTY_WORKTREE` (before any subprocess spawns), `STEPS_UNDECLARED`, `STEP_UNKNOWN`, `STEP_MALFORMED` (declared entry missing `module` or `function`), `STEP_SEQUENCE_NOT_REACHED` (an earlier sequence item is still unticked — the mark read is the literal one in `AGREED.md`, which a step that just ran does not update, so the refusal publishes the exact runnable `position` refresh bound to the revision the block already names; `position` is the only writer into that section and `step` never becomes a second one), `INTERPRETER_ABSENT`, `STEP_MODULE_MISSING`, `STEP_FUNCTION_MISSING`, `STEP_NOT_CALLABLE`, `STEP_RUNNER_SILENT` (the process exited without ever writing a verdict), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `settle` | Places exactly one caller-authored `- [ ] <text>` line, verbatim, under a caller-named `--under <heading>` (exact match, hash marks included) in whichever holder file `agreements_state` already knows carries checklist items — the mark written is always `[ ]`, never `[x]`. `--about` is resolved the identical way `discuss`'s own `--about` is, then matched against the ledger by witness identity `(kind, operand)`; ANY answered `discuss` event satisfies this, never newest-wins, so a later open clarifying question never erases an earlier answer. On a collision (the same `_agreement_collides` search `discuss` reports), `--supersedes <text>` must exact-match one of the computed colliding items; recorded in the one `settle` ledger event only — the document itself still needs a human-written `Reversed` paragraph to show the supersession actually happened, which this command deliberately cannot author. Optional `--witness test_<id>` — a separate identity from `--about` — is persisted verbatim as a trailing `` `test_<id>` `` token; omitted, the written line is byte-identical to the pre-witness grammar. `settle` is the ONLY command that ever writes this token: there is no `patch`/`edit` subcommand, and hand-typing one into the file is unsupported doctrine, not a technical prevention — the parser cannot and does not distinguish a skill-written token from a hand-typed one, and `verify`/`close` evaluate either exactly the same way. No `--revision`: a placement binds to no revision. **`--attach`** (design "attach, not place") switches this same command into a second mode: bind `--witness` (required in this mode) onto a line ALREADY settled, matched by its exact `--text` — the mark is never touched, a ticked item stays ticked and an open one stays open, and everything else in the holder file is byte-identical afterward. `--under`/`--about`/`--supersedes` do not apply with `--attach` and are refused if given; the discussion precondition (`SETTLE_NOT_DISCUSSED`/`SETTLE_DISCUSSION_UNANSWERED`) is skipped entirely, because a line `--attach` matches was already discussed and placed by a prior `settle` call — attaching a witness to it is not placing a new agreement (see `cmd_settle`'s own docstring for the full reasoning). This is the retrofit mechanism, not the retrofit itself: running it over every already-settled line in a target is a separate, bounded, operator-directed pass. **`--remove`** (design "the eraser") switches this same command into a third mode: delete an already-settled line's own bytes outright, matched by its exact `--text`, touching no other byte in the document. Refused `SETTLE_NOT_REVERSED` unless the exact text is already quoted, bold, under a `## Reversed` heading somewhere in the same holder — deletion is refused until the document itself already explains why, and `--remove` deliberately cannot author that explanation. `--under`/`--supersedes`/`--witness` do not apply and are refused if given. **`--reverse`** (design "a reversal is one write") switches this same command into a fourth mode: write a NEW `## Reversed` entry (from `--paragraph`, required — `SETTLE_PARAGRAPH_REQUIRED` if blank or omitted, since the engine never authors the reasoning) and delete that same located line, both folded into ONE spliced write — either both land or the compare-and-swap itself refuses and neither does. Refused `SETTLE_ALREADY_REVERSED` if the text is already quoted under `## Reversed` (plain `--remove` is the reachable command for that state) and `SETTLE_HEADING_ABSENT`/`SETTLE_HEADING_AMBIGUOUS` if the holder carries no `## Reversed` heading, or more than one. `--under`/`--supersedes`/`--witness` do not apply and are refused if given. **`--done`** (design "the tick this class closes") switches this same command into a fifth mode: flip an already-settled line's own mark from `[ ]` to `[x]`, matched by its exact `--text` — the text, any witness token it already carries, and every other byte in the holder file are unchanged. Refused `SETTLE_NOT_WITNESSED` unless the located line already carries a `` `test_<id>` `` token: a tick asserts the work is done, and this command refuses to author that assertion for a line nobody can point a test at — bind one first with `--attach`. Refused `SETTLE_ALREADY_DONE` if the located mark is already `x`/`X`. `--under`/`--supersedes`/`--witness`/`--paragraph` do not apply with `--done` and are refused if given; the discussion precondition is skipped for the identical reason `--attach` skips it (see `cmd_settle`'s own docstring for the full guard argument, including why an escape hatch for witness-less irreducible arguments was deliberately not added, and why un-ticking is deliberately left out of this change) | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code below), `SETTLE_STDIN_CONFLICT` (`--text -` and `--supersedes -` together), `SETTLE_EMPTY_TEXT`, `SETTLE_ATTACH_CONFLICT` (`--attach` combined with `--under` or `--supersedes`), `SETTLE_REMOVE_CONFLICT` (`--remove` combined with `--attach`/`--under`/`--supersedes`/`--witness`), `SETTLE_REVERSE_CONFLICT` (`--reverse` combined with `--attach`/`--remove`/`--under`/`--supersedes`/`--witness`, or `--paragraph` given without `--reverse`), `SETTLE_DONE_CONFLICT` (`--done` combined with `--attach`/`--remove`/`--reverse`/`--under`/`--supersedes`/`--witness`/`--paragraph`), `SETTLE_WITNESS_REQUIRED` (`--attach` without `--witness`), `SETTLE_PARAGRAPH_REQUIRED` (`--reverse` without a non-blank `--paragraph`), `SETTLE_UNDER_REQUIRED` / `SETTLE_ABOUT_REQUIRED` (create path only, omitted without `--attach`/`--remove`/`--reverse`/`--done`), `SETTLE_NOT_DISCUSSED` (no `discuss` event names this witness identity at all — create path only), `SETTLE_DISCUSSION_UNANSWERED` (events exist, none `answered` — create path only), `SETTLE_HOLDER_ABSENT` (no markdown file under the product folder holds checklist items), `SETTLE_HEADING_ABSENT` / `SETTLE_HEADING_AMBIGUOUS` (create path: the named heading occurs zero, or more than one, times across every holder — a fenced code block's own heading-shaped line never counts as an occurrence), `SETTLE_TEXT_ABSENT` / `SETTLE_TEXT_AMBIGUOUS` (`--attach`/`--remove`/`--reverse`/`--done` paths: `--text` matches zero, or more than one, existing checklist line across every holder), `SETTLE_ALREADY_WITNESSED` (`--attach` path: the one located line already carries a witness token; `--attach` never replaces one), `SETTLE_NOT_REVERSED` (`--remove` path: the exact text is not already quoted, bold, under a `## Reversed` heading in the same holder), `SETTLE_ALREADY_REVERSED` (`--reverse` path: the exact text is already quoted under `## Reversed`; plain `--remove` is the reachable command for that state), `SETTLE_ALREADY_DONE` (`--done` path: the located line's own mark is already `x`/`X`), `SETTLE_NOT_WITNESSED` (`--done` path: the located line carries no witness token), `SETTLE_COLLIDES_UNNAMED` (create path: a collision exists and `--supersedes` was not given; names every colliding text verbatim, never a count, and prints one runnable `discuss` command asking which one, if any, this placement supersedes), `SETTLE_SUPERSEDES_UNKNOWN` (create path: `--supersedes` names text absent from the computed collision list), `SETTLE_WITNESS_MALFORMED` (`--witness` given and not `test_[A-Za-z0-9_]+`, either path), `POSITION_HOLDER_MOVED` (reused unchanged from `position`/`close` — the holder's bytes changed between the read that located the line and the write), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `defect` | One `defect` event to `.implementation/position.jsonl`: the forge-relative `--file` path, its live `fileSha256` digest, `session`, `at` and, when given, `detail` (omitted entirely, never written as `null`, when not given). Declares that some file this forge itself ships is currently broken. While this stays open (see `open_defects`), `step`, `gate`, `offer`, `close`, `settle`, `apply` and `admit` all refuse `FORGE_DEFECT_OPEN` for this exact `<target>/<name>` — see their own rows below, and `apply`/`admit` in [The rest of the surface](#the-rest-of-the-surface-and-the-roster-closed-at-nineteen). `probe`, `verify`, `position`, `plan`, `compose`, `handoff` and `discuss` stay reachable throughout; `handoff` additionally surfaces every open defect (file, session, detail) in its report. Never gated on an already-open defect and calls no worktree guard itself: a second declaration while one is open must stay possible, and the worktree is likely dirty precisely when something is broken. Repeatable — a call over an unchanged digest appends a fresh event rather than editing or refusing. Clearing happens the moment the named file's bytes change; asserting a fix in a fresh `--detail` on unchanged bytes does not clear it. **Deleting the file after a defect was declared against it is itself a clear**, decided rather than an oversight: the recorded digest can never again match an absent file, so absence is the strongest possible digest change (`ABSENT_FILE_DIGEST`, see `impl_position.current_file_digest`) — not a hole to close. This blocks mid-flow forge repair once detected; it does not prevent the edit itself — no hook or deny rule is added. Scope is per `<target>/<name>`, never a switch that blocks every target at once: a parallel session on a different target running the identical broken code must rediscover it | `DEFECT_FILE_NOT_FORGE_OWNED` (`--file` resolves outside `FORGE_ROOT/skills` — checked before existence, so this command never reports on the existence of anything outside that tree), `DEFECT_FILE_ABSENT` (`--file` is not a regular file; a path that never existed is refused rather than recorded, since the sentinel it would otherwise carry could never clear on its own), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
+| `materialize` | Exactly one of three mutually exclusive modes. `--stage <scaffold\|objects\|harness> --plan <path> [--seed <n>]`: plan-gated (the `PLAN_MISMATCH`/`PLAN_STALE` pattern `apply` uses) and clean-worktree-required; writes the chosen stage's file destinations from the kit — eleven for `scaffold` (plus its two merge anchors, `.gitignore`/`pyproject.toml`), three for `objects` (gated on step 8's declaration; `--seed` required), three for `harness` (no `--seed` needed) — and records every write in `<Name>/.implementation/materialization.json` (git-ignored), written last, atomically, after every file has landed. `--authored <path>`: releases the drift seal on one receipt-recorded destination, any of the seventeen, after the agent has authored over it — no file write, no plan gate, a dirty tree is fine (precedent: `_is_own_bookkeeping`). `--adopt <path>`: records an unrecorded destination's current bytes into the receipt as `kind: "adopted"` — the degraded guarantee, spelled out in `references/usage.md`: the record names who is responsible for the bytes, never that they came from the kit | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code below: `materialize --stage` writes kit destinations over the target, so it spends exactly as `apply` does), `MATERIALIZE_MODE_REQUIRED`, `MATERIALIZE_MODE_CONFLICT` (two or more of `--stage`/`--authored`/`--adopt` given together), `OUTSIDE_WORKSPACE`, `NOT_A_GIT_REPO`, `DIRTY_WORKTREE` (`--stage` only), `PLAN_REQUIRED`, `PLAN_MISMATCH`, `PLAN_STALE`, `SEED_REQUIRED` (`scaffold`/`objects` only), `OBJECT_MAP_NOT_APPROVED` (`--stage objects` before step 8's `revision`/`premises` are recorded), `STAGE_CANNOT_ANSWER` (a scaffold-stage template still carries an unresolved `{{TOKEN}}` after substitution), `DESTINATION_CONFLICT` (a destination appeared between the set computation and the write, the whole stage refused before any byte lands), `APPLY_ABORTED` (mid-write failure; tree reset and cleaned, no receipt entry), `NOT_A_KIT_DESTINATION` (`--authored`/`--adopt` naming a path outside the seventeen), `MATERIALIZE_PATH_ABSENT` (naming a path with no bytes on disk), `NO_RECEIPT_ENTRY` (`--authored` on a path the engine never wrote — use `--adopt`), `ALREADY_RECORDED` (`--adopt` on a path the receipt already carries — use `--authored`) |
+
+### The rest of the surface, and the roster closed at nineteen
+
+The table above is the write-verb half. A partial roster read as a complete one
+is the failure this heading exists to prevent, and this file has already made
+it once: a limitation paragraph at the top said the CLI accepted nine and
+refused everything else by naming them, so the running code held a roster this
+document did not. Nothing derived that nine. By the time anybody measured it
+the surface had doubled and the sentence was still there, unchallenged, because
+a spelled number with nothing reading it cannot go red.
+
+`COMMANDS` binds nineteen subcommands and dispatches nothing else. The ten
+above and the nine below are that set, stated here as closed. The nine are not
+lesser commands; they are the ones whose contract is already carried at length
+elsewhere — `probe` and `verify` each own a status roster of their own, and
+restating those statuses here would be the second definition of one rule this
+file's doctrine keeps rejecting. So for them the load-bearing column is the
+third: where the detail actually lives.
+
+| Command | What it does | Where its detail lives |
+| --- | --- | --- |
+| `name` | Normalizes a name as the user typed it into the directory/package pair every later command takes as `--name`, and reports it so the agent can show it before writing anything. The only command that takes no `--target`: it runs before a target exists. Refuses `NAME_EMPTY`, `NAME_HAS_NO_WORDS`, `NAME_NOT_ALPHANUMERIC` and `NAME_STARTS_WITH_DIGIT` rather than guessing a spelling | `references/usage.md`, *The name, normalized before the directory exists* |
+| `env` | Builds the target's own `.venv` under `implementations/<repo>/`, refusing an interpreter below 3.10 or below the target's own declared `python_requires`, whichever is higher — and refusing outright to run from a forge virtualenv. Reports every LFS pointer as a placeholder with the real file's size, at the one moment a repository full of pointers looks complete | `references/usage.md`, *2. The isolated environment* |
+| `plan` | Reads the repository and returns the migration it would perform — `renames`, moves, `createDirs`, `referenceUpdates`, `unclassifiedFiles` — and writes nothing. The artefact the user approves; `apply` refuses anything else | `references/usage.md`, *3. Plan the migration (read-only)* |
+| `apply` | Executes exactly the approved plan — and refuses anything else — as one separate `git mv` commit, all-or-nothing: the tree is verified clean first, and a mid-migration failure restores the reviewed starting point rather than leaving a half-migrated repository. A gating command — it refuses `FORGE_DEFECT_OPEN` like the write-verbs above | `references/usage.md`, *4. Apply, as one separate commit* |
+| `verify` | Reports layout, revision fidelity, scaffold/object/harness drift, the audit bridge's state and every executed notebook's interpreter. Reports and never gates: its statuses are their own roster, held to `cmd_verify`'s own returns | `references/usage.md`, *5. Verify* and *Reading `verify`* |
+| `admit` | Rules on each remedy's admissibility before anything is measured, and writes the verdict into the target so the remedy suite can refuse to run without it. Only the verdict travels — the proposal's text stays in the forge. Gating, and refuses `FORGE_DEFECT_OPEN` | `references/usage.md`, *`admit` — admissibility is ruled on first* |
+| `compose` | Rewrites one resolved entry so a finding's remedy takes its place, substituting inside the entry rather than handing back the bare block, and using the equation's own `\tag{n}` as the identity it lands on | `references/usage.md`, *`compose` — the remedy takes the entry's place* |
+| `handoff` | Hands the open findings back to the deliberation, sized by their reach: a local remedy travels as an agenda item, a structural one as a prompt for a session of its own. Also surfaces every open forge `defect` — file, session, detail — in its report | `references/usage.md`, *`handoff` — back to the deliberation, sized by reach* |
+| `probe` | Reports what stands between this repository and a benchmark, and runs nothing. Answers `nextStep`, which is what the Decision Gates rows are written about and what a reader is sent to before every offer to run. Its reported facts are their own roster; none of them is a gate | `references/usage.md`, *Probe — what stands between this repository and a benchmark* and *Reading `probe`* |
+
+### Every refusal declares how it is cleared
+
+The write-verb table's `Refuses on` column enumerates codes. A code is not an exit: a live
+session hit `POSITION_DISAGREES`, the engine printed the code and a sentence,
+and the agent driving the CLI composed the next question itself — "Do you want
+me to do that now?". That is the failure this section exists to make
+impossible. **The engine publishes what happens next. The agent never composes
+it.**
+
+One hundred and twelve distinct codes are reachable from the nine gating
+commands — `apply`, `admit`, `gate`, `offer`, `close`, `step`, `settle`,
+`materialize`, `position` (`GATING_COMMANDS`). **Reachable from, not raised
+inside**, and the difference cost a live session: the roster was first built
+from a walk over the `cmd_*` bodies alone, which cannot see a refusal a command
+reaches through a helper, so forty-two codes — `DIRTY_WORKTREE` among them —
+were never classified and reached users bare. The suite derives the set by
+following calls out of those bodies and out of `implementation_cli.py` into
+`_core/implementation/`. Each code is classified in `GATING_REFUSALS` by one
+derivable test, and the classification is a decision somebody made rather than a
+shape somebody noticed:
+
+> Can the caller clear this by changing the invocation alone, without touching
+> the repository?
+
+- **Yes — an *invocation* defect** (49 codes). The detail already names the
+  flag, the token or the mutual exclusion. Nothing is published beside it: a
+  `resolve` key on every refusal is the shape a reader learns to skip, and that
+  is how a real one stops being read.
+- **No — a *work state*** (63 codes). Somebody must act on the repository, so
+  the refused payload carries `resolve`: `{kind: "command", command}` when the
+  engine can name the whole exit, or `{kind: "question", question, command}`
+  when the next act is a decision, where `command` is the runnable `discuss`
+  invocation that opens it.
+
+Every published command — a `resolve`, a `next` act, an `offer` action, a `toDiscuss` entry — is runnable **verbatim from any directory**: it carries the absolute path of the interpreter running this CLI and the absolute path of the CLI itself (`CLI_INVOCATION`), both `shlex.quote`d, and every embedded path is absolute. The script ships mode 644 with no execute bit, so a bare relative script name was runnable from exactly one directory and silently not from any other — a shell's `command not found` reaches a harness on stdout with exit status 0, which is a step that never ran reported as a step that did.
+
+A `resolve` is published only when the refused **call** is itself a gating one.
+The roster's reach crosses helpers that non-gating commands share — `plan` runs
+the same dirty-tree guard `apply` does — and a resolution built from arguments
+the refused command never carried would not run.
+
+`POSITION_DISAGREES` resolves to re-executing the verification notebook under
+the target's own venv with that venv's `bin` on `PATH` — see
+[Executing a notebook needs `PATH`](#executing-a-notebook-needs-path-not-just-the-right-python)
+— and then re-running `position` to rebind the mark to what was measured.
+
+Two classifications are worth stating because a reader will argue with them.
+`GATE_AUTHORIZATION_REQUIRED`'s detail *does* name a flag, and it is still a
+work state: naming `--authorization` is not the same as being able to fill it,
+because the token is minted only by a prior `offer` publish. And
+`POSITION_ABSENT` publishes a question rather than a command — measured, not
+assumed: the obvious `position --reconcile` was run and refused
+`POSITION_TARGET_LEVEL_REQUIRED`, because a fresh header cannot be written
+without naming the rung the pass aims at, and only the target's own `__levels__`
+name the rungs.
+
+`position` was the ninth command to join the roster, and it joined on the
+criterion rather than by history: it reads the target before it writes, and two
+of its refusals — `POSITION_HOLDER_AMBIGUOUS` (two files carry the block) and
+`POSITION_LEVELS_UNDECLARED` (a leveled item, no ladder declared) — were work
+states reaching their reader as a bare code, which is the exact defect this
+roster exists to make impossible. `POSITION_RUNG_SKIPPED` joined with it.
+
+The roster is derived-against rather than proof-read, exactly as the Output
+Contract's status table is: the suite walks the gating commands' own source for
+the codes they raise, so **a refusal added to a gating command fails the tests
+until it has been classified.** Adding a code that publishes nothing is now a
+decision with a name on it, not an omission.
+
+### When the forge itself crashes mid-flow
+
+Declaring a defect is not the only way one gets recorded. `main()` catches
+exactly one coded exception, `Refused`, for its ordinary exit-2 report; any
+OTHER exception raised while dispatching a command — a bug in this forge's
+own code, not a caller mistake — is, by definition, a forge-side defect, and
+is auto-appended as a `kind: "defect"` event (naming the crashing module and
+its own current digest) before the original error is raised again unchanged.
+No agent has to notice this and run `defect` by hand first.
+
+This needs `<target>` and `<name>` to have a ledger path to write into at
+all, so it inherits the same stated limit `defect` itself does not close:
+`env` (no `--name`), `name` (no `--target`) and `compose` (nothing
+layout-shaped to address) cannot be recorded against and are left exactly as
+crash-prone as they already were. A crash inside one of those three still
+propagates in full; it is simply never captured.
+
 ## References
 
 - `references/usage.md` — worked invocations of every command.
-- `scripts/implementation_cli.py` — `env`, `plan`, `apply`, `admit`, `verify`. Stdlib only.
+- `scripts/implementation_cli.py` — every command in [Command Roster](#command-roster), and nothing outside it. Stdlib only.
 - `assets/` — pyproject, module, test and notebook templates.
