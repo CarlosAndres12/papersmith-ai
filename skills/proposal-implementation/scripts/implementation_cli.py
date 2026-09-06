@@ -27,6 +27,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -148,6 +149,11 @@ ROOT_KEEP = {
     "requirements.txt", "requirements-dev.txt", "environment.yml",
     "poetry.lock", "uv.lock", "CITATION.cff", "CHANGELOG.md",
     "AGENTS.md", "CLAUDE.md", ".gitkeep",
+    # The adoption survey's own binding artifact: `adopt` writes it at the
+    # target's root and `adopt --apply` reads it back, so the reorganization
+    # must carry it in place rather than move it or refuse on it as
+    # unclassified -- repository metadata, in the same sense as the rest.
+    "adoption-plan.json",
 }
 
 NOTEBOOK_EXT = {".ipynb"}
@@ -13678,6 +13684,542 @@ def cmd_materialize(args: argparse.Namespace) -> dict:
     return _materialize_adopt(target, name, args.adopt)
 
 
+#: The adoption plan's filename, at the target's root. `adopt` survey writes
+#: it beside the copied tree; `adopt --apply` reads it back as the binding
+#: the human approved. Lowercase, like every other non-code constant here,
+#: so the refusal-code walk never reads it as a code.
+adoption_plan_filename = "adoption-plan.json"
+
+#: The degraded guarantee every `adoptFiles` entry carries, word for word the
+#: one `_materialize_adopt` records: adoption names who is responsible for
+#: the bytes, never that they came from the kit.
+adopted_guarantee_note = ("the record names who wrote them, "
+                          "not that the engine owns the bytes")
+
+#: Directories paper-draft discovery never descends into: version control,
+#: environments, caches and vendored trees. A draft inside one of these is
+#: not the paper, it is somebody else's copy of something.
+adopt_candidate_ignored_dirs = frozenset({
+    ".git", ".venv", "venv", "node_modules", "__pycache__",
+    ".pytest_cache", ".mypy_cache", ".ipynb_checkpoints",
+})
+
+#: The adopted paper's managed filename. The deliberation skill's own ADOPT
+#: branch (SKILL.md, "Resolving the base version") adopts an unmanaged file
+#: as v1 by adding the marker and renaming it to exactly this; `adopt
+#: --apply` performs that same file operation, never a deliberation-engine
+#: call, so the name is shared rather than re-derived.
+adopted_revision_filename = "research-concept-r01.md"
+
+
+def _adopt_normalize_name(raw: str) -> str:
+    """The `<Name>/` directory form of whatever the user typed, through the
+    existing `name` normalizer and before anything is written with it.
+
+    A literal `INVALID_NAME` on anything unusable, never the dynamic
+    re-raise `cmd_name` performs: the roster walk cannot read a variable
+    code, and a second unreadable site is a red test rather than a shortcut.
+    """
+    try:
+        resolved = normalize_name(raw)
+    except NameRefused:
+        raise Refused("INVALID_NAME",
+                      f"Name {raw!r} cannot become a directory and a package.")
+    return resolved["directory"]
+
+
+def _adopt_workspace_target(raw: str) -> Path:
+    """The survey half of `resolve_target`: containment under
+    `implementations/`, without requiring a repository that does not exist
+    yet. The message mirrors the guard's, so the two never disagree about
+    where generated code may live.
+    """
+    target = Path(raw).expanduser().resolve()
+    try:
+        target.relative_to(WORKSPACE.resolve())
+    except ValueError:
+        raise Refused(
+            "OUTSIDE_WORKSPACE",
+            f"Target must live under {WORKSPACE}. Clone the repository there first — "
+            "the forge's own environment is never a workspace for generated code.",
+        )
+    return target
+
+
+def _adopt_tree_entries(root: Path) -> list[tuple[str, bytes]]:
+    """Every regular file under `root` as `(relative posix path, bytes)`.
+
+    Skips `.git/` (history is not surveyed bytes) and the adoption plan
+    itself (written into the target after the survey hash is taken, so
+    hashing it would make every plan stale on arrival). Unreadable entries
+    are skipped on both sides alike, so survey and apply stay comparable.
+    """
+    entries: list[tuple[str, bytes]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if relative.parts and relative.parts[0] == ".git":
+            continue
+        if len(relative.parts) == 1 and relative.parts[0] == adoption_plan_filename:
+            continue
+        if path.is_dir() and not path.is_symlink():
+            continue
+        try:
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
+        except OSError:
+            continue
+        entries.append((relative.as_posix(), data))
+    return entries
+
+
+def _adopt_tree_hash(root: Path) -> str:
+    """The binding between survey and apply: a sha256 over the surveyed
+    bytes, path by path, so the approval names exactly what was looked at.
+    Any byte added, removed or edited between survey and apply refuses
+    `PLAN_STALE`, which is what makes the human gate behind it mean
+    something.
+    """
+    digest = hashlib.sha256()
+    for relative, data in _adopt_tree_entries(root):
+        digest.update(relative.encode("utf-8") + b"\0" + data)
+    return digest.hexdigest()
+
+
+def _adopt_paper_candidates(source: Path) -> list[str]:
+    """The paper drafts a source folder holds, as sorted relative paths.
+
+    Every `*.md` file outside the ignored directories, except `README.md`:
+    a readme describes the folder, it is never the paper. Zero means
+    code-only; one is proposed as the v1 base; several refuse
+    `ADOPT_AMBIGUOUS` at the survey, before anything is copied, because
+    guessing among drafts is the decision the gate exists to take.
+    """
+    found: list[str] = []
+    for path in sorted(source.rglob("*")):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() != ".md":
+            continue
+        relative = path.relative_to(source)
+        if any(part.startswith(".") and part not in (".", "..")
+               or part in adopt_candidate_ignored_dirs
+               for part in relative.parts[:-1]):
+            continue
+        if relative.parts[-1].startswith("."):
+            continue
+        if relative.name.lower() == "readme.md":
+            continue
+        found.append(relative.as_posix())
+    return found
+
+
+def _adopt_copy_source(source: Path, target: Path) -> None:
+    """Copy the working tree, never move it: the source stays byte-identical,
+    which the survey-purity test pins. `.git/` is not copied -- adoption
+    starts its own history rather than inheriting the source's.
+    """
+    shutil.copytree(source, target, ignore=shutil.ignore_patterns(".git"),
+                    symlinks=False, ignore_dangling_symlinks=True)
+
+
+def _deliberation_status(source_filename: str | None) -> dict:
+    """`STATUS` from the deliberation engine, read-only and keyless.
+
+    The engine owns `proposals/`' ground truth (managed revisions, latest,
+    ambiguity), so the paper leg asks it rather than re-deriving the
+    classification beside it. No engine change, no new operation: this shells
+    out to the existing CLI with the project root bound to the same
+    `proposals/` directory the Python side reads, so the two can never
+    disagree about which directory they looked at.
+
+    Anything unreadable -- no node, a non-zero exit, unparsable output, a
+    non-`ok` status -- refuses `ADOPT_AMBIGUOUS`: the draft's standing cannot
+    be established, and proceeding past an unestablished standing is exactly
+    what the ambiguity refusal exists to stop.
+    """
+    cli = FORGE_ROOT / "skills" / "proposal-deliberation" / "cli.mjs"
+    request: dict[str, str] = {"operation": "STATUS"}
+    if source_filename is not None:
+        request["sourceFilename"] = source_filename
+    env = dict(os.environ)
+    env["PROPOSAL_DELIBERATION_PROJECT_ROOT"] = str(proposals_root().parent)
+    try:
+        proc = subprocess.run(
+            ["node", str(cli), json.dumps(request)],
+            capture_output=True, text=True, cwd=str(FORGE_ROOT),
+            env=env, timeout=120)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"STATUS could not be read for the adopted paper ({exc}); "
+            "its standing is unestablished, so nothing is adopted.")
+    try:
+        payload = json.loads(proc.stdout or "")
+    except json.JSONDecodeError:
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"STATUS answered no readable JSON for the adopted paper: "
+            f"{proc.stderr.strip()[:200]}; its standing is unestablished, "
+            "so nothing is adopted.")
+    if proc.returncode != 0 or not isinstance(payload, dict) \
+            or payload.get("status") != "ok":
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"STATUS refused for the adopted paper: "
+            f"{(proc.stdout or proc.stderr).strip()[:200]}; its standing is "
+            "unestablished, so nothing is adopted.")
+    return payload
+
+
+def _adopt_survey(args: argparse.Namespace) -> dict:
+    """Phase 1: copy an external folder under `implementations/` and write
+    the adoption plan the human approves. Reads the source, writes the copy
+    and the plan file, and mutates nothing else: no reorganization, no
+    scaffold, no paper placement. The source itself is never written.
+    """
+    name = _adopt_normalize_name(args.name)
+    if not getattr(args, "source", None):
+        raise Refused(
+            "SOURCE_NOT_FOUND",
+            "adopt surveys an external folder into the workspace; "
+            "--source <folder> names it and none was given.")
+    source = Path(args.source).expanduser().resolve()
+    if not source.is_dir():
+        raise Refused(
+            "SOURCE_NOT_FOUND",
+            f"Source folder {source} does not exist or is not a directory.")
+    target = _adopt_workspace_target(args.target)
+    if target.exists():
+        raise Refused(
+            "DESTINATION_CONFLICT",
+            f"Target {target} already exists; adoption copies into a fresh "
+            "directory and never overwrites. Remove it, or name another target.")
+    try:
+        target.relative_to(source)
+    except ValueError:
+        pass
+    else:
+        raise Refused(
+            "DESTINATION_CONFLICT",
+            f"Target {target} lives inside the source it would copy; "
+            "a copy into itself never finishes. Name a target outside the source.")
+    candidates = _adopt_paper_candidates(source)
+    if len(candidates) > 1:
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"Several paper drafts could be the v1 base: {candidates}. "
+            "Say which one the adoption starts from, and why.")
+    try:
+        _adopt_copy_source(source, target)
+        git(target, "init", "-q")
+        git(target, "add", "-A")
+        plan = build_plan(target, name)
+        scale = plan_scale(plan, target)
+        gaps = scaffold_gaps(target, name)
+        adopt_files: list[dict] = []
+        for destination in all_kit_destinations(name):
+            full = target / destination
+            if not full.is_file():
+                continue
+            adopt_files.append({
+                "path": destination,
+                "kind": "adopted",
+                # The degraded guarantee, spelled where the operator reads
+                # it: adoption records who is responsible for the bytes, not
+                # that the bytes came from the kit.
+                "guarantee": adopted_guarantee_note,
+                "writtenSha256": hashlib.sha256(full.read_bytes()).hexdigest(),
+            })
+        adoption = {
+            "command": "adopt",
+            "mode": "survey",
+            "source": str(source),
+            "target": str(target),
+            "name": name,
+            "sourceTreeHash": _adopt_tree_hash(source),
+            "paper": {"candidate": candidates[0] if candidates else None,
+                      "mode": "adopt-as-v1"},
+            "renames": plan["renames"],
+            "moves": plan["moves"],
+            "createDirs": plan["createDirs"],
+            "referenceUpdates": plan["referenceUpdates"],
+            "conflicts": plan["conflicts"],
+            "unclassified": plan["unclassified"],
+            "reorganization": {
+                "decisionCount": scale["decisionCount"],
+                "breakdown": scale["breakdown"],
+                "carriedFiles": scale["carriedFiles"],
+                "limit": scale["limit"],
+                "scale": scale["scale"],
+            },
+            "scaffoldGaps": gaps,
+            "adoptFiles": adopt_files,
+        }
+        plan_path = target / adoption_plan_filename
+        plan_path.write_text(json.dumps(adoption, indent=2) + "\n", encoding="utf-8")
+        git(target, "add", "-A")
+        git(target, "commit", "-q", "-m",
+            f"chore(adopt): survey external folder {source.name} as {name}")
+    except Refused:
+        # A refused survey leaves nothing behind: the target did not exist
+        # before this call, so removing it restores exactly that state.
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    except Exception:
+        shutil.rmtree(target, ignore_errors=True)
+        raise
+    head = git(target, "rev-parse", "HEAD").strip()
+    if scale["scale"] == "large":
+        scale_note = (
+            f"scale is large ({scale['decisionCount']} decisions against a "
+            f"limit of {scale['limit']}): the reorganization list below is "
+            "presented, never applied blind -- take it to its own session "
+            "before approving the apply.")
+    else:
+        scale_note = (
+            f"scale is reviewable ({scale['decisionCount']} decisions): read "
+            "the reorganization list and approve the apply, or refuse it.")
+    return {
+        "command": "adopt",
+        "mode": "survey",
+        "status": "surveyed",
+        "source": str(source),
+        "target": str(target),
+        "name": name,
+        "sourceTreeHash": adoption["sourceTreeHash"],
+        "paper": adoption["paper"],
+        "reorganization": adoption["reorganization"],
+        "scaffoldGaps": gaps,
+        "adoptFiles": [entry["path"] for entry in adopt_files],
+        "conflicts": plan["conflicts"],
+        "unclassified": plan["unclassified"],
+        "plan": str(plan_path),
+        "commit": head,
+        "scaleNote": scale_note,
+        "nextCommand": _cli_command(
+            "adopt", "--apply", "--target", str(target), "--name", name,
+            "--plan", str(plan_path)),
+        "note": "Survey only: the source tree is untouched; the copy, its "
+                "fresh git history and the plan file are new, and nothing "
+                "was reorganized, scaffolded or placed. Prior work keeps "
+                "its own package under src/ and never lands in "
+                f"src/{package_name(name)}/. Present the reorganization, "
+                "the paper candidate, the scaffold gaps and the adopted "
+                "files, and get approval before running nextCommand.",
+    }
+
+
+def _adopt_apply_paper(target: Path, approved: dict) -> dict:
+    """Phase 2, paper leg: the surveyed draft becomes the managed v1.
+
+    The draft is copied into `proposals/` under its own basename -- still
+    unmanaged -- `STATUS` confirms that standing, the marker bytes are
+    prepended and the file is renamed to `research-concept-r01.md`, and the
+    post-adoption consistency (managed marker, latest, unambiguous) must
+    hold before anything else runs. A leg that fails removes what it placed
+    and refuses, so `proposals/` is left as found.
+    """
+    paper = approved.get("paper") or {}
+    candidate = paper.get("candidate")
+    if not candidate:
+        return {"candidate": None, "mode": "adopt-as-v1", "status": "code-only",
+                "note": "the survey found no paper draft; code only, "
+                        "nothing placed under proposals/."}
+    draft = target / candidate
+    if not draft.is_file():
+        raise Refused(
+            "PLAN_STALE",
+            f"The surveyed draft {candidate} is no longer in the adopted "
+            "copy; the tree moved since approval. Re-run the survey and get "
+            "approval again.")
+    data = draft.read_bytes()
+    if data.startswith(MANAGED_ARTIFACT_MARKER):
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"The surveyed draft {candidate} already carries the managed "
+            "artifact marker; it is not an unmanaged base to adopt. Adopt "
+            "the managed revision through the deliberation instead, and why "
+            "this copy differs.")
+    proposals = proposals_root()
+    proposals.mkdir(parents=True, exist_ok=True)
+    workspace = _deliberation_status(None)
+    managed = workspace.get("managedRevisions") or []
+    if managed or workspace.get("latest") or workspace.get("multipleActive"):
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            "proposals/ already holds managed revisions "
+            f"({[entry.get('filename') for entry in managed]}); adopting an "
+            "external draft as v1 beside them is ambiguous. Say which "
+            "revision stands, and why.")
+    staged = proposals / Path(candidate).name
+    final = proposals / adopted_revision_filename
+    if staged.exists() or final.exists():
+        raise Refused(
+            "ADOPT_AMBIGUOUS",
+            f"proposals/ already holds {staged.name} or "
+            f"{final.name}; adopting over either would overwrite it. Say "
+            "which file stands, and why.")
+    placed: list[Path] = []
+    try:
+        staged.write_bytes(data)
+        placed.append(staged)
+        standing = _deliberation_status(staged.name)
+        if standing.get("sourceClassification") != "UNMANAGED":
+            raise Refused(
+                "ADOPT_AMBIGUOUS",
+                f"STATUS classifies the staged draft as "
+                f"{standing.get('sourceClassification')}, not UNMANAGED; "
+                "its standing is not the one adoption requires, so nothing "
+                "is adopted.")
+        final.write_bytes(MANAGED_ARTIFACT_MARKER + data)
+        placed.append(final)
+        staged.unlink()
+        audit = _deliberation_status(final.name)
+        evidence = {
+            "latest": audit.get("latest"),
+            "multipleActive": audit.get("multipleActive"),
+            "sourceClassification": audit.get("sourceClassification"),
+            "markerPresent": is_managed_artifact(final),
+        }
+        passed = (evidence["latest"] == adopted_revision_filename
+                  and not evidence["multipleActive"]
+                  and evidence["sourceClassification"] == "LATEST"
+                  and evidence["markerPresent"])
+        consistency = {"status": "PASS" if passed else "FAIL", **evidence}
+        if not passed:
+            raise Refused(
+                "ADOPT_AMBIGUOUS",
+                "the post-adoption consistency check did not pass "
+                f"({evidence}); the adoption is not the unambiguous latest, "
+                "so nothing stands as v1.")
+    except Refused:
+        for placed_path in placed:
+            try:
+                placed_path.unlink()
+            except OSError:
+                pass
+        raise
+    return {"candidate": candidate, "mode": "adopt-as-v1", "status": "adopted",
+            "revision": adopted_revision_filename, "consistency": consistency}
+
+
+def _adopt_apply(args: argparse.Namespace) -> dict:
+    """Phase 2: execute the approved adoption plan. The plan hash is
+    revalidated first -- anything the copy gained, lost or changed since the
+    survey refuses `PLAN_STALE`. Then the paper leg, then the code leg (one
+    `git mv` migration commit, the scaffold stage, one `--adopt` recording
+    per surveyed file, each through the unchanged `_materialize_adopt`), and
+    the run closes with the `verify` report.
+    """
+    name = _adopt_normalize_name(args.name)
+    if not getattr(args, "plan", None):
+        raise Refused(
+            "PLAN_REQUIRED",
+            "adopt --apply requires --plan <adoption-plan.json>; the survey "
+            "writes it beside the copied tree.")
+    try:
+        approved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise Refused(
+            "PLAN_STALE",
+            f"The adoption plan {args.plan} cannot be read; the binding to "
+            "the surveyed bytes is unestablished. Re-run the survey and get "
+            "approval again.")
+    if not isinstance(approved, dict) or approved.get("command") != "adopt" \
+            or approved.get("mode") != "survey":
+        raise Refused(
+            "PLAN_MISMATCH",
+            "The approved plan is not an adopt survey; point --plan at the "
+            "adoption-plan.json the survey wrote.")
+    target = resolve_target(args.target)
+    if approved.get("target") != str(target) or approved.get("name") != name:
+        raise Refused(
+            "PLAN_MISMATCH",
+            "The approved plan was produced for a different target or name.")
+    _require_no_open_defect(target, name)
+    if _adopt_tree_hash(target) != approved.get("sourceTreeHash"):
+        raise Refused(
+            "PLAN_STALE",
+            "The adopted copy changed since the plan was approved. Re-run "
+            "the survey and get approval again.")
+    require_clean_worktree(target)
+
+    paper = _adopt_apply_paper(target, approved)
+
+    current = build_plan(target, name)
+    if current["conflicts"]:
+        raise Refused(
+            "DESTINATION_CONFLICT",
+            f"Destinations clash (existing file, or two sources onto one path): {current['conflicts']}. "
+            "Applying would overwrite. Resolve with the user first.",
+        )
+    if current["unclassified"]:
+        raise Refused(
+            "UNCLASSIFIED_FILES",
+            f"No rule covers: {current['unclassified']}. Ask where they belong; never guess.",
+        )
+    try:
+        migrate(target, current)
+    except Exception as failure:  # noqa: BLE001 - the repository must not stay half-migrated
+        git(target, "reset", "-q", "--hard", check=False)
+        git(target, "clean", "-qfd", check=False)
+        raise Refused(
+            "APPLY_ABORTED",
+            f"{failure}. Nothing was committed and the working tree was restored "
+            "to its pre-migration state; re-run the survey to see the current situation.",
+        ) from failure
+    head = git(target, "rev-parse", "HEAD").strip()
+
+    # The scaffold stage, called as the stage rather than through the
+    # `--stage` gate: that gate compares the live tree against the approved
+    # plan, and the migration commit above just moved the tree past it
+    # (measured: `materialize --stage scaffold --plan` over a freshly
+    # applied tree refuses `PLAN_STALE`). The binding the gate protects --
+    # nothing unapproved reached the tree -- is already held by the
+    # sourceTreeHash check above, taken before anything moved.
+    scaffold = _stage_scaffold(target, name, args.seed or "7")
+    adopted = [_materialize_adopt(target, name, entry["path"])
+               for entry in approved.get("adoptFiles") or []]
+    verify = cmd_verify(argparse.Namespace(
+        target=str(target), name=name, revision=None, shards=None))
+    return {
+        "command": "adopt",
+        "mode": "apply",
+        "status": "applied",
+        "target": str(target),
+        "name": name,
+        "session": getattr(args, "session", None),
+        "paper": paper,
+        "migration": {
+            "commit": head,
+            "renamed": current["renames"],
+            "referencesRewritten": current["referenceUpdates"],
+            "moved": len(current["moves"]),
+            "createdDirs": current["createDirs"],
+        },
+        "scaffold": {"written": scaffold["written"],
+                     "anchors": scaffold["anchors"]},
+        "adopted": [entry["path"] for entry in adopted],
+        "verify": verify,
+        "note": "The migration is one commit; revert it to undo the "
+                "reorganization. The scaffold writes and the adoptions are "
+                "uncommitted: review them, then commit. The verify report "
+                "above is read-only.",
+    }
+
+
+def cmd_adopt(args: argparse.Namespace) -> dict:
+    """Adopt an external folder: survey it into the workspace, then --apply
+    the approved plan. Two modes mirroring plan -> apply, with the human
+    gate between them: the survey mutates nothing but the plan file, and
+    the apply revalidates the surveyed bytes before moving anything.
+    """
+    if getattr(args, "apply", False):
+        return _adopt_apply(args)
+    return _adopt_survey(args)
+
+
 #: The commands that refuse on the repository's own state rather than only on
 #: what was typed: every one of them reads the target before it will proceed,
 #: and every one can stop a session dead. `GatingRefusalRosterTests` walks
@@ -13693,7 +14235,7 @@ def cmd_materialize(args: argparse.Namespace) -> dict:
 #: raised: the rung is decided where the header is sealed, not where a later
 #: command reads it back.
 GATING_COMMANDS = ("apply", "admit", "gate", "offer", "close", "step",
-                   "settle", "materialize", "position")
+                   "settle", "materialize", "position", "adopt")
 
 #: The caller typed something the caller can retype. The detail already names
 #: the flag, the token or the mutual exclusion, so nothing is published beside
@@ -13945,6 +14487,13 @@ GATING_REFUSALS: dict[str, str] = {
     "OBJECT_MAP_NOT_APPROVED": WORK_STATE,
     # A scaffold destination still carries a token this stage cannot answer.
     "STAGE_CANNOT_ANSWER": WORK_STATE,
+
+    # --- `adopt`'s survey and apply ----------------------------------------
+    # `SOURCE_NOT_FOUND` judges `--source` and nothing else, so the detail is
+    # already the whole exit. `ADOPT_AMBIGUOUS` names a standing no flag can
+    # settle: which draft is the v1 base, or which managed revision stands.
+    "SOURCE_NOT_FOUND": INVOCATION_DEFECT,
+    "ADOPT_AMBIGUOUS": WORK_STATE,
 
     # --- the ledger's own root, shared by every write verb ------------------
     # Arguable, and decided rather than noticed. Re-typing `--name` with the
@@ -14467,13 +15016,34 @@ def _step_declaration_question(reason: str):
         "why?")
 
 
+def _resolve_plan_stale(args) -> dict:
+    """The plan moved under the approval. From `adopt --apply` the exit is
+    the survey again -- the binding lives in the adoption plan, so its own
+    `--source` is read back out of it; anything unreadable there falls back
+    to the `plan` every other caller gets, rather than publishing a survey
+    with no source in it.
+    """
+    if getattr(args, "command", None) == "adopt":
+        try:
+            approved = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+            source = approved.get("source") if isinstance(approved, dict) else None
+        except (OSError, ValueError, TypeError, AttributeError):
+            source = None
+        if source:
+            return _refusal_command(_cli_command(
+                "adopt", "--source", str(source),
+                "--target", str(getattr(args, "target", "")),
+                "--name", str(getattr(args, "name", ""))))
+    return _refusal_command(
+        _cli_command("plan", *_refusal_target_args(args)))
+
+
 #: One builder per work state. Every one of them is reached only by its own
 #: code, and every one publishes something a reader runs unedited -- a code
 #: with nothing real to publish is a misclassification, not an empty field, and
 #: `GatingRefusalRosterTests` asserts the content rather than the key.
 _WORK_STATE_RESOLUTIONS = {
-    "PLAN_STALE": lambda args: _refusal_command(
-        _cli_command("plan", *_refusal_target_args(args))),
+    "PLAN_STALE": _resolve_plan_stale,
     "APPLY_ABORTED": lambda args: _refusal_command(
         _cli_command("plan", *_refusal_target_args(args))),
     "DESTINATION_CONFLICT": lambda args: _refusal_question(
@@ -14717,6 +15287,14 @@ _WORK_STATE_RESOLUTIONS = {
               "detail names the destination); which later step answers that "
               "token, and should this stage run before it, and why?"),
 
+    # --- `adopt`'s survey and apply ----------------------------------------
+    "ADOPT_AMBIGUOUS": lambda args: _refusal_question(
+        args, "more than one paper draft claims to be the v1 base, or "
+              "proposals/ already holds managed revisions beside the adopted "
+              "one, or the staged draft's standing is unestablished (the "
+              "refusal detail names which); which draft is the v1 base, and "
+              "which managed revision stands, and why?"),
+
     # --- the shared readers -------------------------------------------------
     "MALFORMED_FINDINGS": lambda args: _refusal_question(
         args, "tests/findings.py does not read as a findings declaration (the "
@@ -14792,7 +15370,8 @@ COMMANDS = {"env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_app
             "step": cmd_step,
             "settle": cmd_settle,
             "defect": cmd_defect,
-            "materialize": cmd_materialize}
+            "materialize": cmd_materialize,
+            "adopt": cmd_adopt}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -15255,6 +15834,27 @@ def main(argv: list[str] | None = None) -> int:
                 "--seed", default=None,
                 help="the suite's fixed seed, substituted into {{SEED}}; "
                      "required with --stage scaffold")
+        if name == "adopt":
+            p.add_argument(
+                "--source", default=None,
+                help="the external folder to survey; required without --apply. "
+                     "Copied, never moved, into a fresh target the survey commits.")
+            p.add_argument(
+                "--apply", action="store_true",
+                help="execute the approved adoption plan instead of surveying; "
+                     "requires --plan. Mutually exclusive with --source.")
+            p.add_argument(
+                "--plan", default=None,
+                help="path to the adoption-plan.json the survey wrote; "
+                     "required with --apply.")
+            p.add_argument(
+                "--seed", default="7",
+                help="the suite's fixed seed, substituted into {{SEED}} by "
+                     "the scaffold stage of the apply's code leg.")
+            p.add_argument(
+                "--session", default=None,
+                help="identity carried in the apply report; the paper leg "
+                     "and STATUS calls it gates are keyless.")
 
     args = parser.parse_args(argv)
     try:
