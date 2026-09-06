@@ -16423,7 +16423,7 @@ class CommandRosterTests(unittest.TestCase):
     def test_every_command_dispatched_is_accounted_for(self):
         write_verbs = {"position", "discuss", "propose", "gate", "offer",
                        "close", "step", "settle", "defect",
-                       "materialize"}
+                       "materialize", "adopt"}
         dispatched = set(impl.COMMANDS)
         self.assertEqual(
             dispatched, self.DOCUMENTED_ELSEWHERE | write_verbs,
@@ -16459,7 +16459,7 @@ class CommandRosterClosureTests(unittest.TestCase):
     dispatch table fails until it has a row, and a row no command backs fails
     too.
 
-    `test_the_roster_derivation_finds_the_measured_nineteen` is the guard on
+    `test_the_roster_derivation_finds_the_measured_twenty` is the guard on
     the scraper rather than on the roster, for the reason
     `GatingRefusalRosterTests` states about its own count: a walk that silently
     matches nothing makes the second direction pass over an empty set, and a
@@ -16499,12 +16499,12 @@ class CommandRosterClosureTests(unittest.TestCase):
                 for header in (self.WRITE_TABLE_HEADER, self.REST_TABLE_HEADER)
                 for row in self._table(header)]
 
-    def test_the_roster_derivation_finds_the_measured_nineteen(self):
+    def test_the_roster_derivation_finds_the_measured_twenty(self):
         """Sanity on the walk, not on the roster. A command added to or removed
         from the CLI should move this number; a broken header, a renamed column
         or a table that stopped parsing should not be able to leave it green."""
         rostered = self.rostered_commands()
-        self.assertEqual(len(rostered), 19)
+        self.assertEqual(len(rostered), 20)
         self.assertEqual(
             sorted(rostered), sorted(set(rostered)),
             "a command is rostered twice; two rows for one command is two "
@@ -26061,6 +26061,10 @@ _ENGLISH_COUNTS = {
     # of the `cmd_*` bodies alone.
     110: "One hundred and ten", 111: "One hundred and eleven",
     112: "One hundred and twelve",
+    # `adopt` surveys an external folder and applies the approved plan behind
+    # the same gate, adding one invocation defect (`SOURCE_NOT_FOUND`) and one
+    # work state (`ADOPT_AMBIGUOUS`).
+    114: "One hundred and fourteen",
 }
 
 
@@ -26419,7 +26423,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
             {("implementation_cli.py", "cmd_name"),
              ("impl_steps.py", "_verdict_result")})
 
-    def test_the_derivation_finds_the_measured_one_hundred_and_twelve(self):
+    def test_the_derivation_finds_the_measured_one_hundred_and_fourteen(self):
         """Sanity check on the derivation itself, not on the roster: a change
         that adds, removes or renames a refusal anywhere a gating command can
         reach should move this number, never a typo in the walk above.
@@ -26434,8 +26438,10 @@ class GatingRefusalRosterTests(unittest.TestCase):
         were always raised, always reachable, and never seen. One hundred and
         twelve is that reading plus `PRODUCT_DIR_MISNAMED`, which nine write
         verbs now raise before they can open a second product tree.
+        One hundred and fourteen is that reading plus `SOURCE_NOT_FOUND`
+        and `ADOPT_AMBIGUOUS`, which `adopt` raises for its survey.
         """
-        self.assertEqual(len(reachable_refusal_codes()), 112)
+        self.assertEqual(len(reachable_refusal_codes()), 114)
 
     def test_the_roster_classifies_nothing_a_gating_command_cannot_raise(self):
         """The reverse direction, and the half the forward lock cannot give.
@@ -26517,7 +26523,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         skill = " ".join(SKILL_MD.read_text(encoding="utf-8").split())
         self.assertIn(
             f"{_english_count(len(impl.GATING_REFUSALS))} distinct codes are "
-            "reachable from the nine gating commands", skill)
+            "reachable from the ten gating commands", skill)
         self.assertIn(
             f"an *invocation* defect** ({counts[impl.INVOCATION_DEFECT]} "
             "codes)", skill)
@@ -28849,3 +28855,286 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
         self.assertTrue(ran.stdout.strip().startswith("{"),
                         f"the published exit printed no JSON: {ran.stdout!r} "
                         f"{ran.stderr!r}")
+
+
+class AdoptCommandTests(unittest.TestCase):
+    """`adopt` — an external folder becomes a workspace target in two phases.
+
+    The survey copies the source under `implementations/`, commits the copy
+    and writes `adoption-plan.json`; the human gate sits between the phases;
+    the apply revalidates the surveyed bytes, places the draft as the managed
+    v1, migrates the code in one commit, writes the scaffold stage, records
+    each adopted file and closes with the `verify` report. Every test below
+    drives the real CLI as a subprocess against a real source folder, a real
+    target and a fixture deliberation root, the way the materialize command
+    tests do.
+    """
+
+    NAME = "Adopt-Target"
+    SEED = "7"
+    MARKER = "<!-- proposal-workspace:artifact:v1 -->\n"
+
+    def _source(self, tag, files):
+        """An external folder outside the workspace holding `files`."""
+        root = Path(tempfile.mkdtemp(prefix=f"adopt_src_{os.getpid()}_{tag}_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for relative, content in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+        return root
+
+    def _source_snapshot(self, root):
+        """Every regular file under `root` by content hash, `.git` aside."""
+        snapshot = {}
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and ".git" not in path.relative_to(root).parts:
+                snapshot[str(path.relative_to(root))] = hashlib.sha256(
+                    path.read_bytes()).hexdigest()
+        return snapshot
+
+    def _target(self, tag):
+        """A target path under `implementations/` that does not exist yet."""
+        box = (FORGE / "implementations"
+               / f"_adopt_{tag}_{os.getpid()}_{id(self)}")
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        return box
+
+    def _project(self):
+        """A fixture deliberation root with an empty `proposals/` directory,
+        bound to both sides that read it: the Python CLI through
+        `IMPLEMENTATION_PROPOSALS`, the engine through
+        `PROPOSAL_DELIBERATION_PROJECT_ROOT`."""
+        root = Path(tempfile.mkdtemp(prefix=f"adopt_proposals_{os.getpid()}_"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "proposals").mkdir()
+        return root
+
+    def run_cli(self, *args, project=None):
+        env = dict(os.environ)
+        if project is not None:
+            env["IMPLEMENTATION_PROPOSALS"] = str(project / "proposals")
+            env["PROPOSAL_DELIBERATION_PROJECT_ROOT"] = str(project)
+        proc = subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE,
+                              env=env)
+        return json.loads(proc.stdout or "{}"), proc.returncode, proc
+
+    def _survey(self, source, box, project, name=None):
+        return self.run_cli(
+            "adopt", "--source", str(source), "--target", str(box),
+            "--name", name or self.NAME, project=project)
+
+    def _apply(self, box, plan, project, name=None, session="s1"):
+        return self.run_cli(
+            "adopt", "--apply", "--target", str(box),
+            "--name", name or self.NAME, "--plan", str(plan),
+            "--session", session, project=project)
+
+    def _basic_source(self, tag="basic"):
+        return self._source(tag, [
+            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
+            ("draft.md", "# A short draft\n\nSome mathematics here.\n"),
+            ("README.md", "project notes\n"),
+        ])
+
+    def test_survey_leaves_the_source_untouched(self):
+        """Survey purity: the source is copied, never moved, never edited."""
+        source = self._basic_source()
+        before = self._source_snapshot(source)
+        box = self._target("purity")
+        payload, code, proc = self._survey(source, box, self._project())
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        self.assertEqual(payload["status"], "surveyed")
+        self.assertEqual(self._source_snapshot(source), before,
+                         "the survey must not write into the source")
+        self.assertFalse((source / ".git").exists(),
+                         "the survey must not git-touch the source")
+        self.assertTrue((box / "compute.py").is_file())
+        self.assertTrue((box / "adoption-plan.json").is_file())
+
+    def test_survey_writes_the_plan_binding_the_surveyed_bytes(self):
+        """The plan names the source hash, the paper candidate, the
+        reorganization scale and all thirteen scaffold gaps of a fresh tree."""
+        source = self._basic_source()
+        box = self._target("plan")
+        payload, code, proc = self._survey(source, box, self._project())
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        plan = json.loads((box / "adoption-plan.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual(plan["sourceTreeHash"], payload["sourceTreeHash"])
+        self.assertEqual(plan["sourceTreeHash"], impl._adopt_tree_hash(box),
+                         "the copy hashes to the surveyed bytes once the "
+                         "plan file itself is excluded")
+        self.assertEqual(plan["paper"],
+                         {"candidate": "draft.md", "mode": "adopt-as-v1"})
+        self.assertEqual(plan["reorganization"]["scale"], "reviewable")
+        self.assertEqual(len(plan["scaffoldGaps"]), 13,
+                         "a fresh tree opens the eleven destinations plus "
+                         "the two merge anchors")
+        self.assertEqual(plan["adoptFiles"], [])
+        self.assertIn("adopt --apply", payload["nextCommand"])
+
+    def test_survey_with_no_draft_is_code_only(self):
+        """Zero candidates propose nothing: the paper leg has nothing to do."""
+        source = self._source("codeonly", [
+            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
+            ("README.md", "a readme is never the paper\n"),
+        ])
+        box = self._target("codeonly")
+        payload, code, proc = self._survey(source, box, self._project())
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        self.assertEqual(payload["paper"],
+                         {"candidate": None, "mode": "adopt-as-v1"})
+
+    def test_survey_refuses_ambiguous_drafts_before_copying_anything(self):
+        """Several drafts refuse `ADOPT_AMBIGUOUS`, and the refusal leaves no
+        target behind: choosing among drafts is the gate's decision."""
+        source = self._source("ambiguous", [
+            ("first.md", "# first\n"),
+            ("second.md", "# second\n"),
+        ])
+        box = self._target("ambiguous")
+        payload, code, proc = self._survey(source, box, self._project())
+        self.assertEqual(code, 2, proc.stdout)
+        self.assertEqual(payload["status"], "refused")
+        self.assertEqual(payload["code"], "ADOPT_AMBIGUOUS")
+        self.assertFalse(box.exists(),
+                         "a refused survey must leave nothing behind")
+
+    def test_survey_refuses_a_missing_source_and_an_existing_target(self):
+        box = self._target("guards")
+        payload, code, _ = self.run_cli(
+            "adopt", "--source", str(box.parent / "no_such_folder"),
+            "--target", str(box), "--name", self.NAME)
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "SOURCE_NOT_FOUND")
+        source = self._basic_source(tag="conflict")
+        box.mkdir(parents=True)
+        payload, code, _ = self._survey(source, box, self._project())
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "DESTINATION_CONFLICT")
+
+    def test_apply_refuses_a_stale_plan_and_writes_nothing(self):
+        """A copy that moved since the survey refuses `PLAN_STALE`: no paper
+        is placed and no migration commit lands."""
+        project = self._project()
+        source = self._basic_source(tag="stale")
+        box = self._target("stale")
+        payload, code, proc = self._survey(source, box, project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        (box / "compute.py").write_text(
+            (box / "compute.py").read_text(encoding="utf-8") + "TAMPERED = 1\n",
+            encoding="utf-8")
+        payload, code, proc = self._apply(
+            box, box / "adoption-plan.json", project)
+        self.assertEqual(code, 2, proc.stdout)
+        self.assertEqual(payload["code"], "PLAN_STALE")
+        self.assertEqual(
+            list((project / "proposals").iterdir()), [],
+            "a stale apply must place no paper")
+        log = subprocess.run(["git", "-C", str(box), "log", "--oneline"],
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(len(log.stdout.strip().splitlines()), 1,
+                         "a stale apply must commit no migration")
+
+    def test_apply_refuses_a_plan_from_another_name(self):
+        """The binding covers the name as well as the bytes: `PLAN_MISMATCH`."""
+        project = self._project()
+        source = self._basic_source(tag="mismatch")
+        box = self._target("mismatch")
+        payload, code, proc = self._survey(source, box, project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        payload, code, _ = self._apply(
+            box, box / "adoption-plan.json", project, name="Other-Name")
+        self.assertEqual(code, 2, payload)
+        self.assertEqual(payload["code"], "PLAN_MISMATCH")
+
+    def test_apply_places_the_paper_and_records_adopted_files(self):
+        """End to end: the draft becomes the managed v1 with a passing
+        consistency, the migration lands in one commit, the scaffold stage
+        writes, and a kit destination the copy already held is recorded with
+        `kind: "adopted"` — responsibility, never provenance."""
+        project = self._project()
+        source = self._source("receipt", [
+            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
+            ("draft.md", "# A short draft\n\nSome mathematics here.\n"),
+            ("tests/test_smoke.py",
+             '"""Hand-written smoke."""\n\n\ndef test_hand_written():\n'
+             "    assert True\n"),
+        ])
+        box = self._target("receipt")
+        payload, code, proc = self._survey(source, box, project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        plan = json.loads((box / "adoption-plan.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual([entry["path"] for entry in plan["adoptFiles"]],
+                         ["tests/test_smoke.py"])
+        self.assertEqual(plan["adoptFiles"][0]["kind"], "adopted")
+
+        payload, code, proc = self._apply(
+            box, box / "adoption-plan.json", project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        self.assertEqual(payload["status"], "applied")
+
+        paper = payload["paper"]
+        self.assertEqual(paper["status"], "adopted")
+        self.assertEqual(paper["revision"], "research-concept-r01.md")
+        self.assertEqual(paper["consistency"]["status"], "PASS")
+        placed = project / "proposals" / "research-concept-r01.md"
+        self.assertTrue(placed.is_file())
+        with placed.open("rb") as handle:
+            self.assertEqual(
+                handle.read(len(self.MARKER.encode("utf-8"))),
+                self.MARKER.encode("utf-8"),
+                "the adopted v1 carries the managed marker as its first bytes")
+        self.assertEqual(
+            (project / "proposals" / "draft.md").exists(), False,
+            "only the managed rename stands under proposals/")
+
+        migration = payload["migration"]
+        self.assertEqual(migration["moved"], 1)
+        self.assertTrue((box / "src" / "legacy" / "compute.py").is_file())
+        self.assertTrue((box / "draft.md").is_file(),
+                        "documentation stays where it is")
+        log = subprocess.run(["git", "-C", str(box), "log", "--oneline"],
+                             capture_output=True, text=True, check=True)
+        self.assertEqual(len(log.stdout.strip().splitlines()), 2,
+                         "survey commit plus exactly one migration commit")
+
+        receipt = json.loads(
+            (box / ".implementation" / "materialization.json").read_text(
+                encoding="utf-8"))
+        entry = next(e for e in receipt["entries"]
+                     if e["path"] == "tests/test_smoke.py")
+        self.assertEqual(entry["kind"], "adopted")
+        self.assertIn("names who wrote them", entry["guarantee"])
+        self.assertEqual(
+            entry["writtenSha256"],
+            hashlib.sha256(
+                (box / "tests" / "test_smoke.py").read_bytes()).hexdigest())
+
+        structure = payload["verify"]["structure"]
+        self.assertEqual(structure["scaffoldGaps"], [])
+        self.assertEqual(structure["unrecordedScaffold"], [])
+        self.assertEqual(structure["scaffoldDrift"], [])
+        self.assertEqual(structure["objectDrift"], [])
+        self.assertEqual(structure["harnessDrift"], [])
+
+    def test_apply_without_a_draft_places_no_paper(self):
+        """Code-only adoption skips the paper leg and still migrates."""
+        project = self._project()
+        source = self._source("codeonly-apply", [
+            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
+        ])
+        box = self._target("codeonly-apply")
+        payload, code, proc = self._survey(source, box, project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        payload, code, proc = self._apply(
+            box, box / "adoption-plan.json", project)
+        self.assertEqual(code, 0, proc.stdout + proc.stderr)
+        self.assertEqual(payload["paper"]["status"], "code-only")
+        self.assertEqual(
+            list((project / "proposals").iterdir()), [],
+            "code-only adoption places nothing under proposals/")
+        self.assertTrue((box / "src" / "legacy" / "compute.py").is_file())
