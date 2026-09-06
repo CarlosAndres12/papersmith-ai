@@ -224,6 +224,123 @@ without that check `apply` would rewrite a file that was never on the list the
 user approved. On success everything lands in one commit — `git revert <commit>`
 undoes the whole migration.
 
+## Adopt an external folder (survey, then apply)
+
+When the work starts as a folder outside the workspace — prior code, a paper
+draft, or both — rather than a repository URL, `adopt` brings it under
+`implementations/` in two phases mirroring `plan` → `apply`, with the human
+gate between them. No deliberation-engine change and no new engine operation:
+the paper leg performs the deliberation skill's own ADOPT file operation
+(marker bytes plus rename to `research-concept-r01.md`), and every other step
+reuses the existing plan, scaffold and verify machinery.
+
+### Phase 1: survey (read the source, write the copy and the plan)
+
+```bash
+python3 skills/proposal-implementation/scripts/implementation_cli.py adopt \
+  --source /path/to/external-folder --target implementations/<repo> --name Example-Method
+```
+
+```json
+{
+  "command": "adopt", "mode": "survey", "status": "surveyed",
+  "source": "/path/to/external-folder",
+  "target": "…/implementations/<repo>",
+  "name": "Example-Method",
+  "sourceTreeHash": "4f43…00",
+  "paper": { "candidate": "draft.md", "mode": "adopt-as-v1" },
+  "reorganization": { "decisionCount": 1, "scale": "reviewable", "…": "…" },
+  "scaffoldGaps": ["…thirteen entries on a fresh tree…"],
+  "adoptFiles": [],
+  "plan": "…/implementations/<repo>/adoption-plan.json",
+  "scaleNote": "…",
+  "nextCommand": "… adopt --apply --target … --name … --plan …"
+}
+```
+
+The survey validates before copying: a missing `--source` or a source that
+is not a directory refuses `SOURCE_NOT_FOUND`; a target outside
+`implementations/` refuses `OUTSIDE_WORKSPACE`; a target that already exists
+— or one nested inside the source it would copy — refuses
+`DESTINATION_CONFLICT`. The `--name` is normalized through the existing
+`name` command first, before any `<Name>`/`<Package>` path is written.
+
+The copy is one way: the source is never moved, never edited, never
+git-touched. `.git/` is not carried over — adoption starts its own history
+with one survey commit holding the copy and the plan. The survey mutates
+nothing else: no reorganization, no scaffold, no paper placement.
+
+Paper drafts are detected, not guessed at: every `*.md` file outside version
+control, environments, caches and vendored trees, except `README.md` — a
+readme describes the folder, it is never the paper. Zero drafts means
+code-only (`"candidate": null`); one is proposed as the v1 base; several
+refuse `ADOPT_AMBIGUOUS` before anything is copied, because choosing among
+drafts is the decision the gate exists to take.
+
+The plan machinery runs over the copy as it stands: `reorganization` carries
+the decision count and scale (`reviewable` or `large`), alongside the moves,
+renames, reference updates, conflicts and unclassified files. Prior work
+keeps its own package under `src/` and never lands in `src/<Package>/` —
+that is `classify`'s own rule, reused unchanged. `scaffoldGaps` names the
+thirteen scaffold destinations still open. `adoptFiles` names the kit
+destinations the copy already holds, each with `kind: "adopted"` and the
+degraded guarantee spelled out: **the record names who wrote the bytes, not
+that the bytes came from the kit** — adoption records responsibility for
+bytes the engine never saw, and must never be read as engine confidence in
+them. `sourceTreeHash` binds the approval to the surveyed bytes: anything
+the copy gains, loses or changes before the apply refuses `PLAN_STALE`.
+
+The gate between the phases is human-side, and there is no code to override
+it: a `scale: "large"` list is presented, never applied blind, and no `--yes`
+flag exists to skip the reading.
+
+### Phase 2: apply (revalidate, place the paper, migrate the code)
+
+```bash
+python3 skills/proposal-implementation/scripts/implementation_cli.py adopt \
+  --apply --target implementations/<repo> --name Example-Method \
+  --plan implementations/<repo>/adoption-plan.json [--session <id>] [--seed 7]
+```
+
+The plan hash is revalidated first: a copy that moved since the survey
+refuses `PLAN_STALE`, and a plan written for another target or name refuses
+`PLAN_MISMATCH`. Then the paper leg, when the survey proposed a candidate:
+the draft is copied into `proposals/` under its own basename — still
+unmanaged — `STATUS` confirms that standing, the marker bytes
+(`<!-- proposal-workspace:artifact:v1 -->\n`) are prepended and the file is
+renamed to `research-concept-r01.md`, and the post-adoption consistency
+(managed marker present, the unambiguous latest, no tie) must hold before
+anything else runs. A paper leg that fails removes what it placed and
+refuses `ADOPT_AMBIGUOUS`, leaving `proposals/` as found; a `proposals/`
+that already holds managed revisions refuses the same way, because adopting
+an external draft as v1 beside them is a standing no flag can settle.
+
+Then the code leg: the `git mv` migration lands with its reference updates
+in one commit, exactly as `apply` performs it; the scaffold stage writes
+(`--seed` substitutes `{{SEED}}`, default `7`); each surveyed file is
+recorded through the unchanged per-file adopt, which keeps its own refusals
+intact — `ALREADY_RECORDED` on a path the receipt already carries,
+`NOT_A_KIT_DESTINATION` outside the seventeen, `MATERIALIZE_PATH_ABSENT`
+with no bytes on disk. The run closes with the `verify` report, read-only.
+The migration commit reverts as one; the scaffold writes and the adoptions
+stay uncommitted for review, then commit.
+
+```json
+{
+  "command": "adopt", "mode": "apply", "status": "applied",
+  "paper": { "candidate": "draft.md", "status": "adopted",
+             "revision": "research-concept-r01.md",
+             "consistency": { "status": "PASS", "latest": "research-concept-r01.md",
+                              "multipleActive": false,
+                              "sourceClassification": "LATEST",
+                              "markerPresent": true } },
+  "migration": { "commit": "1cd11…", "moved": 1, "…": "…" },
+  "scaffold": { "written": ["…eleven destinations…"], "anchors": ["…"] },
+  "adopted": [],
+  "verify": { "…": "the read-only report" }
+}
+```
+
 ## Materialize the scaffold
 
 ```bash
@@ -2057,20 +2174,20 @@ state, alongside the scenarios — not verified by hand once.
 
 Every refusal leaves the CLI through one handler and prints the same JSON:
 `status`, `code`, `detail`, exit `2`, nothing appended anywhere. Refusals a call
-to one of the nine **gating** commands can reach — `apply`, `admit`, `gate`,
-`offer`, `close`, `step`, `settle`, `materialize`, `position` — carry one more
+to one of the ten **gating** commands can reach — `apply`, `admit`, `gate`,
+`offer`, `close`, `step`, `settle`, `materialize`, `position`, `adopt` — carry one more
 thing, and which ones carry it is itself the answer to a question:
 
 > Can the caller clear this by changing the invocation alone, without touching
 > the repository?
 
 **Yes — an invocation defect.** The detail already names the flag, the token or
-the mutual exclusion. Forty-nine codes, and nothing is published beside them:
+the mutual exclusion. Fifty codes, and nothing is published beside them:
 `SETTLE_STDIN_CONFLICT`, `OFFER_ANSWER_NOT_A_TOKEN`, `MATERIALIZE_MODE_REQUIRED`,
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-three codes, including
+carries a `resolve` key saying what. Sixty-four codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

@@ -12607,9 +12607,10 @@ def _require_no_open_defect(target: Path, name: str) -> None:
     report, so a refusal here and a surfaced defect there can never
     disagree about what "open" means -- one derivation serves both.
 
-    Called only from `step`, `gate`, `offer`, `close`, `settle`, `apply` and
-    `admit`, immediately after `resolve_target`/`validate_name` and before
-    `require_clean_worktree` or any other target read -- the earliest point
+    Called only from `step`, `gate`, `offer`, `close`, `settle`, `apply`,
+    `admit` and `adopt --apply`, immediately after `resolve_target`/name
+    normalization and before `require_clean_worktree` or any other target
+    read -- the earliest point
     at which a ledger path (`<target>/<name>/.implementation/`) exists to
     consult at all. Never called from `defect` itself (declaring a second
     defect while one is open must stay possible) or from any diagnostic
