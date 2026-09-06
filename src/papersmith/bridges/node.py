@@ -17,7 +17,7 @@ def node_binary() -> str | None:
 
 
 def engine_path(workspace: Path) -> Path:
-    path = workspace / "skills" / "proposal-deliberation" / "engine" / "cli.mjs"
+    path = workspace / "skills" / "proposal-deliberation" / "cli.mjs"
     if not path.is_file():
         raise SourceError(f"missing deliberation engine: {path}")
     return path
@@ -39,6 +39,10 @@ def _environment(workspace: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["PROPOSAL_DELIBERATION_PROJECT_ROOT"] = str(workspace)
     env.setdefault("PROPOSAL_DELIBERATION_SESSION_ID", "papersmith-cli-session")
+    env.setdefault(
+        "DELIBERATION_DOMAIN_PROFILE",
+        str(workspace / "skills" / "proposal-deliberation" / "profile.ts"),
+    )
     return env
 
 

@@ -43,7 +43,7 @@ class InitTests(unittest.TestCase):
             ".papersmith/runs_ledger.jsonl",
             ".claude/agents/paper-ingestion.md",
             "skills/paper-ingestion/SKILL.md",
-            "skills/proposal-deliberation/engine/cli.mjs",
+            "skills/proposal-deliberation/cli.mjs",
             "skills/kaggle-accounts/store/.gitignore",
             "guidance/paper-guide",
             "guidance/reference-papers",
