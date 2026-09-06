@@ -5,8 +5,10 @@
 #
 # `skills/` at the repository root is the single source of truth. Each harness
 # reads skills from its own convention directory, so this script links the
-# canonical tree into each one. The links are absolute and idempotent: re-running
-# converges to the same layout without duplicating or nesting anything.
+# canonical tree into each one. The links are relative and idempotent: re-running
+# converges to the same layout without duplicating or nesting anything, and the
+# checkout stays relocatable (an absolute link would keep pointing at wherever
+# the checkout happened to live when the script last ran).
 #
 # Harnesses:
 #   .claude/skills       Claude Code
@@ -49,8 +51,12 @@ for entry in "${HARNESSES[@]}"; do
     rm -rf "$target"
   fi
 
-  ln -sfn "$CANONICAL" "$target"
-  printf 'linked %-18s %s -> %s\n' "$label" "$rel" "$CANONICAL"
+  # Relative link, computed rather than hardcoded so a harness nested deeper
+  # than one level still resolves. python3 is already a hard repo dependency.
+  link_target="$(python3 -c 'import os.path,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$CANONICAL" "$(dirname "$target")")"
+
+  ln -sfn "$link_target" "$target"
+  printf 'linked %-18s %s -> %s\n' "$label" "$rel" "$link_target"
 done
 
 echo "Harness skill projection complete."
