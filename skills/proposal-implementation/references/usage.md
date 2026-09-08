@@ -715,7 +715,7 @@ Two independent findings, reported separately:
   in `--revision`; `invariantsWithoutTest` are claims declared in code with no
   test enforcing them. Both need the user's decision before you touch anything.
 
-Eleven more are reported and none of them is a finding, which is exactly why
+Twelve more are reported and none of them is a finding, which is exactly why
 they were easy to leave undocumented:
 
 - **`coupling`** — which notebook cells reach into the target's internals instead
@@ -884,6 +884,41 @@ they were easy to leave undocumented:
   compared by hand. Declare the roots, or leave the reading switched off
   knowingly. The kit ships the key in its own `__steps__` example, so a
   repository built from zero is asked rather than defaulted past.
+- **`undeclaredStepNotebooks`** — the same declaration one reading deeper, and
+  the half `undeclaredProduces` cannot answer: one entry per declared
+  `__steps__` step that names no notebook among its `produces` roots. A pilot
+  is the declared flow walked with the declared notebooks, and a step's
+  notebooks are read off those roots and off nothing else, so a step naming
+  none is walked by calling the target's own library while the notebook that
+  would carry the same work to a worker elsewhere goes untouched by the very
+  run meant to validate it. It reads that one declaration and **never the
+  position sequence**: a notebook is also reachable through the item at a
+  step's `advances` ordinal, and a step reached only that way is named here
+  anyway, because a sequence witness is a mark in `AGREED.md` that a repository
+  built from zero has not written — consulting it would go quiet on exactly the
+  repository this exists for. The exit for that false positive is the cheap
+  one: name the notebook in `produces` too. The shape it asks for is two steps rather than one,
+  each naming its own root under `Notebooks/`: one that **computes** —
+  orchestrating the library, writing data, drawing nothing — and one that
+  **draws**, reading what the first left behind and rendering tables, figures
+  and conclusions. Collapsing them is a legitimate design and this never
+  refuses it; what it costs is that a figure cannot be redrawn without paying
+  for the computation again, and that whichever half sits outside a notebook is
+  the half the pilot never exercised in the shape it will be sent in. It names
+  every step that owns no notebook, **including one that declares no
+  `produces` at all** — deliberately not subtracted from `undeclaredProduces`,
+  because `[]` here has to mean *every declared step owns a notebook* and
+  subtracting would let a repository whose steps all declare nothing read
+  empty. A new key and not a widening of `pilotCompleteness.withoutNotebook`:
+  that one is computed from a pilot's own evidence and says *this repository
+  opened no notebook here*, after a run; this one is read off the declaration
+  alone and says *nobody ever asked it to have one*, which is the question a
+  repository built from zero has to meet before any run exists. `[]` when every
+  declared step names one, when no step is declared, and when there is no
+  benchmark package to declare one in — `structure.scaffoldGaps` already names
+  that missing file. It **never gates**. The kit ships both kinds of step in
+  its own `__steps__` example, so a repository built from zero meets the
+  pattern rather than discovering it after a pilot has run.
 
 Omit `--revision` and `fidelity.status` is `unknown`: the modules' declared
 revisions are still listed, but nothing is compared. Never report an
@@ -1631,17 +1666,91 @@ oversight: the fact as computed cannot tell a repository that is not ready apart
 from one that never sends work anywhere. `SKILL.md`'s Output Contract carries the
 argument and states what would change it.
 
-**`pilotCompleteness` is a rung, and two of them.** It answers whether the
-ordered flow the target declared has actually finished at pilot: `status:
-"undeclared"` when no `__steps__` entry carries an `advances` ordinal (the rule
-does not apply, and the ladder answers what it always did), `"incomplete"` while
-any step is short, `"complete"` once none is. `incomplete` names the steps still
-short, in declared order — read that, not a count. Each row says why: `ran` is
-the step's own ledger verdict (`null` is unmeasured, which includes a run
-recorded against a suite that has since moved), `notebook` is the file its own
-sequence item names, and `notebookCurrent` is whether that file is executed
-against these sources. Existence is not evidence — a template copied into place
-and an executed report look identical until the execution counts are read.
+**A reported state that names work publishes the way out of it.** Two of them
+do, beside the fact itself, in the same `{kind, question, command}` shape a
+refusal's own `resolve` carries:
+
+- **`remoteExecution.resolve`** — non-`null` exactly when the ledger reports
+  `drift` or `unreliable`, on `verify` and on `probe` alike, because both read
+  one function. It publishes the QUESTION rather than the command, and the
+  question says why: `remote_cli reconcile` is the act, and two of its four
+  required flags are values this section may not print — a worker id is a
+  service account's username, which is why `workers` beside it is a count, and
+  a backend name is a service name. The `discuss` command it carries does run
+  unedited; paste it, answer it, and the answer lands in the record.
+- **`structure.resolve`** — a list, one entry per gap key (`scaffoldGaps`,
+  `objectGaps`, `harnessGaps`) that names anything, `[]` when the repository is
+  fully materialized. Each entry names the exact `materialize --stage` that
+  writes those files and the exact files it would write. A question again, and
+  again the reason is in it: `--plan` is an approval a human gives, and a
+  published command that generated its own approval would answer the gate
+  rather than pass it; `--seed` is the number the scaffolded experiment draws
+  from, which no skill may pick for a repository.
+
+**`notebookPilot` is the third, and it is a join rather than a fact.**
+`remoteExecution.notebookPilot` asks, per generated job, whether the notebook
+that job would run is one the pilot actually walked. It reads no disk of its
+own: the job's `run.notebook` comes out of the same `run-config.json` its
+`staleness` came from, and the walked set is `pilotCompleteness`'s own. Three
+answers and one shape — `piloted`, `unpiloted`, `not-applicable` — with every
+row carrying `job`, `notebook`, `pilotRelative` and `status` whichever answer it
+got. `unpiloted` means the pilot never opened that file, or that the job's path
+is not one the pilot's vocabulary can express; `not-applicable` means the job
+declares the callable shape and names no notebook, which is a different fact
+from a comparison that came out wrong and is reported as one. `status` is `"ok"`
+or `"unpiloted"` for the whole set, `unpiloted` names the jobs, and `walked`
+names every notebook the pilot opened, so a mismatch can be read without
+re-deriving either side. It gates nothing: read it before offering a campaign,
+and say plainly which notebook is about to be run untested.
+
+**`pilotCompleteness` is a rung, and two of them.** It answers whether the flow
+the target declared has actually finished at pilot: `status: "undeclared"` when
+no `__steps__` entry carries an `advances` ordinal at all (the rule does not
+apply, and the ladder answers what it always did), `"incomplete"` while any step
+is short, `"complete"` once none is. `incomplete` names the steps still short —
+read that, not a count. Each row says why: `ran` is the step's own ledger verdict
+(`null` is unmeasured, which includes a run recorded against a suite that has
+since moved), `notebooks` are the files it owes, and `notebooksCurrent` is
+whether all of them are executed against these sources. Existence is not
+evidence — a template copied into place and an executed report look identical
+until the execution counts are read.
+
+**Every declared step counts, not the ordered subset.** A row exists for every
+`__steps__` entry: the ones carrying an ordinal first and in that order, then the
+rest in name order with `advances: null`. The ordinal says where a step goes, and
+it never said whether the step has to run. Measured, and the reason this changed:
+a repository declaring ten steps carried no ordinal on four of them, none of the
+four had ever run, two of their notebooks held zero executed cells — and `probe`
+answered `pilot-decisions`, which offers the remote worker. The gate was reading
+six tenths of the flow and reporting on all of it.
+
+**The notebooks a step owes come from two links the target already writes.** Its
+own `produces` roots, where a root under `Notebooks/` names a notebook it renders
+— the half that needs no ordinal, and therefore the half that works for the
+entries above; and, when the step carries an ordinal, the operand of the sequence
+item at it whenever that item's witness is a notebook. The union, never one or
+the other: dropping the second would lose a check today's targets already have.
+
+**Whether the pilot opened a notebook at all is said per step, zero included.**
+A pilot is the declared flow walked with the declared notebooks, at whatever
+reduced scale the target declares, so that the artefacts that will later be sent
+have been executed and read first — and a step the flow ran without opening one has
+not had that done for it. Every row carries `notebookCount`, and
+`withoutNotebook` names the steps whose set came back empty, beside its own
+`withoutNotebookNote`. It gates nothing and refuses nothing: a target may
+legitimately keep its computation in a library and render nothing of its own, so
+the step's verdict and the ladder's answer are exactly what they were. It is
+reported because it was invisible — measured, at four declared steps in ten whose
+notebooks the flow never executed, one of them the file a remote worker would have
+been sent — and the count is on every row rather than only on the zeroes, so a
+reader learns what the check watches before the run where it decides something.
+
+**`unmeasurable` sits beside `incomplete`, and it is not a softer version of
+it.** It names the steps that declare no `produces` roots, so nobody could look
+at what they rendered. Such a step has not failed the pilot — its own run still
+decides its row — and the top-level `note` says exactly what the missing
+declaration costs. `incomplete` asks a reader for a run; `unmeasurable` asks for
+a declaration.
 
 While it is `"incomplete"` the answer is `pilot-first` and the offer of the
 declared scale is withheld: the outputs are what anybody reads to know the agreed
@@ -1962,6 +2071,40 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py step \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --step verification
 ```
+
+## `walk` — the flow walks itself, act by act
+
+`step` runs exactly one. `walk` runs the ones the flow still owes, in the
+order the flow declares, and stops at the first act a person has to take.
+
+```bash
+python3 skills/proposal-implementation/scripts/implementation_cli.py walk \
+  --target implementations/<repo> --name <Name> --session <your-session-id> \
+  --revision research-concept-r17.md
+```
+
+It asks `probe` what is owed, routes each step by its own declared
+`placement`, and then **executes the published subcommands as subprocesses**
+rather than calling their functions -- so every guard those carry applies
+exactly as it does to somebody running them by hand. After each local step it
+refreshes the position and records that step's product, because `step`
+refuses on a dirty tree and every step dirties it with its own output; the
+message names the step and narrates nothing, which is the half that stays
+yours.
+
+It stops, rather than refusing, and says where: at a `launch`, at a `blocked`
+step nobody routed, or at the first act that refused -- returning `performed`
+and `stoppedAt` so the answer is what it did and what is left. It stops
+rather than skipping ahead because the flow is ordered: a step that cannot
+run is one whose output every later step reads.
+
+**It has no path to `submit`.** A launch is hours of somebody's quota and is
+the one act whose plan a person asked to see first, so the walk hands it over
+instead of taking it.
+
+Omit `--revision` and no position refresh runs between steps, which means an
+ordered next step will refuse -- the flag is what lets a walk be more than one
+step long.
 
 Runs exactly one step per call — no flag sequences or dispatches more than
 one, and this never consults `probe`'s `nextStep`. A step that declares

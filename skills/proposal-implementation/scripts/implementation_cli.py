@@ -111,6 +111,15 @@ CLI_INVOCATION = " ".join(
 
 PRODUCT_DIRS = ("Notebooks", "Data", "Results", "Models")
 
+#: The product category a rendered result lives under, named off `PRODUCT_DIRS`
+#: rather than spelled a second time. A `produces` root is product-relative, so
+#: a root under THIS category is the step saying which notebook it renders --
+#: the link that lets `pilot_completeness_state` ask the notebook question of a
+#: step that declared no ordinal, and therefore has no sequence item to read one
+#: off. A second literal beside the tuple is how the two come to disagree the
+#: day a layout changes.
+PRODUCT_NOTEBOOKS = PRODUCT_DIRS[0]
+
 #: Where a tracked `.py` may live. Anything else is a stray module.
 #:
 #: `tools/` is here for the same reason the benchmark is a sibling package, and
@@ -400,6 +409,31 @@ def agreements_state(target: Path, name: str) -> dict:
     }
 
 
+def sequence_block_detail(position: dict, advances: int) -> str:
+    """What to add to a sequence refusal when the blocking item can never tick.
+
+    Empty for the ordinary case, and that is deliberate: most blocked ordinals
+    really are just pending, and a refusal that always volunteered a cause would
+    teach the reader to skim past the one time it has one.
+
+    When an earlier item's witness names a notebook with no seal, the bare
+    refusal is true and actively misleading --- "item 4 is not yet ticked" reads
+    as "run item 4", so it gets run, it succeeds, and the identical message comes
+    back. Measured: two full sweeps against an ordinal that could not move
+    either time. The message is the only place that difference can live, because
+    nothing else the operator sees distinguishes the two states.
+    """
+    bloqueantes = [entry for entry in position.get("unmeasurable") or []
+                   if entry["ordinal"] < advances]
+    if not bloqueantes:
+        return ""
+    return "\n" + "\n".join(
+        f"  item {entry['ordinal']} can never be ticked: {entry['reason']}.\n"
+        f"    notebook: {entry['notebook']}\n"
+        f"    fix:      {entry['resolve']}"
+        for entry in bloqueantes)
+
+
 def position_state(target: Path, name: str, evidence: dict,
                    revision: str | None, source: str | None) -> dict:
     """The execution sequence's current state, read from `<Name>/AGREED.md`.
@@ -484,6 +518,7 @@ def position_state(target: Path, name: str, evidence: dict,
     last_close = next((e for e in reversed(events) if e.get("kind") == "close"), None)
 
     sequence, disagreements, unmeasured, unbacked = [], [], [], []
+    unmeasurable = []
     for item, result in zip(items, derived):
         entry = {
             "ordinal": item["ordinal"], "mark": item["mark"],
@@ -505,6 +540,33 @@ def position_state(target: Path, name: str, evidence: dict,
         # reader looking for the second must not have to know the first.
         if result["unbacked"]:
             unbacked.append(entry)
+
+        # No es "todavía no", es "nunca": el testigo de cuaderno se tilda contra
+        # `sourcesMatch`, que sólo escribe el sello. Un cuaderno sin la celda del
+        # sello deja ese campo en `None` para siempre, así que el paso puede
+        # correr impecable las veces que sea y el ítem no se mueve. La marca
+        # pelada confunde los dos estados y manda a correr de nuevo lo que ya
+        # corrió bien; esto los separa, sin aflojar la secuencia.
+        if item["witness"]["kind"].startswith("notebook"):
+            operando = item["witness"]["operand"] or ""
+            informe = next(
+                (r for r in (evidence.get("notebooks") or {}).get("reports", [])
+                 if r.get("notebook") == operando
+                 or r.get("notebook", "").endswith(f"/{operando}")), None)
+            if informe is not None and informe.get("sealed") is False:
+                unmeasurable.append({
+                    "ordinal": item["ordinal"],
+                    "notebook": informe["notebook"],
+                    "measuredBy": result["measuredBy"],
+                    "reason": (
+                        "the notebook carries no seal cell, so `sourcesMatch` "
+                        "is never written and this witness can never be "
+                        "measured -- the step running is not the problem"),
+                    "resolve": (
+                        f"add the kit's seal to {informe['notebook']}: a final "
+                        f"cell that prints `{KIT_SEAL.stem}.stamp()`, then run "
+                        "the step once more so the report records it"),
+                })
 
     # The same staleness rule `admissibility_record` already applies (line
     # 4815-4821): a revision's *content* hash, not its name, is what a header
@@ -530,6 +592,9 @@ def position_state(target: Path, name: str, evidence: dict,
         "boundTo": bound_to, "sequence": sequence,
         "disagreements": disagreements, "unmeasured": unmeasured,
         "unbacked": unbacked,
+        # Los ítems que no pueden tildarse jamás, distinguidos de los que
+        # simplemente no corrieron todavía. Ver el bloque que lo llena.
+        "unmeasurable": unmeasurable,
         "lastGate": last_gate, "lastClose": last_close,
         "targetLevel": block["target"],
         # Derived from the same `evidence` the marks above were, and pointedly
@@ -2058,6 +2123,150 @@ def undeclared_produces_state(target: Path, name: str, steps: dict) -> list[dict
             if not (isinstance(entry, dict) and entry.get(PRODUCES_KEY))]
 
 
+def _step_notebook_roots(entry: dict) -> list[str]:
+    """The declared output roots of one step that name a notebook, or `[]`.
+
+    Two helpers already defined below hold the whole answer, and both are
+    reused rather than respelled: `_produces_roots` for what a step declares
+    (dropping a malformed entry the way every reporting path in this file
+    drops one, never raising), and `_owns` for whether a root falls under the
+    product's notebook category. `_owns` is segment-wise, which is the part
+    that matters here: a root of `NotebooksDraft/one.ipynb` names no notebook
+    of the product and a `str.startswith` comparison would say it does.
+
+    Defined above the two it calls, and that is deliberate rather than an
+    accident of ordering: it belongs beside the report that reads it, and the
+    names resolve when it is called rather than when it is written.
+    """
+    return [root for root in _produces_roots(entry)
+            if _owns(root, [PRODUCT_NOTEBOOKS])]
+
+
+#: What a step gives up by naming no notebook among its own output roots,
+#: written out rather than labelled -- `PRODUCES_UNDECLARED_CONSEQUENCE`'s own
+#: doctrine and its own shape, one reading deeper into the same declaration.
+#: Every fact here is read off code that already exists: `_pilot_notebooks`,
+#: which derives a step's notebooks from exactly these roots and from nothing
+#: else, and `pilotCompleteness.withoutNotebook`, which names the same absence
+#: AFTER a pilot has been paid for.
+STEP_NOTEBOOK_UNDECLARED_CONSEQUENCE = (
+    "this step names no notebook among its output roots, so nothing in its "
+    "own declaration says it renders one. A pilot is the declared flow walked "
+    f"with the declared notebooks, and `_pilot_notebooks` reads a step's "
+    f"notebooks off these `{PRODUCES_KEY}` roots -- so on this declaration "
+    "alone the step is walked by calling the target's own library, while the "
+    "notebook that would carry the same work to a worker elsewhere is never "
+    "executed by the run that was supposed to validate it. Those are two code "
+    "paths, and nothing downstream compares them -- measured on one "
+    "repository at four declared steps in ten, one of them the file a remote "
+    "worker would have been handed. **What this cannot see, said rather than "
+    "implied: the position sequence.** `_pilot_notebooks` has a second source "
+    "-- the item at a step's `advances` ordinal, when that item witnesses a "
+    "notebook -- and a step reached only that way IS opened by a pilot and is "
+    "still named here, because that witness is a mark in a file a repository "
+    "built from zero has not written yet. This reads one declaration and says "
+    "so; `pilotCompleteness.withoutNotebook` is where both routes are unioned "
+    "and measured against a run. The shape that closes it is two steps rather "
+    "than one, each "
+    f"naming its own root under `{PRODUCT_NOTEBOOKS}/`: a step that COMPUTES "
+    "-- orchestrating the library, writing data, drawing nothing -- and a "
+    "step that DRAWS, reading what the first left behind and rendering "
+    "tables, figures and conclusions. Collapsing the two into one step is a "
+    "legitimate design and nothing here refuses it; what it costs is that the "
+    "drawing can no longer be re-run without paying for the computation "
+    "again, and that whichever half sits outside a notebook is the half the "
+    "pilot never exercised in the shape it will be sent in. The exit is the "
+    f"target's own and already exists: name a `{PRODUCT_NOTEBOOKS}/<file>` "
+    f"root in the `{PRODUCES_KEY}` list this entry's own `declaration` names "
+    "-- the same list `step` already measures a run's write scope against -- "
+    "and nothing else has to change.")
+
+
+def undeclared_step_notebooks_state(target: Path, name: str,
+                                    steps: dict) -> list[dict]:
+    """Every declared step that owns no notebook, beside what that costs.
+
+    `undeclared_produces_state`'s shape, its restraint and its reasoning, one
+    reading deeper into the one declaration both read. That one asks whether a
+    step named its output roots at all; this one asks whether any of the roots
+    it named is a notebook -- the artefact a pilot executes and the artefact
+    that later leaves this machine.
+
+    **One declaration and never the position sequence, stated as a limit
+    rather than left to be discovered.** `_pilot_notebooks` reaches a step's
+    notebooks two ways: through these roots, and through the sequence item at
+    the step's `advances` ordinal when that item witnesses a notebook. Only
+    the first is read here, and a step reached only the second way is named
+    anyway. That is not an oversight and it is the price of the question being
+    answerable at all from zero: a sequence witness is a mark in `AGREED.md`,
+    which a repository that has run nothing has not written, so a check that
+    consulted it would go quiet on exactly the repository it exists for. The
+    cost is the false positive, and it is bounded and cheap -- the exit is to
+    name the notebook in `produces` too, which is the declaration the pilot
+    reads first anyway. `pilotCompleteness.withoutNotebook` is where both
+    routes are unioned and graded against a run that happened.
+
+    **A new key and not a widening of `pilotCompleteness.withoutNotebook`, and
+    the reason is what each of the two can answer.** `withoutNotebook` is
+    computed from the pilot's own evidence: it needs a position sequence, the
+    notebook reports, and a flow somebody already declared an ordering for --
+    and it answers `status: "undeclared"` with empty lists for a repository
+    that declared no ordering at all. It says *this repository opened no
+    notebook here*, after a run. The question a from-zero repository has to be
+    asked is the other one -- *nobody ever asked it to have one* -- and it has
+    to be answerable before any run exists, off the declaration alone. Folding
+    the demand into the report would make one key's emptiness mean two things:
+    every target that has not run a pilot yet, and every target whose steps
+    each own a notebook. That is the exact confusion this branch has already
+    paid for twice.
+
+    **Every step that owns no notebook, including one that declares no
+    `produces` at all -- deliberately NOT subtracted from
+    `undeclaredProduces`.** The two overlap in membership and they are not the
+    same claim, and the emptiness is what decides it: `[]` here has to mean
+    *every declared step owns a notebook*, full stop. Subtract the steps that
+    declared nothing and a repository whose ten steps all declare no roots
+    reads `[]` from this key, which is precisely the false reading -- a report
+    that says nothing is missing because it was looking at nobody. The
+    consequences differ too, so neither entry is a copy of the other: one
+    names a run measured against nothing, this one a step the pilot cannot
+    exercise as the artefact it will be sent as.
+
+    **Reported, never demanded**, for both arguments `undeclared_produces_
+    state` already makes and one more that is specific to this reading. A
+    repository may legitimately keep its computation in a library and render
+    elsewhere -- `PILOT_WITHOUT_NOTEBOOK_NOTE` says so in as many words -- and
+    a refusal here would corner an operator whose layout is exactly what they
+    meant. What must never happen again is that nobody is told, which is the
+    whole difference between this and a rule.
+
+    **A target with nowhere to write it is asked nothing**, the identical
+    restraint every sibling report keeps: no benchmark package, or no file
+    `resolve_steps_declaration` reads, is a scaffold gap
+    `structure.scaffoldGaps` already names.
+
+    `steps` is passed in rather than resolved here, from the same
+    `resolve_steps_declaration` call `verify` already makes -- two reads of one
+    declaration in one command is how the two come to disagree.
+    """
+    if not steps:
+        return []
+    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
+    if not bench_root.is_dir():
+        return []
+    holder = next((candidate for candidate in ("__init__.py", "config.py")
+                   if (bench_root / candidate).is_file()), None)
+    if holder is None:
+        return []
+    return [{"step": step, "declaration": f"{STEPS_DECLARATION}[{step!r}]"
+                                          f"[{PRODUCES_KEY!r}]",
+             "path": (bench_root / holder).relative_to(target).as_posix(),
+             "consequence": STEP_NOTEBOOK_UNDECLARED_CONSEQUENCE}
+            for step, entry in sorted(steps.items())
+            if not _step_notebook_roots(entry if isinstance(entry, dict)
+                                        else {})]
+
+
 def search_cost_forecast(reduction: dict, required_scale: dict) -> dict | None:
     """What the declared search would cost, projected from what was actually measured.
 
@@ -3272,6 +3481,34 @@ def cmd_probe(args) -> dict:
     pilot_undecided = [
         row["step"] for row in pilot["steps"]
         if _pilot_decision_question(target, name, row["step"]) not in answered]
+    # What the report the operator reads carries right now, and whether anybody
+    # has been shown it. Measured, and the defect that named this: on a real
+    # repository `report.status` was `drift` carrying five kinds of finding
+    # about the very notebooks the pilot had just produced, and this ladder
+    # answered `pilot-decisions` anyway -- the pass whose per-step questions
+    # decide which steps go to a remote worker, taken over artefacts nobody had
+    # been told were in drift. Running without errors is not the same as being
+    # right: the flow has to SHOW what was agreed, or nobody -- neither the
+    # owner nor the operator -- can validate it.
+    #
+    # `liveFindings` and not `status != "ok"`: `incomplete` is a reading that
+    # could not be taken (no interpreter) and already has its own rung, and a
+    # finding stamped `fromStaleNotebook` describes a run this repository has
+    # already moved past. Neither is a live finding about these artefacts.
+    #
+    # An acknowledgement and NOT a wall. The rung is held by a question with an
+    # answer -- repair the report, or record why the decisions are taken over
+    # it as it stands -- so the exit exists and is the operator's own. A hard
+    # gate here could not be cleared at all: a report at pilot is legitimately
+    # in drift (a section whose run has not happened renders an absence), the
+    # repair for some findings is the full run itself, and the ladder would
+    # refuse the pass that authorizes the run to fix the report that the run
+    # is what fixes. This repository has that deadlock on record one rung over
+    # (`FLOW_UNFINISHABLE_CONSEQUENCE`), and it is not built a second time.
+    report_findings = list(report.get("liveFindings") or [])
+    report_unacknowledged = bool(report_findings) and (
+        _report_findings_question(target, name, report_findings)
+        not in answered)
     if next_step in ("benchmark", "piloted") and resolved["status"] in (
             "absent", "undeclared"):
         next_step = "declare-first"
@@ -3327,8 +3564,16 @@ def cmd_probe(args) -> dict:
     # decision per step. `discuss` already buckets by exact question text, so
     # N steps are N independently-retiring buckets with no second approval
     # surface built beside it.
+    #
+    # An unacknowledged report holds the same rung, rather than a rung of its
+    # own: what it stands in front of is exactly what the per-step pass stands
+    # in front of, and a second rung asking the same question one step later
+    # would be two answers for one state. `report-first` below is unchanged and
+    # still fires on any report that is not `ok`; this only says, before the
+    # decisions are taken, what that rung would otherwise say after them.
     elif next_step in ("benchmark", "piloted") and (
-            pilot["status"] == "complete" and pilot_undecided):
+            pilot["status"] == "complete"
+            and (pilot_undecided or report_unacknowledged)):
         next_step = "pilot-decisions"
     elif next_step in ("benchmark", "piloted") and (
             search["recordFound"] is False
@@ -3394,8 +3639,28 @@ def cmd_probe(args) -> dict:
          # recomputed: a second read here could disagree with the branch that
          # published it, the same discipline `declarationStatus` states.
          "incomplete": pilot["incomplete"],
-         "notebooks": [row["notebook"] for row in pilot["steps"]
-                       if row["notebook"]]})
+         # Flattened in the rows' own order, de-duplicated without sorting:
+         # two steps may render into one root, and naming an output twice in
+         # the published sentence reads as two artefacts. A step owes a LIST
+         # now (`_pilot_notebooks` unions its declared `produces` roots with
+         # its sequence item's witness), and reading only the first would put
+         # this consumer back one indirection behind the widened answer.
+         "notebooks": list(dict.fromkeys(
+             notebook for row in pilot["steps"]
+             for notebook in row["notebooks"])),
+         # What those notebooks carry, and whether any step is still
+         # undecided -- threaded through for the reason every other fact
+         # here is: a second read could disagree with the branch that
+         # published it.
+         "reportFindings": report_findings,
+         # Which of those steps the pilot never opened a notebook for --
+         # `pilotCompleteness`' own list, threaded through for the reason
+         # every other fact here is. Without it the decision pass names the
+         # notebooks that exist and says nothing about the steps that
+         # rendered none, which is exactly how four steps of ten fell out of
+         # a pilot with nobody told.
+         "withoutNotebook": pilot["withoutNotebook"],
+         "undecided": pilot_undecided})
     # `toDiscuss` carries the question-shaped publications only -- a command
     # this flow can name completely is not a question anybody answers, and
     # putting one in a discussion list would open a bucket nothing retires.
@@ -3412,6 +3677,13 @@ def cmd_probe(args) -> dict:
     # longer than its `resolve`, and the roster's `publish` shape (one dict)
     # is why the per-step half lives here rather than inside it.
     if next_step == "pilot-decisions":
+        # Before the per-step decisions and never after them: the findings are
+        # about the artefacts each of those decisions is taken over, and a
+        # reader meets the state of the evidence before they are asked to act
+        # on it.
+        if report_unacknowledged:
+            to_discuss += [_report_findings_entry(target, name,
+                                                  report_findings)]
         to_discuss += [_pilot_decision_entry(target, name, step)
                        for step in pilot_undecided]
     return {
@@ -3452,6 +3724,33 @@ def cmd_probe(args) -> dict:
         # somebody opening a clean repository to run the flow from the top
         # actually has. Gates nothing. See `walk_state`.
         "walk": walk,
+        # The half `walk` could not answer. `walk` says where this repository
+        # stands; this says what the next act is for every step still owed, in
+        # the flow's own order, routed by each step's declared `placement`.
+        # Without it a session could read its position perfectly and had
+        # nothing telling it how to move -- every rung published a question
+        # whose answer changed no state, and the walk from one step to the
+        # next was performed by hand. Reports and issues nothing: running any
+        # of these acts is the caller's, and every guard each one carries
+        # stays where it is. See `flow_acts`.
+        "flowActs": flow_acts(
+            walk["steps"], probe_steps, jobs.get("jobs") or [],
+            # The rung the operator's own position header aims at, never the
+            # top of the ladder: `position --target-level` is the knob that
+            # says which phase this pass is walking toward, and it carries its
+            # own no-skip guard. Reading `topRung` here would report every
+            # step as owed on a repository deliberately resting at a lower
+            # rung, which is a report nobody would read twice.
+            level=(position or {}).get("targetLevel"),
+            levels=walk.get("levels") or []),
+        # Where the flow is GOING, as against what it owes toward the rung
+        # aimed at. Reported always and never acted on: a repository resting
+        # at the floor with every step reaching the floor owes nothing there
+        # and would read as finished, which is the one way this ladder can
+        # tell a session it arrived when it did not. See `flow_destination`.
+        "flowDestination": flow_destination(
+            walk["steps"], probe_steps, jobs.get("jobs") or [],
+            walk.get("levels") or []),
         # What went out to a remote worker (the ledger), plus what job
         # folders exist right now (the filesystem), plus — purely additive,
         # this slice refuses nothing on it — whether each job classifies as
@@ -3461,6 +3760,16 @@ def cmd_probe(args) -> dict:
             **remote,
             **jobs,
             "necessity": necessity,
+            # The join nothing checked: whether the notebook each job would
+            # run is one the pilot actually walked. Both operands are already
+            # held by this command and are threaded in rather than recomputed
+            # -- `jobs["jobs"]` carries each job's own declared notebook, read
+            # out of the same `run-config.json` its staleness came from, and
+            # `pilot` carries every notebook the declared flow opened. A
+            # second read of either here could disagree with the branch above
+            # that published it. Reports and refuses nothing; see
+            # `JOB_NOTEBOOK_PILOT_NOTE`.
+            "notebookPilot": job_notebook_pilot_state(jobs["jobs"], pilot),
         },
         "nextStep": next_step,
         # What to do about that answer, published by the engine rather than
@@ -3729,6 +4038,79 @@ def scaffold_destinations(name: str) -> list[str]:
             f"{name}/Notebooks/verification.ipynb"]
 
 
+#: Which `materialize --stage` answers which `structure` gap key, and whether
+#: that stage needs a `--seed`. One roster, read by the publisher below, so a
+#: fourth stage added to `materialize` has one place to be classified in rather
+#: than three sites to remember. `(gap key, stage, needs a seed)`.
+STRUCTURE_GAP_STAGES = (
+    ("scaffoldGaps", "scaffold", True),
+    ("objectGaps", "objects", True),
+    ("harnessGaps", "harness", False),
+)
+
+#: Why a `structure` gap publishes a QUESTION and not the command that fills
+#: it, stated once for all three.
+#:
+#: **The act exists and this file owns it.** `materialize --stage <stage>`
+#: writes exactly the destinations the gap key names, out of this skill's own
+#: kit. Nothing about it is another skill's.
+#:
+#: **Two of its arguments are a human's, by design.** `--plan` is the approval
+#: gate: `materialize --stage` refuses `PLAN_REQUIRED` without an approved plan
+#: and `PLAN_STALE` when the repository moved since approval, and the plan's
+#: CONTENT is derivable here (`build_plan` is a pure function of the
+#: repository) exactly as the position reinstall's payload is. Publishing a
+#: command that generated its own approval and handed it to the gate would make
+#: the gate tautological -- an act that clears the check by answering it, which
+#: is the one thing a published exit must never be. `--seed` is worse: it is
+#: the number the scaffolded experiment draws from, and a skill that picked one
+#: for a repository would be choosing a scientific parameter on the operator's
+#: behalf.
+#:
+#: So the exit published is the question, it NAMES the command and the exact
+#: destinations, and it says which two answers are the human's. Its `discuss`
+#: command runs unedited.
+STRUCTURE_GAP_RESOLUTION_LIMIT = (
+    "is the act that writes them, out of this skill's own kit. It is not "
+    "published ready to run and that is deliberate: `--plan` is an approval a "
+    "human gives, and a command that generated its own approval would answer "
+    "the gate instead of passing it")
+
+
+def structure_gap_resolutions(target: Path, name: str,
+                              gaps: dict) -> list[dict]:
+    """One published exit per `structure` gap key that names anything --
+    `[]` when the repository is fully materialized.
+
+    A list, and always a list, because these are three independent states with
+    three independent acts: a repository can owe its harness and owe nothing
+    else. One `resolve` slot would make a reader ask which of the three it was
+    about, and an empty list says "nothing owed" in the same shape a full one
+    says what is.
+
+    `gaps` is the mapping this command already computed, threaded in rather
+    than recomputed: two reads of one fact inside one command is how the
+    published act comes to name destinations the reported key does not.
+    """
+    published = []
+    for key, stage, needs_seed in STRUCTURE_GAP_STAGES:
+        missing = gaps.get(key) or []
+        if not missing:
+            continue
+        seed = (", and `--seed` is the number the scaffolded experiment draws "
+                "from, which no skill may choose for a repository"
+                if needs_seed else "")
+        published.append(_reported_state_question(
+            target, name, about="record",
+            question=(
+                f"these destinations this skill's own kit ships are absent "
+                f"from the repository: {missing}. `materialize --stage "
+                f"{stage}` {STRUCTURE_GAP_RESOLUTION_LIMIT}{seed}. Run `plan`, "
+                f"get it approved, and materialize the stage -- or record why "
+                f"these files stay absent, and why?")))
+    return published
+
+
 def scaffold_gaps(target: Path, name: str) -> list[str]:
     gaps = [w for w in scaffold_destinations(name) if not (target / w).exists()]
     if pytest_anchor_missing(target):
@@ -3828,8 +4210,7 @@ def scaffold_kit_source(destination: str, name: str) -> Path | None:
     mapping = {
         f"src/{package}_Benchmark/__init__.py":
             SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py",
-        f"src/{package}_Benchmark/report_digest.py":
-            SKILL_ROOT / "assets" / "kit" / "nb" / "report_digest.py",
+        f"src/{package}_Benchmark/{KIT_SEAL.name}": KIT_SEAL,
         "tests/test_smoke.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_smoke.py",
         "tests/findings.py": SKILL_ROOT / "assets" / "kit" / "tests" / "findings.py",
         "tests/conftest.py": SKILL_ROOT / "assets" / "kit" / "tests" / "conftest.py",
@@ -4296,6 +4677,10 @@ def trivial_assertions(tests_dir: Path) -> list[str]:
 #: the code moves out from under it.
 DIGEST_MARKER = "SOURCES-SHA256"
 
+#: The kit asset that produces the seal. One spelling, so `seal_spellings()`
+#: and the scaffold that installs it cannot name two different files.
+KIT_SEAL = SKILL_ROOT / "assets" / "kit" / "nb" / "report_digest.py"
+
 
 #: What the benchmark package declares instead of `__provenance__`. It implements no
 #: equation, so provenance would be a lie; but without any declaration nobody can
@@ -4477,6 +4862,68 @@ def _described(produced: dict) -> str | None:
         if stripped and OBJECT_REPR.match(stripped):
             return stripped[:120]
     return None
+
+
+#: The mime types a runtime writes prose in. Anything else it managed to render
+#: -- a picture, an HTML table, a plotting library's own bundle -- is a result a
+#: reader can read, whatever it happens to be called. Written as the complement
+#: rather than as a list of the rich types, for the reason `OBJECT_REPR` states
+#: about naming a library: an allow-list of rich mimes goes silent for the next
+#: runtime, and nothing here may learn who draws.
+PROSE_MIMES = ("text/plain", "text/markdown")
+
+#: A markdown table's delimiter row -- the rule under the header. A line made of
+#: nothing but pipes, dashes, colons and blanks, carrying at least one column
+#: boundary and at least one run of dashes. It is the one part of a table that
+#: cannot occur inside a sentence, and it is matched as STRUCTURE and never as
+#: words on purpose: a check that read phrases would hold one repository's prose,
+#: in one language, and say nothing about the next.
+TABLE_RULE = re.compile(r"^(?=[^\n]*\|)(?=[^\n]*--)[ \t|:-]+$", re.M)
+
+#: A value standing in a column. Wider than `MEASUREMENT` deliberately: this one
+#: is only ever COUNTED per line and never quoted back as a measurement, so a
+#: table whose cells are whole numbers still reads as a table. `MEASUREMENT` may
+#: not widen the same way -- there it is the number put in front of a reader, and
+#: a year or a seed is not one.
+VALUE = re.compile(r"-?\d+(?:[.,]\d+)?")
+
+
+def _shows_result(produced: dict) -> bool:
+    """Whether what a cell emitted carries a result, or only a sentence about one.
+
+    The question `_shows_image` asks about pictures, asked about everything else
+    a rendering can produce. Three routes in, and every one of them reads the
+    STRUCTURE of the output:
+
+    * the runtime rendered something that is not prose at all -- an image, an
+      HTML table, a bundle a plotting library registered a formatter for;
+    * the prose it did emit carries a markdown table's delimiter row; or
+    * it carries values in the shape a table has -- a measurement anywhere, or
+      more than one line with more than one value on it, which is what a
+      whitespace-aligned table printed as text looks like and what the kit's own
+      `render` ships.
+
+    **Nothing here may read what the words say, and that is the whole design.**
+    The cell this exists to catch emits a sentence explaining why it has nothing
+    to show, and the obvious implementation -- match those sentences -- would
+    hardcode one repository's prose, in one language, into a forge that builds
+    repositories for research it is never allowed to know the name of. It would
+    also break on the next repository, which says the same thing in different
+    words. A table and a picture are structural; a sentence is not, and it is
+    recognised here only by the absence of the other two.
+
+    Biased toward "showed something" wherever the reading is ambiguous. A
+    finding that fired on real tables would be met once and ignored forever,
+    while one that stays quiet on an unusual rendering costs a reader nothing
+    they did not already have.
+    """
+    if any(mime not in PROSE_MIMES for mime in produced["mimes"]):
+        return True
+    text = produced["shown"]
+    if TABLE_RULE.search(text) or MEASUREMENT.search(text):
+        return True
+    return sum(1 for line in text.splitlines()
+               if len(VALUE.findall(line)) > 1) > 1
 
 
 #: Read inside the target's own interpreter, because both questions below need the
@@ -4810,6 +5257,17 @@ def report_state(target: Path, name: str, package: str) -> dict:
                         rule buckets a rendering under) is blind to it too.
     `unrendered`        a cell that computed a declared measurement and emitted
                         nothing. The number exists and no reader ever sees it.
+    `statedNotShown`    a cell that called a declared rendering and emitted a
+                        sentence where the result belongs — no table, no
+                        picture, only prose. Measured on a real report: of 57
+                        rendered outputs 6 carried a table and 21 explained why
+                        they had nothing, and every check here called the
+                        document clean, because such a cell emitted markdown,
+                        carries a conclusion and states its aim. It is judged by
+                        the STRUCTURE of what it emitted and never by what the
+                        words say (`_shows_result`): matching sentences would
+                        write one repository's prose, in one language, into a
+                        forge that may not know whose repository it is.
     `describedNotShown` a cell that emitted a description of a figure instead of
                         the picture. This is the one that hides best: the cell ran,
                         raised nothing, produced an output, and every check that
@@ -4819,7 +5277,7 @@ def report_state(target: Path, name: str, package: str) -> dict:
     `undeclaredDrawings` a cell that showed a picture no declared call could have
                         drawn, so `figures` is short by that call.
 
-    The last three are the only ones that read what a cell *produced* rather than
+    The last four are the only ones that read what a cell *produced* rather than
     what its code says. Everything else here can be answered from the sources, and
     a defect that only exists in the outputs was invisible to all of it.
 
@@ -4910,6 +5368,7 @@ def report_state(target: Path, name: str, package: str) -> dict:
     undeclared: set[str] = set()
     unaimed: list[dict] = []
     unrendered: list[dict] = []
+    stated_not_shown: list[dict] = []
     described_not_shown: list[dict] = []
     undeclared_drawings: list[dict] = []
     restated: list[dict] = []
@@ -4976,7 +5435,8 @@ def report_state(target: Path, name: str, package: str) -> dict:
                     # second is the declared one, and it still reads the cell as a
                     # whole — a declared drawing call that produced no picture
                     # anywhere in its cell drew nothing a reader can see.
-                    if described is not None or (drawn and not shows_image):
+                    describes = described is not None or (drawn and not shows_image)
+                    if describes:
                         described_not_shown.append({
                             "notebook": rel, "cell": index,
                             "drawing": ", ".join(drawn) or "<sin declarar>",
@@ -5007,6 +5467,40 @@ def report_state(target: Path, name: str, package: str) -> dict:
                     if rendered and not writes_record and not produced["any"]:
                         unrendered.append({"notebook": rel, "cell": index,
                                            "rendering": ", ".join(rendered)})
+
+                    # The cell that emitted SOMETHING and no result in it: a
+                    # declared rendering whose output carries neither a table
+                    # nor a picture, so what a reader meets where the result
+                    # belongs is a sentence. `unrendered` cannot see it — that
+                    # one fires on a cell that emitted nothing at all, and this
+                    # one has an output, a conclusion after it and an aim
+                    # before it, which is why every other check here calls it
+                    # green.
+                    #
+                    # Excluded when `describedNotShown` has already claimed the
+                    # cell: a description of a figure is this same failure with
+                    # a name of its own, and reporting one cell twice would ask
+                    # a reader to fix it twice.
+                    #
+                    # Reported and never refused. A rendering legitimately has
+                    # nothing to show when the run that fills it has not
+                    # happened yet, and that is the honest output of a
+                    # rehearsal rather than a defect in the notebook. What is
+                    # wrong is only that it is INVISIBLE: it counts as shown,
+                    # so a reader is told the document is fine. Named and
+                    # counted here, the reader judges.
+                    if (rendered and not writes_record and produced["any"]
+                            and not describes and not _shows_result(produced)):
+                        stated_not_shown.append({
+                            "notebook": rel, "cell": index,
+                            "rendering": ", ".join(rendered),
+                            "emitted": sorted(produced["mimes"])
+                                       or (["text"] if produced["streamed"] else []),
+                            # The sentence itself, so the reader meets what
+                            # stood in for the table rather than being told one
+                            # did — `describedNotShown`'s own `description`
+                            # key, one failure over.
+                            "stated": produced["shown"].strip()[:120]})
 
                     # A conclusion that says the table again. Every other reading
                     # of duplication compares one rendering with another; this one
@@ -5228,6 +5722,11 @@ def report_state(target: Path, name: str, package: str) -> dict:
                 # mirar y nada sobre dónde termina lo bueno.
                 "unaimed": unaimed,
                 "unrendered": unrendered,
+                # A declared rendering that emitted a sentence where the result
+                # belongs. `unrendered` is its sibling and cannot reach it: that
+                # one fires on a cell that emitted NOTHING, and this cell
+                # emitted something — which is exactly why it reads as shown.
+                "statedNotShown": stated_not_shown,
                 "describedNotShown": described_not_shown,
                 # A cell that showed a picture no declared call could have drawn.
                 # It is what keeps the two findings above from being a courtesy:
@@ -5257,6 +5756,23 @@ def report_state(target: Path, name: str, package: str) -> dict:
             if isinstance(row, dict) and row.get("notebook") in stale:
                 row["fromStaleNotebook"] = True
 
+    # Which findings describe the code as it stands, rather than a run already
+    # superseded. Derived here, at the one place `findings` exists and directly
+    # after the stamp that separates the two, so a check added later joins this
+    # answer without anybody having to remember it -- the same reason the stamp
+    # above is written here rather than at each site.
+    #
+    # A row that names no notebook is live by construction: it was read off the
+    # declaration or off the record, and neither goes stale with a notebook. So
+    # the test is the ABSENCE of the stale mark and never the presence of a
+    # fresh one, which is what keeps the string-valued findings
+    # (`undeclared`, `componentsNotRecorded`) in the answer instead of silently
+    # dropping every finding that carries no dict.
+    live_findings = sorted(
+        key for key, rows in findings.items()
+        if any(not (isinstance(row, dict) and row.get("fromStaleNotebook"))
+               for row in rows))
+
     clean = all(not value for value in findings.values())
     status = "ok" if clean else "drift"
     if live.get("status") != "ok":
@@ -5264,6 +5780,16 @@ def report_state(target: Path, name: str, package: str) -> dict:
         # looked for, and saying `ok` would report their absence as their answer.
         status = "incomplete" if clean else "drift"
     return {"status": status,
+            # Which findings are about THIS code, named rather than counted.
+            # `status` says the document does not agree with the run it
+            # describes and stops there; a consumer that has to tell a reader
+            # what the artefacts carry needs the names, and deriving them a
+            # second time somewhere else is how two commands come to disagree
+            # about one report. Deliberately absent from the `absent` /
+            # `undeclared` return above, exactly as `declared` is: there are no
+            # findings there because nothing could be looked for, and an
+            # empty list would say the opposite.
+            "liveFindings": live_findings,
             "live": live.get("status"),
             "liveDetail": live.get("detail"),
             # Which module `writtenSelections` was actually derived from, and
@@ -6205,6 +6731,45 @@ def notebook_coupling(path: Path, contract: dict) -> dict:
     return {"coupled": bool(couplings), "couplings": couplings}
 
 
+def seal_spellings() -> tuple[str, ...]:
+    """What a notebook must name for its seal to be reachable, taken from the kit.
+
+    Derived and never written here. The kit ships one module that produces the
+    seal, so its own filename is the name a notebook imports, and `DIGEST_MARKER`
+    is the string the seal prints and `notebook_execution` reads back. Spelling
+    either one a second time in this file would be a copy that goes stale the day
+    the asset is renamed --- and it would go stale GREEN, marking every notebook
+    sealed, which is the exact failure this check exists to close.
+    """
+    return (KIT_SEAL.stem, DIGEST_MARKER)
+
+
+def notebook_seals(notebook: dict) -> bool:
+    """Whether this notebook's own source can produce the seal at all.
+
+    Static, and that is the whole point. `unstamped` answers the same question
+    from OUTPUTS, so it can only answer it about a notebook that already ran ---
+    and a `@notebook` witness ticks against `sourcesMatch`, which only the seal
+    writes. Put together, a notebook without the seal cell runs perfectly, comes
+    back `executed`, and its ordinal can never be ticked; the first anyone hears
+    of it is a refusal after the run was paid for.
+
+    Measured on a real walk: four of ten notebooks carried no seal, four ordinals
+    of the sequence were unreachable from the moment they were declared, and the
+    walk stopped after 548 seconds of sweep with a message that read as if the
+    step had failed. It had not; it was the witness that could never be measured.
+
+    Reading the SOURCE answers it before a kernel starts, which is what makes it
+    a demand that can be made of a repository built from zero rather than a
+    post-mortem of one that already spent the time.
+    """
+    fuentes = "\n".join(
+        "".join(cell.get("source") or [])
+        for cell in (notebook.get("cells") or [])
+        if isinstance(cell, dict) and cell.get("cell_type") == "code")
+    return any(spelling in fuentes for spelling in seal_spellings())
+
+
 def notebooks_state(target: Path, name: str, package: str) -> dict:
     """Every notebook of the product, and whether its evidence is still current.
 
@@ -6254,6 +6819,10 @@ def notebooks_state(target: Path, name: str, package: str) -> dict:
         # The boundary travels WITH the status, where a reader meets it,
         # rather than in a docstring they will not open.
         state["digestScope"] = DIGEST_SCOPE
+        # Estático, y antes de que corra nada: `unstamped` mira las SALIDAS y por
+        # eso sólo puede hablar de un cuaderno que ya corrió. Éste mira la fuente.
+        state["sealed"] = notebook_seals(json.loads(
+            notebook.read_text(encoding="utf-8")))
         reports.append(state)
     return {
         "sourcesDigest": current,
@@ -6277,6 +6846,11 @@ def notebooks_state(target: Path, name: str, package: str) -> dict:
         # failure as a green suite whose red was never reachable.
         "unstamped": [r["notebook"] for r in reports
                       if r["status"] == "executed" and r["sourcesMatch"] is None],
+        # La mitad que se puede exigir DESDE CERO. `unstamped` de arriba es su
+        # post-mortem: dice lo mismo, después de pagar la corrida. Un cuaderno
+        # acá no puede sellar, así que cualquier testigo que lo nombre es un
+        # ítem que jamás se tilda por bien que corra el paso.
+        "unsealed": [r["notebook"] for r in reports if not r["sealed"]],
         "status": "ok" if reports and all(
             r["status"] == "executed" and r["sourcesMatch"] for r in reports) else "drift",
     }
@@ -7062,6 +7636,102 @@ def _load_remote_execution_ledger():
     return module
 
 
+def _reported_state_question(target: Path, name: str, *, about: str,
+                             question: str) -> dict:
+    """A published exit for a REPORTED state -- the question a human answers,
+    and the `discuss` command that opens it.
+
+    `_refusal_question`'s exact shape, one surface out. That one is read at the
+    `except Refused` chokepoint and builds itself from the refused call's own
+    `args`; a reported state has no refusal and no `args`, so it is handed the
+    pair it already holds. Both produce `{kind, question, command}`, because a
+    reader who has learnt one publication shape has learnt them all, and a
+    second shape here would be a second thing to learn for no reason.
+
+    The command runs unedited. That is the whole requirement and it is the one
+    a published exit fails at silently: `discuss` needs only the target, the
+    name, a bucket and the question text, all four of which every caller here
+    holds, and every one is `shlex.quote`d by `_discuss_command`.
+    """
+    return {"kind": "question", "question": question,
+            "command": _discuss_command(target, name, about=about,
+                                        question=question)}
+
+
+#: Why the ledger's two work states publish a QUESTION and not the command
+#: that clears them, stated once rather than argued twice below.
+#:
+#: **The act exists and is mechanical.** `remote_cli reconcile` is what settles
+#: a ledger in drift or one this check could not fully read; the Decision Gates
+#: table has said so in prose since the state existed.
+#:
+#: **This file may not spell it.** `reconcile` requires four flags. Two are
+#: derivable here -- `--target` and `--entrypoint`, both already in this
+#: payload. The other two are values this skill is forbidden to print, and the
+#: prohibition is not incidental to this key, it IS this key's own rule:
+#: `workers` is reported as a COUNT precisely because a worker id is a service
+#: account's username, and `--backend` is the name a concrete adapter was
+#: registered under, which is a service name outright. A command published with
+#: either filled in would break the one sentence this section exists to keep;
+#: published with them blank it would not run, which is worse than prose,
+#: because prose does not claim to be runnable.
+#:
+#: So the exit published is the question, and the question NAMES the command,
+#: names the two values only the operator can supply, and says why. That is a
+#: published exit of the second kind -- and its `discuss` command runs unedited,
+#: which is the half a reader can actually execute.
+REMOTE_EXECUTION_RESOLUTION_LIMIT = (
+    "`remote_cli reconcile` is the act that settles this, and this skill "
+    "cannot hand it over ready to run: it requires `--worker` and `--backend`, "
+    "and both are values this section is forbidden to print -- a worker id is "
+    "a service account's username, which is why `workers` here is a count, and "
+    "a backend name is a service name. Run it for the account and the backend "
+    "this repository submits through")
+
+REMOTE_EXECUTION_DRIFT_QUESTION = (
+    "this repository's remote-execution ledger and the service no longer "
+    "agree, or a result arrived for a submission the source has already moved "
+    "past. Nothing read out of that ledger is trustworthy until it is settled, "
+    "and waiting does not settle it. "
+    + REMOTE_EXECUTION_RESOLUTION_LIMIT +
+    ", and report what it finds before anything is offered on the strength of "
+    "this ledger -- or record why a run is being taken against a ledger nobody "
+    "reconciled, and why?")
+
+REMOTE_EXECUTION_UNRELIABLE_QUESTION = (
+    "a line of this repository's remote-execution ledger could not be read at "
+    "all, so nothing it says about what is out there is trustworthy -- not what "
+    "is still pending, not what came back, not how many. "
+    + REMOTE_EXECUTION_RESOLUTION_LIMIT +
+    ", and report what it finds before offering any run -- or record why an "
+    "unreadable ledger is being read past, and why?")
+
+#: The ledger states that name work somebody has to do, and the question each
+#: publishes. A closed roster rather than an `if` chain, so a third work state
+#: added to the fold has a place to be classified into and a test that fails
+#: until it is -- `GATING_REFUSALS`' own shape, one surface out.
+REMOTE_EXECUTION_WORK_STATES = {
+    "drift": REMOTE_EXECUTION_DRIFT_QUESTION,
+    "unreliable": REMOTE_EXECUTION_UNRELIABLE_QUESTION,
+}
+
+
+def remote_execution_resolution(target: Path, name: str,
+                                status: str) -> dict | None:
+    """What clears `status`, or `None` where there is nothing to clear.
+
+    `None` for `ok`, `pending` and `absent`, and that is not an omission:
+    `position_finding_resolution`'s own rule, that a resolution published over
+    a report with no finding in it is an act nobody needs to run, and the
+    reader who meets one learns to skip the key.
+    """
+    question = REMOTE_EXECUTION_WORK_STATES.get(status)
+    if question is None:
+        return None
+    return _reported_state_question(target, name, about="record",
+                                    question=question)
+
+
 def remote_execution_state(target: Path, name: str, package: str) -> dict:
     """What went out to a remote worker, what came back, and what changed since.
 
@@ -7090,12 +7760,16 @@ def remote_execution_state(target: Path, name: str, package: str) -> dict:
     sentence — "No service is named here, and none should be" — the moment
     somebody ran this command.
     """
+    # `resolve` is spelled on the absent returns too, and never omitted from
+    # them: a payload whose SHAPE varies with its state makes every consumer
+    # test for the key before reading it, and the one that forgets reads
+    # `None` and cannot tell "nothing to do" from "this key is not here".
     if not REMOTE_EXECUTION_LEDGER_SCRIPT.is_file():
-        return {"status": "absent"}
+        return {"status": "absent", "resolve": None}
 
     ledger_path = target / name / ".remote-execution" / "ledger.jsonl"
     if not ledger_path.is_file():
-        return {"status": "absent"}
+        return {"status": "absent", "resolve": None}
 
     ledger = _load_remote_execution_ledger()
     lines = ledger_path.read_text(encoding="utf-8").splitlines()
@@ -7135,6 +7809,14 @@ def remote_execution_state(target: Path, name: str, package: str) -> dict:
         "quarantined": quarantined,
         "unreadableLines": state.unreadable_lines,
         "workers": workers,
+        # What to do about `status`, published by the engine rather than left
+        # in a doctrine table for whoever is reading to find. `None` for every
+        # state that names no work. See `remote_execution_resolution` and
+        # `REMOTE_EXECUTION_RESOLUTION_LIMIT`: the act is `remote_cli
+        # reconcile`, and two of its four required flags are values this
+        # section may not print, so what is published is the question that
+        # names them -- whose own `discuss` command runs unedited.
+        "resolve": remote_execution_resolution(target, name, status),
     }
 
 
@@ -7285,6 +7967,166 @@ def _proposal_digest(events: list, campaign: dict) -> str | None:
     return None
 
 
+def _run_block_notebook(run_config: dict) -> str | None:
+    """The notebook a job's NORMAL run declares, or `None`.
+
+    A plain mapping read over a shape the `remote-execution` skill owns, and
+    deliberately not a call into that skill's own `declared_notebooks()`: that
+    function unions `run.notebook` with `run.smoke`'s, which is right for the
+    question IT answers (*which notebooks must arrive in the checkout*) and
+    wrong for this one (*which notebook would this job run*). Folding a
+    rehearsal's artefact in here would report a smoke notebook as the thing a
+    campaign sends. Nothing in that skill is reached or changed by this.
+
+    Every non-string and every blank reads as `None` -- the same "declares
+    nothing knowable" this file gives a config it could not open. This is a
+    reporting path: `jobfolder.validate_run_config()` already refuses a
+    malformed block at the one place it guards an act, and refusing again here
+    would turn a read-only report into a second gate on somebody else's rule.
+    """
+    run_block = (run_config or {}).get("run")
+    if not isinstance(run_block, dict):
+        return None
+    notebook = run_block.get("notebook")
+    return notebook if isinstance(notebook, str) and notebook.strip() else None
+
+
+def _product_relative_notebook(notebook: str | None,
+                               product: str | None) -> str | None:
+    """A job's repository-relative notebook path, restated in the vocabulary
+    the pilot speaks, or `None` when it cannot be.
+
+    The two halves of this join name the same file in two different
+    vocabularies, and neither one is wrong. A job's `run.notebook` is
+    REPOSITORY-relative: the remote-execution skill resolves it against the
+    clone (`git cat-file -e <commit>:<notebook>`), so it carries the product
+    segment. `_pilot_notebooks` speaks PRODUCT-relative (`Notebooks/<file>`),
+    the same tail `impl_position._derive_notebook` matches on. Comparing the
+    two as written would report every job as unpiloted, which is the failure
+    mode a join has to be built not to have.
+
+    Segment-wise and never `str.startswith`, for `_owns`' own reason: a
+    product named `Method` must not swallow a path under `Method_Benchmark/`.
+
+    `None` when the job names no product, when the notebook does not sit under
+    it, or when there is nothing to translate. `None` is never read as a match:
+    a path this vocabulary cannot even express is certainly not one the pilot
+    walked, and saying so is the honest answer rather than a silent pass.
+    """
+    if not isinstance(notebook, str) or not notebook.strip():
+        return None
+    if not isinstance(product, str) or not product.strip():
+        return None
+    parts = [part for part in notebook.split("/") if part]
+    product_parts = [part for part in product.split("/") if part]
+    if len(parts) <= len(product_parts):
+        return None
+    if parts[:len(product_parts)] != product_parts:
+        return None
+    return "/".join(parts[len(product_parts):])
+
+
+#: The three answers this join can give, named once rather than respelled at
+#: each site that branches on one. `not-applicable` is a member and not an
+#: absence: a job declaring the callable shape carries no notebook to compare,
+#: and reporting that as `unpiloted` would accuse a legitimate job of a
+#: mismatch it cannot have.
+JOB_NOTEBOOK_PILOT_STATUSES = ("piloted", "unpiloted", "not-applicable")
+
+#: What the notebook/pilot join is, said in the payload rather than left to a
+#: reader to infer from three status words -- `WALK_NOTE`'s own doctrine.
+#:
+#: **The measured gap this closes.** Both halves already existed and nothing
+#: compared them. A job's run block can name a notebook and the worker runs
+#: that exact file from the pinned clone; `pilot_completeness_state` knows
+#: which notebooks the declared flow actually walked. Between them sat the
+#: only question that decides whether a campaign is worth its quota -- *is the
+#: artefact about to be sent one that has been executed and read here first* --
+#: and no key answered it, so an operator could read a complete pilot beside a
+#: job pointing at a notebook that pilot never opened, and nothing said a word.
+#:
+#: **Reported, never gating, and that is the whole posture.** This sits in
+#: front of the expensive door, and a refusal there that an operator cannot
+#: clear corners them at exactly the point where the alternatives all cost
+#: money. A repository may legitimately generate a job before it pilots, or
+#: pilot through one notebook and send another on purpose. What must never
+#: happen is that nobody is told.
+#:
+#: **`not-applicable` is a first-class answer, not a blank.** A job declaring
+#: the callable shape names no notebook at all -- `run_block_kind()` in the
+#: remote-execution skill admits exactly one of the two shapes -- so there is
+#: nothing to compare, and that is a different fact from a comparison that
+#: came out wrong. Off a payload that reported only mismatches the two read
+#: identically, which is the reading this key exists to stop.
+JOB_NOTEBOOK_PILOT_NOTE = (
+    "whether the notebook each generated job would run is one the pilot "
+    "actually walked. A pilot is the declared flow walked with the declared "
+    "notebooks, so that the artefact later sent to a worker has been executed "
+    "and read before anybody commits machine time to it -- and a job pointing "
+    "at a notebook that pilot never opened spends that time on a file nothing "
+    "here has ever run. Three answers, and the shape is the same in all "
+    "three: `piloted` (the pilot walked this exact notebook), `unpiloted` (it "
+    "did not, or the job's path is not one the pilot's vocabulary can even "
+    "express), and `not-applicable` (this job declares the callable shape and "
+    "names no notebook, so there is nothing to compare). Nothing here refuses "
+    "anything: a repository may generate a job before it pilots, or pilot one "
+    "notebook and send another deliberately. It is named because the "
+    "alternative reading is silence.")
+
+
+def job_notebook_pilot_state(jobs: list[dict], pilot: dict) -> dict:
+    """Whether the notebook each job would run is one the pilot walked --
+    `{"status", "jobs", "unpiloted", "walked", "note"}`, and never a refusal.
+
+    Pure: both operands are already computed by the caller and threaded in --
+    `remote_execution_jobs_state()`'s own `jobs` list and
+    `pilot_completeness_state()`'s own return. No filesystem walk, no second
+    `JOBFOLDER.read()`, no re-derivation of either half. Two reads of one fact
+    inside one command is how the two come to disagree, which is the restraint
+    `classify_remote_necessity` already keeps one key over.
+
+    `walked` is the union of every notebook every step's row names, in sorted
+    order and de-duplicated: two steps may render into one root, and the
+    question here is set membership, never which step got there first.
+
+    `status` is `"ok"` when no job is `unpiloted` and `"unpiloted"` when one
+    is. It gates nothing -- see `JOB_NOTEBOOK_PILOT_NOTE` -- and it is a
+    headline rather than a verdict, so a reader who scans one key still meets
+    the fact.
+
+    Every row carries all four of `job`, `notebook`, `pilotRelative` and
+    `status`, in every one of the three states. A payload whose shape varies
+    with its answer makes each consumer test for a key before reading it, and
+    the one that forgets reads `None`.
+    """
+    walked = sorted({notebook
+                     for row in (pilot or {}).get("steps") or []
+                     if isinstance(row, dict)
+                     for notebook in row.get("notebooks") or []
+                     if isinstance(notebook, str)})
+    rows = []
+    for job in jobs or []:
+        raw = job.get("notebook")
+        # Re-normalized here rather than trusted, because this function is
+        # pure and its `jobs` operand is whatever a caller hands it: a test,
+        # a future second producer, or the loop above. `None` and a blank
+        # string are the same absence and must not read as two.
+        notebook = raw if isinstance(raw, str) and raw.strip() else None
+        relative = _product_relative_notebook(notebook, job.get("product"))
+        if notebook is None:
+            status = "not-applicable"
+        elif relative is not None and relative in walked:
+            status = "piloted"
+        else:
+            status = "unpiloted"
+        rows.append({"job": job.get("job"), "notebook": notebook,
+                     "pilotRelative": relative, "status": status})
+    unpiloted = [row["job"] for row in rows if row["status"] == "unpiloted"]
+    return {"status": "unpiloted" if unpiloted else "ok",
+            "jobs": rows, "unpiloted": unpiloted, "walked": walked,
+            "note": JOB_NOTEBOOK_PILOT_NOTE}
+
+
 def remote_execution_jobs_state(target: Path) -> dict:
     """`probe`'s own job-folder fact (design #744 section 9): what job
     folders exist on disk right now, reported alongside
@@ -7372,6 +8214,13 @@ def remote_execution_jobs_state(target: Path) -> dict:
                 "staleness": {"status": "unreadable", "reason": str(exc)},
                 "accelerator": None,
                 "localBudget": None,
+                # Spelled on this row too, and never omitted from it: a row
+                # whose SHAPE varies with state makes every consumer test for
+                # the key before reading it, and the one that forgets reads
+                # `None` and calls it "declares no notebook". A config nobody
+                # could read declares nothing knowable, which is what `None`
+                # says here -- and `staleness` beside it already says why.
+                "notebook": None,
             })
             continue
 
@@ -7389,6 +8238,20 @@ def remote_execution_jobs_state(target: Path) -> dict:
             "staleness": dict(job_folder.staleness),
             "accelerator": run_config.get("accelerator"),
             "localBudget": run_config.get("localBudget"),
+            # What this job would RUN, when what it runs is a notebook --
+            # read out of the same open `run_config`, exactly as the two
+            # fields above it are, and never a second `JOBFOLDER.read()`.
+            # `None` for a job declaring the callable shape, which is the
+            # majority: `run_block_kind()` in the remote-execution skill
+            # admits exactly one of the two and refuses a block carrying
+            # both, so an absent `notebook` here is that skill's own answer
+            # rather than a guess taken here. Read as a plain mapping
+            # lookup and never through that skill's `declared_notebooks()`:
+            # this is the job's NORMAL run, and folding `run.smoke`'s
+            # notebook in beside it would report a rehearsal's artefact as
+            # the thing a campaign sends. Nothing in the other skill is
+            # reached, read differently, or changed by this.
+            "notebook": _run_block_notebook(run_config),
         })
 
         if not isinstance(product, str) or not product:
@@ -8048,10 +8911,174 @@ def _flow_steps(steps: dict) -> list[tuple[str, int]]:
     return sorted(ordered, key=lambda pair: (pair[1], pair[0]))
 
 
+def _declared_flow_steps(steps: dict) -> list[tuple[str, int | None]]:
+    """EVERY declared step, the ordered ones first and in their declared
+    order, each paired with its ordinal or `None`.
+
+    **This is a different question from `_flow_steps`, and reading one answer
+    for both is the defect this exists for.** `_flow_steps` answers *in what
+    ORDER do they go*, and its own docstring argues -- rightly -- that an
+    entry carrying no ordinal declared no position, so folding one into the
+    ORDERING would report a finished flow unfinished forever. That argument is
+    about order. Completeness asks *did the pilot run everything*, and the
+    answer to that one is every entry `__steps__` declares, ordinal or not: a
+    step the target wrote down is a step the target means to run, and the
+    ordinal says where it goes rather than whether it counts.
+
+    **Measured.** A repository declaring ten steps carried no ordinal on four
+    of them. None of the four had ever run and two of their notebooks held
+    zero executed cells, yet `pilot_completeness_state` iterated the ordered
+    subset alone -- so all four were invisible to it, the pilot read complete,
+    and the ladder offered the remote worker over a flow that had never been
+    walked. The rung was right about the six it could see and blind to the
+    four it could not.
+
+    The ordinal-less entries come last, in name order, because there is no
+    position to sort them into: a reader meets the declared sequence first and
+    everything declared beside it after, and either half is deterministic.
+
+    A non-dict entry is dropped here exactly as `_flow_steps` drops it -- this
+    reader never raises, the same restraint for the same reason.
+    """
+    ordered = _flow_steps(steps)
+    ranked = {step_name for step_name, _ in ordered}
+    unranked = sorted(step_name for step_name, entry in steps.items()
+                      if isinstance(entry, dict) and step_name not in ranked)
+    return [*ordered, *((step_name, None) for step_name in unranked)]
+
+
+def _produces_roots(entry: dict) -> list[str]:
+    """A step's declared output roots, product-relative, or `[]`.
+
+    `cmd_step` refuses `STEP_MALFORMED` for a `produces` that is not a
+    non-empty list of non-blank strings, at the moment it would run. This is a
+    reporting path and never raises (`_flow_steps`' own rule), so a malformed
+    declaration reads as no declaration here rather than crashing a command
+    whose whole job is to report -- and the refusal still fires at the one
+    place it guards an act.
+    """
+    return [root for root in entry.get(PRODUCES_KEY) or []
+            if isinstance(root, str) and root.strip()]
+
+
+def _pilot_notebooks(entry: dict, item: dict | None, evidence: dict) -> list[str]:
+    """Every notebook one step owes at pilot, product-relative and sorted.
+
+    Two sources, unioned, because each reaches a step the other cannot.
+
+    - **The step's own declared output roots** (`produces`). A root under
+      `PRODUCT_NOTEBOOKS` is the target saying which notebook this step
+      renders, in a declaration it already writes. This is the half that works
+      for a step carrying no ordinal at all -- which is precisely why the
+      widened completeness rule can ask the notebook question of one, and why
+      no new declaration is introduced to make it possible.
+    - **The sequence item at its ordinal**, when that item witnesses a
+      notebook. Kept rather than replaced: a target that declares notebook
+      witnesses and no `produces` would otherwise LOSE a check it has today,
+      and a predicate that gates the expensive door may only ever widen.
+
+    Read out of `evidence["notebooks"]` rather than off the disk, so this
+    stays pure and can never disagree with the reports graded beside it.
+    `notebooks_state` stamps a path relative to the TARGET
+    (`<name>/Notebooks/<file>`) while a witness names the tail relative to the
+    PRODUCT -- the same pair `impl_position._derive_notebook` matches on -- so
+    the leading product segment is dropped here and every operand handed to
+    `derive` speaks the one vocabulary.
+
+    Ownership is `_owns`, segment-wise, never `str.startswith`: a root of
+    `Notebooks/one` must not swallow `Notebooks/one-more`, which is the
+    difference between a guard and a guard-shaped string comparison.
+    """
+    owed: set[str] = set()
+    roots = _produces_roots(entry)
+    if roots:
+        reports = (evidence.get("notebooks") or {}).get("reports") or []
+        for report in reports:
+            stamped = report.get("notebook") if isinstance(report, dict) else None
+            if not isinstance(stamped, str):
+                continue
+            tail = Path(stamped).parts[1:]
+            if not tail or tail[0] != PRODUCT_NOTEBOOKS:
+                continue
+            relative = "/".join(tail)
+            if _owns(relative, roots):
+                owed.add(relative)
+    witness = (item or {}).get("witness") or {}
+    if witness.get("kind") == "notebook" and witness.get("operand"):
+        owed.add(witness["operand"])
+    return sorted(owed)
+
+
+#: What completeness cannot ask of a step that declares no output roots, said
+#: rather than folded into a verdict -- `PRODUCES_UNDECLARED_CONSEQUENCE`'s own
+#: shape and doctrine, one reading over: that one names what a step's RUN is
+#: measured against, this one what its OUTPUT is. Kept distinct from `unrun`
+#: because the two demand opposite things of a reader: an unrun step is work
+#: still owed, and a step nobody can measure the output of is a declaration
+#: still owed. Reported, never gating: a step that declares no roots has not
+#: failed the pilot, and refusing one would discard a run already paid for.
+PILOT_UNMEASURABLE_CONSEQUENCE = (
+    "this step declares no output roots, so the pilot cannot ask whether it "
+    "rendered anything a reader can open. Its own run still decides here: a "
+    "step that never returned is incomplete exactly as any other is. What is "
+    "lost is only the second half -- whether the notebooks it renders were "
+    "executed against these sources -- and it is lost SILENTLY unless it is "
+    "named, because a step that owes no notebook and a step whose notebook "
+    "nobody can find read identically off a verdict. The exit is the target's "
+    f"own and already exists: declare `{STEPS_DECLARATION}[<step>]"
+    f"[{PRODUCES_KEY!r}]`, the same roots `step` already measures a run's "
+    "write scope against, and nothing else has to change.")
+
+#: Which steps the pilot walked without opening a notebook, said on every run
+#: rather than only on the run where it turns out to matter -- `WALK_NOTE`'s
+#: and `priorWork`'s own doctrine, that a report met only when something is
+#: wrong is a report nobody has learnt to read by the time it matters.
+#:
+#: **The measured defect.** Of ten declared steps on a real repository, six
+#: executed a notebook and four computed by calling the target's own library
+#: directly. The notebooks those four own -- including the one that would be
+#: handed to a remote worker to run -- were never executed by the flow, so the
+#: pilot validated one path while the artefact that actually gets sent was the
+#: other. Nothing reported it: off every key this state published, a step that
+#: renders no notebook and a step whose notebook nobody opened read
+#: identically, and four steps and their notebooks fell out of the pilot with
+#: nobody told.
+#:
+#: **Reported, never gating**, and that is not a preference either. A target
+#: may legitimately keep its computation in a library and render elsewhere; a
+#: refusal here would corner an operator whose layout is exactly what they
+#: meant, and it would grade an act already taken -- the same two arguments
+#: `PILOT_UNMEASURABLE_CONSEQUENCE` makes one key over and
+#: `undeclared_produces_state` makes for the declaration beside it. What must
+#: never happen again is that nobody is told.
+#:
+#: **A different absence from `unmeasurable`.** That one names a step nobody
+#: could look at, because it declared no output roots at all. This one names a
+#: step there was nothing to open: it may declare roots, and none of them
+#: falls under the product's notebook category. The two ask a reader for
+#: different things -- one for a declaration, one for nothing at all beyond
+#: knowing which half of the flow the pilot exercised.
+PILOT_WITHOUT_NOTEBOOK_NOTE = (
+    "the pilot is the declared flow walked with the declared notebooks, at "
+    "whatever reduced scale the target declares, so that the artefacts that "
+    "will later be sent have been executed and read before anybody commits "
+    "machine time to them. These steps ran without opening one: the flow "
+    "reached each of them and no notebook it renders was executed, so "
+    "whatever the step computed is in nothing a reader opens, and any "
+    "notebook it owns went untouched by the very run that was supposed to "
+    "validate it. That is not a finding and nothing here refuses it -- a "
+    "target may legitimately compute in its own library and render "
+    "elsewhere. It is named because the alternative reading is silence. Every "
+    "step carries its own `notebookCount` beside this list, zero included, so "
+    "what the check watches is met on every run rather than only on the run "
+    "where it turns out to matter.")
+
+
 def pilot_completeness_state(steps: dict, sequence: list[dict],
                              evidence: dict) -> dict:
-    """Whether the ordered flow this target declared has actually run at
-    pilot -- `{"status", "steps", "incomplete"}`, and never a refusal.
+    """Whether the flow this target declared has actually run at pilot --
+    `{"status", "steps", "incomplete", "unmeasurable", "withoutNotebook",
+    "note", "withoutNotebookNote"}`, and never a refusal.
 
     The measured defect this exists for: a target declaring six ordered steps
     had run the second of them and nothing else; six of its seven notebooks
@@ -8061,6 +9088,18 @@ def pilot_completeness_state(steps: dict, sequence: list[dict],
     at pilot", and the ladder was reading the wrong one. Nothing had been
     produced for anybody to read, and a question that offers the expensive run
     at that point is an invitation to say yes.
+
+    **EVERY declared step, never the ordered subset, and that widening is the
+    second defect this function has been measured to carry.** It read
+    `_flow_steps`, which returns only the `__steps__` entries carrying an
+    integer `advances`. On a real repository four of ten declared steps
+    carried none: all four were invisible here, two of their notebooks held
+    zero executed cells, the pilot reported complete, and the ladder fell
+    through to the rung that offers the remote worker -- the expensive door --
+    over a flow six tenths walked. `_flow_steps` is right for what it answers
+    (*in what order do they go*) and is unchanged; `_declared_flow_steps`
+    answers the different question this one asks (*did the pilot run
+    everything*), and its own docstring carries the argument.
 
     Two facts per step, and only two:
 
@@ -8078,13 +9117,40 @@ def pilot_completeness_state(steps: dict, sequence: list[dict],
 
     **How the notebook is known, and why nothing new is declared for it.**
     The forge must never read the target's own Python to find which file a
-    step executes. It does not have to: `advances` is the target saying which
-    position item a step produces evidence for, and that item already names
-    its own witness. So the notebook a step owes is the operand of the
-    sequence item at that step's ordinal, whenever that item's witness kind is
-    `notebook` -- a link the target already writes, in the vocabulary it
-    already uses. A second declaration beside it would be one more thing that
-    can disagree with the first.
+    step executes, and it does not have to -- twice over, which is what makes
+    the widening possible at all (`_pilot_notebooks` holds the join). A step's
+    own `produces` roots are already the target naming what it renders, and a
+    root under `PRODUCT_NOTEBOOKS` is therefore a notebook it owes: that half
+    needs no ordinal, so it reaches the entries a sequence item cannot.
+    Beside it, `advances` still says which position item a step produces
+    evidence for, and that item still names its own witness -- kept rather
+    than replaced, because a target declaring notebook witnesses and no
+    `produces` would otherwise lose a check it has today, and a predicate
+    standing in front of the expensive door may only ever widen. Both are
+    links the target already writes, in vocabulary it already uses; no second
+    declaration is introduced, and a repository built from zero is asked for
+    nothing it is not asked for already.
+
+    **A step declaring no `produces` is unmeasurable here, never failed.** It
+    is named in `unmeasurable` beside `PILOT_UNMEASURABLE_CONSEQUENCE` --
+    `undeclared_produces_state`'s own reported-never-demanded shape -- and its
+    own run still decides its `complete`. Folding the two together would
+    either fail a legitimate step for a declaration it never had to make, or
+    (the direction that actually costs something) let "nobody could look" pass
+    for "nothing was wrong".
+
+    **Whether the pilot opened a notebook at all is said per step, zero
+    included.** Every row carries `notebookCount`, and `withoutNotebook` names
+    the steps whose set came back empty, beside `PILOT_WITHOUT_NOTEBOOK_NOTE`.
+    It moves no verdict: `complete` and `status` are exactly what they were,
+    because a step that computes in the target's own library has not failed
+    the pilot and refusing one would corner an operator whose design is
+    deliberate. It is reported because until it was, the fact was invisible --
+    measured, at four declared steps in ten whose notebooks the flow never
+    executed, one of them the artefact a remote worker would have been sent to
+    run. The check is met on every run and not only on the run where it turns
+    out to matter, which is the whole difference between a report a reader has
+    learnt and a report they meet for the first time as a surprise.
 
     **Both halves are graded through `impl_position.derive`, never by a
     second arithmetic beside it** -- the discipline `_skipped_rung_detail`
@@ -8114,7 +9180,11 @@ def pilot_completeness_state(steps: dict, sequence: list[dict],
     **A flow nobody declared is not an incomplete one.** `status` is
     `"undeclared"` when no entry carries an ordinal, and every caller reads
     that as "this rule does not apply" -- a target that never opted into an
-    ordering keeps exactly the ladder it always had.
+    ordering keeps exactly the ladder it always had. That condition is
+    deliberately still `_flow_steps`' own and is NOT widened with the rest: a
+    repository with no ordering at all has opted into nothing, and reading its
+    steps as a flow would apply this rule to every target that never asked for
+    it. What the widening changes is which steps count ONCE a flow exists.
 
     Pure: no I/O, no filesystem walk, no ledger read. `steps` is
     `resolve_steps_declaration`'s own return, `sequence` is
@@ -8122,32 +9192,71 @@ def pilot_completeness_state(steps: dict, sequence: list[dict],
     caller already builds -- the same restraint `classify_remote_necessity`
     keeps, so two callers asking this question cannot answer it differently.
     """
-    flow = _flow_steps(steps)
-    if not flow:
-        return {"status": "undeclared", "steps": [], "incomplete": []}
+    if not _flow_steps(steps):
+        # Every key the walked answer carries, spelled here too: a payload
+        # whose SHAPE varies with state makes each consumer test for a key
+        # before reading it, and the one that forgets reads `None`.
+        return {"status": "undeclared", "steps": [], "incomplete": [],
+                "unmeasurable": [], "withoutNotebook": [],
+                "note": PILOT_UNMEASURABLE_CONSEQUENCE,
+                "withoutNotebookNote": PILOT_WITHOUT_NOTEBOOK_NOTE}
     by_ordinal = {item["ordinal"]: item for item in sequence
                   if isinstance(item.get("ordinal"), int)}
     rows = []
-    for step_name, advances in flow:
-        witness = (by_ordinal.get(advances) or {}).get("witness") or {}
-        notebook = (witness.get("operand")
-                    if witness.get("kind") == "notebook" else None)
+    for step_name, advances in _declared_flow_steps(steps):
+        entry = steps.get(step_name)
+        entry = entry if isinstance(entry, dict) else {}
+        item = by_ordinal.get(advances) if advances is not None else None
+        notebooks = _pilot_notebooks(entry, item, evidence)
         probes = [{"witness": {"kind": "step", "operand": step_name,
                                "twostate": True}, "mark": " "}]
-        if notebook:
-            probes.append({"witness": {"kind": "notebook", "operand": notebook,
-                                       "twostate": True}, "mark": " "})
+        probes += [{"witness": {"kind": "notebook", "operand": notebook,
+                                "twostate": True}, "mark": " "}
+                   for notebook in notebooks]
         graded = impl_position.derive(probes, evidence)
         ran = graded[0]["satisfied"]
-        current = graded[1]["satisfied"] if notebook else None
+        # One tri-state over every notebook the step owes, folded the way the
+        # single one was: anything short of `True` -- unexecuted, executed
+        # against other sources, or a witness naming a file no report covers
+        # -- is not shown, and not shown is never a pass.
+        current = (all(graded_row["satisfied"] is True
+                       for graded_row in graded[1:]) if notebooks else None)
         rows.append({
             "step": step_name, "advances": advances, "ran": ran,
-            "notebook": notebook, "notebookCurrent": current,
-            "complete": ran is True and (notebook is None or current is True),
+            "notebooks": notebooks, "notebooksCurrent": current,
+            # How many the pilot opens for this step, on every row and
+            # whether or not it is zero. See `PILOT_WITHOUT_NOTEBOOK_NOTE`:
+            # a step that renders none is not wrong, it is invisible, and a
+            # number reported only where it is zero is a number nobody has
+            # learnt to read by the time it decides something.
+            "notebookCount": len(notebooks),
+            # The distinct fact, per step: whether the notebook half could be
+            # asked at all. `notebooks == []` under a declared root means the
+            # step renders none and is measured; under no root at all it means
+            # nobody could look. See `PILOT_UNMEASURABLE_CONSEQUENCE`.
+            "producesDeclared": bool(_produces_roots(entry)),
+            "complete": ran is True and (current is None or current is True),
         })
     incomplete = [row["step"] for row in rows if not row["complete"]]
     return {"status": "incomplete" if incomplete else "complete",
-            "steps": rows, "incomplete": incomplete}
+            "steps": rows, "incomplete": incomplete,
+            # Reported beside `incomplete` and never inside it: a step nobody
+            # can measure the output of has not failed the pilot, and the two
+            # lists ask a reader for opposite things -- a run, and a
+            # declaration.
+            "unmeasurable": [row["step"] for row in rows
+                             if not row["producesDeclared"]
+                             and not row["notebooks"]],
+            # Which steps the pilot walked without opening a notebook,
+            # whatever they declared -- a superset of `unmeasurable`, and a
+            # different question from it: that one is a step nobody could
+            # look at, this one a step there was nothing to open. Reported
+            # beside both lists and inside neither, because it asks a reader
+            # for no act at all. See `PILOT_WITHOUT_NOTEBOOK_NOTE`.
+            "withoutNotebook": [row["step"] for row in rows
+                                if not row["notebooks"]],
+            "note": PILOT_UNMEASURABLE_CONSEQUENCE,
+            "withoutNotebookNote": PILOT_WITHOUT_NOTEBOOK_NOTE}
 
 
 #: What the walk report is, said in the payload rather than left to a reader
@@ -8175,6 +9284,358 @@ WALK_OUTSIDE = "outsideTheWalk"
 #: walked of them -- an artefact is not produced until everything that writes
 #: into it has run.
 WALK_ORDER = ("notWalked", "unfinished", "walked")
+
+#: Where a declared step runs once the flow leaves rehearsal scale, and the
+#: name of the job folder that carries it when it runs elsewhere. Both are
+#: read off the target's own `__steps__`, and both are optional.
+#:
+#: **They are a declaration and not a ledger read, and that is the whole
+#: point.** The placement of every step of a real flow was decided in
+#: conversation and recorded as `discuss` answers -- free prose, in a file
+#: under `.implementation/`, which `.gitignore` excludes. So the decision
+#: could not be consumed (nothing can parse "Locally. It is the smallest step
+#: of the ten" into a route) and could not travel (a clone receives none of
+#: it), while the walk that has to act on it runs from a clone. The ledger
+#: keeps the REASON, with its numbers and its measurements; the declaration
+#: carries the FACT, which is the only half a machine consumes.
+#:
+#: `job` exists because nothing tied a job folder to a step. That link was
+#: deliberately not invented here -- a forge that guessed it would be deciding
+#: somebody's layout for them -- so the target names it, exactly as it names
+#: its own `produces` roots and its own `advances` ordinal.
+#: Every key this skill reads off one `__steps__` entry, and the roster the
+#: kit is held to. Data rather than a sentence, so a key added here fails a
+#: test until the kit's own example ships it -- which is what makes "a
+#: repository built from zero is asked for everything the skill reads" a
+#: measured property instead of a promise.
+#:
+#: It carries no target vocabulary and cannot: these are the forge's own
+#: contract names, the same class as `advances` and `produces`. What a step is
+#: CALLED, what it writes, which service it sends to -- all of that is the
+#: target's word and none of it appears here.
+STEP_KEYS = ("module", "function", "advances", "reads", "produces",
+             "placement", "job", "service")
+
+PLACEMENT_KEY = "placement"
+JOB_KEY = "job"
+SERVICE_KEY = "service"
+PLACEMENT_LOCAL = "local"
+PLACEMENT_REMOTE = "remote"
+PLACEMENTS = (PLACEMENT_LOCAL, PLACEMENT_REMOTE)
+
+#: What an undeclared placement costs, said where the absence is reported.
+PLACEMENT_UNDECLARED_CONSEQUENCE = (
+    "the walk cannot route this step once the flow leaves rehearsal scale: it "
+    "knows the step exists, what it produces and where it sits in the order, "
+    "and not whether it runs here or on a worker. So the flow stops at it "
+    "rather than choosing, and a choice made by default is the one nobody "
+    "would have approved.")
+
+
+def _step_placement(entry: object) -> str | None:
+    """Where one declared step runs, or `None` when it declares nothing.
+
+    A value outside the two the contract names reads as undeclared rather
+    than raising: the same restraint `_produces_roots` applies to a malformed
+    root, and for the same reason -- a reporting path that raises on a
+    declaration it does not recognise turns a typo into a dead command.
+    """
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get(PLACEMENT_KEY)
+    return value if value in PLACEMENTS else None
+
+
+def _step_job(entry: object) -> str | None:
+    """The job folder one remote step runs through, or `None`."""
+    return _step_text(entry, JOB_KEY)
+
+
+def _step_service(entry: object) -> str | None:
+    """The service one remote step's job folder lives under, or `None`.
+
+    Declared by the TARGET and never discovered here, and the reason is a rule
+    this skill already carries: a service may be read to walk a directory and
+    is reduced to a count before anything is returned, so nothing in this file
+    may name one. Discovery could not fill the gap either -- adapters register
+    lazily, so the registry is empty until somebody names one, and listing the
+    adapter directory would read a sibling helper as a backend.
+
+    So the target says it, exactly as it says its own `job`, and the name
+    travels only in an argv the walker executes -- never in a payload this
+    skill returns.
+    """
+    return _step_text(entry, SERVICE_KEY)
+
+
+def _step_text(entry: object, key: str) -> str | None:
+    """One non-blank string key off a step's declaration, or `None`."""
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+#: The acts a step can still owe. `blocked` is a first-class answer and never
+#: a blank: a step nobody routed is not a step with nothing to do.
+ACT_RUN_LOCAL = "run-local"
+ACT_GENERATE_JOB = "generate-job"
+ACT_REHEARSE = "rehearse"
+ACT_LAUNCH = "launch"
+ACT_BLOCKED = "blocked"
+
+
+def _rung_reaches(rung: str | None, level: str | None,
+                  levels: list[str]) -> bool:
+    """Whether a step's own rung already reaches the rung being walked toward.
+
+    The ladder the target declares is the order, so `none` does not reach
+    `pilot` and `pilot` does not reach `remote`. A rung nothing measured
+    (`None`) reaches nothing: unmeasured is not attained, the same reading
+    every witness in this file already takes.
+
+    A target that declares no ladder has no order to compare against, and
+    there `walked` is the whole of what can be known -- so the caller falls
+    back to it rather than this function inventing a scale for a repository
+    that declared none. `undeclaredLadder` is where that absence is named.
+    """
+    if level is None or rung is None:
+        return False
+    if rung not in levels or level not in levels:
+        return False
+    return levels.index(rung) >= levels.index(level)
+
+
+def flow_acts(rows: list[dict], steps: dict, jobs: list[dict],
+              *, level: str | None = None,
+              levels: list[str] | None = None) -> list[dict]:
+    """The ordered acts standing between this repository and a walked flow.
+
+    One entry per declared step that has not been walked, in the order the
+    flow declares, each carrying the single act that step still owes. This is
+    the half that did not exist: `_walk_report` answers *where am I* and this
+    answers *what is the next act*, which is the question a session has to be
+    able to answer to move at all. Without it every rung published a question
+    whose answer changed nothing, and the walk from one step to the next was
+    performed by whoever was driving the CLI -- by hand, in a throwaway shell
+    script, three times on the day this was written.
+
+    **Pure, and it issues nothing.** It reads rows the caller already computed
+    and returns what WOULD be done, in order. Running any of it is the
+    caller's act, and every guard those acts carry stays exactly where it is.
+    A function that both decided and dispatched would be a launch path with no
+    `gate` standing in front of it.
+
+    A step whose placement is undeclared yields `blocked` rather than a guess.
+    Routing by default is how a campaign measured in days ends up somewhere
+    nobody chose, and `undeclared_placement_state` is what names that absence
+    before the walk ever reaches it.
+    """
+    levels = list(levels or [])
+    by_name = {job.get("job"): job for job in jobs if isinstance(job, dict)}
+    acts = []
+    # By the ORDER THE FLOW DECLARES, never the order the rows arrive in.
+    # `_walk_report` sorts its rows by step name because it is a report and a
+    # reader looks names up in it; acts are executed, and executing them
+    # alphabetically would run a step before the one whose output it reads --
+    # on a real repository the first act came out as the drawing step and the
+    # suite-and-invariants step that everything else rests on came out last.
+    # A step declaring no ordinal has no place in the order and goes after the
+    # ones that claim one, in the report's own order, which is the same
+    # restraint `pilot_completeness_state` already applies.
+    for row in sorted(rows, key=lambda r: (r.get("advances") is None,
+                                           r.get("advances") or 0)):
+        # A step is owed until its own rung reaches the one being walked
+        # toward -- NOT until it has been walked once. That distinction is the
+        # whole of this function's correctness at more than one scale, and it
+        # was measured rather than reasoned: on a real repository all ten
+        # declared steps read `walked`, every one of them at rung `none`,
+        # because the ledger's step events carry no scale at all. Skipping on
+        # `walked` therefore answered "nothing is owed" for a full run that
+        # had not started, which is the one wrong answer that costs a campaign.
+        #
+        # Where no ladder is declared there is no order to compare against and
+        # `walked` is the whole of what can be known, so that is what decides.
+        reached = (_rung_reaches(row.get("rung"), level, levels) if levels
+                   else row["walk"] == "walked")
+        if reached:
+            continue
+        entry = steps.get(row["step"])
+        placement = _step_placement(entry)
+        if placement is None:
+            acts.append({"step": row["step"], "placement": None,
+                         "act": ACT_BLOCKED,
+                         "needs": PLACEMENT_UNDECLARED_CONSEQUENCE})
+            continue
+        if placement == PLACEMENT_LOCAL:
+            acts.append({"step": row["step"], "placement": placement,
+                         "act": ACT_RUN_LOCAL, "needs": None})
+            continue
+        job_name = _step_job(entry)
+        service = _step_service(entry)
+        missing = [key for key, value in ((JOB_KEY, job_name),
+                                          (SERVICE_KEY, service))
+                   if value is None]
+        if missing:
+            keys = " and ".join(
+                f"{STEPS_DECLARATION}[{row['step']!r}][{key!r}]"
+                for key in missing)
+            acts.append({"step": row["step"], "placement": placement,
+                         "act": ACT_BLOCKED,
+                         "needs": f"{keys} names nothing, so this step is not "
+                                  "tied to the job folder that would carry it "
+                                  "elsewhere, nor to the service that folder "
+                                  "lives under"})
+            continue
+        job = by_name.get(job_name)
+        if job is None:
+            act = ACT_GENERATE_JOB
+        elif not job.get("smokeReady"):
+            act = ACT_REHEARSE
+        else:
+            act = ACT_LAUNCH
+        acts.append({"step": row["step"], "placement": placement,
+                     "act": act, "job": job_name, "needs": None})
+    return acts
+
+
+def flow_destination(rows: list[dict], steps: dict, jobs: list[dict],
+                     levels: list[str] | None) -> dict:
+    """Where this flow is going, and everything still between it and there.
+
+    `flow_acts` answers what is owed toward the rung the position header
+    AIMS at, which is the right question for deciding what to do next and
+    the wrong one for knowing whether the work is finished. A repository
+    resting at the floor with every step reaching the floor answers `[]`
+    there -- nothing owed -- and a session reading that concludes it
+    arrived. It has not: the destination is the top of the ladder the target
+    itself declared, and the distance to it is exactly what nobody was
+    told.
+
+    So this is computed toward `levels[-1]` and reported ALWAYS, whatever
+    the header aims at. It is a report and never a thing to act on: acting
+    happens against `flow_acts`, one rung at a time, because the ladder
+    refuses a skipped rung and this would otherwise read as permission to
+    jump. What it guarantees is narrower and is the whole point -- the flow
+    cannot look finished while it is not.
+
+    Which rung the top IS remains the target's word. A ladder whose top is a
+    local rung has a local destination and this says so; nothing here
+    assumes the top means a worker, because a forge that assumed it would be
+    deciding somebody's flow for them.
+    """
+    levels = list(levels or [])
+    if not levels:
+        return {"rung": None, "remaining": [],
+                "note": "no ladder is declared, so this flow states no "
+                        "destination; `undeclaredLadder` names what that "
+                        "absence costs"}
+    top = levels[-1]
+    remaining = flow_acts(rows, steps, jobs, level=top, levels=levels)
+    return {"rung": top, "remaining": remaining,
+            "note": "every act still standing between this repository and "
+                    "the top of its own declared ladder, reported whatever "
+                    "the position header aims at. Act against `flowActs`, "
+                    "one rung at a time; read this to know whether there is "
+                    "anywhere left to go."}
+
+
+#: What a walk performs on its own, and what it stops at. The split is the
+#: whole of this walker's safety and it is stated as data rather than as a
+#: branch, so a test can read it and an act added later has to be classified
+#: rather than silently inheriting one behaviour or the other.
+#:
+#: `launch` is the line. Everything above it is local work, a job folder
+#: written on this disk, or the rehearsal the doctrine already makes the
+#: agent's to run -- minutes, and the cheapest possible answer to whether the
+#: wire carries current. A launch is hours of somebody's quota against a
+#: campaign, and it is the one act whose plan a person asked to see before it
+#: happens. A walk that took it would be the launch path with no gate in
+#: front of it that `flow_acts` refuses to be.
+WALK_PERFORMS = (ACT_RUN_LOCAL, ACT_GENERATE_JOB, ACT_REHEARSE)
+WALK_STOPS_AT = (ACT_LAUNCH, ACT_BLOCKED)
+
+
+def generate_job_argv(target: Path, name: str, step: str, entry: dict,
+                      repo_url: str, repo_ref: str,
+                      notebook: str | None) -> list[str]:
+    """The exact `generate-job` invocation for one remote step.
+
+    Every value is derived from what the repository already declares or from
+    its own git remote, never invented here: the service and the job folder
+    come from `__steps__`, the product is the name this flow was invoked
+    with, the notebook is the one that step names among its own `produces`
+    roots, and the clone paths are the two a runner needs -- the package
+    source and the product's notebooks.
+
+    Composed, and returned as an argv the CALLER executes. It is never
+    published in a payload, because the service name is in it and this
+    skill's own rule is that a service is read to walk a directory and
+    reduced to a count before anything is returned. An argv executed is not a
+    payload returned, which is the whole reason this shape is a list of
+    strings rather than a string.
+
+    `--repo-ref` is the branch and `--commit` is deliberately left out: the
+    remote skill resolves and then PROVES the pin against the declared
+    remote, in a scratch repository, before writing a byte. Passing a commit
+    from here would be this skill asserting a fact that one is built to
+    verify.
+    """
+    argv = [sys.executable, str(REMOTE_EXECUTION_CLI_SCRIPT), "generate-job",
+            "--target", str(target),
+            "--service", _step_service(entry) or "",
+            "--job-name", _step_job(entry) or "",
+            "--product", name,
+            "--repo-url", repo_url,
+            "--repo-ref", repo_ref,
+            "--clone-path", "src",
+            "--clone-path", f"{name}/Notebooks"]
+    if notebook:
+        argv += ["--run-notebook", notebook]
+    return argv
+
+
+def walk_plan(acts: list[dict]) -> dict:
+    """What a walk would perform, in order, and the act it stops at.
+
+    Pure, and it performs nothing: it decides. The caller executes, so every
+    guard each act carries stays exactly where it is.
+
+    It stops at the FIRST act it will not take rather than filtering those
+    out and continuing, because the flow is ordered: a step that cannot run
+    is one whose output every later step reads, and walking past it would
+    run the rest against material that was never produced. A `blocked` step
+    stops the walk for the same reason a `launch` does -- one because nobody
+    routed it, the other because somebody has to approve it.
+    """
+    performs: list[dict] = []
+    for act in acts:
+        if act["act"] in WALK_STOPS_AT:
+            return {"performs": performs, "stopsAt": act}
+        if act["act"] not in WALK_PERFORMS:
+            return {"performs": performs,
+                    "stopsAt": {**act, "needs": (
+                        f"{act['act']!r} is classified in neither "
+                        "WALK_PERFORMS nor WALK_STOPS_AT, so nothing here "
+                        "knows whether a walk may take it")}}
+        performs.append(act)
+    return {"performs": performs, "stopsAt": None}
+
+
+def undeclared_placement_state(steps: dict) -> list[dict]:
+    """One entry per declared step that names no placement.
+
+    Reported and never demanded, the same shape `undeclaredProduces` uses: a
+    repository that never leaves rehearsal scale needs no placement on
+    anything and is not defective for saying nothing. What the absence costs
+    is named rather than left for somebody to discover at the point the walk
+    stops.
+    """
+    return [{"step": step,
+             "declaration": f"{STEPS_DECLARATION}[{step!r}][{PLACEMENT_KEY!r}]",
+             "consequence": PLACEMENT_UNDECLARED_CONSEQUENCE}
+            for step, entry in sorted(steps.items())
+            if _step_placement(entry) is None]
 
 
 def product_artefacts(target: Path, name: str) -> list[str]:
@@ -9496,6 +10957,38 @@ def _pilot_decision_entry(target: Path, name: str, step: str) -> dict:
     return {key: value for key, value in entry.items() if key != "kind"}
 
 
+def _report_findings_question(target: Path, name: str,
+                              findings: list[str]) -> str:
+    """The exact text of the report acknowledgement, and the only construction
+    of it -- `_pilot_decision_question`'s own rule, for the same reason: this
+    string IS the bucket key (`_discussion_buckets` buckets by exact trimmed
+    text), so a second spelling anywhere would open a second, never-retiring
+    bucket for something somebody already acknowledged.
+
+    Derived from the target, the name and the FINDING NAMES alone. Never a
+    count of rows: rows move as a notebook is re-run while the fact the
+    operator is being shown -- that the document does not yet agree with the
+    run -- has not changed, and embedding one would re-ask on every call (the
+    stability rule `_piloted_discuss_entry` documents). The names themselves
+    are not that: a finding appearing or clearing IS a change of state, and
+    re-asking then is the point.
+    """
+    return (f"{name} (target {target}) has finished its declared flow at "
+            f"pilot, and the report those steps rendered carries live "
+            f"findings ({', '.join(findings)}) -- the artefacts every per-step "
+            f"decision is taken over, and the ones anybody validating this "
+            f"work has to read; " + NEXT_STEP_REPAIR_CHOICE)
+
+
+def _report_findings_entry(target: Path, name: str,
+                           findings: list[str]) -> dict:
+    """The acknowledgement, in the shape `toDiscuss` already carries --
+    `_pilot_decision_entry`'s own composition, one question over."""
+    entry = _next_step_question_entry(
+        target, name, _report_findings_question(target, name, findings))
+    return {key: value for key, value in entry.items() if key != "kind"}
+
+
 def _pilot_decisions_publication(target: Path, name: str, facts: dict) -> dict:
     """`pilot-decisions` -- the pass itself, published beside the per-step
     questions `cmd_probe` appends to `toDiscuss`.
@@ -9510,17 +11003,53 @@ def _pilot_decisions_publication(target: Path, name: str, facts: dict) -> dict:
     Where the outputs are is named here rather than left to the reader, since
     reading them is the act this question is waiting on. The paths are the
     target's own declared operands, read out of its own sequence.
+
+    **And what those outputs carry, when the report block has something to
+    say about them.** Naming the file and staying silent about the findings in
+    it sends the operator to read an artefact and tells them nothing about the
+    state it is in -- and this rung is the last one before the decisions that
+    put a step on a remote worker. `reportFindings` is `report.liveFindings`,
+    threaded through by `cmd_probe` rather than recomputed, the same discipline
+    `declarationStatus` states.
+
+    **And which steps the pilot opened no notebook for.** This is the
+    consumer that reads the widened answer narrowly if it is left alone.
+    Naming where the outputs are and staying silent about the steps that
+    rendered none tells an operator they are looking at the whole flow when
+    they are looking at part of it -- measured, at six paths named out of ten
+    declared steps -- and this is the last rung before the decisions that put
+    a step on a remote worker, whose own artefact may be one of the notebooks
+    nothing ever executed. Nothing is refused by saying so; the sentence
+    names them and the pass carries on. `withoutNotebook` is
+    `pilotCompleteness`' own list, threaded through by `cmd_probe` rather
+    than recomputed, the same discipline `notebooks` and `reportFindings`
+    already state.
+
+    **Each half appears only when it has something to say.** The rung
+    fires on an unacknowledged report as well as on undecided steps, so a pass
+    whose steps are all decided would otherwise say "each step owes its own
+    decision ... published beside this one" with nothing published beside it.
     """
     notebooks = list(facts.get("notebooks") or [])
     where = (" its outputs are at " + ", ".join(notebooks) + "; "
              if notebooks else " ")
+    findings = list(facts.get("reportFindings") or [])
+    carries = (f"those outputs carry live findings ({', '.join(findings)}), "
+               "which nobody can validate this work without seeing; "
+               if findings else "")
+    unopened = list(facts.get("withoutNotebook") or [])
+    opened = ("the pilot opened no notebook for "
+              + ", ".join(repr(step) for step in unopened)
+              + ", so what those steps computed is in none of what this pass "
+                "asks you to read; " if unopened else "")
+    owed = ("the flow now returns to its first step: each step owes its own "
+            "decision about how the full run carries it, and those questions "
+            "are published beside this one; " if facts.get("undecided") else "")
     return _next_step_question_entry(
         target, name,
         f"{name} (target {target}) has finished every step of its declared "
-        f"flow at pilot and{where}"
-        "the flow now returns to its first step: each step owes its own "
-        "decision about how the full run carries it, and those questions are "
-        "published beside this one; " + NEXT_STEP_REPAIR_CHOICE)
+        f"flow at pilot and{where}" + carries + opened + owed
+        + NEXT_STEP_REPAIR_CHOICE)
 
 
 #: Every value `cmd_probe`'s ladder can assign to `next_step`, and what each
@@ -12352,7 +13881,8 @@ def cmd_step(args: argparse.Namespace) -> dict:
                 "STEP_SEQUENCE_NOT_REACHED",
                 f"item {min(earlier_open)} in the sequence is not yet ticked; "
                 f"{args.step!r} advances item {advances} and cannot run ahead "
-                "of it -- a step that skips a rung is refused.")
+                "of it -- a step that skips a rung is refused."
+                + sequence_block_detail(position, advances))
 
     # The other optional sub-key, read exactly the way `advances` is: absent
     # runs unmeasured (see `PRODUCES_UNDECLARED_CONSEQUENCE`), and PRESENT is
@@ -12669,6 +14199,13 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     scaffold_recorded = scaffold_structure_gaps(target, name)
     object_recorded = object_structure_gaps(target, name)
     harness_recorded = harness_structure_gaps(target, name)
+    # Computed once, here, and read twice below: by the three reported keys
+    # and by the acts published beside them. Two calls in two slots would let
+    # a published `materialize` name destinations the key it answers does not,
+    # which is the one way an exit can be runnable and still wrong.
+    structure_gaps = {"scaffoldGaps": scaffold_gaps(target, name),
+                      "objectGaps": object_gaps(target, name),
+                      "harnessGaps": harness_gaps(target, name)}
     structure_ok = (not missing_dirs and not stray and not stale_refs
                     and not unparsable
                     and not scaffold_gaps(target, name)
@@ -12997,15 +14534,23 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "strayModules": stray,
             "unparsableTests": unparsable,
             "staleReferences": stale_refs,
-            "scaffoldGaps": scaffold_gaps(target, name),
+            "scaffoldGaps": structure_gaps["scaffoldGaps"],
             "scaffoldDrift": scaffold_recorded["drift"],
             "unrecordedScaffold": scaffold_recorded["unrecorded"],
-            "objectGaps": object_gaps(target, name),
+            "objectGaps": structure_gaps["objectGaps"],
             "objectDrift": object_recorded["drift"],
             "unrecordedObjects": object_recorded["unrecorded"],
-            "harnessGaps": harness_gaps(target, name),
+            "harnessGaps": structure_gaps["harnessGaps"],
             "harnessDrift": harness_recorded["drift"],
             "unrecordedHarness": harness_recorded["unrecorded"],
+            # What to do about the three gap keys above, published by the
+            # engine rather than left in a doctrine paragraph for whoever is
+            # reading to find. One entry per key that names anything, `[]`
+            # when nothing is owed. See `structure_gap_resolutions`: the act
+            # is `materialize --stage`, and two of its arguments are a
+            # human's by design, so what is published is the question that
+            # names them -- whose own `discuss` command runs unedited.
+            "resolve": structure_gap_resolutions(target, name, structure_gaps),
         },
         "priorWork": prior_work_state(target, package_name(name)),
         "agreements": agreements_state(target, name),
@@ -13146,6 +14691,33 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         # with its consequence rather than refused, and where the from-zero
         # demand lives.
         "undeclaredProduces": undeclared_produces_state(
+            target, name, declared_steps),
+        # The third reading of the same declaration, and the one the walk
+        # routes on. `undeclaredProduces` asks what a step writes and
+        # `undeclaredStepNotebooks` asks whether any of it is a notebook; this
+        # asks WHERE the step runs once the flow leaves rehearsal scale.
+        # Reported with its consequence and never refused, for the reason its
+        # two neighbours already carry: a repository that never leaves
+        # rehearsal scale needs no placement on anything and is not defective
+        # for saying nothing. What it must not do is default -- routing an
+        # unrouted step by convention is how a run measured in days lands
+        # somewhere nobody chose, so `flow_acts` blocks on it and this is
+        # where the absence is named before the walk ever reaches it. The
+        # from-zero demand is the kit's own `__steps__` example, which ships
+        # both keys. See `undeclared_placement_state`.
+        "undeclaredPlacement": undeclared_placement_state(declared_steps),
+        # The same declaration, one reading deeper, and the half
+        # `undeclaredProduces` cannot answer: a step that named its roots and
+        # named no notebook among them. A new top-level key rather than a
+        # widening of `pilotCompleteness.withoutNotebook`, because that one is
+        # computed from a pilot's own evidence and answers "this repository
+        # opened no notebook here", while a repository built from zero has to
+        # be asked the other question -- "nobody ever asked it to have one" --
+        # before any run exists. Top-level for the identical `returned_keys`
+        # constraint every key above carries. See
+        # `undeclared_step_notebooks_state`'s own docstring for why the two
+        # lists deliberately overlap and why neither refuses.
+        "undeclaredStepNotebooks": undeclared_step_notebooks_state(
             target, name, declared_steps),
     }
 
@@ -15358,7 +16930,143 @@ def refusal_resolution(code: str, args) -> dict | None:
         return None
 
 
-COMMANDS = {"env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_apply,
+def cmd_walk(args: argparse.Namespace) -> dict:
+    """Walk the declared flow toward the rung the position header aims at.
+
+    The piece that did not exist. Every part of the ordered flow was here --
+    the steps, their guards, the position sequence, the ledger, and the whole
+    remote chain -- and nothing carried a repository from step N to step N+1,
+    so that walk was performed by whoever drove the CLI, by hand, in a
+    throwaway shell script.
+
+    **It executes the published subcommands as subprocesses rather than
+    calling their functions.** Every guard those commands carry -- the dirty
+    worktree, the sequence order, the interpreter, the pin -- then applies
+    exactly as it does to a human running them, with nothing re-implemented
+    and nothing bypassed. A walker that reached inside would be a second path
+    to the same acts, and the second path is always the one missing a check.
+
+    It performs local work, writes job folders, and stops at a launch. That
+    line is `walk_plan`'s and is stated there; what it means here is that
+    this function has no path to `submit` at all.
+
+    Between two steps it refreshes the position, because an ordered next step
+    refuses while an earlier item's mark is the one written before this run,
+    and `position` is the only writer into that section. It does not commit:
+    what belongs in the history and what the message says are the operator's,
+    and a walker authoring commit messages would be writing the record of
+    somebody else's work.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    # No `require_named_product_dir` here, and its absence is derived rather
+    # than forgotten: that guard's scope is the set of commands that append to
+    # the ledger themselves, and this one appends nothing. Every write it
+    # causes goes through `step` or `position`, each of which carries the
+    # guard already, so calling it here would put a tenth name in a set the
+    # suite holds equal to the nine that actually append -- and a guard whose
+    # scope stops matching what it guards is one nobody can reason about.
+
+    probe = cmd_probe(argparse.Namespace(
+        target=str(target), name=args.name, revision=args.revision))
+    plan = walk_plan(probe["flowActs"])
+
+    performed: list[dict] = []
+    for act in plan["performs"]:
+        if act["act"] == ACT_RUN_LOCAL:
+            argv = [sys.executable, str(CLI_PATH), "step",
+                    "--target", str(target), "--name", args.name,
+                    "--step", act["step"], "--session", args.session]
+        else:
+            # Composed here and never published: the argv carries a service
+            # name, and this skill's own rule is that a service is read to
+            # walk a directory and reduced to a count before anything is
+            # returned. Executing one is not returning one.
+            steps = resolve_steps_declaration(target, name)
+            entry = steps.get(act["step"]) or {}
+            notebooks = _step_notebook_roots(entry)
+            argv = generate_job_argv(
+                target, name, act["step"], entry,
+                _target_remote_url(target), _target_branch(target),
+                f"{name}/{notebooks[0]}" if notebooks else None)
+        ran = subprocess.run(argv, capture_output=True, text=True)
+        performed.append({"step": act["step"], "act": act["act"],
+                          "exitStatus": ran.returncode,
+                          "detail": (ran.stdout or ran.stderr)[-600:]})
+        if ran.returncode != 0:
+            # The refusal is the answer. Walking past a step that would not
+            # run would put every later step against material never produced,
+            # which is the same reason `walk_plan` stops rather than filters.
+            return {"command": "walk", "target": str(target), "name": name,
+                    "performed": performed, "stoppedAt": act,
+                    "reason": "the act above refused; its own message says why"}
+        if act["act"] == ACT_RUN_LOCAL and args.revision:
+            subprocess.run(
+                [sys.executable, str(CLI_PATH), "position",
+                 "--target", str(target), "--name", args.name,
+                 "--session", args.session, "--revision", args.revision],
+                capture_output=True, text=True)
+            _commit_walked_step(target, act["step"])
+    return {"command": "walk", "target": str(target), "name": name,
+            "performed": performed, "stoppedAt": plan["stopsAt"],
+            "reason": None if plan["stopsAt"] is None else
+                      plan["stopsAt"].get("needs")
+                      or "a launch is the operator's to authorize"}
+
+
+def _commit_walked_step(target: Path, step: str) -> None:
+    """Record what one walked step produced, so the next one can run.
+
+    A tension worth stating rather than hiding. `step` publishes its own next
+    acts and says of the first that the commit message is the operator's and
+    this skill never writes one -- which is right for a person running one
+    step and reading what it left. It cannot hold for a walk: `step` refuses
+    on a dirty tree, every step dirties the tree with its own product, and a
+    walker that stopped after each one to ask for a message would not be a
+    walker at all. That was measured, not reasoned: the first walk ran one
+    step and the second refused DIRTY_WORKTREE.
+
+    So the message here is deliberately mechanical -- it names the step and
+    nothing else. It records that an act happened; it does not narrate what
+    the work means, which is the half that stays the operator's and which
+    they can rewrite freely, since none of this is pushed.
+
+    Silent when there is nothing to record: a step that legitimately wrote
+    nothing is not an error, and `step`'s own `wrote` block is where that is
+    reported.
+    """
+    if not subprocess.run(["git", "-C", str(target), "status", "--porcelain"],
+                          capture_output=True, text=True).stdout.strip():
+        return
+    subprocess.run(["git", "-C", str(target), "add", "-A"],
+                   capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(target), "commit", "-q", "-m",
+         f"walk: {step}",
+         "-m", "What this step declared it produces, recorded so the next "
+               "step in the flow can run: `step` refuses on a dirty tree. "
+               "The message is mechanical on purpose -- it records that an "
+               "act happened and narrates nothing, which stays yours."],
+        capture_output=True, text=True)
+
+
+def _target_remote_url(target: Path) -> str:
+    """The target's own `origin`, read at runtime and never stored here."""
+    ran = subprocess.run(["git", "-C", str(target), "remote", "get-url", "origin"],
+                         capture_output=True, text=True)
+    return ran.stdout.strip() if ran.returncode == 0 else ""
+
+
+def _target_branch(target: Path) -> str:
+    """The branch the target is on, which is what a job pins against."""
+    ran = subprocess.run(["git", "-C", str(target), "branch", "--show-current"],
+                         capture_output=True, text=True)
+    return ran.stdout.strip() if ran.returncode == 0 else ""
+
+
+COMMANDS = {"walk": cmd_walk,
+            "env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_apply,
             "admit": cmd_admit, "handoff": cmd_handoff, "compose": cmd_compose,
             "probe": cmd_probe,
             "verify": cmd_verify,
@@ -15580,6 +17288,14 @@ def main(argv: list[str] | None = None) -> int:
                                 "exactly this operator-declared list; the "
                                 "engine never substitutes one of its own. "
                                 "Omit it for a single-send launch")
+        if name == "walk":
+            p.add_argument("--session", required=True,
+                           help="the session driving this walk, stamped on "
+                                "every position write it triggers")
+            p.add_argument("--revision", default=None,
+                           help="the managed revision the position binds to; "
+                                "omitted, no position refresh runs between "
+                                "steps and an ordered next step will refuse")
         if name == "step":
             p.add_argument("--step", required=True,
                            help="the declared __steps__ entry to run; no "
