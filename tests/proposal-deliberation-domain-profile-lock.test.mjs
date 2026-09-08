@@ -88,7 +88,7 @@ test('no document tells a reader to run the bare core',async()=>{
 	// must be a skill's own launcher, which supplies the profile. This nearly
 	// shipped: the path rewrite that moved the engine updated these commands to the
 	// new location and left them pointing at an engine that now refuses.
-	const docs=['.claude/skills/proposal-deliberation/SKILL.md','.claude/skills/proposal-deliberation/references/usage.md','.claude/skills/proposal-implementation/SKILL.md','.claude/skills/proposal-implementation/references/usage.md','README.md'];
+	const docs=['.claude/skills/proposal-deliberation/SKILL.md','.claude/skills/proposal-deliberation/references/usage.md','.claude/skills/proposal-implementation/SKILL.md','.claude/skills/proposal-implementation/references/usage.md','.claude/skills/experimental-deliberation/SKILL.md','.claude/skills/experimental-deliberation/references/usage.md','README.md'];
 	for(const doc of docs){
 		const text=await readFile(path.resolve(doc),'utf8').catch(()=>null);
 		if(text===null) continue;

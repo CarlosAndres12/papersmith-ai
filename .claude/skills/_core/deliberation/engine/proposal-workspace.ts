@@ -64,8 +64,12 @@ const ARTIFACT_MARKER_BUFFER = artifact.marker;
 export const OVERWRITE_CAPABILITY_TTL_MS = 5 * 60 * 1000;
 
 const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const SAFE_DERIVE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*-r[0-9]{2,}$/;
-const SAFE_ROOT_REVISION_SLUG = /^r([0-9]{2,})$/;
+// Profile-derived, like `MANAGED_REVISION_TARGET_MARKDOWN` below: the revision LETTER is
+// `DOMAIN.artifact.revisionPattern`, never a literal `r`. These two constants were the last
+// site in this file still assuming it, which made every successor unpublishable for any
+// domain whose prefix is not `r` -- the neighbouring checks were swept and these were missed.
+const SAFE_DERIVE_SLUG = new RegExp(`^${SEGMENT}-${escapedRevisionPrefix}[0-9]{2,}$`);
+const SAFE_ROOT_REVISION_SLUG = new RegExp(`^${escapedRevisionPrefix}([0-9]{2,})$`);
 const SAFE_INSERTION_ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const SAFE_EQUATION_LABEL = /^[A-Za-z][A-Za-z0-9:._-]{0,127}$/;
 const SAFE_DISPLAY_ID = /^display-sha256-[a-f0-9]{64}-occurrence-[1-9][0-9]{0,5}$/;
@@ -2085,7 +2089,7 @@ function validateDeriveSlug(slug: string | undefined): string {
 	const safeSlug = validateSlug(slug);
 	if (!SAFE_DERIVE_SLUG.test(safeSlug)) {
 		throw blocked(
-			"derive and derive_revision require a revision slug ending in -rNN with exactly two digits.",
+			`derive and derive_revision require a revision slug ending in -${DOMAIN.artifact.revisionPattern}NN with at least two digits.`,
 			`Use a new slug such as ${DOMAIN.exampleSlug}.`,
 		);
 	}
