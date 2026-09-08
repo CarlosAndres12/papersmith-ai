@@ -18,6 +18,7 @@ import {
  type ManagedRevisionDiscovery,
 } from './revision-lifecycle-store.js';
 import { PENDING_AUDIT_LEASE_MS, sha256, type PendingAuditArtifact, type PendingAuditContext, type RevisionLifecycleOperation, type RevisionLifecycleResult, type RevisionWithdrawalMetadata } from './types.js';
+import { artifact as artifactConfig, withdrawnMarkerPath } from './artifact-naming.js';
 
 type LifecycleFs={
  copyFile:typeof copyFile;
@@ -41,7 +42,7 @@ function blocked(operation:RevisionLifecycleOperation,warning:string):RevisionLi
  return {status:'blocked',operation,withdrawnFilename:null,restoredLatestFilename:null,artifactCount:0,backupLocation:null,auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',warnings:[warning]};
 }
 function backupLocation(root:string,operationDirectory:string) { return relative(root,operationDirectory).split(sep).join('/'); }
-function markerRelative(operationId:string) { return `.proposal-deliberation/withdrawn/${operationId}/audit-marker.json`; }
+function markerRelative(operationId:string) { return withdrawnMarkerPath(operationId); }
 function immutableAt(operationDirectory:string,artifact:LifecycleArtifactRecord) { return join(operationDirectory,artifact.quarantineRelativePath); }
 function publicAt(root:string,artifact:LifecycleArtifactRecord) { return join(root,artifact.publicRelativePath); }
 function publicBackupAt(operationDirectory:string,artifact:LifecycleArtifactRecord) { return join(operationDirectory,'public-backup',artifact.publicRelativePath); }
@@ -53,7 +54,7 @@ async function requireExactDirectory(fs:LifecycleFs,path:string) {
  if (!info.isDirectory()||info.isSymbolicLink()||(await realpath(path))!==path) throw new Error('UNSAFE_LIFECYCLE_DIRECTORY');
 }
 async function prepareWithdrawalRoot(fs:LifecycleFs,root:string) {
- await requireExactDirectory(fs,join(root,'.proposal-deliberation'));
+ await requireExactDirectory(fs,join(root,artifactConfig.sidecarRoot));
  const withdrawn=withdrawalRootPath(root);
  if (!await exists(fs,withdrawn)) await fs.mkdir(withdrawn,{recursive:false});
  await requireExactDirectory(fs,withdrawn);

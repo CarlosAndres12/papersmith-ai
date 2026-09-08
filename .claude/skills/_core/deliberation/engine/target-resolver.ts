@@ -51,7 +51,7 @@ const isolatedInQuery=(query:string,value:string)=>new RegExp(`(?<![\\p{L}\\p{N}
 function declaringEntries(entries:readonly StructuralEntry[],key:'labels'|'tags'){const owner=new Map<string,{id:string;size:number}>();for(const entry of entries){const size=entry.endByte-entry.startByte;for(const value of entry[key]){const current=owner.get(value);if(!current||size<current.size)owner.set(value,{id:entry.entryId,size});}}return owner;}
 const equationSymbols=(value:string)=>[...new Set(value.match(/\\[A-Za-z]+|\b[A-Za-z]\b/g)??[])];
 const entryText=(state:DocumentState,id:string)=>{const e=state.structuralIndex.byId[id];return e?state.documentBytes.subarray(e.startByte,e.endByte).toString('utf8'):''};
-const leaf=(entry:StructuralEntry)=>['display_equation','paragraph','inline_math_region','list','code_block','definition','theorem','algorithm'].includes(entry.type);
+const leaf=(entry:StructuralEntry)=>['display_equation','paragraph','inline_math_region','list','code_block','definition','theorem','algorithm','table','figure_placeholder'].includes(entry.type);
 const sameHeadingPath=(left:string[],right:string[])=>JSON.stringify(left)===JSON.stringify(right);
 const whitespaceOnly=(bytes:Buffer,start:number,end:number)=>/^\s*$/u.test(bytes.subarray(start,end).toString('utf8'));
 
@@ -225,6 +225,20 @@ export function resolveSuccessorTarget(state:DocumentState,query:string):Success
  // hand it the weakest first and turn a clear win into a negative margin.
  const canonical=collapseNestedSuccessorCandidates(candidates).sort((left,right)=>right.score-left.score||left.entryId.localeCompare(right.entryId));
  return canonical.length?{candidates:canonical}:{candidates:[],reason:'SUCCESSOR_TARGET_NOT_FOUND'};
+}
+
+/**
+ * Change 8, option (b): locates the change header's OWN structural entry by its declared
+ * heading text (`profile.artifact.changeHeader.heading`), and returns it as a one-entry
+ * composite candidate at its natural span -- exactly the span `document-index.ts` already
+ * gives a heading chunk (start through the next heading of ANY level), so it never needs
+ * `sectionBodyEnd`'s same-or-higher-level widening. `undefined` when the document does not
+ * (yet) carry the header, e.g. a document seeded before the profile declared one.
+ */
+export function changeHeaderLocusCandidate(state:DocumentState,heading:string):TargetCandidate|undefined{
+ const entry=state.structuralIndex.entries.find(e=>['section','subsection','heading'].includes(e.type)&&entryText(state,e.entryId).split(/\r?\n/u,1)[0].replace(/^#{1,6}\s+/,'').trim()===heading);
+ if(!entry)return undefined;
+ return compositeCandidate(state,[entry],entry.startByte,entry.endByte,'change header locus');
 }
 
 export function materializeCompositeTarget(state:DocumentState,candidate:TargetCandidate){

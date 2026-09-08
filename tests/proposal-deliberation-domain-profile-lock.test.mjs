@@ -12,6 +12,16 @@ const profile=await readFile(PROFILE,'utf8');
 // rule without this file being edited to know about it.
 const declared=[...profile.matchAll(/^\t(?:deriveBase|baseLabel|baseLabelLong|exampleSlug): "([^"]+)",$/gm)].map(m=>m[1]);
 const names=[...(profile.match(/^\tnames: \[([^\]]*)\],$/m)?.[1]??'').matchAll(/"([^"]+)"/g)].map(m=>m[1]);
+// Phase 1.5 (change 2/3, extended lock): a SECOND, core-only scan surface, reading
+// `artifact.{stem, directory, sidecarRoot}` off this same profile -- never added to the
+// `declared`/`names` list above, which the SUITE scan below also uses: a node fixture must
+// legitimately write real `proposals/research-concept-...` files, and every one of them
+// would read as a leak if `stem`/`directory` joined that shared list. `sidecarRoot` is
+// matched WITH its leading dot (`.proposal-deliberation`) on purpose: without the dot this
+// scan goes red on `PARSER_VERSION` ('proposal-deliberation/1'), the
+// `sdd/proposal-deliberation-*` design citations, and the `proposal-deliberation-${uuid}`
+// operation-id factories -- none of which is the sidecar namespace.
+const artifactDeclared=[...profile.matchAll(/^\t\t(?:directory|stem|sidecarRoot): "([^"]+)",$/gm)].map(m=>m[1]);
 const coreFiles=(await readdir(coreDir,{recursive:true,withFileTypes:true}))
 	.filter(e=>e.isFile()&&(e.name.endsWith('.ts')||e.name.endsWith('.mjs')))
 	.map(e=>path.join(e.parentPath??e.path,e.name));
@@ -44,6 +54,21 @@ test('no file in the shared core names a domain',()=>{
 		for(const value of declared)if(source.includes(value))leaks.push(`${rel} spells ${JSON.stringify(value)}`);
 		for(const name of names)if(lower.includes(name.toLowerCase()))leaks.push(`${rel} names ${JSON.stringify(name)}`);}
 	assert.deepEqual([...new Set(leaks)],[],'the core must read these off the host-chosen profile, never spell them');
+});
+test('the profile declares its artifact namespace values (directory, stem, sidecarRoot)',()=>{
+	assert.equal(artifactDeclared.length,3,`expected 3 declared artifact values (directory, stem, sidecarRoot), found ${artifactDeclared.length}`);
+	for(const value of artifactDeclared)assert.notEqual(value.trim(),'');
+	assert.ok(artifactDeclared.some(v=>v.startsWith('.')),'sidecarRoot must be declared WITH its leading dot, or the core-only scan below cannot tell it apart from the bare word "proposal-deliberation" legitimately used elsewhere in core');
+});
+test('no file in the shared core spells the artifact namespace',()=>{
+	assert.ok(sources.length>40,`expected the whole engine, scanned ${sources.length}`);
+	const leaks=[];
+	for(const[rel,source]of sources){
+		// Zero exemptions, including this file's own module: `artifact-naming.ts` reads
+		// `DOMAIN.artifact` back out at runtime, it never spells the literal values itself.
+		for(const value of artifactDeclared)if(source.includes(value))leaks.push(`${rel} spells ${JSON.stringify(value)}`);
+	}
+	assert.deepEqual([...new Set(leaks)],[],'core must read the managed directory/stem/sidecar-root off the host-chosen profile, never spell them');
 });
 test('no test in the node suite names a domain either',()=>{
 	assert.ok(suiteSources.length>30,`expected the whole node suite, scanned ${suiteSources.length}`);

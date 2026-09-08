@@ -21,9 +21,18 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path
 import { fileURLToPath } from "node:url";
 import { type Static, Type } from "typebox";
 import { DOMAIN } from "./domain-profile.js";
+import {
+	artifact,
+	escapedRevisionPrefix,
+	escapedStem,
+	managedRevisionSchemaPattern,
+	parseRevisionIncrement,
+	SEGMENT,
+	strictManagedRevision,
+} from "./artifact-naming.js";
 
 const GUIDE_DIRECTORY = "guidance/paper-guide";
-const PROPOSAL_DIRECTORY = "proposals";
+const PROPOSAL_DIRECTORY = artifact.directory;
 const MAX_READ_BYTES = 64 * 1024;
 const MAX_WRITE_BYTES = 256 * 1024;
 const MAX_APPEND_BYTES = 64 * 1024;
@@ -49,9 +58,9 @@ const MAX_FIXED_INVENTORY_PAGE = 32;
 const MAX_FIXED_BASE_SECTIONS = 512;
 const FIXED_DERIVE_BASE = DOMAIN.deriveBase;
 const CAPABILITY_LENGTH = 43;
-const ARTIFACT_MARKER = "<!-- proposal-workspace:artifact:v1 -->\n";
+const ARTIFACT_MARKER = DOMAIN.artifact.marker;
 const ARTIFACT_MARKER_NAMESPACE = "proposal-workspace:artifact";
-const ARTIFACT_MARKER_BUFFER = Buffer.from(ARTIFACT_MARKER, "utf8");
+const ARTIFACT_MARKER_BUFFER = artifact.marker;
 export const OVERWRITE_CAPABILITY_TTL_MS = 5 * 60 * 1000;
 
 const SAFE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -66,9 +75,9 @@ const SAFE_CAPABILITY = /^[A-Za-z0-9_-]{43}$/;
 const GUIDE_MARKDOWN = /^[^/\\\0]+\.md$/;
 const GUIDE_MANIFEST = /^[^/\\\0]+\.manifest\.json$/;
 const BASE_MARKDOWN = /^[^/\\\0]+\.md$/;
-const MANAGED_TARGET_MARKDOWN = /^research-concept-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
-const MANAGED_REVISION_TARGET_MARKDOWN = /^research-concept-([a-z0-9]+(?:-[a-z0-9]+)*)-r([0-9]{2,})\.md$/;
-const ROOT_MANAGED_REVISION_TARGET_MARKDOWN = /^research-concept-r([0-9]{2,})\.md$/;
+const MANAGED_TARGET_MARKDOWN = new RegExp(`^${escapedStem}-${SEGMENT}\\.md$`);
+const MANAGED_REVISION_TARGET_MARKDOWN = new RegExp(`^${escapedStem}-(${SEGMENT})-${escapedRevisionPrefix}([0-9]{2,})\\.md$`);
+const ROOT_MANAGED_REVISION_TARGET_MARKDOWN = new RegExp(`^${escapedStem}-${escapedRevisionPrefix}([0-9]{2,})\\.md$`);
 
 const equationBlockAnchorSchema = Type.Object(
 	{
@@ -328,10 +337,10 @@ const continuityManifestSchema = Type.Object(
 		source: Type.Object(
 			{
 				target: Type.String({
-					description: "Exact marker-owned latest revision filename in proposals/, never a path.",
+					description: `Exact marker-owned latest revision filename in ${PROPOSAL_DIRECTORY}/, never a path.`,
 					minLength: 1,
 					maxLength: MAX_NAME_LENGTH,
-					pattern: "^research-concept-[a-z0-9]+(?:-[a-z0-9]+)*-r[0-9]{2,}\\.md$",
+					pattern: managedRevisionSchemaPattern({ requireLineage: true }),
 				}),
 				sha256: Type.String({
 					description: "SHA-256 of the exact complete marker-owned latest target bytes.",
@@ -486,10 +495,10 @@ const proposalWorkspaceSchema = Type.Object(
 		continuityManifest: Type.Optional(continuityManifestSchema),
 		source: Type.Optional(
 			Type.String({
-				description: "Exact latest marker-owned research-concept-rNN.md root-lineage or research-concept-<lineage>-rNN.md explicit-lineage filename.",
+				description: `Exact latest marker-owned ${artifact.stem}-rNN.md root-lineage or ${artifact.stem}-<lineage>-rNN.md explicit-lineage filename.`,
 				minLength: 1,
 				maxLength: MAX_NAME_LENGTH,
-				pattern: "^research-concept-(?:r[0-9]{2,}|[a-z0-9]+(?:-[a-z0-9]+)*-r[0-9]{2,})\\.md$",
+				pattern: managedRevisionSchemaPattern(),
 			}),
 		),
 		sourceSha256: Type.Optional(
@@ -733,15 +742,15 @@ function validateManagedTargetFilename(rawName: string | undefined): string {
 		isAbsolute(rawName)
 	) {
 		throw blocked(
-			"managed target must be an exact research-concept-<slug>.md filename, not a base or path.",
+			`managed target must be an exact ${artifact.stem}-<slug>.md filename, not a base or path.`,
 			"Pass the filename of a prior proposal_workspace write exactly.",
 		);
 	}
-	const slug = rawName.slice("research-concept-".length, -".md".length);
+	const slug = rawName.slice(`${artifact.stem}-`.length, -".md".length);
 	if (slug.length > MAX_SLUG_LENGTH || !SAFE_SLUG.test(slug)) {
 		throw blocked(
 			"managed target filename does not match a valid proposal_workspace target.",
-			"Pass the exact research-concept-<slug>.md filename created by proposal_workspace write.",
+			`Pass the exact ${artifact.stem}-<slug>.md filename created by proposal_workspace write.`,
 		);
 	}
 	return rawName;
@@ -1116,12 +1125,12 @@ async function proposalTarget(
 	slug: string | undefined,
 ): Promise<{ root: string; target: string; filename: string }> {
 	const safeSlug = validateSlug(slug);
-	const filename = `research-concept-${safeSlug}.md`;
+	const filename = `${artifact.stem}-${safeSlug}.md`;
 	const root = await canonicalProjectRoot(projectRoot);
 	const directory = await canonicalDirectory(root, PROPOSAL_DIRECTORY);
 	const target = resolve(directory, filename);
 	if (dirname(target) !== directory) {
-		throw blocked("proposal target resolved outside proposals/.", "Use a strict lowercase-hyphen slug.");
+		throw blocked(`proposal target resolved outside ${PROPOSAL_DIRECTORY}/.`, "Use a strict lowercase-hyphen slug.");
 	}
 	return { root, target, filename };
 }
@@ -1197,7 +1206,7 @@ async function authorizeProposalOverwrite(
 	}
 	const approved = await ctx.ui.confirm(
 		"Authorize proposal replacement",
-		`Allow one replacement of proposals/${filename} within five minutes? This approval cannot modify any base path.`,
+		`Allow one replacement of ${PROPOSAL_DIRECTORY}/${filename} within five minutes? This approval cannot modify any base path.`,
 	);
 	if (approved !== true) {
 		throw blocked("the human did not approve proposal replacement.", "Leave the existing proposal unchanged.");
@@ -1208,7 +1217,7 @@ async function authorizeProposalOverwrite(
 		throwIfAborted(signal);
 		const directory = await canonicalDirectory(root, PROPOSAL_DIRECTORY);
 		if (resolve(directory, filename) !== target) {
-			throw blocked("the proposals directory changed during authorization.", "Repair the workspace and retry.");
+			throw blocked(`the ${PROPOSAL_DIRECTORY} directory changed during authorization.`, "Repair the workspace and retry.");
 		}
 		const current = await inspectProposalTarget(target);
 		if (!current || !sameIdentity(identity, current)) {
@@ -1228,12 +1237,12 @@ async function authorizeProposalOverwrite(
 			content: [
 				{
 					type: "text",
-					text: `Human-approved one-time overwrite capability for proposals/${filename}: ${capability}`,
+					text: `Human-approved one-time overwrite capability for ${PROPOSAL_DIRECTORY}/${filename}: ${capability}`,
 				},
 			],
 			details: {
 				resource: "proposal",
-				path: `proposals/${filename}`,
+				path: `${PROPOSAL_DIRECTORY}/${filename}`,
 				capability,
 				expiresAt,
 			},
@@ -1278,7 +1287,7 @@ async function writeProposal(
 		throwIfAborted(signal);
 		const directory = await canonicalDirectory(root, PROPOSAL_DIRECTORY);
 		if (resolve(directory, filename) !== target) {
-			throw blocked("the proposals directory changed during authorization.", "Repair the workspace and retry.");
+			throw blocked(`the ${PROPOSAL_DIRECTORY} directory changed during authorization.`, "Repair the workspace and retry.");
 		}
 		const existingIdentity = await inspectProposalTarget(target);
 		let flags = (existingIdentity ? constants.O_RDWR : constants.O_WRONLY) | noFollowFlag();
@@ -1372,8 +1381,8 @@ async function writeProposal(
 		}
 		throwIfAborted(signal);
 		return {
-			content: [{ type: "text", text: `Wrote ${bytesWritten} bytes to proposals/${filename}.` }],
-			details: { resource: "proposal", path: `proposals/${filename}`, bytesWritten },
+			content: [{ type: "text", text: `Wrote ${bytesWritten} bytes to ${PROPOSAL_DIRECTORY}/${filename}.` }],
+			details: { resource: "proposal", path: `${PROPOSAL_DIRECTORY}/${filename}`, bytesWritten },
 		};
 	});
 }
@@ -1416,7 +1425,7 @@ async function appendProposalRevision(
 		throwIfAborted(signal);
 		const directory = await canonicalDirectory(root, PROPOSAL_DIRECTORY);
 		if (resolve(directory, filename) !== target) {
-			throw blocked("the proposals directory changed during authorization.", "Repair the workspace and retry.");
+			throw blocked(`the ${PROPOSAL_DIRECTORY} directory changed during authorization.`, "Repair the workspace and retry.");
 		}
 		const existingIdentity = await inspectProposalTarget(target);
 		if (!existingIdentity) {
@@ -1495,7 +1504,7 @@ async function appendProposalRevision(
 			}
 
 			const blockSha256 = createHash("sha256").update(blockBuffer).digest("hex");
-			const artifactPath = `proposals/${filename}`;
+			const artifactPath = `${PROPOSAL_DIRECTORY}/${filename}`;
 			return {
 				content: [
 					{
@@ -3450,12 +3459,12 @@ function validateContinuityManifestShape(
 			operation,
 			"continuity-source-identity",
 			"continuityManifest source is not an exact safe managed revision identity",
-			"Use one research-concept-<lineage>-rNN.md filename and the lowercase SHA-256 of its complete marker-owned bytes.",
+			`Use one ${artifact.stem}-<lineage>-rNN.md filename and the lowercase SHA-256 of its complete marker-owned bytes.`,
 			"source",
 		);
 	}
 	const sourceMatch = source.target.match(MANAGED_REVISION_TARGET_MARKDOWN);
-	const candidateMatch = candidateSlug.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)-r([0-9]{2,})$/);
+	const candidateMatch = candidateSlug.match(new RegExp(`^(${SEGMENT})-${escapedRevisionPrefix}([0-9]{2,})$`));
 	if (
 		!sourceMatch ||
 		!candidateMatch ||
@@ -3930,7 +3939,7 @@ async function inventoryFixedDisplays(
 		? page.offset + selected.length
 		: undefined;
 	const payload = {
-		base: `proposals/${FIXED_DERIVE_BASE}`,
+		base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 		offset: page.offset,
 		limit: page.limit,
 		total: descriptors.length,
@@ -3948,7 +3957,7 @@ async function inventoryFixedDisplays(
 		content: [{ type: "text", text: rendered }],
 		details: {
 			resource: "displays",
-			base: `proposals/${FIXED_DERIVE_BASE}`,
+			base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 			offset: page.offset,
 			limit: page.limit,
 			count: selected.length,
@@ -3993,7 +4002,7 @@ async function inventoryFixedSections(
 		? page.offset + selected.length
 		: undefined;
 	const payload = {
-		base: `proposals/${FIXED_DERIVE_BASE}`,
+		base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 		offset: page.offset,
 		limit: page.limit,
 		total: descriptors.length,
@@ -4011,7 +4020,7 @@ async function inventoryFixedSections(
 		content: [{ type: "text", text: rendered }],
 		details: {
 			resource: "sections",
-			base: `proposals/${FIXED_DERIVE_BASE}`,
+			base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 			offset: page.offset,
 			limit: page.limit,
 			count: selected.length,
@@ -4045,7 +4054,7 @@ async function readFixedDisplay(
 		content: [{ type: "text", text: descriptor.block.text }],
 		details: {
 			resource: "display",
-			base: `proposals/${FIXED_DERIVE_BASE}`,
+			base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 			...publicDisplayMetadata(descriptor),
 			canonicalCompleteBlock: true,
 		},
@@ -4230,7 +4239,7 @@ async function atomicCreateManagedProposal(
 		throwIfAborted(signal);
 		const directory = await canonicalDirectory(root, PROPOSAL_DIRECTORY);
 		if (resolve(directory, filename) !== target) {
-			throw blocked("the proposals directory changed during derive authorization.", "Repair the workspace and retry.");
+			throw blocked(`the ${PROPOSAL_DIRECTORY} directory changed during derive authorization.`, "Repair the workspace and retry.");
 		}
 		if (await inspectProposalTarget(target)) {
 			throw blocked(
@@ -4243,7 +4252,7 @@ async function atomicCreateManagedProposal(
 		const tempName = `.${filename}.derive-${randomBytes(16).toString("hex")}.tmp`;
 		const temp = resolve(directory, tempName);
 		if (dirname(temp) !== directory) {
-			throw blocked("the derive staging path escaped proposals/.", "Repair the workspace and retry.");
+			throw blocked(`the derive staging path escaped ${PROPOSAL_DIRECTORY}/.`, "Repair the workspace and retry.");
 		}
 		let tempExists = false;
 		try {
@@ -4266,7 +4275,7 @@ async function atomicCreateManagedProposal(
 				) {
 					throw blocked(
 						"the derived staging file changed before publication.",
-						"Repair the proposals directory and retry.",
+						`Repair the ${PROPOSAL_DIRECTORY} directory and retry.`,
 					);
 				}
 			} finally {
@@ -4290,7 +4299,7 @@ async function atomicCreateManagedProposal(
 			if (!identity) {
 				throw blocked(
 					"atomic derive publication did not produce a target.",
-					"Inspect the proposals directory before retrying.",
+					`Inspect the ${PROPOSAL_DIRECTORY} directory before retrying.`,
 				);
 			}
 			const published = await open(target, constants.O_RDONLY | noFollowFlag());
@@ -4312,7 +4321,7 @@ async function atomicCreateManagedProposal(
 			} finally {
 				await published.close();
 			}
-			return { path: `proposals/${filename}`, bytesWritten: output.length, sha256: digest };
+			return { path: `${PROPOSAL_DIRECTORY}/${filename}`, bytesWritten: output.length, sha256: digest };
 		} finally {
 			if (tempExists) await unlink(temp).catch(() => undefined);
 		}
@@ -4329,7 +4338,7 @@ async function createInitialProposal(
 		throw candidateRejected(
 			"initial_create",
 			"initial-target-identity",
-			"INITIAL_CREATE publishes only research-concept-r01.md",
+			`INITIAL_CREATE publishes only ${artifact.stem}-r01.md`,
 			"Use slug r01 for the first managed proposal.",
 			{ slug },
 		);
@@ -4409,7 +4418,7 @@ function validateSuccessorIdentity(
 		successorFailure(
 			"successor-source-identity",
 			"source must be one exact terminal-rNN managed proposal filename",
-			"Inventory managed proposals and pass the exact latest root or explicit-lineage terminal-rNN filename.",
+			`Inventory managed ${PROPOSAL_DIRECTORY} and pass the exact latest root or explicit-lineage terminal-rNN filename.`,
 		);
 	}
 	if (typeof sourceSha256 !== "string" || !/^[a-f0-9]{64}$/.test(sourceSha256)) {
@@ -4422,7 +4431,7 @@ function validateSuccessorIdentity(
 	const sourceRootMatch = source.match(ROOT_MANAGED_REVISION_TARGET_MARKDOWN);
 	const targetRootMatch = safeSlug.match(SAFE_ROOT_REVISION_SLUG);
 	const sourceMatch = source.match(MANAGED_REVISION_TARGET_MARKDOWN);
-	const targetMatch = safeSlug.match(/^([a-z0-9]+(?:-[a-z0-9]+)*)-r([0-9]{2,})$/);
+	const targetMatch = safeSlug.match(new RegExp(`^(${SEGMENT})-${escapedRevisionPrefix}([0-9]{2,})$`));
 	const validRootTransition =
 		sourceRootMatch &&
 		targetRootMatch &&
@@ -4436,7 +4445,7 @@ function validateSuccessorIdentity(
 		successorFailure(
 			"successor-lineage-identity",
 			"target slug must remain in the exact source lineage; root revisions must advance by exactly one rNN",
-			"For research-concept-r01.md use r02; otherwise keep the explicit lineage prefix unchanged and choose a greater rNN slug.",
+			`For ${artifact.stem}-r01.md use r02; otherwise keep the explicit lineage prefix unchanged and choose a greater rNN slug.`,
 			{ source, slug: safeSlug },
 		);
 	}
@@ -4851,9 +4860,9 @@ function validateSuccessorCandidate(
 }
 
 export function nextSuccessorTarget(sourceFilename: string): string {
-	const match = sourceFilename.match(/^(research-concept-(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?r)(\d+)\.md$/);
-	if (!match) throw new Error("INVALID_MANAGED_SUCCESSOR_SOURCE");
-	return `${match[1]}${String(Number(match[2]) + 1).padStart(2, "0")}.md`;
+	const parsed = parseRevisionIncrement(sourceFilename);
+	if (!parsed) throw new Error("INVALID_MANAGED_SUCCESSOR_SOURCE");
+	return `${parsed.prefix}${String(parsed.ordinal + 1).padStart(2, "0")}.md`;
 }
 
 async function deriveSuccessorProposal(
@@ -4925,13 +4934,13 @@ async function deriveSuccessorProposal(
 		content: [
 			{
 				type: "text",
-				text: `Derived immutable successor ${written.path} atomically from proposals/${identity.source}.`,
+				text: `Derived immutable successor ${written.path} atomically from ${PROPOSAL_DIRECTORY}/${identity.source}.`,
 			},
 		],
 		details: {
 			resource: "proposal",
 			operation: "derive_successor",
-			source: `proposals/${identity.source}`,
+			source: `${PROPOSAL_DIRECTORY}/${identity.source}`,
 			sourceSha256: latest.sha256,
 			sourceBytes: latest.bytes,
 			target: written.path,
@@ -4974,12 +4983,12 @@ async function deriveProposal(
 	);
 	const written = await atomicCreateManagedProposal(projectRoot, safeSlug, derived.body, signal);
 	return {
-		content: [{ type: "text", text: `Derived ${written.path} atomically from proposals/${FIXED_DERIVE_BASE}.` }],
+		content: [{ type: "text", text: `Derived ${written.path} atomically from ${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}.` }],
 		details: {
 			resource: "proposal",
 			path: written.path,
 			operation: "derive",
-			base: `proposals/${FIXED_DERIVE_BASE}`,
+			base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 			bytesWritten: written.bytesWritten,
 			sha256: written.sha256,
 			inlineNormalizationCount: derived.inlineNormalizationCount,
@@ -5055,14 +5064,14 @@ async function deriveProposalRevision(
 		content: [
 			{
 				type: "text",
-				text: `Derived researcher-authorized revision ${written.path} atomically from proposals/${FIXED_DERIVE_BASE}.`,
+				text: `Derived researcher-authorized revision ${written.path} atomically from ${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}.`,
 			},
 		],
 		details: {
 			resource: "proposal",
 			path: written.path,
 			operation: "derive_revision",
-			base: `proposals/${FIXED_DERIVE_BASE}`,
+			base: `${PROPOSAL_DIRECTORY}/${FIXED_DERIVE_BASE}`,
 			bytesWritten: written.bytesWritten,
 			sha256: written.sha256,
 			inlineNormalizationCount: derived.inlineNormalizationCount,
@@ -5164,7 +5173,7 @@ export function createProposalWorkspaceTool(
 		label: "Proposal Workspace",
 		description: options.operationGuard
 			? "DOCUMENT_OPERATION proposal workspace. Reads remain sandboxed; mutations fail closed except one preflight-bound initial r01 write or one exact latest/SHA-bound incremental derive_successor under the declared operation budget."
-			: "Sandboxed proposal workspace. Reads only eligible proposal evidence and marker-owned managed targets; writes only proposals/research-concept-<slug>.md. derive_successor atomically patches the exact SHA-bound latest root or explicit-lineage managed revision into a new immutable same-lineage rNN target with byte-level untouched-region verification. Legacy derive and derive_revision remain available for fixed-base compatibility. All other filesystem access is denied.",
+			: `Sandboxed proposal workspace. Reads only eligible proposal evidence and marker-owned managed targets; writes only ${PROPOSAL_DIRECTORY}/${artifact.stem}-<slug>.md. derive_successor atomically patches the exact SHA-bound latest root or explicit-lineage managed revision into a new immutable same-lineage rNN target with byte-level untouched-region verification. Legacy derive and derive_revision remain available for fixed-base compatibility. All other filesystem access is denied.`,
 		promptSnippet: "Use the sandboxed proposal corpus and proposal target workspace",
 		promptGuidelines: options.operationGuard
 			? [
@@ -5175,8 +5184,8 @@ export function createProposalWorkspaceTool(
 				]
 			: [
 					"Use proposal_workspace exclusively for proposal-deliberation filesystem access; if it blocks or is unavailable, stop and report the failure.",
-					"Use proposal_workspace read/managed_target with the exact generated filename to resume or migrate an existing marker-owned draft; never use it for bases or manual proposals.",
-					"When a latest managed proposal exists, use derive_successor with its exact terminal-rNN filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root research-concept-r01.md advances only with slug r02; explicit lineages retain the greater same-lineage terminal-rNN rule, and root/explicit transitions are forbidden.",
+					`Use proposal_workspace read/managed_target with the exact generated filename to resume or migrate an existing marker-owned draft; never use it for bases or manual ${PROPOSAL_DIRECTORY}.`,
+					`When a latest managed proposal exists, use derive_successor with its exact terminal-rNN filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root ${artifact.stem}-r01.md advances only with slug r02; explicit lineages retain the greater same-lineage terminal-rNN rule, and root/explicit transitions are forbidden.`,
 					`Use legacy derive only for initial fixed-base creation or backward-compatible flows: ${DOMAIN.deriveBase}, a new slug ending -rNN, and bounded additive insertions anchored to exact unique base text or anchor={equationLabel} / anchor={numberedTag} with position=after.`,
 					"Use inventory/displays with bounded offset/limit and read/display with a returned displayId to inspect parser-exact fixed-base display blocks; IDs are deterministic for exact block bytes and duplicate occurrence, and stale IDs fail closed.",
 					"Use inventory/sections with bounded offset/limit to obtain stable fixed-base sectionId selectors, heading text/level, byte extents, and inherited display counts; a section extends from its ATX heading through the next heading of the same or higher level.",
@@ -5320,68 +5329,104 @@ const DIRECT_DOCUMENT_INTENTS = new Set(['MODIFY', 'INSERT', 'DELETE', 'MOVE', '
 const MAINTENANCE_OPERATION = 'MAINTENANCE';
 const CREATE_SUCCESSOR_OPERATION = 'CREATE_SUCCESSOR';
 const CREATE_INITIAL_REVISION_OPERATION = 'CREATE_INITIAL_REVISION';
-const MANAGED_CHAT_DOCUMENT_FILENAME = /^research-concept-(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?r[0-9]{2,}\.md$/;
-const MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+const MANAGED_CHAT_DOCUMENT_FILENAME = strictManagedRevision;
+const MANAGED_ARTIFACT_MARKER = artifact.marker;
 
 /** Canonicalizes only the two public CHAT_DELIBERATION spellings; it never normalizes paths. */
 export function resolveChatDocumentFilename(rawFilename: unknown): { filename?: string; reason?: string } {
  if (rawFilename === undefined) return {};
  if (typeof rawFilename !== 'string') return { reason: 'CHAT_DOCUMENT_FILENAME_INVALID' };
- const filename = rawFilename.startsWith('proposals/') ? rawFilename.slice('proposals/'.length) : rawFilename;
- if (!MANAGED_CHAT_DOCUMENT_FILENAME.test(filename) || (rawFilename !== filename && rawFilename !== `proposals/${filename}`)) return { reason: 'CHAT_DOCUMENT_FILENAME_INVALID' };
+ const directoryPrefix = `${PROPOSAL_DIRECTORY}/`;
+ const filename = rawFilename.startsWith(directoryPrefix) ? rawFilename.slice(directoryPrefix.length) : rawFilename;
+ if (!MANAGED_CHAT_DOCUMENT_FILENAME(filename) || (rawFilename !== filename && rawFilename !== `${PROPOSAL_DIRECTORY}/${filename}`)) return { reason: 'CHAT_DOCUMENT_FILENAME_INVALID' };
  return { filename };
 }
 
 /**
- * Loads the paper-guide directory (task 3.5/3.6, spec I2) as read-only reference fragments for a
- * NEW deliberation's initial context assembly. Reused across every invocation but only ever called
- * by `execute()` for a conversation's first turn -- never per turn. Never hardcodes a guide filename:
- * it inventories `GUIDE_DIRECTORY` (the existing constant) exactly like `inventoryGuides` does, and
- * silently returns no fragments (never throws) when the directory is absent, so projects without a
- * guide (or existing fixtures that never configured one) are unaffected.
+ * Loads every declared source's directory (task 3.5/3.6, spec I2; generalized in change 7 to
+ * `profile.sources`, replacing the single hardcoded `GUIDE_DIRECTORY` path) as read-only
+ * reference fragments for a NEW deliberation's initial context assembly. Reused across every
+ * invocation but only ever called by `execute()` for a conversation's first turn -- never per
+ * turn. Never hardcodes a guide filename: it inventories each declared source path exactly like
+ * `inventoryGuides` does for the legacy single guide, and silently skips a source whose
+ * directory is absent (never throws), so projects without one (or existing fixtures that never
+ * configured one) are unaffected. `required: true` presence is enforced separately -- only at
+ * `CREATE_INITIAL_REVISION`, by `missingRequiredSources` below -- never here.
  */
 async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGuideFragment[]> {
  let root: string;
- let directory: string;
  try {
   root = await canonicalProjectRoot(projectRoot);
-  directory = await canonicalDirectory(root, GUIDE_DIRECTORY);
  } catch {
   return [];
  }
- let entries;
- try {
-  entries = await readdir(directory, { withFileTypes: true });
- } catch {
-  return [];
- }
- const folders = entries
-  .filter((entry) => entry.isDirectory())
-  .map((entry) => entry.name)
-  .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
  const fragments: ChatGuideFragment[] = [];
  let bytes = 0;
- for (const folder of folders) {
+ for (const source of DOMAIN.sources) {
   if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
-  const markdownName = `${folder}.md`;
-  if (!GUIDE_MARKDOWN.test(markdownName)) continue;
-  let canonicalPath: string;
+  let directory: string;
   try {
-   const paperDir = await canonicalDirectory(root, `${GUIDE_DIRECTORY}/${folder}`);
-   canonicalPath = await canonicalRegularFile(paperDir, markdownName, "guide Markdown");
+   directory = await canonicalDirectory(root, source.path);
   } catch {
    continue;
   }
-  const buffer = await readFile(canonicalPath);
-  const text = buffer.subarray(0, MAX_CHAT_GUIDE_CONTEXT_BYTES - bytes).toString("utf8");
-  if (!text) continue;
-  bytes += Buffer.byteLength(text);
-  fragments.push({ path: `${GUIDE_DIRECTORY}/${folder}/${markdownName}`, content: text });
+  let entries;
+  try {
+   entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+   continue;
+  }
+  const folders = entries
+   .filter((entry) => entry.isDirectory())
+   .map((entry) => entry.name)
+   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const folder of folders) {
+   if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
+   const markdownName = `${folder}.md`;
+   if (!GUIDE_MARKDOWN.test(markdownName)) continue;
+   let canonicalPath: string;
+   try {
+    const paperDir = await canonicalDirectory(root, `${source.path}/${folder}`);
+    canonicalPath = await canonicalRegularFile(paperDir, markdownName, "guide Markdown");
+   } catch {
+    continue;
+   }
+   const buffer = await readFile(canonicalPath);
+   const text = buffer.subarray(0, MAX_CHAT_GUIDE_CONTEXT_BYTES - bytes).toString("utf8");
+   if (!text) continue;
+   bytes += Buffer.byteLength(text);
+   fragments.push({ path: `${source.path}/${folder}/${markdownName}`, content: text });
+  }
  }
  return fragments;
 }
 
-/** Wraps `resolveLatestManagedRevision` for the base-confirmation gate: a project with no `proposals/`
+/**
+ * Every declared `required: true` source whose directory is absent from disk (change 7). A
+ * read-only presence check, never a fragment load -- mirrors the same try/catch shape
+ * `loadGuideDirectoryFragments` already uses per source. Empty when every required source is
+ * present, or when the profile declares none.
+ */
+async function missingRequiredSources(projectRoot: string): Promise<readonly { path: string }[]> {
+ let root: string;
+ try {
+  root = await canonicalProjectRoot(projectRoot);
+ } catch {
+  return DOMAIN.sources.filter((source) => source.required).map((source) => ({ path: source.path }));
+ }
+ const missing: { path: string }[] = [];
+ for (const source of DOMAIN.sources) {
+  if (!source.required) continue;
+  try {
+   await canonicalDirectory(root, source.path);
+  } catch {
+   missing.push({ path: source.path });
+  }
+ }
+ return missing;
+}
+
+/** Wraps `resolveLatestManagedRevision` for the base-confirmation gate: a project with no managed
  * directory at all (e.g. a fresh workspace, or fixtures that never created one) has nothing to confirm,
  * so any resolution failure degrades to `{status:'empty'}` rather than blocking ordinary chat. */
 async function safeResolveLatestManagedRevision(projectRoot: string) {
@@ -5483,7 +5528,7 @@ export function projectProposalDeliberationPublicResult(input:{result:any;operat
  const {result}=input,delta=(key:string)=>Math.max(0,(input.metricsAfter[key]??0)-(input.metricsBefore[key]??0));
  const calls={modelCalls:result.modelCalls??delta('totalModelCalls'),plannerCalls:result.plannerCalls??delta('totalPlannerCalls'),tutorCalls:delta('totalTutorCalls'),reviewerCalls:delta('totalReviewerCalls')};
  const base={operation:input.operation,sourceFilename:result.published?.sourceFilename??result.sourceFilename??input.sourceFilename??null,...calls,mutations:result.mutations??0,warnings:input.audit?.warnings??[]};
- if(result.status==='awaiting_acceptance')return {...base,status:'awaiting_acceptance',targetFilename:result.targetFilename,acceptanceToken:result.acceptanceToken,patchCount:result.patchCount,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:'accept_successor',...(result.mathDelta?{mathDelta:result.mathDelta}:{})};
+ if(result.status==='awaiting_acceptance')return {...base,status:'awaiting_acceptance',targetFilename:result.targetFilename,acceptanceToken:result.acceptanceToken,patchCount:result.patchCount,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:'accept_successor',...(result.mathDelta?{mathDelta:result.mathDelta,preservationDelta:result.preservationDelta}:{})};
  if(result.status==='published'){
   const unresolved=input.audit?.status==='FAIL'||input.selfAudit?.status==='FAIL';
   return {...base,status:unresolved?'blocked':'published',...(unresolved?{category:'audit',message:'Terminal audit failed; inspect the receipt before retrying.'}:{}),targetFilename:result.published.targetFilename,targetSha256:result.published.publishedSha256,patchCount:result.published.patchCount,receiptId:`${result.published.targetFilename}:${result.published.targetRevision}`,manifestStatus:result.derived.derivedStateManifest.status,auditStatus:input.audit?.status??'NOT_RUN',selfAuditStatus:input.selfAudit?.status??'NOT_RUN',recoveryStatus:unresolved?'required':'not_required',nextAction:unresolved?'inspect_receipt':null};
@@ -5530,7 +5575,7 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
   :undefined;
  // CREATE_INITIAL_REVISION (spec I1): independent of any canonical-metadata option. The existing-proposal check
  // and publication are both injectable ports so the full creation logic is unit-testable without a real
- // filesystem; production wiring uses the real proposals/ directory below.
+ // filesystem; production wiring uses the real managed directory below.
  const initialRevisionCreation=new InitialRevisionCreationService(
   {hasManagedProposal:async()=>(await safeResolveLatestManagedRevision(projectRoot)).status!=='empty'},
   createFilesystemInitialRevisionPublicationPort(projectRoot),
@@ -5554,7 +5599,7 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
        successorAcceptanceToken:Type.Optional(Type.String({minLength:32,maxLength:128,pattern:'^[A-Za-z0-9_-]+$',description:'Opaque token forwarded internally from the immediately preceding successor preview.'})),
    selectedEntryId:Type.Optional(Type.String({minLength:1,maxLength:256})),
    resolvedDecisions:Type.Optional(Type.Array(Type.Unknown(),{description:'CREATE_SUCCESSOR + MODIFY only (ambient-model paradigm): one already-resolved EditAction per approved locus, supplied by the caller instead of a separate model call. Routes through the ambient-supplied echo-and-validate planner; no model/network call happens on this path.'})),
-   sourceFilename:Type.Optional(Type.String({minLength:1,maxLength:266,pattern:'^(?:proposals/)?research-concept-(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?r[0-9]{2,}\\.md$',description:'For CHAT_DELIBERATION, pass an exact managed revision filename or the same filename prefixed once by proposals/. Paths are never normalized.'})),
+   sourceFilename:Type.Optional(Type.String({minLength:1,maxLength:266,pattern:managedRevisionSchemaPattern({directoryPrefix:true}),description:`For CHAT_DELIBERATION, pass an exact managed revision filename or the same filename prefixed once by ${PROPOSAL_DIRECTORY}/. Paths are never normalized.`})),
    sourceQuery:Type.Optional(Type.String({minLength:1,maxLength:4096})),
    destinationQuery:Type.Optional(Type.String({minLength:1,maxLength:4096})),
    position:Type.Optional(StringEnum(['before','after','inside_start','inside_end'] as const)),
@@ -5640,6 +5685,13 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
    }
    if(route.stage==='CREATE_INITIAL_REVISION'){
     const authority=resolveV2ExecutionAuthority(route.stage);
+    // Required sources (change 7): a `required: true` source that is absent blocks here,
+    // before any fragment is loaded and before any v1 is rendered -- never a silent `[]`.
+    const missingSources=await missingRequiredSources(projectRoot);
+    if(missingSources.length){
+     const publicResult={status:'blocked' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:null,mutations:0 as const,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:'supply_required_source',blockers:missingSources.map((source)=>({code:'REQUIRED_SOURCE_MISSING',message:`Required source "${source.path}" is missing; CREATE_INITIAL_REVISION cannot proceed without it.`}))};
+     return {content:[{type:'text',text:JSON.stringify(publicResult)}],details:publicResult};
+    }
     const guideFragments=await loadGuideDirectoryFragments(projectRoot);
     const result=await initialRevisionCreation.execute({idea:params.instruction,...(guideFragments.length?{guideFragments}:{})});
     const publicResult=result.status==='created'

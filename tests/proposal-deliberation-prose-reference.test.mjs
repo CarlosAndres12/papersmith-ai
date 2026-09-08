@@ -5,7 +5,7 @@ import { createJiti } from 'jiti';
 const jiti=createJiti(import.meta.url);
 const engine=path.resolve('.claude/skills/_core/deliberation/engine');
 const {PROSE_REFERENCE,buildReferenceIndex}=await jiti.import(path.join(engine,'reference-index.ts'));
-const {mathAtoms,mathDelta}=await jiti.import(path.join(engine,'math-integrity.ts'));
+const {atoms:mathAtoms,delta:mathDelta}=await jiti.import(path.join(engine,'preservation.ts'));
 const {buildStructuralIndex}=await jiti.import(path.join(engine,'document-index.ts'));
 // These documents number with \tag{N} and cite as `(Ec. N)`; they never use
 // \label/\eqref. Nothing exercised that convention before this file, so moving it

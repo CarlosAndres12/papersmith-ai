@@ -1,4 +1,5 @@
 import { isAbsolute } from "node:path";
+import type { PreservationAtom, PreservationViolation } from "./types.js";
 
 /**
  * The contract a deliberation domain fills in, and the resolver that finds it.
@@ -40,7 +41,8 @@ export type DeliberationDomainProfile = {
 	 * A source string rather than a RegExp, because two call sites need it with
 	 * different flags and a shared mutable RegExp carries `lastIndex` between
 	 * them. Both used to spell this pattern out separately -- `reference-index.ts`
-	 * and `math-integrity.ts` -- with two literals that agreed only by luck.
+	 * and the module now named `preservation-math.ts` -- with two literals that
+	 * agreed only by luck.
 	 */
 	readonly proseReferencePattern: string;
 	/** The same citation, written back out for an atom's display text. */
@@ -71,8 +73,110 @@ export type DeliberationDomainProfile = {
 		readonly subjectLocusDescription: string;
 		/** How scoring reports that a neighbouring entry defines the subject. */
 		readonly subjectEvidenceLabel: string;
+		/**
+		 * Optional (change 10): equivalent to the core `'sparse'`/`'dispers'` literal this
+		 * change removes from `intent-resolver.ts`. When declared, an instruction matching any
+		 * of `terms` (plain substring, same matching style as every other `has(...)` check in
+		 * `intent-resolver.ts`) reports `requestedEffect: label`, exactly as the removed literal
+		 * did. Undeclared is equally valid: `requestedEffect` is then simply never set by this
+		 * mechanism, which is acceptable because nothing downstream reads it except the
+		 * conceptual plan's `scientificGoal` fallback.
+		 */
+		readonly requestedEffect?: { readonly terms: readonly string[]; readonly label: string };
 	};
+	/**
+	 * The complete managed-artifact namespace this domain claims. Nothing here may be
+	 * substituted with a default: `artifact-naming.ts` is the only file that reads these
+	 * values back out, and it is the only file in core allowed to spell the resulting names.
+	 */
+	readonly artifact: {
+		/** Where managed revisions live, relative to the project root (e.g. an "experiments" directory). */
+		readonly directory: string;
+		/** The managed filename's fixed prefix (e.g. an "experiments" stem). */
+		readonly stem: string;
+		/** The revision label's own prefix, escaped and composed by `artifact-naming.ts` -- never a full regex (e.g. a single letter). */
+		readonly revisionPattern: string;
+		/** Renders a revision ordinal into its full label (e.g. ordinal 6 into a two-digit-padded label). */
+		readonly revisionLabel: (ordinal: number) => string;
+		/** Where sidecar state/receipts/withdrawn records live, relative to the project root (e.g. a dot-prefixed sidecar directory name). */
+		readonly sidecarRoot: string;
+		/** The exact managed-artifact marker bytes, including its trailing newline. */
+		readonly marker: string;
+		/**
+		 * Change 8, option (b): the change header is its OWN resolved block span, gated on this
+		 * field's presence -- never a sidecar-only field, never an invariant exemption.
+		 * `COMPOSITE_UNTOUCHED_INVARIANT` (`successor-composite-engine.ts`) walks only the gaps
+		 * BETWEEN edit spans plus the tail; a header that IS its own span sits inside the union,
+		 * so the invariant is satisfied, not bypassed. Undeclared (the default, and
+		 * `proposal-deliberation`'s own choice): `CREATE_SUCCESSOR` requires nothing extra,
+		 * `renderFromIdea` emits nothing extra, bytes are byte-identical to pre-change behavior.
+		 */
+		readonly changeHeader?: {
+			/** The exact heading text (no leading `#`s) `initial-revision-renderer.ts` renders in v1 and `orchestrator.ts` locates as the header's own structural entry on every successor. */
+			readonly heading: string;
+			/** Renders the FULL header block -- including its own heading line -- from the caller's `changeSummary`. Replaces the header entry's entire span each version; the receipt is where full history lives. */
+			readonly render: (summary: { readonly what: string; readonly why: string }) => string;
+		};
+	};
+	/**
+	 * Change 9: names which loaded sources this domain treats as a hard bound on claims, and
+	 * how to detect a candidate's evidence contradicting one. Off by default -- a profile
+	 * declaring none (`proposal-deliberation`'s own choice) never raises
+	 * `SOURCE_AUTHORITY_CONFLICT`, regardless of candidate content. `severity` defaults to
+	 * `'advisory'` (preview-time, cleared by `acknowledgedSourceConflicts` on accept, mirroring
+	 * the preservation gate); `'refuse'` hard-blocks publish outright instead.
+	 */
+	readonly sourceAuthority?: {
+		/** Which of `sources`' paths this domain treats as a bound, for identification in a reported conflict. */
+		readonly names: readonly string[];
+		/** Pure detector over the candidate's full document text -- the profile already knows what its own bound source asserts, exactly as `preservation.extractAtoms` already knows its own canonical notation, with no engine-level file I/O. Empty when nothing conflicts. */
+		readonly detectConflicts: (candidateText: string) => readonly { readonly id: string; readonly sourceName: string; readonly claim: string; readonly evidence: string }[];
+		/** `'advisory'` (default) or `'refuse'`. */
+		readonly severity?: 'advisory' | 'refuse';
+	};
+	/**
+	 * The preservation gate's atom extractor and rule set (change 4): `preservation.ts`
+	 * (formerly `math-integrity.ts`) is domain-neutral and sources both from here instead of
+	 * hardcoding mathematics. The mathematical implementation ships as
+	 * `proposal-deliberation/preservation-math.ts`, wired through this field.
+	 */
+	readonly preservation: {
+		/** Every atom `source` declares, keyed by a stable id. Empty when nothing in this domain's vocabulary is present -- the caller (`preservation.ts`) reports that as "not applicable", never as a vacuous pass. */
+		readonly extractAtoms: (source: string) => Map<string, PreservationAtom>;
+		/** The canonical-form rules this domain's own notation must never violate -- never intentional, so these block outright rather than requiring acknowledgement. */
+		readonly violations: (source: string) => PreservationViolation[];
+	};
+	/**
+	 * Reference integrity (change 5): what this domain's documents DECLARE as a numbered/named
+	 * thing, and what CITES one, sourced here instead of hardwiring `\label`/`\tag`/`\eqref`/
+	 * `(Ec. N)` into `candidate-validator.ts`, `reference-index.ts` and `document-index.ts`.
+	 * The mathematical vocabulary ships as `proposal-deliberation/reference-math.ts`, wired
+	 * through this field, exactly as `preservation` ships `preservation-math.ts` above.
+	 */
+	readonly references: {
+		/** Every declaration this domain's documents make, each carrying its declaration kind (e.g. "label"/"tag" for math -- read by `document-index.ts` to keep its own `entry.labels`/`entry.tags` split for locus lookup) and the declared value. Two declarations sharing a value are a duplicate. Empty when nothing in this text matches the domain's vocabulary -- the caller reports that as "not applicable", never as a vacuous pass. */
+		readonly declares: (source: string) => readonly { readonly kind: string; readonly value: string }[];
+		/** Every citation this domain's documents make of a declared thing, each carrying its citation form and the cited value. A citation whose value never appears in `declares`'s output is unresolved. */
+		readonly cites: (source: string) => readonly { readonly kind: string; readonly value: string }[];
+	};
+	/**
+	 * Read-only reference sources (change 7), loaded once before a NEW deliberation's first
+	 * revision renders. Replaces the single hardcoded `GUIDE_DIRECTORY` path in
+	 * `proposal-workspace.ts`: each `path` is a project-root-relative directory inventoried the
+	 * same way the legacy single guide was, and a `required: true` source that is absent blocks
+	 * `CREATE_INITIAL_REVISION` with `REQUIRED_SOURCE_MISSING` instead of silently loading
+	 * nothing. `proposal-deliberation` declares its guide `required: false`, preserving today's
+	 * silence exactly.
+	 */
+	readonly sources: readonly { readonly path: string; readonly required: boolean }[];
 };
+
+const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'] as const;
+/** No `/`, no `..`, no empty segment -- a profile-supplied path segment escaping the workspace sandbox is the one adjacent risk change 3 introduces (design.md, "profile-supplied path segments are validated at load"). */
+const SAFE_ARTIFACT_SEGMENT = /^\.?[A-Za-z0-9._-]+$/;
+function isSafeArtifactSegment(value: unknown): value is string {
+	return typeof value === 'string' && value.length > 0 && SAFE_ARTIFACT_SEGMENT.test(value) && !value.includes('..') && !value.includes('/');
+}
 
 const configured = process.env.DELIBERATION_DOMAIN_PROFILE;
 if (!configured)
@@ -82,7 +186,7 @@ if (!configured)
 		"through a skill's own cli.mjs, which sets it.",
 	);
 
-const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "proseReferenceText", "vocabulary"] as const;
+const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "proseReferenceText", "vocabulary", "artifact", "preservation", "references", "sources"] as const;
 
 // Absolute, and refused otherwise. A relative path resolves against the working
 // directory, and the engine does not control that: a CLI child process launched
@@ -99,6 +203,22 @@ const loaded = (await import(configured)) as { profile?: DeliberationDomainProfi
 if (!loaded.profile) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INVALID: ${configured} exports no \`profile\`.`);
 const missing = REQUIRED.filter((key) => loaded.profile![key] === undefined);
 if (missing.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missing.join(", ")}.`);
+
+// `REQUIRED` above only ever checked top-level keys, so `artifact: {}` would have passed it
+// vacuously. Every one of the six `artifact.*` fields is checked here explicitly -- still the
+// same refusal code, naming the nested field instead of the top-level key.
+const artifactValue = loaded.profile!.artifact as Record<string, unknown>;
+const missingArtifact = ARTIFACT_REQUIRED.filter((key) => artifactValue[key] === undefined);
+if (missingArtifact.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingArtifact.map((key) => `artifact.${key}`).join(", ")}.`);
+
+// Change 3 turns a sandbox root (the managed directory, the sidecar root) into a profile value;
+// `REQUIRED`-membership alone does not make a caller-supplied path segment safe to join under the
+// project root. Both `directory` and `sidecarRoot` must be a single safe segment: no `/`, no `..`.
+if (!isSafeArtifactSegment(artifactValue.directory) || !isSafeArtifactSegment(artifactValue.sidecarRoot))
+	throw new Error(
+		`DELIBERATION_DOMAIN_PROFILE_UNSAFE_ARTIFACT_PATH: ${configured} declares an unsafe artifact.directory or artifact.sidecarRoot ` +
+		`(must match ${SAFE_ARTIFACT_SEGMENT.source}, and must not contain "/" or "..").`,
+	);
 
 /** The profile this process serves. Chosen by the host, never by the engine. */
 export const DOMAIN: DeliberationDomainProfile = loaded.profile;

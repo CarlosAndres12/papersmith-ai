@@ -8,11 +8,11 @@ import { commitDerivedState, saveRevisionReceipt } from './derived-state-store.j
 import { rebuildDerivedState } from './derived-state-builder.js';
 import { parseManagedRevisionFilename } from './revision-lifecycle-store.js';
 import type { ManagedInitialRevisionReceipt } from './revision-receipt.js';
+import { artifact, initialRevisionFilename, isInitialRevision } from './artifact-naming.js';
 
 export type { InitialRevisionGuideFragment };
 
-const MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
-const MANAGED_INITIAL_REVISION_FILENAME = /^research-concept-[a-z0-9]+(?:-[a-z0-9]+)*-r01\.md$/;
+const MANAGED_ARTIFACT_MARKER = artifact.marker;
 
 function sha256(bytes: Buffer): string {
 	return createHash('sha256').update(bytes).digest('hex');
@@ -60,8 +60,8 @@ export class InitialRevisionCreationService {
 		if (!idea) return { status: 'blocked', code: 'INITIAL_IDEA_REQUIRED' };
 		if (await this.existingProposal.hasManagedProposal()) return { status: 'blocked', code: 'MANAGED_PROPOSAL_ALREADY_EXISTS' };
 		const composed = this.renderer.renderFromIdea({ idea, guideFragments: input.guideFragments });
-		const filename = `research-concept-${composed.slug}-r01.md`;
-		if (!MANAGED_INITIAL_REVISION_FILENAME.test(filename)) throw new Error('INITIAL_REVISION_FILENAME_INVALID');
+		const filename = initialRevisionFilename(composed.slug);
+		if (!isInitialRevision(filename)) throw new Error('INITIAL_REVISION_FILENAME_INVALID');
 		const candidate: InitialRevisionCandidate = { filename, revision: 'r01', markdown: composed.markdown, canonicalMetadata: composed.canonicalMetadata };
 		let published: InitialRevisionPublicationResult;
 		try {
@@ -80,7 +80,7 @@ export class InitialRevisionCreationService {
 
 async function canonicalProposalsDirectory(projectRoot: string): Promise<string> {
 	const root = await realpath(resolve(projectRoot));
-	const directory = resolve(root, 'proposals');
+	const directory = resolve(root, artifact.directory);
 	let existing: string | undefined;
 	try {
 		existing = await realpath(directory);
@@ -98,7 +98,7 @@ async function canonicalProposalsDirectory(projectRoot: string): Promise<string>
 }
 
 function initialRevisionLockPath(root: string): string {
-	return join(root, '.proposal-deliberation', 'locks', 'initial-revision.lock');
+	return join(root, artifact.sidecarRoot, 'locks', 'initial-revision.lock');
 }
 
 /**
@@ -151,7 +151,7 @@ async function releaseInitialRevisionCreationLock(lockPath: string): Promise<voi
  * `.md` atomically and only when the target does not already exist (guarded further by the
  * project-wide single-winner lock above), then writes the derived-state and receipt sidecars in
  * the SAME layout ordinary edit/materialization publication produces (`derived-state-store.ts`'s
- * `.proposal-deliberation/state/<filename>.json` COMMITTED manifest and `.proposal-deliberation/receipts/<filename>.json`
+ * profile-derived state/<filename>.json COMMITTED manifest and receipts/<filename>.json
  * receipt) -- re-audit cleanup (issue #2). Without these sidecars, `readCanonicalManagedRevisionInventory`
  * (`revision-lifecycle-store.ts`) hard-requires a COMMITTED state json and reports the whole inventory as
  * `inconsistent`, degrading scientific-workflow admission for an otherwise perfectly valid, freshly

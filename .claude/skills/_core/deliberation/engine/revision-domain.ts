@@ -1,4 +1,5 @@
 import type { CompiledPatch, EditAction, EditPlan } from './types.js';
+import type { ManagedRevisionName } from './artifact-naming.js';
 
 /**
  * The vocabulary of a managed revision: what a revision is, what it was published from,
@@ -65,7 +66,14 @@ export type CreateR01PayloadV1 = {
 	kind: 'CREATE_R01';
 	payloadVersion: 1;
 	markdown: string;
-	target: { filename: 'research-concept-r01.md'; revision: 'r01' };
+	/**
+	 * `filename` was a fixed-stem-and-first-revision literal string type -- a TypeScript literal cannot
+	 * depend on a runtime profile value, so widening it to plain `string` would delete this
+	 * compile-time check with nothing announcing the loss. `ManagedRevisionName` (not the
+	 * lineage-mandatory `ManagedInitialName`) is correct here: this fixed-base bootstrap route's
+	 * target is always the ROOT-lineage first revision, which `strictManagedRevision` accepts.
+	 */
+	target: { filename: ManagedRevisionName; revision: 'r01' };
 	canonicalMetadata: CanonicalProposalMetadata;
 };
 

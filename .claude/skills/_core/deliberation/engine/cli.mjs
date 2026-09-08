@@ -44,7 +44,7 @@
 //
 // `STATUS` (design `sdd/proposal-deliberation-base-reconciliation`) is another
 // read-only, additive, keyless operation handled directly in this host. It
-// gives an ambient agent a deterministic inventory of `proposals/` instead of
+// gives an ambient agent a deterministic inventory of the managed directory instead of
 // eyeballing the directory before deciding which base version to resume work
 // on. It reuses `parseManagedRevisionFilename` and `resolveLatestManagedRevision`
 // from `revision-lifecycle-store.ts` (the SAME functions `CREATE_SUCCESSOR`'s
@@ -58,7 +58,7 @@
 //   -> {
 //        "status": "ok", "operation": "STATUS",
 //        "managedRevisions": [{ "filename": "...", "lineage": "...", "revisionNumber": 1, "isLatest": true }, ...],
-//        "latest": "research-concept-r03.md" | null,
+//        "latest": "<managed-stem>-r03.md" | null,
 //        "multipleActive": false, "candidates": [],
 //        "nonManagedFiles": ["notes.md"],
 //        "sourceClassification"?: "LATEST" | "OLDER_MANAGED" | "UNMANAGED" | "NOT_FOUND",
@@ -116,6 +116,7 @@ const documentStateModule = await jiti.import(path.join(engineDir, 'document-sta
 const targetResolverModule = await jiti.import(path.join(engineDir, 'target-resolver.ts'));
 const ambiguityGateModule = await jiti.import(path.join(engineDir, 'ambiguity-gate.ts'));
 const revisionLifecycleModule = await jiti.import(path.join(engineDir, 'revision-lifecycle-store.ts'));
+const artifactNamingModule = await jiti.import(path.join(engineDir, 'artifact-naming.ts'));
 
 // Deliberately NOT memoizing `loadDocumentState` results across calls within a
 // `--serve` session (would-be item 2 of the amortization design): the real
@@ -186,7 +187,7 @@ async function runResolveTarget(request) {
 // divergence risk. The filename-shape recognition and canonical latest/tie-
 // break rule themselves are NOT reimplemented here: they come straight from
 // `parseManagedRevisionFilename`/`resolveLatestManagedRevision` below.
-const STATUS_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+const STATUS_MARKER = artifactNamingModule.artifact.marker;
 
 function classifySourceFilename(sourceFilename, { proposalEntryNames, managedRevisions, latest }) {
 	if (typeof sourceFilename !== 'string' || !sourceFilename || path.basename(sourceFilename) !== sourceFilename) {
@@ -203,7 +204,7 @@ function classifySourceFilename(sourceFilename, { proposalEntryNames, managedRev
 	return { sourceClassification: 'OLDER_MANAGED', newerRevisionNumbers };
 }
 
-/** The empty inventory a project that has not created `proposals/` yet must report.
+/** The empty inventory a project that has not created the managed directory yet must report.
  * A brand-new project is exactly the state `CREATE_INITIAL_REVISION` exists for, and
  * SKILL.md tells the agent to run `STATUS` FIRST -- before anything has been created.
  * Reporting a raw `ENOENT ... scandir <abs path>` there would both break that documented
@@ -213,13 +214,13 @@ function emptyStatusInventory() {
 }
 
 async function readProposalsInventory() {
-	const proposalsDir = path.join(projectRoot, 'proposals');
+	const managedDirectory = path.join(projectRoot, artifactNamingModule.artifact.directory);
 	let entries;
 	try {
-		entries = await readdir(proposalsDir, { withFileTypes: true });
+		entries = await readdir(managedDirectory, { withFileTypes: true });
 	} catch (error) {
 		// Only a genuinely ABSENT directory is the benign pre-creation state. An existing
-		// but unreadable `proposals/` (a file in its place, a permission failure) still
+		// but unreadable the managed directory (a file in its place, a permission failure) still
 		// fails closed -- STATUS must never report "empty" for a workspace it could not read.
 		if (error?.code === 'ENOENT') return emptyStatusInventory();
 		throw error;
@@ -240,7 +241,7 @@ async function readProposalsInventory() {
 		}
 		let bytes;
 		try {
-			bytes = await readFile(path.join(proposalsDir, entry.name));
+			bytes = await readFile(path.join(managedDirectory, entry.name));
 		} catch {
 			nonManagedFiles.push(entry.name);
 			continue;
