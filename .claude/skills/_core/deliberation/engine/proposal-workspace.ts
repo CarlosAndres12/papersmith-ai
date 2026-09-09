@@ -5715,6 +5715,17 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
     return {content:[{type:'text',text:JSON.stringify(publicResult)}],details:publicResult};
    }
    if(route.stage==='CHAT_DELIBERATION'){
+    // Task D2 (five-guards-that-cannot-fire): this early return is why
+    // `resolveEffectiveOperationProfile` never throws for CLOSE_DELIBERATION.
+    // `role-budget.ts` declares `BudgetedIntent = Exclude<Intent,'CLOSE_DELIBERATION'>`,
+    // so `operationProfile` (which mirrors `roleBudgets`) has no entry for
+    // CLOSE_DELIBERATION, and `resolveEffectiveOperationProfile` would throw
+    // `UNSUPPORTED_OPERATION_PROFILE` if it were ever called with that intent.
+    // CLOSE_DELIBERATION never reaches it: this branch handles and returns
+    // before the orchestrator's publish path -- the only caller of
+    // `resolveEffectiveOperationProfile` -- is ever entered. Ships unguarded
+    // by design (spec requirement A5): a test asserting this comment's text
+    // would guard bytes, not behavior.
     if(params.operation==='CLOSE_DELIBERATION'){
      const currentSessionIdentity=sessionIdentity(ctx);
      const closeResult=chatDeliberation.close(currentSessionIdentity,params.conversationId??'');
