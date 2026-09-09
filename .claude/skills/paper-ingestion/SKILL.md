@@ -12,6 +12,48 @@ images`. Figures are separate image files the `.md` references (loaded on demand
 not embedded), and the references/bibliography section is dropped. Runs locally
 with no API keys.
 
+## The objective flow
+
+**Why this skill was invoked, and where it has to arrive.** Declared here and in
+`OBJECTIVE_FLOW`, held equal by a test, and independent of what is on disk. A
+listing of what has been ingested answers *where am I*; this answers *what is
+this for*, which no listing implies. The one path a refusal takes carries it.
+
+**Purpose:** turn a paper into the form it can actually be used in — equations
+as LaTeX, tables as tables, figures as files — not a PDF that was processed.
+
+| Stage | Establishes | Behind you when |
+| --- | --- | --- |
+| `filed` | The PDF sits inside a topic folder of its own, which is what makes it a paper rather than a download | it is no longer reported among the unfiled |
+| `extracted` | The Markdown exists beside it, with its figures written as files rather than left inside the page | the paper folder holds the document and its images |
+| `readable` | The equations are LaTeX and the tables are Markdown, so a later reader can quote a formula rather than describe a picture of one | this is the arrival; it is behind nobody |
+
+**Arrival:** a document a person can read and a later session can cite, which a PDF is not.
+
+**Arrival is an artefact somebody can read and cite, never a PDF that was
+processed.** That distinction is this skill's whole reason to exist: a PDF is
+already on disk and already unusable as evidence — its equations are pictures,
+its tables are ink, and nothing downstream can quote it.
+
+**No stop here is a person's**, and the list says so by being empty rather than
+absent: ingestion asks nobody, and a reader meeting a missing key would have to
+guess whether that meant none or meant nobody wrote it down.
+
+
+
+## What this skill delegates, and to whom
+
+Extraction is one stretch and it runs in an agent of its own. What stays in the
+conversation is the part that needs a person: which loose PDFs are unfiled, and
+what the report says afterwards.
+
+| Stretch | Delegated to | Begins after | Ends at | Measure this before delegating |
+| --- | --- | --- | --- | --- |
+| Extract | this skill delegates to the `paper-ingestion` agent | the PDFs to ingest are named | the artefacts a person can read and cite | each named PDF sits inside a topic folder of its own; a loose one is the operator's to file and not this stretch's to guess at |
+
+What moves is execution, never doctrine: every rule stays here, and the agent's
+first instruction is to load this file.
+
 ## Activation Contract
 
 Accept an optional loose PDF path, or discover the source roots from

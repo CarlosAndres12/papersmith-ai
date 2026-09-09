@@ -18177,6 +18177,12 @@ class CommandRosterTests(unittest.TestCase):
     def test_every_command_dispatched_is_accounted_for(self):
         write_verbs = {"position", "discuss", "propose", "gate", "offer",
                        "close", "step", "settle", "defect",
+                       # `walk` writes nothing to the ledger itself -- every
+                       # write it causes goes through `step` or `position` --
+                       # but it does commit each walked step's product, so it
+                       # belongs with the verbs that change the target rather
+                       # than with the ones that only report.
+                       "walk",
                        "materialize"}
         dispatched = set(impl.COMMANDS)
         self.assertEqual(
@@ -18253,12 +18259,12 @@ class CommandRosterClosureTests(unittest.TestCase):
                 for header in (self.WRITE_TABLE_HEADER, self.REST_TABLE_HEADER)
                 for row in self._table(header)]
 
-    def test_the_roster_derivation_finds_the_measured_nineteen(self):
+    def test_the_roster_derivation_finds_the_measured_twenty(self):
         """Sanity on the walk, not on the roster. A command added to or removed
         from the CLI should move this number; a broken header, a renamed column
         or a table that stopped parsing should not be able to leave it green."""
         rostered = self.rostered_commands()
-        self.assertEqual(len(rostered), 19)
+        self.assertEqual(len(rostered), 20)
         self.assertEqual(
             sorted(rostered), sorted(set(rostered)),
             "a command is rostered twice; two rows for one command is two "
@@ -22173,7 +22179,12 @@ class OfferCommandTests(unittest.TestCase):
         # went through the coded `Refused` path, never argparse `choices`,
         # which would have printed usage text on stderr and nothing
         # JSON-shaped on stdout at all.
-        self.assertEqual(set(result), {"status", "code", "detail"})
+        # `objective` joins the three: every refusal carries the north,
+        # because a blocked session is exactly the one that has lost the
+        # purpose. Pinned here rather than tolerated, so a key added to the
+        # refusal payload is a decision somebody takes and not a drift.
+        self.assertEqual(set(result),
+                         {"status", "code", "detail", "objective"})
 
     def test_offer_refuses_before_any_answer_and_publishes_no_actions_key(self):
         box, commit = self._box()
@@ -27807,6 +27818,7 @@ _ENGLISH_COUNTS = {
     # `undeclaredLadder` and `undeclaredRecords` already sit in.
     20: "Twenty", 21: "Twenty-one", 22: "Twenty-two",
     23: "Twenty-three",
+    24: "Twenty-four", 25: "Twenty-five",
     26: "Twenty-six", 27: "Twenty-seven", 28: "Twenty-eight",
     29: "Twenty-nine", 30: "Thirty", 31: "Thirty-one", 32: "Thirty-two",
     33: "Thirty-three", 34: "Thirty-four", 35: "Thirty-five",
@@ -31280,6 +31292,419 @@ class FlowWalkReportTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         (box / "Method").mkdir(parents=True)
         self.assertEqual(impl.product_artefacts(box, "Method"), [])
+
+
+class FlowActsTests(unittest.TestCase):
+    """The half of the walk that says what to DO next, not only where we are.
+
+    `_walk_report` answered *where am I* and nothing answered *what is the
+    next act*, so every rung published a question whose answer changed
+    nothing and the walk from one step to the next was performed by hand.
+    These hold the routing to the five answers it can give.
+    """
+
+    def test_a_walked_step_owes_nothing_and_is_dropped(self) -> None:
+        rows = [{"step": "alpha", "walk": "walked"}]
+        steps = {"alpha": {"placement": "local"}}
+        self.assertEqual(impl.flow_acts(rows, steps, []), [])
+
+    def test_a_local_step_is_routed_to_a_local_run(self) -> None:
+        rows = [{"step": "gamma", "walk": "notWalked"}]
+        steps = {"gamma": {"placement": "local"}}
+        acts = impl.flow_acts(rows, steps, [])
+        self.assertEqual([a["act"] for a in acts], [impl.ACT_RUN_LOCAL])
+        self.assertIsNone(acts[0]["needs"])
+
+    def test_a_remote_step_walks_generate_rehearse_launch_in_that_order(self) -> None:
+        """One step, three states of its own job folder, three different acts.
+
+        The order is the remote chain's own: a folder has to exist before a
+        rehearsal can run on the commit it pins, and a rehearsal has to pass
+        before a launch is offered -- which is what stops a campaign being
+        offered on a wire nobody proved carries current.
+        """
+        rows = [{"step": "beta", "walk": "notWalked"}]
+        steps = {"beta": {"placement": "remote", "job": "job-b",
+                          "service": "service-b"}}
+
+        absent = impl.flow_acts(rows, steps, [])
+        unrehearsed = impl.flow_acts(
+            rows, steps, [{"job": "job-b", "smokeReady": False}])
+        ready = impl.flow_acts(
+            rows, steps, [{"job": "job-b", "smokeReady": True}])
+
+        self.assertEqual(absent[0]["act"], impl.ACT_GENERATE_JOB)
+        self.assertEqual(unrehearsed[0]["act"], impl.ACT_REHEARSE)
+        self.assertEqual(ready[0]["act"], impl.ACT_LAUNCH)
+        for acts in (absent, unrehearsed, ready):
+            self.assertEqual(acts[0]["job"], "job-b")
+
+    def test_an_unrouted_step_blocks_and_never_defaults(self) -> None:
+        """Two ways a remote step is unroutable, and neither is a guess.
+
+        A placement nobody declared, and a remote step naming no job folder.
+        Routing either by default is how a run measured in days lands
+        somewhere nobody chose, so both answer `blocked` and both say what is
+        missing rather than picking one.
+        """
+        rows = [{"step": "a", "walk": "notWalked"},
+                {"step": "b", "walk": "notWalked"}]
+        steps = {"a": {}, "b": {"placement": "remote"}}
+
+        acts = impl.flow_acts(rows, steps, [])
+
+        self.assertEqual([a["act"] for a in acts],
+                         [impl.ACT_BLOCKED, impl.ACT_BLOCKED])
+        self.assertIsNone(acts[0]["placement"])
+        self.assertIn("runs here or on a worker", acts[0]["needs"])
+        self.assertEqual(acts[1]["placement"], impl.PLACEMENT_REMOTE)
+        self.assertIn("['job']", acts[1]["needs"])
+        self.assertIn("['service']", acts[1]["needs"])
+
+    def test_the_declared_order_is_the_order_of_the_acts(self) -> None:
+        """The rows arrive in the flow's own order and leave in it.
+
+        Sorting here would put a cheap local drawing in front of the remote
+        run whose output it reads.
+        """
+        # Deliberately alphabetical-hostile: `_walk_report` sorts its rows by
+        # NAME, so rows arrive in an order that is not the flow's, and acts
+        # executed in it would run a step before the one whose output it
+        # reads. Measured on a real repository: the drawing step came out
+        # first and the suite-and-invariants step everything rests on came out
+        # last.
+        rows = [{"step": "zulu", "walk": "notWalked", "advances": 1},
+                {"step": "alpha", "walk": "notWalked", "advances": 2},
+                {"step": "mike", "walk": "notWalked", "advances": None}]
+        steps = {n: {"placement": "local"} for n in ("zulu", "alpha", "mike")}
+        self.assertEqual([a["step"] for a in impl.flow_acts(rows, steps, [])],
+                         ["zulu", "alpha", "mike"])
+
+    def test_a_step_walked_at_a_lower_rung_is_still_owed_at_a_higher_one(self) -> None:
+        """The distinction the whole function turns on, and it was measured.
+
+        On a real repository all ten declared steps read `walked` -- every one
+        of them at the floor rung, because the ledger's step events carry no
+        scale at all. Skipping on `walked` therefore answered "nothing is
+        owed" for a full run that had not started, which is the one wrong
+        answer that costs a campaign. The ladder the target declares is what
+        tells the two apart.
+        """
+        levels = ["none", "middle", "top"]
+        rows = [{"step": "alpha", "walk": "walked", "rung": "none"}]
+        steps = {"alpha": {"placement": "local"}}
+
+        at_floor = impl.flow_acts(rows, steps, [], level="none", levels=levels)
+        at_top = impl.flow_acts(rows, steps, [], level="top", levels=levels)
+
+        self.assertEqual(at_floor, [], "its own rung reaches what is aimed at")
+        self.assertEqual([a["act"] for a in at_top], [impl.ACT_RUN_LOCAL])
+
+    def test_an_unmeasured_rung_reaches_nothing(self) -> None:
+        """Unmeasured is not attained -- the reading every witness here takes."""
+        levels = ["none", "top"]
+        rows = [{"step": "alpha", "walk": "walked", "rung": None}]
+        steps = {"alpha": {"placement": "local"}}
+        self.assertEqual(
+            [a["act"] for a in impl.flow_acts(rows, steps, [], level="none",
+                                              levels=levels)],
+            [impl.ACT_RUN_LOCAL])
+
+    def test_without_a_declared_ladder_walked_is_the_whole_of_what_is_known(self) -> None:
+        """A repository that declared no ladder has no order to compare
+        against, so nothing here invents a scale for it."""
+        rows = [{"step": "alpha", "walk": "walked", "rung": None}]
+        steps = {"alpha": {"placement": "local"}}
+        self.assertEqual(impl.flow_acts(rows, steps, [], level=None, levels=[]),
+                         [])
+
+    def test_an_undeclared_placement_is_reported_with_what_it_costs(self) -> None:
+        """Reported, never demanded: a repository that never leaves rehearsal
+        scale needs no placement on anything and is not defective for it."""
+        state = impl.undeclared_placement_state(
+            {"a": {"placement": "remote"}, "b": {}, "c": {"placement": "nope"}})
+
+        self.assertEqual([row["step"] for row in state], ["b", "c"])
+        self.assertEqual(state[0]["declaration"], "__steps__['b']['placement']")
+        self.assertTrue(all(row["consequence"] for row in state))
+        self.assertEqual(impl.undeclared_placement_state(
+            {"a": {"placement": "local"}}), [])
+
+
+class ObjectiveFlowTests(unittest.TestCase):
+    """The north: why the skill was invoked and where it has to arrive."""
+
+    def test_every_refusal_carries_it(self) -> None:
+        """A blocked session is exactly the one that has lost the purpose, so
+        the refusal itself carries it. Asserted at the single place every
+        refusal in this engine reaches a reader, so no code can be added that
+        answers without it."""
+        source = Path(impl.__file__).read_text(encoding="utf-8")
+        block = source[source.index('payload = {"status": "refused"'):][:400]
+        self.assertIn('"objective": OBJECTIVE_FLOW', block)
+
+    def test_it_is_declared_and_not_derived(self) -> None:
+        """Invariant on purpose. A stage computed from products would make the
+        purpose depend on the products, which is the one dependency this
+        exists without: it has to read the same on a repository with nothing
+        in it as on one mid-campaign."""
+        flow = impl.OBJECTIVE_FLOW
+        self.assertTrue(flow["purpose"] and flow["arrival"])
+        self.assertEqual([s["stage"] for s in flow["stages"]],
+                         ["standing", "fidelity", "audit", "declaration",
+                          "rehearsal", "full-scale"])
+        for stage in flow["stages"]:
+            self.assertTrue(stage["establishes"], stage["stage"])
+            self.assertTrue(stage["behindWhen"], stage["stage"])
+
+    def test_it_names_the_stops_that_are_not_defects(self) -> None:
+        """The half a blocked agent needs most. Publishing a commit and
+        authorizing a launch are decisions a person owes; an agent that reads
+        them as blockers either stalls on them or takes them, and the second
+        is how quota gets spent by somebody who was not asked."""
+        stops = " ".join(impl.OBJECTIVE_FLOW["humanStops"])
+        # Two of them stand in the FIRST stage, and a session starting from
+        # nothing meets them before anything else. Naming only the two at the
+        # end left an agent that began from an empty repository walking into
+        # approvals its own north never mentioned.
+        self.assertIn("authorizing that code be written", stops)
+        self.assertIn("approving the map", stops)
+        self.assertIn("publishing the commit", stops)
+        self.assertIn("authorizing a launch", stops)
+
+    def test_it_carries_no_target_vocabulary(self) -> None:
+        """It travels with the skill and describes no repository."""
+        import json as _json
+        self.assertEqual(leaks_in(_json.dumps(impl.OBJECTIVE_FLOW)), [])
+
+    def test_the_doctrine_states_the_same_stages(self) -> None:
+        """Held equal to the code, the discipline the command roster and the
+        status tables already carry: doctrine that drifts from the data is
+        doctrine nobody can trust."""
+        skill = SKILL_MD.read_text(encoding="utf-8")
+        # Scoped to the section's own table, never to the whole document: the
+        # first version of this asserted each stage name appeared ANYWHERE in
+        # SKILL.md, and words like `rehearsal` appear all over the doctrine —
+        # so renaming a row in the table left it green. Measured by mutation,
+        # not noticed by reading.
+        start = skill.index("## The objective flow")
+        table = skill[start:skill.index("**Arrival:**", start)]
+        rows = [line for line in table.splitlines() if line.startswith("| `")]
+        self.assertEqual(
+            [line.split("`")[1] for line in rows],
+            [stage["stage"] for stage in impl.OBJECTIVE_FLOW["stages"]],
+            "the doctrine's table and `OBJECTIVE_FLOW` name different stages, "
+            "or name them in a different order")
+        self.assertIn(impl.OBJECTIVE_FLOW["arrival"], skill)
+
+
+class KitDemandsEveryStepKeyTests(unittest.TestCase):
+    """From zero, a repository is asked for everything the skill reads.
+
+    The half that is easy to forget: a key the forge learns to read is a key
+    a repository built from zero must be made to ship, and nothing held the
+    kit to that. `placement` went in and the kit could have stayed silent
+    about it, so the first target built after it would meet the question only
+    when the walk stopped — which is the same "discovered late" failure the
+    `produces` and notebook demands already exist to prevent.
+
+    Derived from `STEP_KEYS`, never from a list written twice: a key added to
+    the roster fails this until the kit's own example names it.
+    """
+
+    KIT = (Path(impl.__file__).resolve().parent.parent
+           / "assets" / "kit" / "src_benchmark" / "__init__.py")
+
+    def test_the_kit_example_names_every_key_the_skill_reads(self) -> None:
+        example = self.KIT.read_text(encoding="utf-8")
+        missing = [key for key in impl.STEP_KEYS
+                   if f'"{key}":' not in example]
+        self.assertEqual(
+            missing, [],
+            "the kit's `__steps__` example is silent about a key this skill "
+            "reads, so a repository built from zero would not be asked for it")
+
+    def test_the_roster_carries_no_target_vocabulary(self) -> None:
+        """These are the forge's own contract names. What a step is called,
+        what it writes and which service it sends to are the target's word."""
+        self.assertEqual(leaks_in(" ".join(impl.STEP_KEYS)), [])
+
+    def test_an_absent_key_is_reported_rather_than_defaulted(self) -> None:
+        """The demand is a report with its cost named, never a refusal: a
+        repository that never leaves rehearsal scale needs no placement and is
+        not defective for saying nothing."""
+        state = impl.undeclared_placement_state({"a": {}})
+        self.assertEqual(len(state), 1)
+        self.assertTrue(state[0]["consequence"])
+
+
+class FlowDestinationTests(unittest.TestCase):
+    """Whether the flow can tell a session it arrived when it has not."""
+
+    LEVELS = ["none", "pilot", "remote"]
+
+    def test_a_flow_owing_nothing_where_it_aims_still_names_where_it_goes(self) -> None:
+        """The failure this exists to close, and it is the expensive one.
+
+        A repository resting at the floor with every step reaching the floor
+        owes nothing toward the rung it aims at. `flow_acts` answers `[]`
+        there -- correctly -- and a session reading only that concludes the
+        work is done. The destination is the top of the ladder the target
+        itself declared, and the distance to it is what nobody was told.
+        """
+        rows = [{"step": "a", "walk": "walked", "rung": "none", "advances": 1},
+                {"step": "b", "walk": "walked", "rung": "none", "advances": 2}]
+        steps = {"a": {"placement": "local"},
+                 "b": {"placement": "remote", "job": "j", "service": "s"}}
+
+        aimed = impl.flow_acts(rows, steps, [], level="none", levels=self.LEVELS)
+        going = impl.flow_destination(rows, steps, [], self.LEVELS)
+
+        self.assertEqual(aimed, [], "nothing is owed toward the floor")
+        self.assertEqual(going["rung"], "remote")
+        self.assertEqual([a["step"] for a in going["remaining"]], ["a", "b"])
+
+    def test_the_destination_is_the_targets_own_top_rung(self) -> None:
+        """Never assumed to mean a worker: a ladder whose top is a local rung
+        has a local destination, and a forge that assumed otherwise would be
+        deciding somebody's flow for them."""
+        rows = [{"step": "a", "walk": "notWalked", "rung": None, "advances": 1}]
+        steps = {"a": {"placement": "local"}}
+        self.assertEqual(
+            impl.flow_destination(rows, steps, [], ["lower", "upper"])["rung"],
+            "upper")
+
+    def test_a_flow_actually_at_the_top_owes_nothing_to_reach_it(self) -> None:
+        rows = [{"step": "a", "walk": "walked", "rung": "remote", "advances": 1}]
+        steps = {"a": {"placement": "local"}}
+        self.assertEqual(
+            impl.flow_destination(rows, steps, [], self.LEVELS)["remaining"], [])
+
+    def test_no_declared_ladder_states_no_destination_and_says_so(self) -> None:
+        """An absence with its cost named, never a silent empty answer."""
+        going = impl.flow_destination([], {}, [], [])
+        self.assertIsNone(going["rung"])
+        self.assertEqual(going["remaining"], [])
+        self.assertIn("undeclaredLadder", going["note"])
+
+
+class WalkPlanTests(unittest.TestCase):
+    """What a walk performs on its own, and the act it stops at."""
+
+    def test_a_launch_is_never_performed(self) -> None:
+        """The property this walker exists to keep.
+
+        Everything above a launch is local work, a job folder written on this
+        disk, or the rehearsal doctrine already makes the agent's to run. A
+        launch is hours of somebody's quota, and it is the one act whose plan
+        a person asked to see before it happens. A walk that took it would be
+        exactly the launch path with no gate in front of it that `flow_acts`
+        refuses to be.
+        """
+        acts = [{"step": "a", "act": impl.ACT_LAUNCH}]
+        plan = impl.walk_plan(acts)
+        self.assertEqual(plan["performs"], [])
+        self.assertEqual(plan["stopsAt"]["act"], impl.ACT_LAUNCH)
+        self.assertNotIn(impl.ACT_LAUNCH, impl.WALK_PERFORMS)
+
+    def test_it_stops_at_the_first_act_it_will_not_take(self) -> None:
+        """Stops rather than filtering and continuing, because the flow is
+        ordered: a step that cannot run is one whose output every later step
+        reads, and walking past it runs the rest against material that was
+        never produced."""
+        acts = [{"step": "a", "act": impl.ACT_RUN_LOCAL},
+                {"step": "b", "act": impl.ACT_LAUNCH},
+                {"step": "c", "act": impl.ACT_RUN_LOCAL}]
+
+        plan = impl.walk_plan(acts)
+
+        self.assertEqual([a["step"] for a in plan["performs"]], ["a"])
+        self.assertEqual(plan["stopsAt"]["step"], "b")
+
+    def test_a_blocked_step_stops_the_walk_exactly_as_a_launch_does(self) -> None:
+        acts = [{"step": "a", "act": impl.ACT_BLOCKED, "needs": "nobody routed it"}]
+        plan = impl.walk_plan(acts)
+        self.assertEqual(plan["performs"], [])
+        self.assertEqual(plan["stopsAt"]["needs"], "nobody routed it")
+
+    def test_nothing_is_owed_and_the_walk_stops_at_nothing(self) -> None:
+        self.assertEqual(impl.walk_plan([]),
+                         {"performs": [], "stopsAt": None})
+
+    def test_an_unclassified_act_stops_the_walk_rather_than_defaulting(self) -> None:
+        """An act in neither list is not a walk-it act by omission.
+
+        The two rosters are data so that an act added later has to be
+        classified; this is what makes forgetting to cost a refusal instead of
+        a silent execution.
+        """
+        plan = impl.walk_plan([{"step": "a", "act": "something-new"}])
+        self.assertEqual(plan["performs"], [])
+        self.assertIn("classified in neither", plan["stopsAt"]["needs"])
+
+    def test_every_act_flow_acts_can_return_is_classified(self) -> None:
+        """The two rosters have to cover the acts, or the check above fires on
+        an act this file itself produces."""
+        produced = {impl.ACT_RUN_LOCAL, impl.ACT_GENERATE_JOB,
+                    impl.ACT_REHEARSE, impl.ACT_LAUNCH, impl.ACT_BLOCKED}
+        self.assertEqual(
+            produced, set(impl.WALK_PERFORMS) | set(impl.WALK_STOPS_AT))
+
+
+class GenerateJobArgvTests(unittest.TestCase):
+    """The remote act, composed from what the repository already declares."""
+
+    def _argv(self, **over):
+        entry = {"placement": "remote", "job": "job-b", "service": "svc",
+                 **over.pop("entry", {})}
+        return impl.generate_job_argv(
+            Path("/t"), "Prod", "beta", entry,
+            "https://example.invalid/r", "main",
+            "Prod/Notebooks/b.ipynb", **over)
+
+    def test_every_value_comes_from_the_declaration_or_the_remote(self) -> None:
+        argv = self._argv()
+        pairs = dict(zip(argv, argv[1:]))
+        self.assertEqual(pairs["--service"], "svc")
+        self.assertEqual(pairs["--job-name"], "job-b")
+        self.assertEqual(pairs["--product"], "Prod")
+        self.assertEqual(pairs["--repo-url"], "https://example.invalid/r")
+        self.assertEqual(pairs["--repo-ref"], "main")
+        self.assertEqual(pairs["--run-notebook"], "Prod/Notebooks/b.ipynb")
+
+    def test_the_pin_is_not_asserted_from_here(self) -> None:
+        """`--commit` is deliberately absent.
+
+        The remote skill resolves the pin and then PROVES it against the
+        declared remote, in a scratch repository, before writing a byte.
+        Passing a commit from here would be this skill asserting the fact that
+        one is built to verify.
+        """
+        self.assertNotIn("--commit", self._argv())
+
+    def test_the_clone_carries_the_source_and_the_notebooks(self) -> None:
+        """A runner clones sparsely, so the two roots it needs are named: the
+        package source it imports and the product notebooks it runs."""
+        argv = self._argv()
+        paths = [argv[i + 1] for i, a in enumerate(argv) if a == "--clone-path"]
+        self.assertEqual(paths, ["src", "Prod/Notebooks"])
+
+    def test_a_step_with_no_notebook_names_none(self) -> None:
+        argv = impl.generate_job_argv(
+            Path("/t"), "Prod", "beta",
+            {"placement": "remote", "job": "job-b", "service": "svc"},
+            "https://example.invalid/r", "main", None)
+        self.assertNotIn("--run-notebook", argv)
+
+    def test_it_returns_an_argv_and_never_a_string(self) -> None:
+        """The shape is the rule. A service name may be read here and must be
+        reduced to a count before anything is RETURNED; an argv the caller
+        executes is not a payload returned, and a joined string would invite
+        being printed into one.
+        """
+        argv = self._argv()
+        self.assertIsInstance(argv, list)
+        self.assertTrue(all(isinstance(a, str) for a in argv))
 
 
 class PublishedCommandsRunVerbatimTests(unittest.TestCase):

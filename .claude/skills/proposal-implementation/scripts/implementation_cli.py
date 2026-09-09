@@ -3717,7 +3717,40 @@ def cmd_probe(args) -> dict:
         # is broken" and this answers "where am I", which is the question
         # somebody opening a clean repository to run the flow from the top
         # actually has. Gates nothing. See `walk_state`.
+        # Why this skill was invoked and where it has to arrive, reported
+        # ABOVE every measurement below it. Every other key here answers
+        # "where am I" by reading products; this answers "what is this for",
+        # which no product implies and which a blocked session needs first.
+        # See `OBJECTIVE_FLOW`.
+        "objective": OBJECTIVE_FLOW,
         "walk": walk,
+        # The half `walk` could not answer. `walk` says where this repository
+        # stands; this says what the next act is for every step still owed, in
+        # the flow's own order, routed by each step's declared `placement`.
+        # Without it a session could read its position perfectly and had
+        # nothing telling it how to move -- every rung published a question
+        # whose answer changed no state, and the walk from one step to the
+        # next was performed by hand. Reports and issues nothing: running any
+        # of these acts is the caller's, and every guard each one carries
+        # stays where it is. See `flow_acts`.
+        "flowActs": flow_acts(
+            walk["steps"], probe_steps, jobs.get("jobs") or [],
+            # The rung the operator's own position header aims at, never the
+            # top of the ladder: `position --target-level` is the knob that
+            # says which phase this pass is walking toward, and it carries its
+            # own no-skip guard. Reading `topRung` here would report every
+            # step as owed on a repository deliberately resting at a lower
+            # rung, which is a report nobody would read twice.
+            level=(position or {}).get("targetLevel"),
+            levels=walk.get("levels") or []),
+        # Where the flow is GOING, as against what it owes toward the rung
+        # aimed at. Reported always and never acted on: a repository resting
+        # at the floor with every step reaching the floor owes nothing there
+        # and would read as finished, which is the one way this ladder can
+        # tell a session it arrived when it did not. See `flow_destination`.
+        "flowDestination": flow_destination(
+            walk["steps"], probe_steps, jobs.get("jobs") or [],
+            walk.get("levels") or []),
         # What went out to a remote worker (the ledger), plus what job
         # folders exist right now (the filesystem), plus — purely additive,
         # this slice refuses nothing on it — whether each job classifies as
@@ -9252,6 +9285,435 @@ WALK_OUTSIDE = "outsideTheWalk"
 #: into it has run.
 WALK_ORDER = ("notWalked", "unfinished", "walked")
 
+#: Where a declared step runs once the flow leaves rehearsal scale, and the
+#: name of the job folder that carries it when it runs elsewhere. Both are
+#: read off the target's own `__steps__`, and both are optional.
+#:
+#: **They are a declaration and not a ledger read, and that is the whole
+#: point.** The placement of every step of a real flow was decided in
+#: conversation and recorded as `discuss` answers -- free prose, in a file
+#: under `.implementation/`, which `.gitignore` excludes. So the decision
+#: could not be consumed (nothing can parse "Locally. It is the smallest step
+#: of the ten" into a route) and could not travel (a clone receives none of
+#: it), while the walk that has to act on it runs from a clone. The ledger
+#: keeps the REASON, with its numbers and its measurements; the declaration
+#: carries the FACT, which is the only half a machine consumes.
+#:
+#: `job` exists because nothing tied a job folder to a step. That link was
+#: deliberately not invented here -- a forge that guessed it would be deciding
+#: somebody's layout for them -- so the target names it, exactly as it names
+#: its own `produces` roots and its own `advances` ordinal.
+#: Every key this skill reads off one `__steps__` entry, and the roster the
+#: kit is held to. Data rather than a sentence, so a key added here fails a
+#: test until the kit's own example ships it -- which is what makes "a
+#: repository built from zero is asked for everything the skill reads" a
+#: measured property instead of a promise.
+#:
+#: It carries no target vocabulary and cannot: these are the forge's own
+#: contract names, the same class as `advances` and `produces`. What a step is
+#: CALLED, what it writes, which service it sends to -- all of that is the
+#: target's word and none of it appears here.
+#: WHY THIS SKILL WAS INVOKED, AND WHERE IT HAS TO ARRIVE.
+#:
+#: Declared, invariant, and deliberately independent of anything on disk. Every
+#: other reading in this file answers *where am I* by measuring products --
+#: `walk` the ledger, `flowActs` what is owed, `flowDestination` the rung. This
+#: answers a question none of them can: *what is this for*. A session that hits
+#: an error, an interruption, or a gap consults it, locates itself, resolves
+#: what blocks, and rejoins -- rather than improvising forward, which is what an
+#: agent does when a blocker detaches it from the purpose.
+#:
+#: **It is not the agreements and does not replace them.** What the mathematics
+#: says lives in the managed revision; what was settled about this repository
+#: lives in its `AGREED.md`. This says only what the skill is FOR, which is the
+#: one thing neither of those states and no artefact implies.
+#:
+#: Each stage names what it establishes and how a reader knows it is behind
+#: them. The conditions are written to be READ, not computed: a stage derived
+#: from products would make the purpose depend on the products, which is
+#: exactly the dependency this exists without.
+OBJECTIVE_FLOW = {
+    "purpose": (
+        "carry the agreed formulation as far as complete runs that can be "
+        "reported -- not a green verification, not a passing rehearsal"),
+    "stages": [
+        {"stage": "standing",
+         "establishes": "a repository to write the mathematics into: isolated "
+                        "under `implementations/` with an interpreter of its "
+                        "own, laid out the way this skill expects, the kit's "
+                        "destinations materialized, and the map from "
+                        "mathematical object to module approved",
+         "behindWhen": "`structure` reports no scaffold gaps and the benchmark "
+                       "declaration carries the revision and premises the map "
+                       "was approved with -- which is what `materialize "
+                       "--stage objects` refuses without"},
+        {"stage": "fidelity",
+         "establishes": "the code says what the bound revision says, and every "
+                        "claim it makes carries an invariant with a test",
+         "behindWhen": "`fidelity` is clean and the target's own suite is green "
+                       "under its own interpreter"},
+        {"stage": "audit",
+         "establishes": "what the formulation gets wrong, established over the "
+                        "declared sweep, with each remedy ruled admissible "
+                        "before it is measured and validated after",
+         "behindWhen": "`audit` is no longer `incomplete`"},
+        {"stage": "declaration",
+         "establishes": "what the experiment compares, over which statistical "
+                        "unit, by which metric, and what it produces",
+         "behindWhen": "the benchmark declaration is answered rather than "
+                       "sitting at its scaffolded empty value"},
+        {"stage": "rehearsal",
+         "establishes": "the declared flow runs end to end with its own "
+                        "notebooks, and the document a person reads agrees "
+                        "with the run",
+         "behindWhen": "the pilot is complete and `report` is `ok`"},
+        {"stage": "full-scale",
+         "establishes": "every step routed to where it was decided to run, and "
+                        "executed there at the scale the protocol declares",
+         "behindWhen": "this is the arrival; it is behind nobody"},
+    ],
+    "arrival": (
+        "complete runs at the declared scale, local or remote as each step "
+        "declares, with the record they leave"),
+    # Said here because a blocked agent needs it most: some stops are not
+    # defects and must not be repaired. Publishing a commit and authorizing a
+    # launch are decisions a person owes, and an agent that treats them as
+    # blockers to resolve will either stall on them or take them.
+    "humanStops": [
+        "authorizing that code be written at all, which nothing below the gate "
+        "may start without",
+        "approving the map from mathematical object to module, and the "
+        "revision and premises recorded beside it",
+        "publishing the commit a worker would clone",
+        "authorizing a launch, which is hours of somebody's quota",
+    ],
+}
+
+
+STEP_KEYS = ("module", "function", "advances", "reads", "produces",
+             "placement", "job", "service")
+
+PLACEMENT_KEY = "placement"
+JOB_KEY = "job"
+SERVICE_KEY = "service"
+PLACEMENT_LOCAL = "local"
+PLACEMENT_REMOTE = "remote"
+PLACEMENTS = (PLACEMENT_LOCAL, PLACEMENT_REMOTE)
+
+#: What an undeclared placement costs, said where the absence is reported.
+PLACEMENT_UNDECLARED_CONSEQUENCE = (
+    "the walk cannot route this step once the flow leaves rehearsal scale: it "
+    "knows the step exists, what it produces and where it sits in the order, "
+    "and not whether it runs here or on a worker. So the flow stops at it "
+    "rather than choosing, and a choice made by default is the one nobody "
+    "would have approved.")
+
+
+def _step_placement(entry: object) -> str | None:
+    """Where one declared step runs, or `None` when it declares nothing.
+
+    A value outside the two the contract names reads as undeclared rather
+    than raising: the same restraint `_produces_roots` applies to a malformed
+    root, and for the same reason -- a reporting path that raises on a
+    declaration it does not recognise turns a typo into a dead command.
+    """
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get(PLACEMENT_KEY)
+    return value if value in PLACEMENTS else None
+
+
+def _step_job(entry: object) -> str | None:
+    """The job folder one remote step runs through, or `None`."""
+    return _step_text(entry, JOB_KEY)
+
+
+def _step_service(entry: object) -> str | None:
+    """The service one remote step's job folder lives under, or `None`.
+
+    Declared by the TARGET and never discovered here, and the reason is a rule
+    this skill already carries: a service may be read to walk a directory and
+    is reduced to a count before anything is returned, so nothing in this file
+    may name one. Discovery could not fill the gap either -- adapters register
+    lazily, so the registry is empty until somebody names one, and listing the
+    adapter directory would read a sibling helper as a backend.
+
+    So the target says it, exactly as it says its own `job`, and the name
+    travels only in an argv the walker executes -- never in a payload this
+    skill returns.
+    """
+    return _step_text(entry, SERVICE_KEY)
+
+
+def _step_text(entry: object, key: str) -> str | None:
+    """One non-blank string key off a step's declaration, or `None`."""
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+#: The acts a step can still owe. `blocked` is a first-class answer and never
+#: a blank: a step nobody routed is not a step with nothing to do.
+ACT_RUN_LOCAL = "run-local"
+ACT_GENERATE_JOB = "generate-job"
+ACT_REHEARSE = "rehearse"
+ACT_LAUNCH = "launch"
+ACT_BLOCKED = "blocked"
+
+
+def _rung_reaches(rung: str | None, level: str | None,
+                  levels: list[str]) -> bool:
+    """Whether a step's own rung already reaches the rung being walked toward.
+
+    The ladder the target declares is the order, so `none` does not reach
+    `pilot` and `pilot` does not reach `remote`. A rung nothing measured
+    (`None`) reaches nothing: unmeasured is not attained, the same reading
+    every witness in this file already takes.
+
+    A target that declares no ladder has no order to compare against, and
+    there `walked` is the whole of what can be known -- so the caller falls
+    back to it rather than this function inventing a scale for a repository
+    that declared none. `undeclaredLadder` is where that absence is named.
+    """
+    if level is None or rung is None:
+        return False
+    if rung not in levels or level not in levels:
+        return False
+    return levels.index(rung) >= levels.index(level)
+
+
+def flow_acts(rows: list[dict], steps: dict, jobs: list[dict],
+              *, level: str | None = None,
+              levels: list[str] | None = None) -> list[dict]:
+    """The ordered acts standing between this repository and a walked flow.
+
+    One entry per declared step that has not been walked, in the order the
+    flow declares, each carrying the single act that step still owes. This is
+    the half that did not exist: `_walk_report` answers *where am I* and this
+    answers *what is the next act*, which is the question a session has to be
+    able to answer to move at all. Without it every rung published a question
+    whose answer changed nothing, and the walk from one step to the next was
+    performed by whoever was driving the CLI -- by hand, in a throwaway shell
+    script, three times on the day this was written.
+
+    **Pure, and it issues nothing.** It reads rows the caller already computed
+    and returns what WOULD be done, in order. Running any of it is the
+    caller's act, and every guard those acts carry stays exactly where it is.
+    A function that both decided and dispatched would be a launch path with no
+    `gate` standing in front of it.
+
+    A step whose placement is undeclared yields `blocked` rather than a guess.
+    Routing by default is how a campaign measured in days ends up somewhere
+    nobody chose, and `undeclared_placement_state` is what names that absence
+    before the walk ever reaches it.
+    """
+    levels = list(levels or [])
+    by_name = {job.get("job"): job for job in jobs if isinstance(job, dict)}
+    acts = []
+    # By the ORDER THE FLOW DECLARES, never the order the rows arrive in.
+    # `_walk_report` sorts its rows by step name because it is a report and a
+    # reader looks names up in it; acts are executed, and executing them
+    # alphabetically would run a step before the one whose output it reads --
+    # on a real repository the first act came out as the drawing step and the
+    # suite-and-invariants step that everything else rests on came out last.
+    # A step declaring no ordinal has no place in the order and goes after the
+    # ones that claim one, in the report's own order, which is the same
+    # restraint `pilot_completeness_state` already applies.
+    for row in sorted(rows, key=lambda r: (r.get("advances") is None,
+                                           r.get("advances") or 0)):
+        # A step is owed until its own rung reaches the one being walked
+        # toward -- NOT until it has been walked once. That distinction is the
+        # whole of this function's correctness at more than one scale, and it
+        # was measured rather than reasoned: on a real repository all ten
+        # declared steps read `walked`, every one of them at rung `none`,
+        # because the ledger's step events carry no scale at all. Skipping on
+        # `walked` therefore answered "nothing is owed" for a full run that
+        # had not started, which is the one wrong answer that costs a campaign.
+        #
+        # Where no ladder is declared there is no order to compare against and
+        # `walked` is the whole of what can be known, so that is what decides.
+        reached = (_rung_reaches(row.get("rung"), level, levels) if levels
+                   else row["walk"] == "walked")
+        if reached:
+            continue
+        entry = steps.get(row["step"])
+        placement = _step_placement(entry)
+        if placement is None:
+            acts.append({"step": row["step"], "placement": None,
+                         "act": ACT_BLOCKED,
+                         "needs": PLACEMENT_UNDECLARED_CONSEQUENCE})
+            continue
+        if placement == PLACEMENT_LOCAL:
+            acts.append({"step": row["step"], "placement": placement,
+                         "act": ACT_RUN_LOCAL, "needs": None})
+            continue
+        job_name = _step_job(entry)
+        service = _step_service(entry)
+        missing = [key for key, value in ((JOB_KEY, job_name),
+                                          (SERVICE_KEY, service))
+                   if value is None]
+        if missing:
+            keys = " and ".join(
+                f"{STEPS_DECLARATION}[{row['step']!r}][{key!r}]"
+                for key in missing)
+            acts.append({"step": row["step"], "placement": placement,
+                         "act": ACT_BLOCKED,
+                         "needs": f"{keys} names nothing, so this step is not "
+                                  "tied to the job folder that would carry it "
+                                  "elsewhere, nor to the service that folder "
+                                  "lives under"})
+            continue
+        job = by_name.get(job_name)
+        if job is None:
+            act = ACT_GENERATE_JOB
+        elif not job.get("smokeReady"):
+            act = ACT_REHEARSE
+        else:
+            act = ACT_LAUNCH
+        acts.append({"step": row["step"], "placement": placement,
+                     "act": act, "job": job_name, "needs": None})
+    return acts
+
+
+def flow_destination(rows: list[dict], steps: dict, jobs: list[dict],
+                     levels: list[str] | None) -> dict:
+    """Where this flow is going, and everything still between it and there.
+
+    `flow_acts` answers what is owed toward the rung the position header
+    AIMS at, which is the right question for deciding what to do next and
+    the wrong one for knowing whether the work is finished. A repository
+    resting at the floor with every step reaching the floor answers `[]`
+    there -- nothing owed -- and a session reading that concludes it
+    arrived. It has not: the destination is the top of the ladder the target
+    itself declared, and the distance to it is exactly what nobody was
+    told.
+
+    So this is computed toward `levels[-1]` and reported ALWAYS, whatever
+    the header aims at. It is a report and never a thing to act on: acting
+    happens against `flow_acts`, one rung at a time, because the ladder
+    refuses a skipped rung and this would otherwise read as permission to
+    jump. What it guarantees is narrower and is the whole point -- the flow
+    cannot look finished while it is not.
+
+    Which rung the top IS remains the target's word. A ladder whose top is a
+    local rung has a local destination and this says so; nothing here
+    assumes the top means a worker, because a forge that assumed it would be
+    deciding somebody's flow for them.
+    """
+    levels = list(levels or [])
+    if not levels:
+        return {"rung": None, "remaining": [],
+                "note": "no ladder is declared, so this flow states no "
+                        "destination; `undeclaredLadder` names what that "
+                        "absence costs"}
+    top = levels[-1]
+    remaining = flow_acts(rows, steps, jobs, level=top, levels=levels)
+    return {"rung": top, "remaining": remaining,
+            "note": "every act still standing between this repository and "
+                    "the top of its own declared ladder, reported whatever "
+                    "the position header aims at. Act against `flowActs`, "
+                    "one rung at a time; read this to know whether there is "
+                    "anywhere left to go."}
+
+
+#: What a walk performs on its own, and what it stops at. The split is the
+#: whole of this walker's safety and it is stated as data rather than as a
+#: branch, so a test can read it and an act added later has to be classified
+#: rather than silently inheriting one behaviour or the other.
+#:
+#: `launch` is the line. Everything above it is local work, a job folder
+#: written on this disk, or the rehearsal the doctrine already makes the
+#: agent's to run -- minutes, and the cheapest possible answer to whether the
+#: wire carries current. A launch is hours of somebody's quota against a
+#: campaign, and it is the one act whose plan a person asked to see before it
+#: happens. A walk that took it would be the launch path with no gate in
+#: front of it that `flow_acts` refuses to be.
+WALK_PERFORMS = (ACT_RUN_LOCAL, ACT_GENERATE_JOB, ACT_REHEARSE)
+WALK_STOPS_AT = (ACT_LAUNCH, ACT_BLOCKED)
+
+
+def generate_job_argv(target: Path, name: str, step: str, entry: dict,
+                      repo_url: str, repo_ref: str,
+                      notebook: str | None) -> list[str]:
+    """The exact `generate-job` invocation for one remote step.
+
+    Every value is derived from what the repository already declares or from
+    its own git remote, never invented here: the service and the job folder
+    come from `__steps__`, the product is the name this flow was invoked
+    with, the notebook is the one that step names among its own `produces`
+    roots, and the clone paths are the two a runner needs -- the package
+    source and the product's notebooks.
+
+    Composed, and returned as an argv the CALLER executes. It is never
+    published in a payload, because the service name is in it and this
+    skill's own rule is that a service is read to walk a directory and
+    reduced to a count before anything is returned. An argv executed is not a
+    payload returned, which is the whole reason this shape is a list of
+    strings rather than a string.
+
+    `--repo-ref` is the branch and `--commit` is deliberately left out: the
+    remote skill resolves and then PROVES the pin against the declared
+    remote, in a scratch repository, before writing a byte. Passing a commit
+    from here would be this skill asserting a fact that one is built to
+    verify.
+    """
+    argv = [sys.executable, str(REMOTE_EXECUTION_CLI_SCRIPT), "generate-job",
+            "--target", str(target),
+            "--service", _step_service(entry) or "",
+            "--job-name", _step_job(entry) or "",
+            "--product", name,
+            "--repo-url", repo_url,
+            "--repo-ref", repo_ref,
+            "--clone-path", "src",
+            "--clone-path", f"{name}/Notebooks"]
+    if notebook:
+        argv += ["--run-notebook", notebook]
+    return argv
+
+
+def walk_plan(acts: list[dict]) -> dict:
+    """What a walk would perform, in order, and the act it stops at.
+
+    Pure, and it performs nothing: it decides. The caller executes, so every
+    guard each act carries stays exactly where it is.
+
+    It stops at the FIRST act it will not take rather than filtering those
+    out and continuing, because the flow is ordered: a step that cannot run
+    is one whose output every later step reads, and walking past it would
+    run the rest against material that was never produced. A `blocked` step
+    stops the walk for the same reason a `launch` does -- one because nobody
+    routed it, the other because somebody has to approve it.
+    """
+    performs: list[dict] = []
+    for act in acts:
+        if act["act"] in WALK_STOPS_AT:
+            return {"performs": performs, "stopsAt": act}
+        if act["act"] not in WALK_PERFORMS:
+            return {"performs": performs,
+                    "stopsAt": {**act, "needs": (
+                        f"{act['act']!r} is classified in neither "
+                        "WALK_PERFORMS nor WALK_STOPS_AT, so nothing here "
+                        "knows whether a walk may take it")}}
+        performs.append(act)
+    return {"performs": performs, "stopsAt": None}
+
+
+def undeclared_placement_state(steps: dict) -> list[dict]:
+    """One entry per declared step that names no placement.
+
+    Reported and never demanded, the same shape `undeclaredProduces` uses: a
+    repository that never leaves rehearsal scale needs no placement on
+    anything and is not defective for saying nothing. What the absence costs
+    is named rather than left for somebody to discover at the point the walk
+    stops.
+    """
+    return [{"step": step,
+             "declaration": f"{STEPS_DECLARATION}[{step!r}][{PLACEMENT_KEY!r}]",
+             "consequence": PLACEMENT_UNDECLARED_CONSEQUENCE}
+            for step, entry in sorted(steps.items())
+            if _step_placement(entry) is None]
+
 
 def product_artefacts(target: Path, name: str) -> list[str]:
     """The result-rendering artefacts the product folder holds, product-relative.
@@ -14306,6 +14768,20 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         # demand lives.
         "undeclaredProduces": undeclared_produces_state(
             target, name, declared_steps),
+        # The third reading of the same declaration, and the one the walk
+        # routes on. `undeclaredProduces` asks what a step writes and
+        # `undeclaredStepNotebooks` asks whether any of it is a notebook; this
+        # asks WHERE the step runs once the flow leaves rehearsal scale.
+        # Reported with its consequence and never refused, for the reason its
+        # two neighbours already carry: a repository that never leaves
+        # rehearsal scale needs no placement on anything and is not defective
+        # for saying nothing. What it must not do is default -- routing an
+        # unrouted step by convention is how a run measured in days lands
+        # somewhere nobody chose, so `flow_acts` blocks on it and this is
+        # where the absence is named before the walk ever reaches it. The
+        # from-zero demand is the kit's own `__steps__` example, which ships
+        # both keys. See `undeclared_placement_state`.
+        "undeclaredPlacement": undeclared_placement_state(declared_steps),
         # The same declaration, one reading deeper, and the half
         # `undeclaredProduces` cannot answer: a step that named its roots and
         # named no notebook among them. A new top-level key rather than a
@@ -15958,7 +16434,143 @@ def refusal_resolution(code: str, args) -> dict | None:
         return None
 
 
-COMMANDS = {"env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_apply,
+def cmd_walk(args: argparse.Namespace) -> dict:
+    """Walk the declared flow toward the rung the position header aims at.
+
+    The piece that did not exist. Every part of the ordered flow was here --
+    the steps, their guards, the position sequence, the ledger, and the whole
+    remote chain -- and nothing carried a repository from step N to step N+1,
+    so that walk was performed by whoever drove the CLI, by hand, in a
+    throwaway shell script.
+
+    **It executes the published subcommands as subprocesses rather than
+    calling their functions.** Every guard those commands carry -- the dirty
+    worktree, the sequence order, the interpreter, the pin -- then applies
+    exactly as it does to a human running them, with nothing re-implemented
+    and nothing bypassed. A walker that reached inside would be a second path
+    to the same acts, and the second path is always the one missing a check.
+
+    It performs local work, writes job folders, and stops at a launch. That
+    line is `walk_plan`'s and is stated there; what it means here is that
+    this function has no path to `submit` at all.
+
+    Between two steps it refreshes the position, because an ordered next step
+    refuses while an earlier item's mark is the one written before this run,
+    and `position` is the only writer into that section. It does not commit:
+    what belongs in the history and what the message says are the operator's,
+    and a walker authoring commit messages would be writing the record of
+    somebody else's work.
+    """
+    target = resolve_target(args.target)
+    name = validate_name(args.name)
+    _require_no_open_defect(target, name)
+    # No `require_named_product_dir` here, and its absence is derived rather
+    # than forgotten: that guard's scope is the set of commands that append to
+    # the ledger themselves, and this one appends nothing. Every write it
+    # causes goes through `step` or `position`, each of which carries the
+    # guard already, so calling it here would put a tenth name in a set the
+    # suite holds equal to the nine that actually append -- and a guard whose
+    # scope stops matching what it guards is one nobody can reason about.
+
+    probe = cmd_probe(argparse.Namespace(
+        target=str(target), name=args.name, revision=args.revision))
+    plan = walk_plan(probe["flowActs"])
+
+    performed: list[dict] = []
+    for act in plan["performs"]:
+        if act["act"] == ACT_RUN_LOCAL:
+            argv = [sys.executable, str(CLI_PATH), "step",
+                    "--target", str(target), "--name", args.name,
+                    "--step", act["step"], "--session", args.session]
+        else:
+            # Composed here and never published: the argv carries a service
+            # name, and this skill's own rule is that a service is read to
+            # walk a directory and reduced to a count before anything is
+            # returned. Executing one is not returning one.
+            steps = resolve_steps_declaration(target, name)
+            entry = steps.get(act["step"]) or {}
+            notebooks = _step_notebook_roots(entry)
+            argv = generate_job_argv(
+                target, name, act["step"], entry,
+                _target_remote_url(target), _target_branch(target),
+                f"{name}/{notebooks[0]}" if notebooks else None)
+        ran = subprocess.run(argv, capture_output=True, text=True)
+        performed.append({"step": act["step"], "act": act["act"],
+                          "exitStatus": ran.returncode,
+                          "detail": (ran.stdout or ran.stderr)[-600:]})
+        if ran.returncode != 0:
+            # The refusal is the answer. Walking past a step that would not
+            # run would put every later step against material never produced,
+            # which is the same reason `walk_plan` stops rather than filters.
+            return {"command": "walk", "target": str(target), "name": name,
+                    "performed": performed, "stoppedAt": act,
+                    "reason": "the act above refused; its own message says why"}
+        if act["act"] == ACT_RUN_LOCAL and args.revision:
+            subprocess.run(
+                [sys.executable, str(CLI_PATH), "position",
+                 "--target", str(target), "--name", args.name,
+                 "--session", args.session, "--revision", args.revision],
+                capture_output=True, text=True)
+            _commit_walked_step(target, act["step"])
+    return {"command": "walk", "target": str(target), "name": name,
+            "performed": performed, "stoppedAt": plan["stopsAt"],
+            "reason": None if plan["stopsAt"] is None else
+                      plan["stopsAt"].get("needs")
+                      or "a launch is the operator's to authorize"}
+
+
+def _commit_walked_step(target: Path, step: str) -> None:
+    """Record what one walked step produced, so the next one can run.
+
+    A tension worth stating rather than hiding. `step` publishes its own next
+    acts and says of the first that the commit message is the operator's and
+    this skill never writes one -- which is right for a person running one
+    step and reading what it left. It cannot hold for a walk: `step` refuses
+    on a dirty tree, every step dirties the tree with its own product, and a
+    walker that stopped after each one to ask for a message would not be a
+    walker at all. That was measured, not reasoned: the first walk ran one
+    step and the second refused DIRTY_WORKTREE.
+
+    So the message here is deliberately mechanical -- it names the step and
+    nothing else. It records that an act happened; it does not narrate what
+    the work means, which is the half that stays the operator's and which
+    they can rewrite freely, since none of this is pushed.
+
+    Silent when there is nothing to record: a step that legitimately wrote
+    nothing is not an error, and `step`'s own `wrote` block is where that is
+    reported.
+    """
+    if not subprocess.run(["git", "-C", str(target), "status", "--porcelain"],
+                          capture_output=True, text=True).stdout.strip():
+        return
+    subprocess.run(["git", "-C", str(target), "add", "-A"],
+                   capture_output=True, text=True)
+    subprocess.run(
+        ["git", "-C", str(target), "commit", "-q", "-m",
+         f"walk: {step}",
+         "-m", "What this step declared it produces, recorded so the next "
+               "step in the flow can run: `step` refuses on a dirty tree. "
+               "The message is mechanical on purpose -- it records that an "
+               "act happened and narrates nothing, which stays yours."],
+        capture_output=True, text=True)
+
+
+def _target_remote_url(target: Path) -> str:
+    """The target's own `origin`, read at runtime and never stored here."""
+    ran = subprocess.run(["git", "-C", str(target), "remote", "get-url", "origin"],
+                         capture_output=True, text=True)
+    return ran.stdout.strip() if ran.returncode == 0 else ""
+
+
+def _target_branch(target: Path) -> str:
+    """The branch the target is on, which is what a job pins against."""
+    ran = subprocess.run(["git", "-C", str(target), "branch", "--show-current"],
+                         capture_output=True, text=True)
+    return ran.stdout.strip() if ran.returncode == 0 else ""
+
+
+COMMANDS = {"walk": cmd_walk,
+            "env": cmd_env, "name": cmd_name, "plan": cmd_plan, "apply": cmd_apply,
             "admit": cmd_admit, "handoff": cmd_handoff, "compose": cmd_compose,
             "probe": cmd_probe,
             "verify": cmd_verify,
@@ -16179,6 +16791,14 @@ def main(argv: list[str] | None = None) -> int:
                                 "exactly this operator-declared list; the "
                                 "engine never substitutes one of its own. "
                                 "Omit it for a single-send launch")
+        if name == "walk":
+            p.add_argument("--session", required=True,
+                           help="the session driving this walk, stamped on "
+                                "every position write it triggers")
+            p.add_argument("--revision", default=None,
+                           help="the managed revision the position binds to; "
+                                "omitted, no position refresh runs between "
+                                "steps and an ordered next step will refuse")
         if name == "step":
             p.add_argument("--step", required=True,
                            help="the declared __steps__ entry to run; no "
@@ -16444,8 +17064,16 @@ def main(argv: list[str] | None = None) -> int:
         # `GATING_REFUSALS` calls the code a work state -- somebody has to act
         # on the repository, and this says what -- and absent otherwise, so its
         # presence is itself the classification rather than a field to skim.
+        # The north, on every refusal without exception. A blocked session is
+        # exactly the one that has lost the purpose, and the cheapest possible
+        # remedy is that the refusal itself carries it: what this is for, where
+        # it has to arrive, and which stops are a person's rather than a defect
+        # to repair. It is small, invariant, and reads the same on every code,
+        # which is what lets an agent locate itself and rejoin instead of
+        # improvising forward. See `OBJECTIVE_FLOW`.
         payload = {"status": "refused", "code": refused.code,
-                   "detail": refused.detail}
+                   "detail": refused.detail,
+                   "objective": OBJECTIVE_FLOW}
         resolution = refusal_resolution(refused.code, args)
         if resolution is not None:
             payload["resolve"] = resolution
