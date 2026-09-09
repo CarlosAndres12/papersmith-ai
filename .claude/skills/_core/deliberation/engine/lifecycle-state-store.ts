@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { sha256, type BaseDocument, type LifecycleRevision, type LifecycleTransitionEvidence, type WithdrawalRecord, type WorkspaceLifecycleState } from './types.js';
+import { artifact as artifactConfig } from './artifact-naming.js';
 
 export type LifecycleFs={mkdir:typeof mkdir;readFile:typeof readFile;readdir:typeof readdir;rename:typeof rename;rm:typeof rm;writeFile:typeof writeFile};
 export type LifecycleStateStoreDependencies={fs?:LifecycleFs;now?:()=>Date;newId?:(kind:string)=>string;hash?:(content:string|Buffer)=>string;beforeCommitMarker?:(transition:LifecycleTransitionEvidence)=>Promise<void>|void;afterCommitMarker?:(transition:LifecycleTransitionEvidence)=>Promise<void>|void};
@@ -26,7 +27,7 @@ export class LifecycleStateStore {
  private readonly beforeCommitMarker?:LifecycleStateStoreDependencies['beforeCommitMarker'];
  private readonly afterCommitMarker?:LifecycleStateStoreDependencies['afterCommitMarker'];
  constructor(projectRoot:string,dependencies:LifecycleStateStoreDependencies={}) {
-  this.root=join(resolve(projectRoot),'.proposal-deliberation','lifecycle','v1');
+  this.root=join(resolve(projectRoot),artifactConfig.sidecarRoot,'lifecycle','v1');
   this.fs=dependencies.fs??defaultFs; this.now=dependencies.now??(()=>new Date()); this.newId=dependencies.newId??(()=>randomUUID()); this.hash=dependencies.hash??sha256;
   this.beforeCommitMarker=dependencies.beforeCommitMarker; this.afterCommitMarker=dependencies.afterCommitMarker;
  }

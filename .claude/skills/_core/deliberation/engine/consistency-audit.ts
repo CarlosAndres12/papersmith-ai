@@ -4,9 +4,10 @@ import { derivedStatePath, receiptPath, validateStoredState } from './derived-st
 import { validateWithdrawalMetadata } from './revision-lifecycle-store.js';
 import { withMutationLock } from './mutation-lock.js';
 import { PARSER_VERSION, PENDING_AUDIT_LEASE_MS, sha256, type PendingAuditArtifact, type PendingAuditContext, type RevisionLifecycleLockOwner } from './types.js';
+import { artifact as artifactConfig, documentPath, receiptPath as managedReceiptPath, statePath, strictManagedRevision, withdrawnMarkerPath } from './artifact-naming.js';
 
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const MANAGED=/^research-concept-(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?r\d{2,}\.md$/;
+const MANAGED=strictManagedRevision;
 const SHA=/^[0-9a-f]{64}$/;
 const activePendingAudits=new Map<string,{root:string;context:PendingAuditContext;owner:RevisionLifecycleLockOwner}>();
 const activeLifecycleLockOwners=new WeakMap<RevisionLifecycleLockOwner,{root:string;operationId:string;filename:string}>();
@@ -18,18 +19,19 @@ function result(status:string, id:string, category:string, evidence:unknown, det
 function operationKey(root:string,operationId:string) { return `${root}\0${operationId}`; }
 function lifecycleMutationLockKey(root:string,filename:string) { return `revision-lifecycle\0${root}\0${filename}`; }
 function isWithin(root:string,path:string) { const value=relative(root,path); return value===''||(!value.startsWith(`..${sep}`)&&value!=='..'&&!isAbsolute(value)); }
-function expectedMarkerPath(operationId:string) { return `.proposal-deliberation/withdrawn/${operationId}/audit-marker.json`; }
+function expectedMarkerPath(operationId:string) { return withdrawnMarkerPath(operationId); }
 function hasExactKeys(value:unknown,keys:string[]) { return !!value&&typeof value==='object'&&JSON.stringify(Object.keys(value).sort())===JSON.stringify([...keys].sort()); }
 
 function declaredLifecycleFilename(context:PendingAuditContext) {
-  const proposal=context.temporarilyMovedArtifacts.find(artifact=>artifact.publicRelativePath.startsWith('proposals/'));
-  const filename=proposal?.publicRelativePath.slice('proposals/'.length);
-  return filename&&MANAGED.test(filename)?filename:undefined;
+  const directoryPrefix=`${artifactConfig.directory}/`;
+  const proposal=context.temporarilyMovedArtifacts.find(entry=>entry.publicRelativePath.startsWith(directoryPrefix));
+  const filename=proposal?.publicRelativePath.slice(directoryPrefix.length);
+  return filename&&MANAGED(filename)?filename:undefined;
 }
 
 export async function withRevisionLifecycleMutationLock<T>(input:{projectRoot:string;operationId:string;filename:string},run:(owner:RevisionLifecycleLockOwner)=>Promise<T>):Promise<T> {
   const root=await realpath(input.projectRoot);
-  if (!UUID.test(input.operationId)||!MANAGED.test(input.filename)) throw new Error('INVALID_REVISION_LIFECYCLE_LOCK_IDENTITY');
+  if (!UUID.test(input.operationId)||!MANAGED(input.filename)) throw new Error('INVALID_REVISION_LIFECYCLE_LOCK_IDENTITY');
   return withMutationLock(lifecycleMutationLockKey(root,input.filename),async()=>{
     const owner=Object.freeze({operationId:input.operationId,filename:input.filename});
     activeLifecycleLockOwners.set(owner,{root,operationId:input.operationId,filename:input.filename});
@@ -77,13 +79,15 @@ function validateArtifactList(artifacts:unknown,operationType:unknown,failures:s
     if (!hasExactKeys(artifact,['publicRelativePath','sha256','expectedLocation'])||typeof artifact.publicRelativePath!=='string'||typeof artifact.sha256!=='string'||artifact.expectedLocation!==expectedLocation||!SHA.test(artifact.sha256)) { valid=false; continue; }
     if (paths.has(artifact.publicRelativePath)) valid=false;
     paths.add(artifact.publicRelativePath);
-    const match=artifact.publicRelativePath.match(/^(?:proposals\/(.+)|\.proposal-deliberation\/(?:state|receipts)\/(.+)\.json)$/);
+    const escapedDirectory=artifactConfig.directory.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const escapedSidecarRoot=artifactConfig.sidecarRoot.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+    const match=artifact.publicRelativePath.match(new RegExp(`^(?:${escapedDirectory}\\/(.+)|${escapedSidecarRoot}\\/(?:state|receipts)\\/(.+)\\.json)$`));
     const candidate=match?.[1]??match?.[2];
-    if (!candidate||!MANAGED.test(candidate)||filename&&candidate!==filename) valid=false;
+    if (!candidate||!MANAGED(candidate)||filename&&candidate!==filename) valid=false;
     else filename=candidate;
   }
   if (filename) {
-    const expected=new Set([`proposals/${filename}`,`.proposal-deliberation/state/${filename}.json`,`.proposal-deliberation/receipts/${filename}.json`]);
+    const expected=new Set([documentPath(filename),statePath(filename),managedReceiptPath(filename)]);
     if (paths.size!==expected.size||[...expected].some(path=>!paths.has(path))) valid=false;
   }
   if (!valid) failures.push(`${prefix}_INVALID_ARTIFACT_DECLARATION`);
@@ -91,8 +95,10 @@ function validateArtifactList(artifacts:unknown,operationType:unknown,failures:s
 }
 
 function immutableRelativePath(publicRelativePath:string) {
-  if (publicRelativePath.startsWith('proposals/')) return `artifacts/${publicRelativePath}`;
-  return `artifacts/${publicRelativePath.replace(/^\.proposal-deliberation\//,'')}`;
+  const directoryPrefix=`${artifactConfig.directory}/`;
+  if (publicRelativePath.startsWith(directoryPrefix)) return `artifacts/${publicRelativePath}`;
+  const sidecarPrefix=`${artifactConfig.sidecarRoot}/`;
+  return `artifacts/${publicRelativePath.startsWith(sidecarPrefix)?publicRelativePath.slice(sidecarPrefix.length):publicRelativePath}`;
 }
 
 async function readRegularWithin(root:string,path:string,failures:string[],code:string) {
@@ -206,12 +212,12 @@ async function auditWithdrawals(root:string,context:PendingAuditContext|undefine
   let withdrawn:string;
   let entries;
   try {
-    withdrawn=await resolveDirectoryWithin(root,join(root,'.proposal-deliberation','withdrawn'));
+    withdrawn=await resolveDirectoryWithin(root,join(root,artifactConfig.sidecarRoot,'withdrawn'));
     entries=await readdir(withdrawn,{withFileTypes:true});
   } catch {
     if (context) failures.push(`PENDING_AUDIT_OPERATION_NOT_FOUND:${context.operationId}`);
     else {
-      try { await lstat(join(root,'.proposal-deliberation','withdrawn')); failures.push('WITHDRAWAL_ROOT_UNSAFE'); }
+      try { await lstat(join(root,artifactConfig.sidecarRoot,'withdrawn')); failures.push('WITHDRAWAL_ROOT_UNSAFE'); }
       catch {}
     }
     return;
@@ -248,12 +254,12 @@ export async function runConsistencyAudit(input:{projectRoot:string;auditContext
   catch { root=input.projectRoot; failures.push('PROJECT_ROOT_UNREADABLE'); }
   let revisions:string[]=[];
   try {
-    revisions=(await readdir(join(root,'proposals'))).filter((name:string)=>MANAGED.test(name));
+    revisions=(await readdir(join(root,artifactConfig.directory))).filter((name:string)=>MANAGED(name));
   } catch {
     failures.push('PROPOSALS_UNREADABLE');
   }
   for (const filename of revisions) {
-    const bytes=await readFile(join(root,'proposals',filename));
+    const bytes=await readFile(join(root,artifactConfig.directory,filename));
     const hash=sha256(bytes);
     let stored:any;
     let receipt:any;
@@ -266,15 +272,15 @@ export async function runConsistencyAudit(input:{projectRoot:string;auditContext
       if (stored.manifest?.documentSha256&&stored.manifest.documentSha256!==hash) failures.push(`MANIFEST_SHA_MISMATCH:${filename}`);
     }
     try { receipt=JSON.parse(await readFile(receiptPath(root,filename),'utf8')); }
-    catch { if (!filename.endsWith('-r01.md')) failures.push(`MISSING_RECEIPT:${filename}`); }
+    catch { if (!filename.endsWith(`-${artifactConfig.revisionLabel(1)}.md`)) failures.push(`MISSING_RECEIPT:${filename}`); }
     if (receipt) {
       if (receipt.documentShaAfter!==hash) failures.push(`RECEIPT_SHA_MISMATCH:${filename}`);
-      if (receipt.sourceRevision&&receipt.sourceRevision!=='r01'&&!revisions.some((name:string)=>name.endsWith(`-${receipt.sourceRevision}.md`))) failures.push(`MISSING_SOURCE_REVISION:${filename}`);
+      if (receipt.sourceRevision&&receipt.sourceRevision!==artifactConfig.revisionLabel(1)&&!revisions.some((name:string)=>name.endsWith(`-${receipt.sourceRevision}.md`))) failures.push(`MISSING_SOURCE_REVISION:${filename}`);
     }
     if (stored?.manifest?.status==='COMMITTED'&&!receipt) failures.push(`COMMITTED_WITHOUT_RECEIPT:${filename}`);
   }
   for (const directory of ['state','receipts']) {
-    const path=join(root,'.proposal-deliberation',directory);
+    const path=join(root,artifactConfig.sidecarRoot,directory);
     try {
       const entries=await readdir(path);
       for (const entry of entries) if (entry.endsWith('.json')&&!revisions.includes(entry.slice(0,-5))) failures.push(`ORPHAN_${directory.toUpperCase()}:${entry}`);

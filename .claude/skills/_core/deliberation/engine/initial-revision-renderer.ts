@@ -1,4 +1,9 @@
 import type { CanonicalProposalMetadata, CreateR01PayloadV1, MaterializationClaimProvenance } from './revision-domain.js';
+import { artifact, managedRevisionFilename } from './artifact-naming.js';
+import { DOMAIN } from './domain-profile.js';
+
+/** Change 8, option (b): v1's own default change summary, rendered only when `profile.artifact.changeHeader` is declared -- the header must exist as a span in v1 for a later successor to replace. The managed directory holds only `.gitkeep` today, so this is zero migration. */
+const INITIAL_CHANGE_SUMMARY = { what: 'Initial revision.', why: 'First published version.' };
 
 /** Read-only paper-guide reference fragment, mirroring `ChatGuideFragment`'s shape without importing chat-only types. */
 export type InitialRevisionGuideFragment = { path: string; content: string };
@@ -55,7 +60,7 @@ export class InitialRevisionRenderer {
 			kind: 'CREATE_R01',
 			payloadVersion: 1,
 			markdown,
-			target: { filename: 'research-concept-r01.md', revision: 'r01' },
+			target: { filename: managedRevisionFilename('ROOT', 1), revision: artifact.revisionLabel(1) },
 			canonicalMetadata: structuredClone(input.canonicalMetadata),
 		};
 	}
@@ -78,6 +83,7 @@ export class InitialRevisionRenderer {
 			sections.push('## Paper Guide Reference', '');
 			for (const fragment of guideFragments) sections.push(`### ${fragment.path}`, '', fragment.content.trim(), '');
 		}
+		if (DOMAIN.artifact.changeHeader) sections.push(DOMAIN.artifact.changeHeader.render(INITIAL_CHANGE_SUMMARY), '');
 		const markdown = `${sections.join('\n').replace(/\n+$/, '')}\n`;
 		return { markdown, slug, canonicalMetadata };
 	}

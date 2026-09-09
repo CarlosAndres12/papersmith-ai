@@ -2,6 +2,7 @@
 name: implementation-build
 description: "One stretch of proposal-implementation, between two of the operator's gates: from an approved object-to-module map to the findings report they decide on. Materialize the object scaffolding, write one module per mathematical object with its provenance and invariant tests, sweep the declared configurations, rule on each remedy's admissibility BEFORE measuring it, and validate what was admitted. Decides nothing and asks nothing — it ends by reporting what it found and what establishing it cost."
 tools: Read, Write, Edit, Bash, Glob, Grep
+stretch: audit
 ---
 
 # Implementation — the build stretch
@@ -19,6 +20,14 @@ on their behalf is the failure this shape exists to prevent.
 
 If you find that the map was never approved — the declaration carries no
 revision or premises — you are before your own stretch. Report that and stop.
+
+**Not every agent's description carries its bound skill's arrival, verbatim.**
+Only a `stretch: terminal` agent does; any other stretch ends at a named,
+earlier stage instead, and a skill that declares no north at all binds an
+agent with nothing to carry. This one is `stretch: audit`: the description
+above ends at the findings report, one stage short of
+`proposal-implementation`'s own arrival, and that is correct rather than
+incomplete.
 
 ## When something refuses
 
