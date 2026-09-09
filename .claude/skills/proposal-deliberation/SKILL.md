@@ -9,16 +9,19 @@ Invoking this skill does not just call a tool — it conditions **you, the runni
 
 ## The objective flow
 
-**Why this skill was invoked, and where it has to arrive.** Declared here and in
-the engine's `OBJECTIVE_FLOW`, held equal by a test, and independent of any
-document on disk. `STATUS` answers *where am I* by listing what has been
-published; this answers *what is this for*, which no listing implies. Every
-refusal the engine raises carries it, and `STATUS` reports it above the
-inventory.
+**Why this skill was invoked, and where it has to arrive.** Declared here and
+in this skill's own `profile.ts` `objective` field, held equal by a test, and
+independent of any document on disk. `STATUS` answers *where am I* by listing
+what has been published; this answers *what is this for*, which no listing
+implies. `STATUS` reports it above the inventory, and both of the engine's
+CLI-level error paths carry it too — that is its complete reach. A typed
+refusal returned as a value from `tool.execute` does not carry it; run
+`STATUS` to recover it.
 
-It lives in the engine and not in a domain profile, and that is derived rather
-than chosen: a profile says what this domain is called and which notation it
-uses, and would say the same north whichever domain asked.
+The north's *structure* lives in the engine — its shape, its presence at
+those three sites — and not its text: the text is this domain's own, declared
+in `profile.ts` alongside every other domain value, because a second domain
+measurably does not say the same north this one does.
 
 **Purpose:** carry the mathematics that was discussed as far as a published
 managed revision — not a good conversation, a document that exists and is the

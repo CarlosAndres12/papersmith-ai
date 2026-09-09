@@ -23,7 +23,7 @@ function sha256(bytes: Buffer): string {
 /** Explicit v1 candidate produced from the caller's idea+guide (spec I1, I2, I5); never the fixed scientific-workflow `CreateR01PayloadV1` contract. */
 export type InitialRevisionCandidate = {
 	filename: string;
-	/** The profile's own first-revision label (`artifact.revisionLabel(1)`), never a literal: the file is named by that label too, and a caller that read a fixed `'r01'` here got a label the document on disk does not carry. A TypeScript literal cannot depend on a runtime profile value, and this project runs no type checker at all, so the guard is `tests/experimental-deliberation-initial-revision.test.mjs`, never this annotation. */
+	/** The profile's own first-revision label (`artifact.revisionLabel(1)`), never a literal: the file is named by that label too, and a caller that read a fixed `'r01'` here got a label the document on disk does not carry. A TypeScript literal cannot depend on a runtime profile value, and this project runs no type checker at all, so the guard is a domain's own initial-revision test suite, never this annotation. */
 	revision: string;
 	markdown: string;
 	canonicalMetadata: CanonicalProposalMetadata;

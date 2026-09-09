@@ -84,6 +84,12 @@ export const profile: DeliberationDomainProfile = {
 		},
 		severity: ${JSON.stringify(severity)},
 	},
+	objective: {
+		purpose: "test purpose",
+		stages: [{ stage: "bound", establishes: "x", behindWhen: "x" }],
+		arrival: "test arrival",
+		humanStops: ["a person decides"],
+	},
 };
 `;
 }

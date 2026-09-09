@@ -24,7 +24,7 @@ const piRoot = '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent';
 
 // Exactly the top-level keys `domain-profile.ts` refuses a profile for omitting,
 // plus the six nested `artifact.*` fields it checks separately.
-const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'proseReferenceText', 'vocabulary', 'artifact', 'preservation', 'references', 'sources'];
+const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'proseReferenceText', 'vocabulary', 'artifact', 'preservation', 'references', 'sources', 'objective'];
 const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'];
 const VOCABULARY_REQUIRED = ['conceptualTerms', 'expertPattern', 'displayNounPattern', 'displayNounStripPattern', 'subjectPattern', 'subjectTerms', 'subjectLocusDescription', 'subjectEvidenceLabel'];
 
@@ -106,6 +106,11 @@ console.log(JSON.stringify({
     plainAtoms: preservation.atoms(PLAIN).size,
     lostFigure: preservation.delta(RICH, RICH_WITHOUT_FIGURE).lost.map((atom) => atom.kind),
     lostNothing: preservation.delta(RICH, RICH).lost.length,
+    objectiveStages: DOMAIN.objective.stages.map((stage) => stage.stage),
+    objectiveArrival: DOMAIN.objective.arrival,
+    objectivePurpose: DOMAIN.objective.purpose,
+    objectiveEntrances: DOMAIN.objective.entrances ?? null,
+    objectiveHumanStops: DOMAIN.objective.humanStops,
 }));
 `;
 
@@ -213,4 +218,57 @@ test('the core reports not-applicable on a document with no experimental structu
     assert.ok(result.richAtoms > 0);
     assert.deepEqual(result.lostFigure, ['figure'], 'dropping the figure placeholder must be reported as a lost atom');
     assert.equal(result.lostNothing, 0, 'an unchanged document loses nothing, which is a pass and not a vacuous one');
+});
+
+// Phase 2 (change 11, "a north a second domain can hold"): this domain declares
+// its OWN north -- bound -> validated -> deliberated -> composed -> published --
+// not the mathematical sibling's stages read back through a shared engine const.
+test('the profile declares its own north: bound, validated, deliberated, composed, published -- not the mathematical stages', async () => {
+    const result = await loaded();
+    assert.deepEqual(result.objectiveStages, ['bound', 'validated', 'deliberated', 'composed', 'published']);
+    assert.doesNotMatch(result.objectivePurpose, /mathematics/i, 'the experimental north must not carry the mathematical sibling\'s subject');
+    assert.doesNotMatch(result.objectiveArrival, /mathematics/i, 'the experimental north must not carry the mathematical sibling\'s subject');
+});
+
+test('the north declares no entrance: proposals/ is a required source, not a mid-flow arrival', async () => {
+    const result = await loaded();
+    assert.equal(result.objectiveEntrances, null, 'this domain has no handoff producing a finding the way the mathematical sibling does');
+});
+
+test('the north declares at least one human stop', async () => {
+    const result = await loaded();
+    assert.ok(result.objectiveHumanStops.length >= 1);
+});
+
+// Spec scenario "The experimental profile declares its own north"
+// (specs/deliberation-objective-flow/spec.md): runs the REAL launcher this
+// skill ships, not a harness that imports the profile directly, so this
+// proves the whole wiring end to end -- launcher, engine, `STATUS`, and both
+// error paths all resolve back to this domain's own text.
+const cliPath = path.join(skillDir, 'cli.mjs');
+
+test('runStatus on the experimental CLI emits the experimental stages, not the mathematical ones', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'experimental-deliberation-cli-'));
+    const env = { ...process.env, PROPOSAL_DELIBERATION_PROJECT_ROOT: directory };
+    delete env.DELIBERATION_DOMAIN_PROFILE;
+    const { stdout } = await execFileAsync('node', [cliPath, '{"operation":"STATUS"}'], { env });
+    const result = JSON.parse(stdout);
+    assert.equal(result.status, 'ok');
+    assert.deepEqual(result.objective.stages.map((stage) => stage.stage), ['bound', 'validated', 'deliberated', 'composed', 'published']);
+    assert.doesNotMatch(result.objective.purpose, /mathematics/i);
+});
+
+test('a malformed request on the experimental CLI still carries the experimental north on its error path', async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'experimental-deliberation-cli-err-'));
+    const env = { ...process.env, PROPOSAL_DELIBERATION_PROJECT_ROOT: directory };
+    delete env.DELIBERATION_DOMAIN_PROFILE;
+    let result;
+    try {
+        await execFileAsync('node', [cliPath, '{"operation":"NOT_A_REAL_OP"}'], { env });
+        assert.fail('expected the CLI to exit non-zero on an unknown operation');
+    } catch (error) {
+        result = JSON.parse(error.stdout);
+    }
+    assert.equal(result.status, 'error');
+    assert.deepEqual(result.objective.stages.map((stage) => stage.stage), ['bound', 'validated', 'deliberated', 'composed', 'published']);
 });

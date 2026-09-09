@@ -62,7 +62,7 @@ const equationSymbols=(value:string)=>[...new Set(value.match(/\\[A-Za-z]+|\b[A-
  * `ambiguityGate` — which blocks whenever the top two are within 4 — handed the
  * caller a menu instead of the table. That predates tables and hit ordinary
  * paragraphs the same way; it only became load-bearing once documents became
- * mostly tables and "replace experiment 3's table" became the usual query.
+ * mostly tables and "replace the third result table" became the usual query.
  *
  * Context is NOT dropped: describing a locus by what surrounds it ("the paragraph
  * after the accuracy table") is a real and supported way to aim, and an entry

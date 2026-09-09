@@ -9,6 +9,68 @@ Invoking this skill does not just call a tool — it conditions **you, the runni
 
 This skill sits on the same shared engine as [`proposal-deliberation`](../proposal-deliberation/SKILL.md), through its own domain profile. The writing scaffold is shared — resolve a locus, patch it, preview, acknowledge, publish. What is *sufficient* is not shared at all, and that difference is the whole reason this skill exists. See [The two domains do not share sufficiency](#the-two-domains-do-not-share-sufficiency).
 
+## The objective flow
+
+**Why this skill was invoked, and where it has to arrive.** Declared here and
+in this skill's own `profile.ts` `objective` field, held equal by a test, and
+independent of any document on disk. `STATUS` answers *where am I* by listing
+what has been published; this answers *what is this for*, which no listing
+implies. `STATUS` reports it above the inventory, and both of the engine's
+CLI-level error paths carry it too — that is its complete reach. A typed
+refusal returned as a value from `tool.execute` does not carry it; run
+`STATUS` to recover it.
+
+It lives in the engine's structure and not its text: a profile says what this
+domain is called and which notation it uses, and this domain measurably does
+**not** say the mathematical sibling's north — this flow has a stage,
+`validated`, that the sibling has no equivalent of at all.
+
+**Purpose:** carry the experiments that were discussed as far as a
+published managed revision — not a good conversation, a document that exists
+and is the current one.
+
+| Stage | Establishes | Behind you when |
+| --- | --- | --- |
+| `bound` | Which revision is current and which entry of it the change touches | `STATUS` named the latest and the target resolved to an entry |
+| `validated` | The protocol, the metric and the baseline came from a search, not a guess | A URL with no dated tag, or a baseline with no repository or venue year, stops this stage |
+| `deliberated` | The change was argued through rather than typed | **the user said so** — nothing here measures it, and nothing may |
+| `composed` | The replacement exists written as the experiment, not a description of it | A block exists carrying the experiment and what it must meet |
+| `published` | The successor exists carrying the artifact marker and is the current revision | This is the arrival; it is behind nobody |
+
+**Arrival:** the successor revision published and current, which is the only form the experiments travel in.
+
+**The middle stage has no observable condition, and that is stated rather than
+papered over.** Nothing measures "it was deliberated". If this pretended to,
+an agent could open a question and answer it itself — a failure this project
+has already seen — and close the stage on its own word. A gap that is named is
+a shield; a gap that is faked is the opposite.
+
+**There is no entrance from outside.** `proposals/` is a required *source*
+read once at v1 render, not a session arriving mid-flow, and no other skill
+hands this one a finding. Declaring an entrance nothing produces would be a
+claim with no producer.
+
+**Two stops are a person's:** accepting the design, which closes
+`deliberated`, and authorizing publication, because it advances the real
+lineage.
+
+## What this skill delegates, and to whom
+
+Two stretches of this flow are mechanical, or decidable from bytes alone, and
+both used to get lost.
+
+| Stretch | Delegated to | Begins after | Ends at | Measure this before delegating |
+| --- | --- | --- | --- | --- |
+| Publish | this skill delegates to the `experimental-publish` agent | the operator accepted the change | the successor published and current | the acceptance itself — the one precondition here that no command reports, because nothing measures `deliberated`. The orchestrator holds it or the stretch does not begin |
+| Validate | this skill delegates to the `experimental-validation` agent | a revision is bound and the design names which protocol, metric and baselines it needs | no external URL lacks a dated tag and no baseline lacks a repository or venue year | `STATUS` — a bound revision must exist before there is anything to validate against |
+
+**The deliberation itself is never delegated**, and the north above says why:
+nothing measures it, so an agent that could close that stage would be
+approving its own document.
+
+What moves is execution, never doctrine: every rule stays here, and each
+agent's first instruction is to load this file.
+
 ## The question that governs every turn
 
 **Does this experiment sustain the proposal's claim, and would it survive a reviewer?**
@@ -52,7 +114,7 @@ Two facts about how the engine actually reads these, both worth knowing before y
 
 ## External validation, before any draft
 
-**This is a stage in this skill's own procedure, not an engine stage.** The engine governs operations; it never governs a sequence, and it will happily let you draft first. Do not.
+**This is now a declared stage of this domain's own north (`validated`, see [The objective flow](#the-objective-flow)) — but the engine still does not enforce where it sits in the sequence.** The engine governs operations, never a sequence, and it will happily let you draft first. Do not. What makes `validated` a real stage rather than a wish is that its own condition is byte-decidable — `preservation-experimental.ts`'s verification-tag and baseline rules, not a check the engine runs before you draft.
 
 Before writing any experiment, search the web for:
 

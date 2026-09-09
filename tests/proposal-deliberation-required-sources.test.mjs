@@ -114,6 +114,12 @@ export const profile: DeliberationDomainProfile = {
 	preservation: { extractAtoms: () => new Map(), violations: () => [] },
 	references: { declares: () => [], cites: () => [] },
 ${sourcesFieldSource}
+	objective: {
+		purpose: "test purpose",
+		stages: [{ stage: "bound", establishes: "x", behindWhen: "x" }],
+		arrival: "test arrival",
+		humanStops: ["a person decides"],
+	},
 };
 `;
 }

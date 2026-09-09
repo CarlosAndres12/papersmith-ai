@@ -5,8 +5,8 @@ import type { PreservationAtom, PreservationDelta, PreservationViolation } from 
  * The preservation gate (change 4): what a document must never lose in silence, and
  * the canonical form every byte it stores must keep. Formerly `math-integrity.ts` --
  * domain-neutral now, sourcing its atom extractor and rule set from
- * `profile.preservation.{extractAtoms, violations}` instead of hardcoding
- * mathematics. The mathematical implementation ships as
+ * `profile.preservation.{extractAtoms, violations}` instead of hardcoding one
+ * domain's own subject. The mathematical implementation ships as
  * `proposal-deliberation/preservation-math.ts`, wired through that profile.
  *
  * The engine's other validators check *internal consistency* -- that labels are

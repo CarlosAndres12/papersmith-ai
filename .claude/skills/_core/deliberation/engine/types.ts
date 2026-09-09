@@ -88,10 +88,9 @@ export type CleanupLevel = 'NONE'|'STRUCTURAL'|'SEMANTIC'; export type MoveMode 
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 /**
  * The preservation gate's domain-neutral vocabulary (change 4): an atom is anything a
- * profile's own extractor recognizes as something that must not vanish silently -- a
- * mathematical display, an experimental table skeleton, a declared success criterion,
- * whatever the domain names. `kind` is intentionally a bare `string`: only the profile
- * knows what its own atom kinds are.
+ * profile's own extractor recognizes as something that must not vanish silently,
+ * whatever the domain calls it. `kind` is intentionally a bare `string`: only the
+ * profile knows what its own atom kinds are.
  */
 export type PreservationAtomKind = string;
 export type PreservationAtom = { id: string; kind: PreservationAtomKind; text: string };

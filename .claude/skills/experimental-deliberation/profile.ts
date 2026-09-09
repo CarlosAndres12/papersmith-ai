@@ -150,4 +150,48 @@ export const profile: DeliberationDomainProfile = {
 		{ path: "proposals", required: true },
 		{ path: "guidance/area-benchmark", required: false },
 	],
+	// The north (change 11, "a north a second domain can hold"): why this session
+	// exists and where it has to arrive. Structure is the engine's; this text is
+	// this domain's own, and it is NOT the mathematical sibling's north with words
+	// swapped -- `validated` has no equivalent there at all, because a mathematical
+	// derivation is timeless and an experimental design's evidence decays.
+	objective: {
+		purpose: "carry the experiments that were discussed as far as a published managed revision -- not a good conversation, a document that exists and is the current one",
+		stages: [
+			{
+				stage: "bound",
+				establishes: "which revision is current and which entry of it the change touches",
+				behindWhen: "`STATUS` named the latest and the target resolved to an entry",
+			},
+			{
+				stage: "validated",
+				establishes: "the protocol, the metric and the baseline came from a search, not a guess",
+				behindWhen: "a URL with no dated tag, or a baseline with no repository or venue year, stops this stage",
+			},
+			{
+				stage: "deliberated",
+				establishes: "the change was argued through rather than typed",
+				behindWhen: "THE USER SAID SO. Nothing here measures it, and nothing may: an agent that could close this stage on its own word would be approving its own document",
+			},
+			{
+				stage: "composed",
+				establishes: "the replacement exists written as the experiment, not a description of it",
+				behindWhen: "a block exists carrying the experiment and what it must meet",
+			},
+			{
+				stage: "published",
+				establishes: "the successor exists carrying the artifact marker and is the current revision",
+				behindWhen: "this is the arrival; it is behind nobody",
+			},
+		],
+		arrival: "the successor revision published and current, which is the only form the experiments travel in",
+		// No entrance: `proposals/` is a required SOURCE read once at v1 render, not
+		// a session arriving mid-flow, and no skill hands this one a finding the way
+		// implementation hands one to the mathematical sibling. Declaring an
+		// entrance nothing produces would be a claim with no producer.
+		humanStops: [
+			"accepting the change, which closes the deliberated stage and which nothing here may close on its own",
+			"authorizing publication, because it advances the real lineage",
+		],
+	},
 };

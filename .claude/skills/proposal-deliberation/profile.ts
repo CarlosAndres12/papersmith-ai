@@ -60,4 +60,51 @@ export const profile: DeliberationDomainProfile = {
 	// pre-change behavior. A future source this domain cannot draft without would set
 	// `required: true` instead.
 	sources: [{ path: "guidance/paper-guide", required: false }],
+	// The north (change 11): today's exact `OBJECTIVE_FLOW` text, byte-identical, moved
+	// out of the engine and into this domain's own profile. This is the first change to
+	// touch this file at all -- behaviour is unchanged, but the file has changed, which
+	// `tests/proposal-deliberation-objective-flow.test.mjs` proves by deriving its
+	// expectations from this profile rather than from a literal array of its own.
+	objective: {
+		purpose: "carry the mathematics that was discussed as far as a published managed revision -- not a good conversation, a document that exists and is the current one",
+		stages: [
+			{
+				stage: "bound",
+				establishes: "which revision is current and which entry of it the change touches",
+				behindWhen: "`STATUS` named the latest and the target resolved to an entry",
+			},
+			{
+				stage: "deliberated",
+				establishes: "the change was argued through rather than typed",
+				behindWhen: "THE USER SAID SO. Nothing here measures it, and nothing may: an agent that could close this stage on its own word would be approving its own proposal",
+			},
+			{
+				stage: "composed",
+				establishes: "the replacement exists written AS mathematics -- the equation, with its tag -- and not as a description of it",
+				behindWhen: "a block exists carrying the equation and the tag it lands on",
+			},
+			{
+				stage: "published",
+				establishes: "the successor exists carrying the artifact marker and is the current revision",
+				behindWhen: "this is the arrival; it is behind nobody",
+			},
+		],
+		arrival: "the successor revision published and current, which is the only form the mathematics travels in",
+		// This skill has an entrance from outside: a finding raised while
+		// implementing arrives through a handoff, already near the composed stage.
+		// Named because a session that entered there still owes the arrival, and a
+		// finding that gets discussed, agreed, and never published is how this pair
+		// of skills loses work.
+		entrances: [
+			{
+				from: "a finding handed over by the implementation skill",
+				arrivesAt: "composed",
+				note: "it still owes publication; agreement is not arrival",
+			},
+		],
+		humanStops: [
+			"accepting the change, which closes the deliberated stage and which nothing here may close on its own",
+			"authorizing publication, because it advances the real lineage",
+		],
+	},
 };

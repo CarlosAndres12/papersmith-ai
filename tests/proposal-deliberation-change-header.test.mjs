@@ -67,6 +67,12 @@ export const profile: DeliberationDomainProfile = {
 	},
 	references: { declares: () => [], cites: () => [] },
 	sources: [],
+	objective: {
+		purpose: "test purpose",
+		stages: [{ stage: "bound", establishes: "x", behindWhen: "x" }],
+		arrival: "test arrival",
+		humanStops: ["a person decides"],
+	},
 };
 `;
 

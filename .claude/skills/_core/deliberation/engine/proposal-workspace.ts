@@ -2926,7 +2926,7 @@ function validateAuthorizedDisplayRelocations(
 				"derive_revision",
 				"unapproved-destination-display",
 				`destination replacement ${JSON.stringify(destination)} contains a target-side unapproved display`,
-				"Keep relocation destinations byte-exact to declared moved displays; add unrelated mathematics through a separate insertion.",
+				"Keep relocation destinations byte-exact to declared moved displays; add anything else unrelated through a separate insertion.",
 				{ destinationReplacementId: destination, targetDisplayCount: mutation.targetDisplayCount, copiedDisplayCount: copiedCount },
 			);
 		}
@@ -5453,8 +5453,8 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
   // paper -- and `proposal-deliberation` still depends on it. It is NOT what a managed
   // revision is: a managed revision is a flat file named `<stem>-<lineage>-<label>.md`
   // sitting directly in its own directory. So a domain that declares another skill's
-  // managed directory as a source (the latest proposal, whose claims the experiments
-  // document exists to test) used to get the WORST of both: `missingRequiredSources`
+  // managed directory as a source (a downstream document whose claims trace back to
+  // an upstream managed revision) used to get the WORST of both: `missingRequiredSources`
   // enforced the directory's presence, and this loader then descended one level, found
   // no sub-directories, and delivered nothing. The source was required, present, and
   // silent.

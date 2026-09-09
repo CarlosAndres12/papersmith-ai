@@ -112,6 +112,7 @@ if (!tool) {
 // path returns the SAME cached, already-compiled module instances (no extra
 // compile cost, and literally the same function objects `CREATE_SUCCESSOR`
 // resolves through internally).
+const domainProfileModule = await jiti.import(path.join(engineDir, 'domain-profile.ts'));
 const documentStateModule = await jiti.import(path.join(engineDir, 'document-state.ts'));
 const targetResolverModule = await jiti.import(path.join(engineDir, 'target-resolver.ts'));
 const ambiguityGateModule = await jiti.import(path.join(engineDir, 'ambiguity-gate.ts'));
@@ -276,8 +277,9 @@ async function runStatus(request) {
 		// The north, above the inventory. `STATUS` lists what has been
 		// published; nothing in that list says what any of it was FOR, and a
 		// session reading an inventory without the purpose has the facts and
-		// not the destination.
-		objective: OBJECTIVE_FLOW,
+		// not the destination. Its text is the host-chosen profile's, never
+		// the engine's own -- see `domain-profile.ts`'s `objective` field.
+		objective: domainProfileModule.DOMAIN.objective,
 		managedRevisions,
 		latest,
 		multipleActive,
@@ -357,66 +359,21 @@ async function readStdin() {
 
 // WHY THIS SKILL WAS INVOKED, AND WHERE IT HAS TO ARRIVE.
 //
-// Declared, invariant, and independent of any document on disk. `STATUS`
-// answers *where am I* by listing what has been published; this answers *what
-// is this for*, which no listing implies. A session that hits an error, an
-// interruption or a gap consults it, locates itself, resolves what blocks, and
-// rejoins -- rather than improvising forward, which is what an agent does when
-// a blocker detaches it from the purpose.
+// `STATUS` answers *where am I* by listing what has been published; the north
+// answers *what is this for*, which no listing implies. A session that hits an
+// error, an interruption or a gap consults it, locates itself, resolves what
+// blocks, and rejoins -- rather than improvising forward, which is what an
+// agent does when a blocker detaches it from the purpose. Emitted at exactly
+// three sites: `runStatus`, above, and the two CLI-level error paths below.
 //
-// It lives in the ENGINE and not in a domain profile, and that placement is
-// derived: a profile says what THIS domain is called and which notation it
-// uses, and would say the same north whichever domain asked. The engine has
-// exactly one purpose, so the purpose is the engine's.
-//
-// **The middle stage has no observable condition, and that is stated rather
-// than papered over.** Nothing measures "it was deliberated". If this pretended
-// to, an agent could open a question and answer it itself -- a failure this
-// project has already seen -- and mark the stage closed on its own word. A gap
-// that is named is a shield; a gap that is faked is the opposite.
-const OBJECTIVE_FLOW = {
-	purpose: 'carry the mathematics that was discussed as far as a published managed revision -- not a good conversation, a document that exists and is the current one',
-	stages: [
-		{
-			stage: 'bound',
-			establishes: 'which revision is current and which entry of it the change touches',
-			behindWhen: '`STATUS` named the latest and the target resolved to an entry',
-		},
-		{
-			stage: 'deliberated',
-			establishes: 'the change was argued through rather than typed',
-			behindWhen: 'THE USER SAID SO. Nothing here measures it, and nothing may: an agent that could close this stage on its own word would be approving its own proposal',
-		},
-		{
-			stage: 'composed',
-			establishes: 'the replacement exists written AS mathematics -- the equation, with its tag -- and not as a description of it',
-			behindWhen: 'a block exists carrying the equation and the tag it lands on',
-		},
-		{
-			stage: 'published',
-			establishes: 'the successor exists carrying the artifact marker and is the current revision',
-			behindWhen: 'this is the arrival; it is behind nobody',
-		},
-	],
-	arrival: 'the successor revision published and current, which is the only form the mathematics travels in',
-	// This skill has an entrance from outside: a finding raised while
-	// implementing arrives through a handoff, already near the composed stage.
-	// Named because a session that entered there still owes the arrival, and a
-	// finding that gets discussed, agreed, and never published is how this pair
-	// of skills loses work.
-	entrances: [
-		{
-			from: 'a finding handed over by the implementation skill',
-			arrivesAt: 'composed',
-			note: 'it still owes publication; agreement is not arrival',
-		},
-	],
-	humanStops: [
-		'accepting the change, which closes the deliberated stage and which nothing here may close on its own',
-		'authorizing publication, because it advances the real lineage',
-	],
-};
-
+// The STRUCTURE is the engine's -- its shape, its presence at these three
+// sites -- but the TEXT is not: it lives in the host-chosen domain profile
+// (`domain-profile.ts`'s `objective` field), never spelled here. A profile
+// says what THIS domain is called and which notation it uses, and a second
+// domain measurably does NOT say the same north the first one does -- its
+// `purpose`, `composed`-equivalent stage and `arrival` all name what THAT
+// domain is about. The engine has no domain of its own, so the north is not
+// its text to declare, only its structure to carry.
 const args = process.argv.slice(2);
 
 if (args.includes('--serve')) {
@@ -427,7 +384,7 @@ if (args.includes('--serve')) {
 			const result = await run(parseRequest(line));
 			process.stdout.write(`${JSON.stringify(result)}\n`);
 		} catch (error) {
-			process.stdout.write(`${JSON.stringify({ status: 'error', message: error?.message ?? String(error), objective: OBJECTIVE_FLOW })}\n`);
+			process.stdout.write(`${JSON.stringify({ status: 'error', message: error?.message ?? String(error), objective: domainProfileModule.DOMAIN.objective })}\n`);
 		}
 	}
 } else {
@@ -437,7 +394,7 @@ if (args.includes('--serve')) {
 		const result = await run(parseRequest(raw));
 		process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 	} catch (error) {
-		process.stdout.write(`${JSON.stringify({ status: 'error', message: error?.message ?? String(error), objective: OBJECTIVE_FLOW }, null, 2)}\n`);
+		process.stdout.write(`${JSON.stringify({ status: 'error', message: error?.message ?? String(error), objective: domainProfileModule.DOMAIN.objective }, null, 2)}\n`);
 		process.exit(1);
 	}
 }

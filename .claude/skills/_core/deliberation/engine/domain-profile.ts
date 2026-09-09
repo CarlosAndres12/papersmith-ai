@@ -90,9 +90,9 @@ export type DeliberationDomainProfile = {
 	 * values back out, and it is the only file in core allowed to spell the resulting names.
 	 */
 	readonly artifact: {
-		/** Where managed revisions live, relative to the project root (e.g. an "experiments" directory). */
+		/** Where managed revisions live, relative to the project root (e.g. a single lowercase noun naming the artifact kind). */
 		readonly directory: string;
-		/** The managed filename's fixed prefix (e.g. an "experiments" stem). */
+		/** The managed filename's fixed prefix (e.g. that same noun, used as the stem). */
 		readonly stem: string;
 		/** The revision label's own prefix, escaped and composed by `artifact-naming.ts` -- never a full regex (e.g. a single letter). */
 		readonly revisionPattern: string;
@@ -137,7 +137,7 @@ export type DeliberationDomainProfile = {
 	/**
 	 * The preservation gate's atom extractor and rule set (change 4): `preservation.ts`
 	 * (formerly `math-integrity.ts`) is domain-neutral and sources both from here instead of
-	 * hardcoding mathematics. The mathematical implementation ships as
+	 * hardcoding one domain's own subject. The mathematical implementation ships as
 	 * `proposal-deliberation/preservation-math.ts`, wired through this field.
 	 */
 	readonly preservation: {
@@ -169,9 +169,30 @@ export type DeliberationDomainProfile = {
 	 * silence exactly.
 	 */
 	readonly sources: readonly { readonly path: string; readonly required: boolean }[];
+	/**
+	 * The north (change 11 -- "a north a second domain can hold"): why a deliberation session
+	 * exists and where it has to arrive. Structure stays the engine's (its shape, its presence
+	 * in `STATUS`, its presence on the engine's two CLI-level error paths, all in `cli.mjs`);
+	 * this is the domain's own text, sourced here exactly as `preservation`/`references` above
+	 * source their own domain-specific behaviour instead of the engine hardcoding one domain's
+	 * subject matter.
+	 */
+	readonly objective: {
+		/** What this session is FOR -- not a good conversation, an artifact that exists and is current. */
+		readonly purpose: string;
+		/** Ordered. Every element states what it establishes and how a reader knows it is behind them. */
+		readonly stages: readonly { readonly stage: string; readonly establishes: string; readonly behindWhen: string }[];
+		/** Single-line literal: the Python arrival seal (`tests/test_agents.py`) reads this back out of a TypeScript-declared profile via an anchored regex. */
+		readonly arrival: string;
+		/** Optional: a session arriving mid-flow from outside this domain's own entry point, and the nearest stage to it. */
+		readonly entrances?: readonly { readonly from: string; readonly arrivesAt: string; readonly note: string }[];
+		/** What no operation may close on its own word -- always a person's decision. */
+		readonly humanStops: readonly string[];
+	};
 };
 
 const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'] as const;
+const OBJECTIVE_REQUIRED = ['purpose', 'stages', 'arrival', 'humanStops'] as const;
 /** No `/`, no `..`, no empty segment -- a profile-supplied path segment escaping the workspace sandbox is the one adjacent risk change 3 introduces (design.md, "profile-supplied path segments are validated at load"). */
 const SAFE_ARTIFACT_SEGMENT = /^\.?[A-Za-z0-9._-]+$/;
 function isSafeArtifactSegment(value: unknown): value is string {
@@ -186,7 +207,7 @@ if (!configured)
 		"through a skill's own cli.mjs, which sets it.",
 	);
 
-const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "proseReferenceText", "vocabulary", "artifact", "preservation", "references", "sources"] as const;
+const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "proseReferenceText", "vocabulary", "artifact", "preservation", "references", "sources", "objective"] as const;
 
 // Absolute, and refused otherwise. A relative path resolves against the working
 // directory, and the engine does not control that: a CLI child process launched
@@ -210,6 +231,25 @@ if (missing.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${c
 const artifactValue = loaded.profile!.artifact as Record<string, unknown>;
 const missingArtifact = ARTIFACT_REQUIRED.filter((key) => artifactValue[key] === undefined);
 if (missingArtifact.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingArtifact.map((key) => `artifact.${key}`).join(", ")}.`);
+
+// `REQUIRED` above only ever checked top-level keys, so `objective: {}` would have passed it
+// vacuously too -- the same bug `artifact: {}` already taught this file. Every one of the four
+// `objective.*` fields is checked here explicitly, still under the same refusal code, naming
+// the nested field instead of the top-level key.
+const objectiveValue = loaded.profile!.objective as Record<string, unknown>;
+const missingObjective = OBJECTIVE_REQUIRED.filter((key) => objectiveValue[key] === undefined);
+if (missingObjective.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingObjective.map((key) => `objective.${key}`).join(", ")}.`);
+
+// `stages` presence alone (the check above) does not rule out `stages: []` -- a north with no
+// stages is not a north. Every element must carry all three keys, or a stage this domain
+// declares by name would silently establish nothing and close on no condition at all.
+const stages = objectiveValue.stages as readonly unknown[];
+const stagesIncomplete = !Array.isArray(stages) || stages.length === 0
+	|| stages.some((stage) => {
+		const value = stage as Record<string, unknown>;
+		return typeof value !== 'object' || value === null || value.stage === undefined || value.establishes === undefined || value.behindWhen === undefined;
+	});
+if (stagesIncomplete) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing objective.stages.`);
 
 // Change 3 turns a sandbox root (the managed directory, the sidecar root) into a profile value;
 // `REQUIRED`-membership alone does not make a caller-supplied path segment safe to join under the
