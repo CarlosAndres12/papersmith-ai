@@ -27,6 +27,14 @@ guidance/*/*
 proposals/*
 !proposals/.gitkeep
 
+# Documentos de experimentos gestionados y su estado interno del motor.
+# Misma regla que `proposals/`: se versiona la carpeta (su `.gitkeep`), nunca su
+# contenido. Cada usuario delibera sobre su propia propuesta y experimental-
+# deliberation deposita acá sus revisiones, en su máquina.
+experiments/*
+!experiments/.gitkeep
+.experimental-deliberation/
+
 # Repos destino de proposal-implementation: cada uno trae su propio .git y su propio
 # .venv. Ignorarlos evita gitlinks accidentales en el índice de la forja y que
 # el entorno del destino se mezcle con el de marker.
