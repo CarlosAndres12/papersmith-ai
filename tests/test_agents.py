@@ -44,6 +44,42 @@ NORTHLESS_SKILLS = {"skill-audit"}
 # declaration.
 ARRIVAL_LINE = re.compile(r'^[ \t]*arrival:\s*"([^"]*)"\s*,?\s*$', re.MULTILINE)
 STAGE_LINE = re.compile(r'^[ \t]*stage:\s*"([^"]*)"\s*,?\s*$', re.MULTILINE)
+# The other two single-line literals a stage and an entrance are made of, read
+# the same anchored way and for the same reason.
+BEHIND_WHEN_LINE = re.compile(
+    r'^[ \t]*behindWhen:\s*"([^"]*)"\s*,?\s*$', re.MULTILINE)
+ARRIVES_AT_LINE = re.compile(
+    r'^[ \t]*arrivesAt:\s*"([^"]*)"\s*,?\s*$', re.MULTILINE)
+
+# A stage whose closing condition is a person's word rather than a byte
+# anything can read. The profile says so itself, in the stage's own
+# `behindWhen` -- so which stage this is gets DERIVED per skill, never listed
+# here. `deliberated` is that stage in both deliberation domains today; a
+# third domain naming it something else is checked the day it is written.
+UNMEASURABLE = re.compile(
+    r"nothing here measures it|the user said so", re.IGNORECASE)
+
+# Prose that asserts work ARRIVES from somewhere else -- another skill's
+# handoff, a pair of skills sharing a flow. An entrance is a declared field
+# (`objective.entrances`), so an agent whose skill declares none and says one
+# of these is claiming a shape its own north does not have. This is a
+# lexicon and cannot be derived, so it is held live instead: every phrase
+# below must still appear in the documents of a domain that DOES declare an
+# entrance (`test_the_entrance_lexicon_is_still_live`), which is what stops a
+# rewrite upstream from quietly turning this into five dead strings.
+ENTRANCE_CLAIMS = (
+    "pair of skills",
+    "entrance from outside",
+    "arrives through a handoff",
+    "handed over by",
+    "the implementation skill",
+)
+
+
+def flat(text: str) -> str:
+    """Whitespace-flattened, because these files are hard-wrapped and "this
+    pair of\\nskills" is the same sentence as "this pair of skills"."""
+    return " ".join(text.split())
 
 
 def frontmatter(path: Path) -> dict:
@@ -151,6 +187,95 @@ def declared_objective(skill: str) -> dict | None:
             f"{skill} declares OBJECTIVE_FLOW in Python AND an objective in "
             f"profile.ts -- one skill, one north; pick a source of truth")
     return python_objective if python_objective is not None else typescript_objective
+
+
+def _python_flow(skill: str) -> dict | None:
+    """The WHOLE `OBJECTIVE_FLOW` dict, not the two keys the seal above needs.
+
+    A separate walk rather than a widened `_python_objective`: that one is what
+    the arrival seal reads, and coverage added here has no business changing
+    what an existing check sees. The duplication is deliberate and small.
+    """
+    for script in sorted((SKILLS / skill).rglob("*.py")):
+        if "__pycache__" in script.parts:
+            continue
+        try:
+            source = script.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if "OBJECTIVE_FLOW" not in [t.id for t in node.targets
+                                        if isinstance(t, ast.Name)]:
+                continue
+            return ast.literal_eval(node.value)
+    return None
+
+
+def stage_conditions(skill: str) -> list[tuple[str, str]] | None:
+    """`(stage, behindWhen)` for every stage of this skill's declared north,
+    in declaration order, or None if it declares none at all.
+
+    The TypeScript side zips the two anchored single-line literals rather than
+    parsing an object: every stage declares exactly one of each, in that order,
+    so a length mismatch means the shape moved and this raises instead of
+    silently pairing a stage with the wrong condition.
+    """
+    flow = _python_flow(skill)
+    if flow is not None:
+        return [(stage.get("stage"), stage.get("behindWhen") or "")
+                for stage in flow.get("stages", [])]
+
+    profile = SKILLS / skill / "profile.ts"
+    if not profile.is_file():
+        return None
+    source = profile.read_text(encoding="utf-8")
+    stages = STAGE_LINE.findall(source)
+    conditions = BEHIND_WHEN_LINE.findall(source)
+    if not stages:
+        return None
+    if len(stages) != len(conditions):
+        raise AssertionError(
+            f"{skill}/profile.ts declares {len(stages)} `stage:` literals and "
+            f"{len(conditions)} `behindWhen:` ones -- the anchored regexes can "
+            f"no longer pair them, so fix the profile or these patterns, never "
+            f"read the mismatch as \"no condition declared\"")
+    return list(zip(stages, conditions))
+
+
+def declared_entrances(skill: str) -> list[str] | None:
+    """The stages this skill's north declares an outside entrance INTO, or
+    None if the skill declares no north at all.
+
+    An empty list is the meaningful answer here, and it is not the same as
+    None: `experimental-deliberation` declares a north and deliberately
+    declares no entrance ("declaring an entrance nothing produces would be a
+    claim with no producer"), and that is exactly the state an agent may not
+    contradict.
+    """
+    flow = _python_flow(skill)
+    if flow is not None:
+        return [entrance.get("arrivesAt")
+                for entrance in flow.get("entrances", [])]
+
+    profile = SKILLS / skill / "profile.ts"
+    if not profile.is_file():
+        return None
+    source = profile.read_text(encoding="utf-8")
+    if not STAGE_LINE.findall(source):
+        return None
+    arrives_at = ARRIVES_AT_LINE.findall(source)
+    if re.search(r"^[ \t]*entrances:", source, re.MULTILINE) and not arrives_at:
+        raise AssertionError(
+            f"{skill}/profile.ts declares an `entrances:` field whose "
+            f"`arrivesAt:` literals this anchored regex cannot read -- fix the "
+            f"profile or this pattern, never read it as \"no entrance\"")
+    return arrives_at
 
 
 def bound_skill(path: Path) -> str:
@@ -398,3 +523,170 @@ class AgentBindingTests(unittest.TestCase):
         self.assertEqual(checked, len(agents),
                          "not every agent file was checked for the shared "
                          "role discipline")
+
+    def test_an_unmeasurable_stage_is_never_delegated(self) -> None:
+        """The stage no agent may be handed, and which agents must say so.
+
+        WHICH stage that is comes out of the profile, never this file: the one
+        whose own `behindWhen` says the user said so and nothing here measures
+        it. An agent able to close it would be approving its own proposal --
+        the failure the whole north exists to name rather than paper over.
+
+        Two layers, both derived:
+
+        * EVERY agent bound to a skill whose north declares such a stage must
+          NAME that stage in its own bytes. An agent that never mentions it has
+          not positioned itself with respect to it at all.
+        * Every such agent whose own `stretch:` is `terminal` must additionally
+          DISCLAIM it. A `stretch: <stage>` agent already ends at a named
+          earlier stage, so its boundary excludes the unmeasurable one
+          structurally; a terminal agent's stretch runs to the arrival, and it
+          is the one that could plausibly absorb the stage on its own word.
+          `experimental-validation` is the non-terminal case today: it does say
+          the same thing ("that is why this stretch, unlike `deliberated`, may
+          be delegated at all"), but in wording only a regex loose enough to
+          accept anything would match -- so it is held to the naming layer and
+          not the disclaimer one, and that limit is stated rather than hidden.
+        """
+        naming, disclaiming = {}, {}
+        for path in self.agents():
+            skill = bound_skill(path)
+            if skill in NORTHLESS_SKILLS:
+                continue
+            conditions = stage_conditions(skill)
+            self.assertIsNotNone(
+                conditions,
+                f"{path.name} is bound to {skill}, which is not in "
+                f"NORTHLESS_SKILLS but declares no stages to read")
+            unmeasurable = [stage for stage, when in conditions
+                            if UNMEASURABLE.search(when)]
+            if not unmeasurable:
+                continue
+            naming[path] = unmeasurable
+            if frontmatter(path).get("stretch") == "terminal":
+                disclaiming[path] = unmeasurable
+
+        if not naming:
+            self.skipTest("no agent is bound to a skill whose north declares "
+                          "a stage nothing measures; there is no stage here "
+                          "that may not be delegated")
+
+        for path, stages in sorted(naming.items()):
+            body = flat(path.read_text(encoding="utf-8"))
+            for stage in stages:
+                self.assertIn(
+                    f"`{stage}`", body,
+                    f"{path.name} is bound to a north whose `{stage}` stage "
+                    f"nothing measures, and never names it")
+
+        self.assertTrue(
+            disclaiming,
+            "no agent bound to such a north declares `stretch: terminal`, so "
+            "the disclaimer below was never asserted against anything")
+        for path, stages in sorted(disclaiming.items()):
+            body = flat(path.read_text(encoding="utf-8"))
+            description = frontmatter(path).get("description", "")
+            for stage in stages:
+                self.assertIn(
+                    f"The `{stage}` stage is not yours", body,
+                    f"{path.name} runs to its skill's arrival and never says "
+                    f"the `{stage}` stage is not its own")
+            self.assertIn(
+                "nothing measures it", body,
+                f"{path.name} disclaims the stage without giving the reason "
+                f"its own north gives -- that nothing measures it")
+            self.assertIn(
+                "approving its own", body,
+                f"{path.name} does not say what closing that stage itself "
+                f"would amount to")
+            self.assertIn(
+                "is not in this stretch and may not be", description,
+                f"{path.name}'s description -- the first thing in context on "
+                f"every invocation -- does not exclude the deliberation from "
+                f"its stretch")
+            self.assertIn(
+                "nothing but the operator closes that", description,
+                f"{path.name}'s description does not say who closes it "
+                f"instead")
+
+    def test_an_agent_never_claims_an_entrance_its_skill_does_not_declare(
+            self) -> None:
+        """A domain-bound line adapted rather than copied.
+
+        `experimental-publish` was authored from `deliberation-publish` as a
+        template. That one says "how this pair of skills loses work", which
+        names `proposal-deliberation`'s declared entrance -- a finding handed
+        over by the implementation skill. `experimental-deliberation` declares
+        no entrance at all, and says so in the profile: "declaring an entrance
+        nothing produces would be a claim with no producer". So the copy would
+        have been a false statement about the domain, and nothing read it.
+
+        The scope is derived rather than the phrase hardcoded: whether a
+        domain HAS an entrance is a declared field, so the same check catches
+        the next line copied across from a domain that has one, not just this
+        phrase. The lexicon it matches with is held live separately.
+        """
+        checked, expected = set(), set()
+        for path in self.agents():
+            skill = bound_skill(path)
+            if skill in NORTHLESS_SKILLS:
+                continue
+            entrances = declared_entrances(skill)
+            self.assertIsNotNone(
+                entrances,
+                f"{path.name} is bound to {skill}, which is not in "
+                f"NORTHLESS_SKILLS but declares no north to read an entrance "
+                f"out of")
+            if entrances:
+                continue
+            expected.add(path.stem)
+            body = flat(path.read_text(encoding="utf-8"))
+            for phrase in ENTRANCE_CLAIMS:
+                self.assertNotIn(
+                    phrase, body,
+                    f"{path.name} is bound to {skill}, whose north declares "
+                    f"no entrance, and its own bytes say {phrase!r} -- a "
+                    f"shape carried over from a domain that has one")
+            checked.add(path.stem)
+
+        if not expected:
+            self.skipTest("every agent is bound to a skill declaring an "
+                          "entrance; there is no domain here that could be "
+                          "given one it does not have")
+        self.assertEqual(
+            checked, expected,
+            "an agent bound to an entrance-less north went unchecked")
+
+    def test_the_entrance_lexicon_is_still_live(self) -> None:
+        """`ENTRANCE_CLAIMS` cannot be derived, so it is held against reality.
+
+        Every phrase in it must still appear somewhere in a domain that
+        genuinely declares an entrance -- its doctrine, its profile, or an
+        agent bound to it. A phrase that has vanished from there is a string
+        that can no longer catch anything, and the check above would go on
+        passing while matching nothing. A rewrite upstream reddens this and
+        the lexicon gets re-derived from what the prose now says.
+        """
+        documents = []
+        for skill_dir in sorted(SKILLS.iterdir()):
+            if not (skill_dir / "SKILL.md").is_file():
+                continue
+            if not declared_entrances(skill_dir.name):
+                continue
+            documents.append(skill_dir / "SKILL.md")
+            documents.append(skill_dir / "profile.ts")
+            documents.extend(path for path in self.agents()
+                             if bound_skill(path) == skill_dir.name)
+        self.assertTrue(
+            documents,
+            "no domain declares an entrance at all, so every phrase in "
+            "ENTRANCE_CLAIMS is unfalsifiable and the check that uses them "
+            "proves nothing")
+        corpus = " ".join(flat(document.read_text(encoding="utf-8"))
+                          for document in documents if document.is_file())
+        for phrase in ENTRANCE_CLAIMS:
+            self.assertIn(
+                phrase, corpus,
+                f"{phrase!r} no longer appears in any domain that declares an "
+                f"entrance -- it is a dead string, and the agents checked "
+                f"against it are no longer being checked for anything")
