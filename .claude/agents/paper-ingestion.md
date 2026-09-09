@@ -8,7 +8,7 @@ tools: Read, Write, Edit, Bash, Glob, Grep
 
 Read `papersmith.yaml` and `skills/paper-ingestion/SKILL.md` before work. Reject malformed YAML roots, unknown ingestion keys, unsupported extraction modes, and invalid values before creating artifacts.
 
-Load `skills/paper-ingestion/SKILL.md` and follow it. **Every rule is
+Load `.claude/skills/paper-ingestion/SKILL.md` and follow it. **Every rule is
 there and none of them is repeated here.**
 
 That is a change from what this file used to be: it restated the skill's own
