@@ -66,6 +66,113 @@ metadata records no version — never a pass. It reports and never gates: a
 foreign interpreter is not a wrong number, it is a reason to distrust the
 numbers, and folding the two into one status destroys the distinction.
 
+## The objective flow
+
+**Why this skill was invoked, and where it has to arrive.** Declared here and in
+`OBJECTIVE_FLOW`, held equal by a test, and deliberately independent of anything
+on disk. Every other reading answers *where am I* by measuring products; this
+answers *what is this for*, which no product implies.
+
+It exists for the moment something breaks. A session that hits an error, an
+interruption or a gap consults it, locates itself, resolves what blocks, and
+rejoins — rather than improvising forward, which is what an agent does when a
+blocker detaches it from the purpose. Every refusal this engine raises carries
+it, at the single place they all reach a reader, so it is never further away
+than the thing that stopped you.
+
+**It is not the agreements and does not replace them.** What the mathematics
+says lives in the managed revision; what was settled about a repository lives in
+its `AGREED.md`. This says only what the skill is for.
+
+**Purpose:** carry the agreed formulation as far as complete runs that can be
+reported — not a green verification, not a passing rehearsal.
+
+| Stage | Establishes | Behind you when |
+| --- | --- | --- |
+| `standing` | A repository to write the mathematics into: isolated under `implementations/` with an interpreter of its own, laid out the way this skill expects, the kit's destinations materialized, and the map from mathematical object to module approved | `structure` reports no scaffold gaps and the benchmark declaration carries the revision and premises the map was approved with — which is what `materialize --stage objects` refuses without |
+| `fidelity` | The code says what the bound revision says, and every claim carries an invariant with a test | `fidelity` is clean and the target's own suite is green under its own interpreter |
+| `audit` | What the formulation gets wrong, established over the declared sweep, each remedy ruled admissible before it is measured and validated after | `audit` is no longer `incomplete` |
+| `declaration` | What the experiment compares, over which statistical unit, by which metric, and what it produces | the benchmark declaration is answered rather than sitting at its scaffolded empty value |
+| `rehearsal` | The declared flow runs end to end with its own notebooks, and the document a person reads agrees with the run | the pilot is complete and `report` is `ok` |
+| `full-scale` | Every step routed to where it was decided to run, and executed there at the scale the protocol declares | this is the arrival; it is behind nobody |
+
+**Arrival:** complete runs at the declared scale, local or remote as each step declares, with the record they leave.
+
+**Four stops are a person's, not defects to repair.** Two of them stand in the
+first stage and a session that starts from nothing meets them before anything
+else: **authorizing that code be written at all**, which nothing below that gate
+may start without, and **approving the map** from mathematical object to module
+with the revision and premises recorded beside it. The other two stand at the
+end: **publishing the commit** a worker would clone, and **authorizing a
+launch**. An agent that reads any of them as a blocker will stall on it or take
+it, and the last is how quota gets spent by somebody who was not asked.
+
+That the first two exist is what makes this north cover a repository with
+nothing in it. Its stages used to begin at `fidelity` — "the code says what the
+revision says" — which presumes code, so a session invoked on a bare repository
+read a north whose first stage assumed something that did not exist yet. A north
+has to read the same on an empty repository as on one mid-campaign.
+
+The conditions above are written to be READ, not computed. A stage derived from
+products would make the purpose depend on the products, which is the one
+dependency this exists without: it has to read the same on a repository with
+nothing in it as on one mid-campaign.
+
+
+## What this skill delegates, and to whom
+
+Two stretches of this flow are mechanical from end to end — they carry out
+decisions already taken and take none of their own — and each runs in an agent
+of its own rather than in the conversation. What moves is EXECUTION, never
+doctrine: every rule stays here, and each agent's first instruction is to load
+this file.
+
+A stretch begins after one of the operator's gates and ends before the next.
+That boundary is the whole design: an agent that started mid-decision would
+take it, which is the failure this shape exists to prevent.
+
+| Stretch | Delegated to | Begins after | Ends before | Measure this before delegating |
+| --- | --- | --- | --- | --- |
+| Build | this skill delegates to the `implementation-build` agent | the object-to-module map is approved | the operator decides what to do with the findings | `verify` — the benchmark declaration carries `revision` and `premises`, which is what `materialize --stage objects` refuses without |
+| Walk | this skill delegates to the `implementation-walk` agent | each step's placement is decided | the launch the operator must authorize | `verify` — `undeclaredPlacement` is empty, so every step says where it runs |
+
+**The last column is what stops a wasted delegation.** Each agent also refuses
+from inside when it finds itself before its own start — that is the backstop,
+not the rule. Discovering it there costs a whole round trip to learn something
+measurable before leaving, and the orchestrator that delegated has to be able to
+tell "it could not start" from "it started and failed".
+
+### `remote-execution` is driven, not delegated to
+
+An agent of its own was considered and rejected, and the reasoning is kept
+because the case for it was good and somebody will make it again.
+
+**What argued for one.** It is the only thing in this forge that spends money,
+and a boundary around what spends is the most valuable boundary there is. Its
+doctrine is large, and carrying it in a walk agent's head is the context bloat
+this whole shape exists to reduce. And its tools could be cut to `Read` and
+`Bash`, making "it never edits the target" structural rather than doctrinal.
+
+**What decided against.** The walk stretch does not need that doctrine — it
+drives `remote_cli`, and that CLI refuses precisely and carries its own north in
+every refusal, so what the walk needs is to run commands and read what comes
+back. A second agent would be a hop that buys nothing it does not already have.
+
+And the quota argument does not survive inspection: **the boundary that stops a
+campaign is the launch gate, not an agent.** The walk stretch ends there by
+construction and has no path to submitting one. Putting an agent in front of a
+gate that already holds adds a door beside an open wall.
+
+**What would change this.** If a stretch ever needed to run remote acts *past*
+the launch gate — polling, fetching, reconciling a campaign already out — that
+stretch has a different end and a different risk, and the case for its own agent
+would have to be made again from there.
+
+**Nothing here forces a delegation.** Running a stretch in the conversation is
+legitimate and is what happens when the operator wants to watch it. What the
+declaration buys is that the boundary is written down: a stretch that could have
+been delegated is one whose ends somebody had to name.
+
 ## Activation Contract
 
 Activate when the user asks to implement, code, scaffold, reorganize or verify
@@ -2468,6 +2575,7 @@ is a fact nobody reads:
 
 | Fact | What it reports | Gates? |
 | --- | --- | --- |
+| `objective` | Why this skill was invoked and where it has to arrive: the declared `purpose`, the ordered `stages` with what each establishes and how a reader knows it is behind them, the `arrival`, and the `humanStops` that are a person's decision rather than a defect to repair. Reported **above** every measurement beside it, and carried by every refusal this engine raises. Invariant and independent of anything on disk — every other fact here answers *where am I* by reading products; this answers *what is this for*, which no product implies. See the section **The objective flow** and `OBJECTIVE_FLOW` | **Never**, and it is never derived either: a stage computed from products would make the purpose depend on the products, which is the one dependency it exists without. It has to read the same on a repository with nothing in it as on one mid-campaign |
 | `backend` | Whether the implementation can be trained at all, and what it computes with | Yes — `convert` is the answer when it cannot |
 | `baselines` | The prior implementations there are to compare against | Yes — nothing to compare against outranks everything else on the ladder |
 | `comparable` | Whether that list is non-empty, stated once so nobody re-derives it | Reported whatever it says |
