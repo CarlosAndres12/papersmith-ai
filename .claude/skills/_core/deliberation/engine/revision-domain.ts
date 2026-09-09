@@ -73,7 +73,8 @@ export type CreateR01PayloadV1 = {
 	 * lineage-mandatory `ManagedInitialName`) is correct here: this fixed-base bootstrap route's
 	 * target is always the ROOT-lineage first revision, which `strictManagedRevision` accepts.
 	 */
-	target: { filename: ManagedRevisionName; revision: 'r01' };
+	/** `revision` was the literal `'r01'` beside it, which no runtime profile value can satisfy: it is `artifact.revisionLabel(1)`, spelled `v01` under a domain whose revision prefix is `v`. Plain `string`, with the runtime guard in the test suite. */
+	target: { filename: ManagedRevisionName; revision: string };
 	canonicalMetadata: CanonicalProposalMetadata;
 };
 

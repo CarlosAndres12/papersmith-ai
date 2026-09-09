@@ -50,6 +50,34 @@ const isolatedInQuery=(query:string,value:string)=>new RegExp(`(?<![\\p{L}\\p{N}
  */
 function declaringEntries(entries:readonly StructuralEntry[],key:'labels'|'tags'){const owner=new Map<string,{id:string;size:number}>();for(const entry of entries){const size=entry.endByte-entry.startByte;for(const value of entry[key]){const current=owner.get(value);if(!current||size<current.size)owner.set(value,{id:entry.entryId,size});}}return owner;}
 const equationSymbols=(value:string)=>[...new Set(value.match(/\\[A-Za-z]+|\b[A-Za-z]\b/g)??[])];
+/**
+ * What a matched term is worth, by WHERE it was found.
+ *
+ * Term matching used to run against one flat blob — the entry's own text, both
+ * neighbouring entries' text and the heading path concatenated — so every word
+ * written inside an entry scored identically for the entry BEFORE it, the entry
+ * AFTER it, and the ancestor that merely spans it. A GFM table could therefore
+ * never be singled out by its own column headers: the table, its section and both
+ * neighbouring paragraphs (which contain none of those words) all tied, and
+ * `ambiguityGate` — which blocks whenever the top two are within 4 — handed the
+ * caller a menu instead of the table. That predates tables and hit ordinary
+ * paragraphs the same way; it only became load-bearing once documents became
+ * mostly tables and "replace experiment 3's table" became the usual query.
+ *
+ * Context is NOT dropped: describing a locus by what surrounds it ("the paragraph
+ * after the accuracy table") is a real and supported way to aim, and an entry
+ * whose own text says nothing must stay reachable through its neighbours. It is
+ * demoted instead, so the entry that actually writes the word outranks the ones
+ * that merely sit beside or above it. Three distinctive terms then separate the
+ * declaring entry from its context by 6, clearing the gate's margin of 4; a
+ * one-word query still ties inside the margin, which is the correct answer for a
+ * query that genuinely does not discriminate.
+ *
+ * `OWN_TERM` stays at the historical 3 so that every locus already resolved by
+ * its own words keeps its exact score, its `confidence` (score/12) and its
+ * ranking against labels and tags (8 each). Only context-only matches move.
+ */
+const OWN_TERM=3,CONTEXT_TERM=1;
 const entryText=(state:DocumentState,id:string)=>{const e=state.structuralIndex.byId[id];return e?state.documentBytes.subarray(e.startByte,e.endByte).toString('utf8'):''};
 const leaf=(entry:StructuralEntry)=>['display_equation','paragraph','inline_math_region','list','code_block','definition','theorem','algorithm','table','figure_placeholder'].includes(entry.type);
 const sameHeadingPath=(left:string[],right:string[])=>JSON.stringify(left)===JSON.stringify(right);
@@ -261,13 +289,25 @@ export function resolveTargets(state:DocumentState,query:string,options:TargetRe
  // Ownership is resolved over EVERY entry, not the filtered set: an equation
  // still declares its tag even when the filter above has excluded its ancestors.
  const labelOwner=declaringEntries(state.structuralIndex.entries,'labels'),tagOwner=declaringEntries(state.structuralIndex.entries,'tags');
+ // A term counts as an entry's OWN only when the entry is the smallest one that
+ // writes it — the same "smallest entry carrying it declares it" rule
+ // `declaringEntries` applies to labels and tags, and for the same reason: a
+ // section's text contains every entry nested inside it, so an ancestor would
+ // otherwise score a descendant's words as if it had written them itself and tie
+ // with the descendant that did. An ancestor keeps the demoted CONTEXT_TERM, so
+ // it stays findable by its body, just never ahead of the entry that owns it.
+ const scored=state.structuralIndex.entries.filter(e=>e.type!=='document');
+ const ownLower=new Map(scored.map(e=>[e.entryId,entryText(state,e.entryId).toLowerCase()]));
+ const writes=(entryId:string,term:string)=>ownLower.get(entryId)?.includes(term)??false;
+ const declares=(e:StructuralEntry,term:string)=>writes(e.entryId,term)&&!scored.some(other=>other.entryId!==e.entryId&&other.startByte>=e.startByte&&other.endByte<=e.endByte&&other.endByte-other.startByte<e.endByte-e.startByte&&writes(other.entryId,term));
  return entries.map(e=>{
   const own=entryText(state,e.entryId); const neighbors=e.neighboringEntryIds.map(id=>entryText(state,id)).join('\n'); const nearby=`${own}\n${neighbors}\n${e.headingPath.join(' ')}`.toLowerCase();
   const matchedTerms=terms.filter(t=>nearby.includes(t)||e.lexicalTerms.includes(t)||e.deterministicAliases.some(a=>a.includes(t)));
+  const declaredTerms=matchedTerms.filter(t=>declares(e,t)); const termScore=declaredTerms.length*OWN_TERM+(matchedTerms.length-declaredTerms.length)*CONTEXT_TERM;
   const matchedLabels=e.labels.filter(x=>isolatedInQuery(query,x)&&labelOwner.get(x)?.id===e.entryId); const matchedTags=e.tags.filter(x=>isolatedInQuery(query,x)&&tagOwner.get(x)?.id===e.entryId);
   const symbols=equationSymbols(own); const matchedSymbols=symbols.filter(symbol=>Object.values(state.symbolIndex.symbols).some(x=>x.normalized===symbol.replace(/^\\/,'').toLowerCase()||x.uses.includes(e.entryId)));
   const semanticEvidence=oneHot&&SUBJECT.test(neighbors)?4:0;
-  const oneHotMatch=SUBJECT.test(own)||semanticEvidence>0;const score=matchedTerms.length*3+matchedLabels.length*8+matchedTags.length*8+semanticEvidence+(equationRequested&&e.type==='display_equation'&&(!oneHot||oneHotMatch)?3:0);
+  const oneHotMatch=SUBJECT.test(own)||semanticEvidence>0;const score=termScore+matchedLabels.length*8+matchedTags.length*8+semanticEvidence+(equationRequested&&e.type==='display_equation'&&(!oneHot||oneHotMatch)?3:0);
   return {entryId:e.entryId,type:e.type,headingPath:e.headingPath,matchedTerms,matchedLabels,matchedTags,matchedSymbols,score,confidence:Math.min(1,score/12),shortPreview:own.slice(0,180),evidence:[...matchedTerms,...matchedLabels,...matchedTags,...(semanticEvidence?[DOMAIN.vocabulary.subjectEvidenceLabel]:[])]};
  }).filter(c=>c.score>0).sort((a,b)=>b.score-a.score||a.entryId.localeCompare(b.entryId)).slice(0,8);
 }

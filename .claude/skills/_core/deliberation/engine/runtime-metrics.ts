@@ -1,6 +1,6 @@
 import { LIMITS } from './types.js';
 
-export type RouteMetricStage = 'LIFECYCLE' | 'DIRECT_DOCUMENT' | 'CHAT_DELIBERATION' | 'DRAFT_MATERIALIZATION' | 'MAINTENANCE' | 'SCIENTIFIC_WORKFLOW' | 'EXISTING_FALLBACK';
+export type RouteMetricStage = 'LIFECYCLE' | 'DIRECT_DOCUMENT' | 'CHAT_DELIBERATION' | 'DRAFT_MATERIALIZATION' | 'MAINTENANCE' | 'SCIENTIFIC_WORKFLOW' | 'CREATE_INITIAL_REVISION' | 'EXISTING_FALLBACK';
 export type RouteMetrics = {
  routeSelections: Record<RouteMetricStage, number>;
  bypassedStageSelections: Record<RouteMetricStage, number>;
@@ -11,7 +11,11 @@ export type LifecycleMetricKind='withdrawal_committed'|'withdrawal_rejected'|'re
 export type LifecycleOperationalMetrics=Record<LifecycleMetricKind,number>;
 export type RuntimeMetrics={currentParallelValidators:number;maxObservedParallelValidators:number;totalValidatorTasks:number;validatorFailures:number;currentModelCalls:number;maxObservedParallelModelCalls:number;totalModelCalls:number;currentWrites:number;maxObservedParallelWrites:number;totalWrites:number;currentPlannerCalls:number;totalPlannerCalls:number;currentRoleCalls:number;totalRoleCalls:number;totalTutorCalls:number;totalReviewerCalls:number;totalMutations:number;rebuildAttempts:number;rebuildFailures:number;routeMetrics:RouteMetrics;scientificMetrics:ScientificOperationalMetrics;lifecycleMetrics:LifecycleOperationalMetrics};
 
-const routeStages: RouteMetricStage[] = ['LIFECYCLE', 'DIRECT_DOCUMENT', 'CHAT_DELIBERATION', 'DRAFT_MATERIALIZATION', 'MAINTENANCE', 'SCIENTIFIC_WORKFLOW', 'EXISTING_FALLBACK'];
+// Every member of `RouteMetricStage`, and the type is the source of truth for that.
+// `CREATE_INITIAL_REVISION` was missing here while `proposal-workspace.ts` routes every
+// initial-revision operation through it, so `routeSelections[stage]++` incremented an
+// absent key: `undefined++` is NaN, and NaN++ stays NaN for the life of the process.
+const routeStages: RouteMetricStage[] = ['LIFECYCLE', 'DIRECT_DOCUMENT', 'CHAT_DELIBERATION', 'DRAFT_MATERIALIZATION', 'MAINTENANCE', 'SCIENTIFIC_WORKFLOW', 'CREATE_INITIAL_REVISION', 'EXISTING_FALLBACK'];
 function emptyRouteCounts(): Record<RouteMetricStage, number> {
  return Object.fromEntries(routeStages.map(stage => [stage, 0])) as Record<RouteMetricStage, number>;
 }

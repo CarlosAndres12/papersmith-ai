@@ -1,10 +1,10 @@
-import { readFile, readdir, stat } from 'node:fs/promises'; import { join } from 'node:path'; import { loadDocumentState } from './document-state.js'; import { extractManagedRevisionFilename,extractRevisionReference,extractWithdrawalOperationId,resolveIntent } from './intent-resolver.js'; import { changeHeaderLocusCandidate,materializeCompositeTarget,resolveSuccessorTarget,resolveTargets,resolveSourceAndDestination } from './target-resolver.js'; import { ambiguityGate } from './ambiguity-gate.js'; import { buildContext,buildMoveCopyContext,buildSuccessorCompositeContext } from './context-builder.js'; import { buildEditPlan,buildMoveCopyPlan } from './edit-planner.js'; import { buildConceptualPlan } from './conceptual-planner.js'; import { compilePatches,compileSuccessorCompositeReplacement } from './patch-compiler.js'; import { validateCandidate } from './candidate-validator.js'; import { rebuildDerivedState } from './derived-state-builder.js'; import { createRevisionReceipt } from './revision-receipt.js'; import { commitDerivedState,markDerivedState,saveRevisionReceipt } from './derived-state-store.js'; import { withMutationLock,mutationLockKey,recordSuccessfulPublication,recordStaleMutationBlock } from './mutation-lock.js'; import { sha256,type CreateSuccessorOperation,type EditAction,type Position,type PublicV2Operation,type RevisionLifecycleOperation,SemanticEditPlanner,type SuccessorEditIntent,TargetCandidate,UserRequest } from './types.js'; import { ProposalWorkspaceAdapter } from './proposal-workspace-adapter.js'; import { resolveEffectiveOperationProfile,reviewerRequired } from './operation-spec.js'; import { type TutorAdapter,validateTutorAssessment } from './tutor-adapter.js'; import { type ReviewerAdapter,validateReviewerAssessment } from './reviewer-adapter.js'; import { writeTask,recordMutation,modelCall,recordRebuildAttempt,recordRebuildFailure } from './runtime-metrics.js'; import { RevisionLifecycleTransaction } from './revision-lifecycle-transaction.js'; import { createSuccessorAcceptanceRegistry,type SuccessorAcceptanceRegistry } from './successor-acceptance-registry.js'; import { resolveLatestManagedRevision } from './revision-lifecycle-store.js'; import { createAmbientSuppliedPlanner,resolveAmbientCompositeDecisions,type AmbientCompositeGroup } from './ambient-supplied-planner.js'; import { compileSuccessorCompositeChangeset } from './patch-compiler.js'; import { evaluateSuccessorGrowthThresholdFromTargets,type GrowthThresholdVerdict } from './growth-threshold.js';
+import { readFile, readdir, stat } from 'node:fs/promises'; import { join } from 'node:path'; import { loadDocumentState } from './document-state.js'; import { extractManagedRevisionFilename,extractRevisionReference,extractWithdrawalOperationId,resolveIntent } from './intent-resolver.js'; import { changeHeaderLocusCandidate,materializeCompositeTarget,resolveSuccessorTarget,resolveTargets,resolveSourceAndDestination } from './target-resolver.js'; import { ambiguityGate } from './ambiguity-gate.js'; import { buildContext,buildMoveCopyContext,buildSuccessorCompositeContext } from './context-builder.js'; import { buildEditPlan,buildMoveCopyPlan } from './edit-planner.js'; import { buildConceptualPlan } from './conceptual-planner.js'; import { compilePatches,compileSuccessorCompositeReplacement } from './patch-compiler.js'; import { validateCandidate } from './candidate-validator.js'; import { rebuildDerivedState } from './derived-state-builder.js'; import { createRevisionReceipt } from './revision-receipt.js'; import { commitDerivedState,markDerivedState,saveRevisionReceipt } from './derived-state-store.js'; import { withMutationLock,mutationLockKey,recordSuccessfulPublication,recordStaleMutationBlock } from './mutation-lock.js'; import { sha256,type CreateSuccessorOperation,type EditAction,type Position,type PublicV2Operation,type RevisionLifecycleOperation,SemanticEditPlanner,type SuccessorEditIntent,TargetCandidate,UserRequest } from './types.js'; import { ProposalWorkspaceAdapter } from './proposal-workspace-adapter.js'; import { resolveEffectiveOperationProfile,reviewerRequired } from './operation-spec.js'; import { type TutorAdapter,validateTutorAssessment } from './tutor-adapter.js'; import { type ReviewerAdapter,validateReviewerAssessment } from './reviewer-adapter.js'; import { writeTask,recordMutation,modelCall,recordRebuildAttempt,recordRebuildFailure } from './runtime-metrics.js'; import { RevisionLifecycleTransaction } from './revision-lifecycle-transaction.js'; import { createSuccessorAcceptanceRegistry,type SuccessorAcceptanceRegistry } from './successor-acceptance-registry.js'; import { resolveLatestManagedRevision } from './revision-lifecycle-store.js'; import { createAmbientSuppliedPlanner,resolveAmbientCompositeDecisions,type AmbientCompositeGroup,type AmbientCompositePart } from './ambient-supplied-planner.js'; import { compileSuccessorCompositeChangeset } from './patch-compiler.js'; import { evaluateSuccessorGrowthThresholdFromTargets,type GrowthThresholdVerdict } from './growth-threshold.js';
 import { DOMAIN } from './domain-profile.js';
 import { artifact as artifactConfig,parseRevisionIncrement,strictManagedRevision } from './artifact-naming.js';
 /** Whether an instruction needs this domain's expert before a conceptual plan is built. Stateless (no `g`), so one instance is safe. */
 const EXPERT_REQUIRED=new RegExp(DOMAIN.vocabulary.expertPattern,'i');
 const MANAGED_ARTIFACT_MARKER=artifactConfig.marker;
-export type V2Request=UserRequest&{operation?:PublicV2Operation;editIntent?:SuccessorEditIntent;sourceFilename?:string;sourceQuery?:string;destinationQuery?:string;position?:Position;adaptive?:boolean;literalContent?:string;expectedSourceSha256?:string;withdrawalOperationId?:string;withdrawalReason?:string;priorConclusion?:string;sessionIdentity?:string;successorAcceptanceToken?:string;acceptSuccessor?:boolean;/** CREATE_SUCCESSOR accept only: the `mathDelta.lost[].id` values the preview reported, echoed back to authorise removing them. Any lost mathematical atom left out of this list blocks the publish with MATH_REMOVALS_NOT_ACKNOWLEDGED. Permanent legacy alias for `acknowledgedRemovals`, both directions equivalent. */acknowledgedMathRemovals?:readonly string[];/** Change 4 (preservation gate, domain-neutral name): identical to `acknowledgedMathRemovals`, treated as the same set. */acknowledgedRemovals?:readonly string[];/** CREATE_SUCCESSOR only: one independent locus query per approved section (design amendment: multi-section successor); when present, overrides `selectedEntryId`/instruction-derived single-locus resolution entirely. */selectedEntryIds?:readonly string[];/** CREATE_SUCCESSOR + MODIFY only (design `sdd/proposal-deliberation-ambient-model`): one already-resolved `EditAction` per approved locus, supplied by the caller (the ambient model) instead of a separate model call. When present, the orchestrator routes through `ambient-supplied-planner.ts` (echo + the migrated planner OUTPUT validation) instead of `semanticPlanner`/`request.model` -- no model/network call happens on this path. */resolvedDecisions?:readonly EditAction[];/** Change 8, option (b): required on the preview turn only when `profile.artifact.changeHeader` is declared; refused `CHANGE_SUMMARY_REQUIRED` otherwise. */changeSummary?:{what:string;why:string};/** Change 9: accept-turn acknowledgement clearing an advisory `SOURCE_AUTHORITY_CONFLICT`, mirroring `acknowledgedRemovals`. */acknowledgedSourceConflicts?:readonly string[]}; export type DerivedStore={commitDerivedState:typeof commitDerivedState;markDerivedState:typeof markDerivedState;saveRevisionReceipt:typeof saveRevisionReceipt}; export type V2Roles={tutor?:TutorAdapter;reviewer?:ReviewerAdapter};
+export type V2Request=UserRequest&{operation?:PublicV2Operation;editIntent?:SuccessorEditIntent;/** CREATE_SUCCESSOR preview/accept: the section range frozen into the acceptance token. Accepted by the public schema in `proposal-workspace.ts` (optional string, 5-64 chars, `N-M` shape); absent is compared as `''`. */sectionRange?:string;sourceFilename?:string;sourceQuery?:string;destinationQuery?:string;position?:Position;adaptive?:boolean;literalContent?:string;expectedSourceSha256?:string;withdrawalOperationId?:string;withdrawalReason?:string;priorConclusion?:string;sessionIdentity?:string;successorAcceptanceToken?:string;acceptSuccessor?:boolean;/** CREATE_SUCCESSOR accept only: the `mathDelta.lost[].id` values the preview reported, echoed back to authorise removing them. Any lost mathematical atom left out of this list blocks the publish with MATH_REMOVALS_NOT_ACKNOWLEDGED. Permanent legacy alias for `acknowledgedRemovals`, both directions equivalent. */acknowledgedMathRemovals?:readonly string[];/** Change 4 (preservation gate, domain-neutral name): identical to `acknowledgedMathRemovals`, treated as the same set. */acknowledgedRemovals?:readonly string[];/** CREATE_SUCCESSOR only: one independent locus query per approved section (design amendment: multi-section successor); when present, overrides `selectedEntryId`/instruction-derived single-locus resolution entirely. */selectedEntryIds?:readonly string[];/** CREATE_SUCCESSOR + MODIFY only (design `sdd/proposal-deliberation-ambient-model`): one already-resolved `EditAction` per approved locus, supplied by the caller (the ambient model) instead of a separate model call. When present, the orchestrator routes through `ambient-supplied-planner.ts` (echo + the migrated planner OUTPUT validation) instead of `semanticPlanner`/`request.model` -- no model/network call happens on this path. */resolvedDecisions?:readonly EditAction[];/** Change 8, option (b): required on the preview turn only when `profile.artifact.changeHeader` is declared; refused `CHANGE_SUMMARY_REQUIRED` otherwise. */changeSummary?:{what:string;why:string};/** Change 9: accept-turn acknowledgement clearing an advisory `SOURCE_AUTHORITY_CONFLICT`, mirroring `acknowledgedRemovals`. */acknowledgedSourceConflicts?:readonly string[]}; export type DerivedStore={commitDerivedState:typeof commitDerivedState;markDerivedState:typeof markDerivedState;saveRevisionReceipt:typeof saveRevisionReceipt}; export type V2Roles={tutor?:TutorAdapter;reviewer?:ReviewerAdapter};
 const CREATE_SUCCESSOR:CreateSuccessorOperation='CREATE_SUCCESSOR';
 function lifecycleFailure(operation:RevisionLifecycleOperation,warning:string,status:'blocked'|'ambiguous'='blocked',question?:string){return {status,operation,withdrawnFilename:null,restoredLatestFilename:null,artifactCount:0,backupLocation:null,auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',warnings:[warning],...(question?{question}:{})}}
 function lifecycleClarification(result:any){if(result?.status==='blocked'&&result?.warnings?.includes('WITHDRAWAL_LOOKUP_AMBIGUOUS'))return {...result,status:'ambiguous',question:'Specify the exact withdrawalOperationId because this filename has multiple withdrawn records.'};return result}
@@ -36,6 +36,45 @@ export function combineSuccessorInstructionHashes(perTarget:readonly {entryId:st
  * `createAmbientSuppliedPlanner` already rejects it identically).
  */
 function ambientBatchNeedsComposite(decisions:readonly unknown[]):boolean{return decisions.some(d=>!(d&&typeof d==='object'&&!Array.isArray(d))||(d as any).kind!=='replace');}
+/**
+ * Joins the change header to one ambient composite group as one MORE disjoint splice
+ * part over its OWN block span, so the header survives a batch that `publish()` can no
+ * longer reach. `publish()` appends the header to a plan it is still about to compile;
+ * this path hands `publish()` an ALREADY-compiled `frozenCompiled` changeset, so the
+ * header has to join the parts BEFORE `compileSuccessorCompositeChangeset` runs -- and
+ * before it, every successor whose batch carried a single `insert`/`delete`/`move`/`copy`
+ * published carrying the PREVIOUS version's header over bytes a version newer.
+ *
+ * It stays its own resolved block span, never an exemption: `COMPOSITE_UNTOUCHED_INVARIANT`
+ * only ever inspects the gaps BETWEEN spans, so a header spliced as a span is checked by
+ * the same engine as every other part rather than excused from it. The group is returned
+ * UNCHANGED when the profile declares no `changeHeader`, when the request carries no
+ * `changeSummary` (`CHANGE_SUMMARY_REQUIRED` already refused that preview upstream), or
+ * when the document has no such heading.
+ *
+ * `targetIndices` is deliberately NOT extended: it indexes the caller's OWN resolved
+ * `targets` array (a mixed batch re-resolves the relocation half's original locus queries
+ * through it), and `growth-threshold.ts`'s advisory measures that same array -- so the
+ * header never inflates the approved-section count the author is advised about.
+ *
+ * A header locus that COLLIDES with a locus the caller already claimed is deliberately not
+ * special-cased either: the extra part reaches `compileSuccessorCompositeChangeset`'s own
+ * disjointness check and is refused `SUCCESSOR_TARGET_OVERLAP`, exactly as
+ * `compileSuccessorCompositeReplacement` refuses the same collision on the replace-only
+ * path. Silently dropping the header instead would publish the very lie this closes.
+ */
+function withChangeHeaderPart(state:any,request:V2Request|undefined,group:AmbientCompositeGroup):AmbientCompositeGroup{
+ if(!DOMAIN.artifact.changeHeader||!request?.changeSummary)return group;
+ const candidate=changeHeaderLocusCandidate(state,DOMAIN.artifact.changeHeader.heading);
+ if(!candidate)return group;
+ materializeCompositeTarget(state,candidate);
+ const entry=state.structuralIndex.byId[candidate.entryId];
+ if(!entry)return group;
+ const replacementText=DOMAIN.artifact.changeHeader.render(request.changeSummary);
+ const part:AmbientCompositePart={entryId:entry.entryId,startByte:entry.startByte,endByte:entry.endByte,textSha256:entry.textSha256,replacementText,op:'replace'};
+ const action:EditAction={kind:'replace',targetEntryId:entry.entryId,replacementText} as EditAction;
+ return {targetIndices:group.targetIndices,targetIds:[...group.targetIds,entry.entryId],parts:[...group.parts,part],actions:[...group.actions,action]};
+}
 /** Builds the minimal `EditPlan` shape `publish()`/`compileSuccessorCompositeChangeset`'s frozenCompiled callers need for one homogeneous ambient composite group (design `sdd/proposal-deliberation-ambient-model`, SLICE 1b). `resolvedTargets`/`actions` counts intentionally do NOT need to match 1:1 (a `move` decision claims two targets but contributes one action) -- unlike `compileSuccessorCompositeReplacement`'s replace-only invariant, this plan is only ever consumed via a precompiled `frozenCompiled` passed into `publish()`, never recompiled from `plan.actions` downstream. */
 function buildAmbientCompositeGroupPlan(documentSha256:string,group:AmbientCompositeGroup,intent:'MODIFY'|'MOVE',instructionSeed:string):any{return {planVersion:'2',documentSha256,intent,instructionHash:sha256(JSON.stringify({instructionSeed,actions:group.actions})),resolvedTargets:[...group.targetIds],semanticChange:false,destructiveIntent:false,cleanupLevel:'NONE',constraints:[],actions:[...group.actions],expectedEffects:[],unresolvedQuestions:[],successorCompositeTarget:true};}
 /** Remaps one relocation decision's own declared entryId field(s) from the ORIGINAL (pre-in-place-publish) resolved entryId to the FRESHLY re-resolved entryId at the SAME locus after the in-place half publishes (design `sdd/proposal-deliberation-ambient-model`, SLICE 1b) -- byte-offset-derived composite entryIds are never stable across a publish, only the fuzzy locus query is. */
@@ -65,7 +104,7 @@ export class ProposalDeliberationOrchestrator {
   // Skipped on the accept turn (the preview turn already required and carried it).
   if(successorRequest&&request.acceptSuccessor!==true&&DOMAIN.artifact.changeHeader&&!(request.changeSummary&&typeof request.changeSummary.what==='string'&&typeof request.changeSummary.why==='string'))return {status:'blocked',reason:'CHANGE_SUMMARY_REQUIRED',modelCalls:0,plannerCalls:0,mutations:0};
   const successorEditIntent:SuccessorEditIntent=request.editIntent==='CONCEPTUAL_REVISION'?'CONCEPTUAL_REVISION':'MODIFY';
-  const resolvedIntent=successorRequest?{...classifiedIntent,intent:successorEditIntent,semanticChange:true,pendingQuestions:[],unresolvedQuestions:[],destructiveIntent:false}:request.operation?{...classifiedIntent,intent:request.operation,pendingQuestions:[],unresolvedQuestions:[],destructiveIntent:true}:classifiedIntent;
+  const resolvedIntent=successorRequest?{...classifiedIntent,intent:successorEditIntent,semanticChange:true,pendingQuestions:[],unresolvedQuestions:[],destructiveIntent:false}:request.operation?{...classifiedIntent,/* reached only when `successorRequest` is false (see its definition above), so `operation` here excludes CREATE_SUCCESSOR and is a RevisionLifecycleOperation */intent:request.operation as RevisionLifecycleOperation,pendingQuestions:[],unresolvedQuestions:[],destructiveIntent:true}:classifiedIntent;
   const priorConclusion=typeof request.priorConclusion==='string'&&request.priorConclusion.trim()?request.priorConclusion.trim():undefined;
   const intent=priorConclusion?{...resolvedIntent,evidence:[`${request.instruction}\n\nPrior chat conclusion (advisory; apply only to the explicit edit): ${priorConclusion}`]}:resolvedIntent;
   if(intent.intent==='WITHDRAW_REVISION'||intent.intent==='RESTORE_WITHDRAWN_REVISION'){
@@ -188,14 +227,16 @@ export class ProposalDeliberationOrchestrator {
   const {inPlace,relocation}=resolution;
   try{
    if(relocation.parts.length===0){
-    const compiled=await compileSuccessorCompositeChangeset(state,inPlace.parts);
-    const plan=buildAmbientCompositeGroupPlan(state.documentSha256,inPlace,'MODIFY',request.instruction);
+    const group=withChangeHeaderPart(state,request,inPlace);
+    const compiled=await compileSuccessorCompositeChangeset(state,group.parts);
+    const plan=buildAmbientCompositeGroupPlan(state.documentSha256,group,'MODIFY',request.instruction);
     const growthAdvisory=evaluateSuccessorGrowthThresholdFromTargets(targets,state.documentBytes.length);
     return this.publish(state,filename,'MODIFY',{plan,modelCalls:0,plannerCalls:0},context,CREATE_SUCCESSOR,request,compiled,growthAdvisory);
    }
    if(inPlace.parts.length===0){
-    const compiled=await compileSuccessorCompositeChangeset(state,relocation.parts);
-    const plan=buildAmbientCompositeGroupPlan(state.documentSha256,relocation,'MOVE',request.instruction);
+    const group=withChangeHeaderPart(state,request,relocation);
+    const compiled=await compileSuccessorCompositeChangeset(state,group.parts);
+    const plan=buildAmbientCompositeGroupPlan(state.documentSha256,group,'MOVE',request.instruction);
     const growthAdvisory=evaluateSuccessorGrowthThresholdFromTargets(targets,state.documentBytes.length);
     return this.publish(state,filename,'MOVE',{plan,modelCalls:0,plannerCalls:0},context,CREATE_SUCCESSOR,request,compiled,growthAdvisory);
    }
@@ -203,8 +244,9 @@ export class ProposalDeliberationOrchestrator {
    // deferred (queries + validated decisions only) for re-resolution once
    // the in-place half's own successor has published (see
    // `acceptAmbientCompositeSuccessor`).
-   const inPlaceCompiled=await compileSuccessorCompositeChangeset(state,inPlace.parts);
-   const inPlacePlan=buildAmbientCompositeGroupPlan(state.documentSha256,inPlace,'MODIFY',request.instruction);
+   const inPlaceGroup=withChangeHeaderPart(state,request,inPlace);
+   const inPlaceCompiled=await compileSuccessorCompositeChangeset(state,inPlaceGroup.parts);
+   const inPlacePlan=buildAmbientCompositeGroupPlan(state.documentSha256,inPlaceGroup,'MODIFY',request.instruction);
    const growthAdvisory=evaluateSuccessorGrowthThresholdFromTargets(targets,state.documentBytes.length);
    const relocationQueries=relocation.targetIndices.map(index=>queries[index]!);
    const relocationOldEntryIds=relocation.targetIndices.map(index=>targets[index]!.entryId);
@@ -260,9 +302,12 @@ export class ProposalDeliberationOrchestrator {
  }
  private async publish(state:any,filename:string,intent:string,planned:any,context:any,operation:typeof CREATE_SUCCESSOR|any=intent,request?:V2Request,frozenCompiled?:any,growthAdvisory?:GrowthThresholdVerdict,pendingRelocation?:{queries:readonly string[];oldEntryIds:readonly string[];decisions:readonly EditAction[]}):Promise<any>{
   // Change 8, option (b): the change header is its OWN resolved block span, appended to the
-  // plan HERE (never invented by a resolver) -- gated on `!frozenCompiled` so the ambient-
-  // composite path (which always precompiles) is deliberately excluded (documented scope
-  // limitation, orthogonal SLICE 1b feature). `CHANGE_SUMMARY_REQUIRED` above already refused
+  // plan HERE (never invented by a resolver) -- gated on `!frozenCompiled`, which is now a
+  // division of labour rather than a scope limitation: a caller that precompiles its own
+  // changeset (the ambient-composite path, and every accept turn replaying a frozen preview)
+  // has ALREADY joined the header through `withChangeHeaderPart` above, and re-appending it
+  // here would double-count it against a compilation that can no longer be changed.
+  // `CHANGE_SUMMARY_REQUIRED` above already refused
   // any CREATE_SUCCESSOR preview lacking `changeSummary` when `changeHeader` is declared, so
   // `request.changeSummary` is always present by the time this runs on a genuine preview turn.
   if(operation===CREATE_SUCCESSOR&&!frozenCompiled&&DOMAIN.artifact.changeHeader&&request?.changeSummary){

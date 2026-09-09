@@ -11,8 +11,9 @@ import { runConsistencyAudit } from './consistency-audit.js';
 import { artifact } from './artifact-naming.js';
 import { runProposalDeliberationSelfAudit } from './self-audit.js';
 import { resolveSourceAndDestination } from './target-resolver.js';
+import type { SemanticEditPlanner } from './types.js';
 
-const planner={plan:async(input:any)=>{const target=input.target??{entryId:input.sourceEntryIds?.[0]};if(input.intent.intent==='MOVE'||input.intent.intent==='COPY')return {transformedContent:'Inserted paragraph.'};return {actions:[{kind:'replace',targetEntryId:target.entryId,replacementText:input.intent.intent==='CONCEPTUAL_REVISION'?'Gamma conceptually revised paragraph.':'Revised paragraph.'}],expectedEffects:[]}}};
+const planner:SemanticEditPlanner={plan:async(input:any)=>{const target=input.target??{entryId:input.sourceEntryIds?.[0]};if(input.intent.intent==='MOVE'||input.intent.intent==='COPY')return {transformedContent:'Inserted paragraph.'};return {actions:[{kind:'replace',targetEntryId:target.entryId,replacementText:input.intent.intent==='CONCEPTUAL_REVISION'?'Gamma conceptually revised paragraph.':'Revised paragraph.'}],expectedEffects:[]}}};
 const tutor={assess:async()=>({decision:'ALLOW',summary:'ok',riskLevel:'LOW',unresolvedQuestions:[]})};
 const reviewer={review:async()=>({decision:'ALLOW',summary:'ok',riskLevel:'LOW',unresolvedQuestions:[]})};
 let operationSequence=0;

@@ -293,3 +293,311 @@ test('4.1.4 CREATE_SUCCESSOR without a declared changeHeader never requires chan
 	assert.equal(published.receipt.resolvedEntryIds.length, 1);
 	assert.equal('changeSummary' in published.receipt, false, 'the receipt must not carry a changeSummary key when changeHeader is undeclared');
 });
+
+// ---------------------------------------------------------------------------
+// The ambient-composite path (CREATE_SUCCESSOR + `resolvedDecisions` carrying any
+// non-`replace` decision)
+//
+// Two measured gaps closed together, because they are one mechanism seen from two
+// sides. `orchestrator.ts` used to gate the header injection on `!frozenCompiled`,
+// and `ambientBatchNeedsComposite` precompiles the WHOLE changeset -- through
+// `compileSuccessorCompositeChangeset` -- as soon as one decision in the batch is
+// not a `replace`. So `publish()` was handed an already-frozen compilation it could
+// no longer add a block span to, and simply skipped the header:
+//
+//   G1 the published successor carried the PREVIOUS version's `## Changes` block
+//      over bytes that were a version newer -- the receipt still recorded the new
+//      `changeSummary`, so the history was intact while the DOCUMENT lied.
+//   G2 the ambient-composite path never injected the header at all, even with a
+//      `changeSummary` present (it was documented as a scope limitation).
+//
+// The fix appends the header as one MORE disjoint splice part BEFORE the changeset
+// is compiled, so it stays its own resolved block span -- never an exemption from
+// `COMPOSITE_UNTOUCHED_INVARIANT`, which only ever inspects the gaps BETWEEN spans.
+// ---------------------------------------------------------------------------
+
+test('4.1.16 an ambient batch carrying a non-replace decision still rewrites the change header in the published document', async (t) => {
+	const result = await run(t, `
+await writeFile(path.join(proposals, 'research-concept-r01.md'), ${JSON.stringify(MARKER)} + ${JSON.stringify(SEED_MARKDOWN)});
+const state = await v2.loadDocumentState(root, 'research-concept-r01.md');
+const gate = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Target Section').candidates);
+const targetEntryId = gate.candidate.entryId;
+const guard = workspaceModule.createDocumentOperationGuard(root);
+const workspace = workspaceModule.createProposalWorkspaceTool(root, { operationGuard: guard });
+let counter = 0;
+const adapter = new v2.ProposalWorkspaceAdapter(root, guard, workspace, () => \`change-header-ambient-insert-\${++counter}\`);
+// NO planner at all: the batch is resolved entirely from resolvedDecisions, which is
+// what makes this the ambient-composite path rather than the replace-only one.
+const orchestrator = new v2.ProposalDeliberationOrchestrator(root, adapter);
+const request = {
+	operation: 'CREATE_SUCCESSOR',
+	sourceFilename: 'research-concept-r01.md',
+	instruction: 'Agrega una nota tras Target Section.',
+	selectedEntryId: 'sección Target Section',
+	changeSummary: { what: 'Added a note after the target section.', why: 'The batch is not replace-only.' },
+	resolvedDecisions: [{ kind: 'insert', anchorEntryId: targetEntryId, position: 'after', content: '\\n## Extra Note\\n\\nInserted content.\\n' }],
+};
+const preview = await orchestrator.execute(request);
+const published = preview.status === 'awaiting_acceptance'
+	? await orchestrator.execute({ ...request, acceptSuccessor: true, successorAcceptanceToken: preview.acceptanceToken })
+	: { status: 'not-attempted' };
+const r02 = published.status === 'published' ? (await readFile(path.join(proposals, 'research-concept-r02.md'))).toString('utf8') : '';
+console.log(JSON.stringify({
+	previewStatus: preview.status,
+	previewReason: preview.reason ?? null,
+	publishedStatus: published.status,
+	publishedReason: published.reason ?? null,
+	r02HasNewHeader: r02.includes('**Why:** The batch is not replace-only.'),
+	r02HasStaleHeader: r02.includes('**Why:** First published version.'),
+	r02HasInsertedContent: r02.includes('Inserted content.'),
+	r02PreservesUntouchedBytes: r02.includes('# Test Document') && r02.includes('Original content for the target section.'),
+	receiptChangeSummary: published.receipt?.changeSummary ?? null,
+}));
+`);
+	assert.equal(result.previewStatus, 'awaiting_acceptance', JSON.stringify(result));
+	assert.equal(result.publishedStatus, 'published', JSON.stringify(result));
+	assert.equal(result.r02HasInsertedContent, true, 'sanity: the non-replace decision must actually have applied, or the header claim below is vacuous');
+	assert.equal(result.r02HasNewHeader, true,
+		'the successor must carry the header describing ITS OWN change, not the previous version\'s');
+	assert.equal(result.r02HasStaleHeader, false,
+		'a header describing the PREVIOUS version over newer bytes is the document lying about itself');
+	assert.equal(result.r02PreservesUntouchedBytes, true,
+		'the header is one more disjoint span, so every byte outside the spliced spans survives untouched');
+	assert.deepEqual(result.receiptChangeSummary, { what: 'Added a note after the target section.', why: 'The batch is not replace-only.' },
+		'the receipt already recorded the summary before this fix -- it must keep doing so');
+});
+
+test('4.1.17 the ambient-composite path counts the header as its own resolved block span across every blast-radius consumer', async (t) => {
+	const result = await run(t, `
+await writeFile(path.join(proposals, 'research-concept-r01.md'), ${JSON.stringify(MARKER)} + ${JSON.stringify(SEED_MARKDOWN)});
+const state = await v2.loadDocumentState(root, 'research-concept-r01.md');
+const gate = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Target Section').candidates);
+const targetEntryId = gate.candidate.entryId;
+// Resolved from the SAME read-only primitive orchestrator.ts itself uses, so this is
+// the expected id rather than one re-derived by a different rule.
+const headerCandidate = v2.changeHeaderLocusCandidate(state, 'Changes');
+const documentBytes = (await readFile(path.join(proposals, 'research-concept-r01.md'))).length;
+const targetSpan = gate.candidate.composite.endByte - gate.candidate.composite.startByte;
+const headerSpan = headerCandidate.composite.endByte - headerCandidate.composite.startByte;
+// growth-threshold.ts (blast radius): the advisory measures the APPROVED sections the
+// author actually chose. The header is engine bookkeeping and must never inflate it.
+// This fixture discriminates: the target alone is under the 40% ratio, the target plus
+// the header is over it, so a header-counting advisory would warn and this one must not.
+const excludeHeaderVerdict = v2.evaluateSuccessorGrowthThreshold({ approvedSectionCount: 1, approvedBytes: targetSpan, documentBytes });
+const includeHeaderVerdict = v2.evaluateSuccessorGrowthThreshold({ approvedSectionCount: 2, approvedBytes: targetSpan + headerSpan, documentBytes });
+const guard = workspaceModule.createDocumentOperationGuard(root);
+const workspace = workspaceModule.createProposalWorkspaceTool(root, { operationGuard: guard });
+let counter = 0;
+const adapter = new v2.ProposalWorkspaceAdapter(root, guard, workspace, () => \`change-header-ambient-arity-\${++counter}\`);
+const orchestrator = new v2.ProposalDeliberationOrchestrator(root, adapter);
+const request = {
+	operation: 'CREATE_SUCCESSOR',
+	sourceFilename: 'research-concept-r01.md',
+	instruction: 'Agrega una nota tras Target Section.',
+	selectedEntryId: 'sección Target Section',
+	changeSummary: { what: 'Added a note after the target section.', why: 'The batch is not replace-only.' },
+	resolvedDecisions: [{ kind: 'insert', anchorEntryId: targetEntryId, position: 'after', content: '\\n## Extra Note\\n\\nInserted content.\\n' }],
+};
+const preview = await orchestrator.execute(request);
+const resolvedTargets = preview.plan?.resolvedTargets ?? [];
+// operation-spec.ts (blast radius): maxPatchCount for a composite successor IS the
+// resolved-target count, and the adapter refuses INVALID_OPERATION_BUDGET when the
+// compiled patches outnumber it -- so the header must add exactly one to BOTH.
+const effectiveProfile = v2.resolveEffectiveOperationProfile({ intent: 'MODIFY', cleanupLevel: 'NONE', successorCompositeTarget: true, successorTargetCount: resolvedTargets.length });
+const published = preview.status === 'awaiting_acceptance'
+	? await orchestrator.execute({ ...request, acceptSuccessor: true, successorAcceptanceToken: preview.acceptanceToken })
+	: { status: 'not-attempted' };
+console.log(JSON.stringify({
+	previewStatus: preview.status,
+	previewReason: preview.reason ?? null,
+	resolvedTargets,
+	expectedTargetEntryId: targetEntryId,
+	expectedHeaderEntryId: headerCandidate.entryId,
+	compiledPatchCount: preview.compiled?.patches?.length ?? null,
+	effectiveMaxPatchCount: effectiveProfile.maxPatchCount,
+	growthAdvisory: preview.growthAdvisory ?? null,
+	excludeHeaderVerdict,
+	includeHeaderVerdict,
+	publishedStatus: published.status,
+	publishedReason: published.reason ?? null,
+	// successor-acceptance-registry.ts + revision-receipt.ts (blast radius): the token's
+	// compositeTargetIds is the very same resolvedTargets array, and the receipt's
+	// resolvedEntryIds is what a later audit reads the version's loci back from.
+	receiptResolvedEntryIds: published.receipt?.resolvedEntryIds ?? null,
+}));
+`);
+	assert.equal(result.previewStatus, 'awaiting_acceptance', JSON.stringify(result));
+	assert.deepEqual(result.resolvedTargets, [result.expectedTargetEntryId, result.expectedHeaderEntryId],
+		'the header joins the ambient batch as one MORE resolved block span, last, exactly as the replace-only path appends it');
+	assert.equal(result.compiledPatchCount, 2, 'the header is compiled as its own patch, never folded into the caller\'s');
+	assert.equal(result.effectiveMaxPatchCount, 2, 'operation-spec.ts must recount, or the adapter refuses INVALID_OPERATION_BUDGET');
+	assert.notDeepEqual(result.excludeHeaderVerdict, result.includeHeaderVerdict,
+		'sanity: this fixture must actually discriminate, or the advisory assertion below proves nothing');
+	assert.deepEqual(result.growthAdvisory, result.excludeHeaderVerdict,
+		'the growth advisory measures the author\'s approved sections only -- never the engine\'s own header block');
+	assert.equal(result.publishedStatus, 'published', JSON.stringify(result));
+	assert.deepEqual(result.receiptResolvedEntryIds, [result.expectedTargetEntryId, result.expectedHeaderEntryId],
+		'the receipt records both loci this version actually rewrote');
+});
+
+test('4.1.18 an ambient batch whose own decision claims the change-header locus is refused SUCCESSOR_TARGET_OVERLAP', async (t) => {
+	const result = await run(t, `
+await writeFile(path.join(proposals, 'research-concept-r01.md'), ${JSON.stringify(MARKER)} + ${JSON.stringify(SEED_MARKDOWN)});
+const state = await v2.loadDocumentState(root, 'research-concept-r01.md');
+const gate = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Changes').candidates);
+const headerCandidate = v2.changeHeaderLocusCandidate(state, 'Changes');
+const guard = workspaceModule.createDocumentOperationGuard(root);
+const workspace = workspaceModule.createProposalWorkspaceTool(root, { operationGuard: guard });
+const adapter = new v2.ProposalWorkspaceAdapter(root, guard, workspace, () => 'change-header-ambient-overlap');
+const orchestrator = new v2.ProposalDeliberationOrchestrator(root, adapter);
+const preview = await orchestrator.execute({
+	operation: 'CREATE_SUCCESSOR',
+	sourceFilename: 'research-concept-r01.md',
+	instruction: 'Elimina la sección Changes.',
+	selectedEntryId: 'sección Changes',
+	changeSummary: { what: 'Tried to delete the change header.', why: 'The engine must rewrite that same block.' },
+	resolvedDecisions: [{ kind: 'delete', targetEntryId: gate.candidate.entryId, instructionEvidence: 'Elimina la sección Changes.', reason: 'obsolete' }],
+});
+let r02Exists = true;
+try { await readFile(path.join(proposals, 'research-concept-r02.md')); } catch { r02Exists = false; }
+console.log(JSON.stringify({
+	resolvedSameLocus: gate.candidate.entryId === headerCandidate.entryId,
+	status: preview.status,
+	reason: preview.reason ?? null,
+	r02Exists,
+}));
+`);
+	assert.equal(result.resolvedSameLocus, true,
+		'sanity: the batch must really claim the header\'s own span, or nothing collides');
+	assert.equal(result.status, 'blocked', JSON.stringify(result));
+	// Not a special case, and deliberately not an exemption: the header part reaches
+	// `compileSuccessorCompositeChangeset`'s own disjointness check and is refused there,
+	// exactly as `compileSuccessorCompositeReplacement` refuses the same collision on the
+	// replace-only path. Silently dropping the header would publish the stale-header lie.
+	assert.equal(result.reason, 'SUCCESSOR_TARGET_OVERLAP', JSON.stringify(result));
+	assert.equal(result.r02Exists, false, 'nothing may publish when the header cannot be rewritten');
+});
+
+// The relocation-only branch of the same path. `move`/`copy` decisions freeze a
+// SEPARATE composite group from the in-place ones, compiled at its own call site, so
+// a header joined only to the in-place group would leave exactly this batch shape
+// publishing the stale header -- the gap fixed for one branch and left open next door.
+const RELOCATION_SEED = `# Test Document\n\n${HEADER_BLOCK}\n## Alpha\n\nAlpha body.\n\n## Beta\n\nBeta body.\n\n## Tail\n\nTail body.\n`;
+
+test('4.1.19 a relocation-only ambient batch rewrites the change header too, and recounts with the moved pair', async (t) => {
+	const result = await run(t, `
+await writeFile(path.join(proposals, 'research-concept-r01.md'), ${JSON.stringify(MARKER)} + ${JSON.stringify(RELOCATION_SEED)});
+const state = await v2.loadDocumentState(root, 'research-concept-r01.md');
+const alphaEntryId = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Alpha').candidates).candidate.entryId;
+const betaEntryId = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Beta').candidates).candidate.entryId;
+const headerEntryId = v2.changeHeaderLocusCandidate(state, 'Changes').entryId;
+const guard = workspaceModule.createDocumentOperationGuard(root);
+const workspace = workspaceModule.createProposalWorkspaceTool(root, { operationGuard: guard });
+let counter = 0;
+const adapter = new v2.ProposalWorkspaceAdapter(root, guard, workspace, () => \`change-header-ambient-move-\${++counter}\`);
+const orchestrator = new v2.ProposalDeliberationOrchestrator(root, adapter);
+const request = {
+	operation: 'CREATE_SUCCESSOR',
+	sourceFilename: 'research-concept-r01.md',
+	instruction: 'Mueve Alpha después de Beta.',
+	selectedEntryIds: ['sección Alpha', 'sección Beta'],
+	changeSummary: { what: 'Moved Alpha after Beta.', why: 'Relocation-only batches need a header too.' },
+	resolvedDecisions: [{ kind: 'move', sourceEntryIds: [alphaEntryId], destinationAnchorId: betaEntryId, position: 'after', moveMode: 'LITERAL', removeSource: true, cleanupLevel: 'NONE' }],
+};
+const preview = await orchestrator.execute(request);
+const published = preview.status === 'awaiting_acceptance'
+	? await orchestrator.execute({ ...request, acceptSuccessor: true, successorAcceptanceToken: preview.acceptanceToken })
+	: { status: 'not-attempted' };
+const r02 = published.status === 'published' ? (await readFile(path.join(proposals, 'research-concept-r02.md'))).toString('utf8') : '';
+console.log(JSON.stringify({
+	previewStatus: preview.status,
+	previewReason: preview.reason ?? null,
+	resolvedTargets: preview.plan?.resolvedTargets ?? [],
+	expected: [alphaEntryId, betaEntryId, headerEntryId],
+	compiledPatchCount: preview.compiled?.patches?.length ?? null,
+	publishedStatus: published.status,
+	publishedReason: published.reason ?? null,
+	r02HasNewHeader: r02.includes('**Why:** Relocation-only batches need a header too.'),
+	r02HasStaleHeader: r02.includes('**Why:** First published version.'),
+	alphaFollowsBeta: r02.indexOf('Beta body.') >= 0 && r02.indexOf('Beta body.') < r02.indexOf('Alpha body.'),
+}));
+`);
+	assert.equal(result.previewStatus, 'awaiting_acceptance', JSON.stringify(result));
+	assert.deepEqual(result.resolvedTargets, result.expected,
+		'source, destination, then the header -- the relocation group recounts exactly like the in-place one');
+	// A `move` contributes TWO parts (insert at the destination, delete at the source) for its
+	// two claimed targets, and the header adds the third of each -- so patches and resolved
+	// targets stay balanced and `operation-spec.ts`'s maxPatchCount still covers them.
+	assert.equal(result.compiledPatchCount, 3);
+	assert.equal(result.publishedStatus, 'published', JSON.stringify(result));
+	assert.equal(result.alphaFollowsBeta, true, 'sanity: the relocation must actually have applied');
+	assert.equal(result.r02HasNewHeader, true, 'a move-only batch rewrites the header exactly as an in-place one does');
+	assert.equal(result.r02HasStaleHeader, false);
+});
+
+test('4.1.20 a MIXED ambient batch rewrites the header on the version it belongs to, and the second version inherits it', async (t) => {
+	const result = await run(t, `
+await writeFile(path.join(proposals, 'research-concept-r01.md'), ${JSON.stringify(MARKER)} + ${JSON.stringify(RELOCATION_SEED)});
+const state = await v2.loadDocumentState(root, 'research-concept-r01.md');
+const alphaEntryId = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Alpha').candidates).candidate.entryId;
+const betaEntryId = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Beta').candidates).candidate.entryId;
+const tailEntryId = v2.ambiguityGate(v2.resolveSuccessorTarget(state, 'sección Tail').candidates).candidate.entryId;
+const headerEntryId = v2.changeHeaderLocusCandidate(state, 'Changes').entryId;
+const guard = workspaceModule.createDocumentOperationGuard(root);
+const workspace = workspaceModule.createProposalWorkspaceTool(root, { operationGuard: guard });
+// A mixed batch performs TWO sequential publishes against the same adapter, and the
+// guard rejects a second begin_document_operation on an already-finalized id.
+let counter = 0;
+const adapter = new v2.ProposalWorkspaceAdapter(root, guard, workspace, () => \`change-header-ambient-mixed-\${++counter}\`);
+const orchestrator = new v2.ProposalDeliberationOrchestrator(root, adapter);
+const request = {
+	operation: 'CREATE_SUCCESSOR',
+	sourceFilename: 'research-concept-r01.md',
+	instruction: 'Reescribe Tail y mueve Alpha después de Beta.',
+	selectedEntryIds: ['sección Tail', 'sección Alpha', 'sección Beta'],
+	changeSummary: { what: 'Rewrote Tail and moved Alpha.', why: 'A mixed batch publishes two versions from one consent.' },
+	resolvedDecisions: [
+		{ kind: 'replace', targetEntryId: tailEntryId, replacementText: '## Tail\\n\\nRewritten tail body.\\n' },
+		{ kind: 'move', sourceEntryIds: [alphaEntryId], destinationAnchorId: betaEntryId, position: 'after', moveMode: 'LITERAL', removeSource: true, cleanupLevel: 'NONE' },
+	],
+};
+const preview = await orchestrator.execute(request);
+const published = preview.status === 'awaiting_acceptance'
+	? await orchestrator.execute({ ...request, acceptSuccessor: true, successorAcceptanceToken: preview.acceptanceToken })
+	: { status: 'not-attempted' };
+const read = async (name) => { try { return (await readFile(path.join(proposals, name))).toString('utf8'); } catch { return null; } };
+const r02 = await read('research-concept-r02.md');
+const r03 = await read('research-concept-r03.md');
+console.log(JSON.stringify({
+	previewStatus: preview.status,
+	previewReason: preview.reason ?? null,
+	// The frozen in-place half is Tail's replace plus the header -- the relocation half is
+	// deferred and re-resolved after this one publishes.
+	resolvedTargets: preview.plan?.resolvedTargets ?? [],
+	expectedInPlace: [tailEntryId, headerEntryId],
+	publishedStatus: published.status,
+	publishedReason: published.reason ?? null,
+	versionCount: published.versions?.length ?? null,
+	r02HasNewHeader: (r02 ?? '').includes('**Why:** A mixed batch publishes two versions from one consent.'),
+	r02HasStaleHeader: (r02 ?? '').includes('**Why:** First published version.'),
+	r03HasNewHeader: (r03 ?? '').includes('**Why:** A mixed batch publishes two versions from one consent.'),
+	r03HasStaleHeader: (r03 ?? '').includes('**Why:** First published version.'),
+	r03AlphaFollowsBeta: r03 !== null && r03.indexOf('Beta body.') < r03.indexOf('Alpha body.'),
+	r03HasRewrittenTail: (r03 ?? '').includes('Rewritten tail body.'),
+}));
+`);
+	assert.equal(result.previewStatus, 'awaiting_acceptance', JSON.stringify(result));
+	assert.deepEqual(result.resolvedTargets, result.expectedInPlace,
+		'the header joins the in-place half, which is the version this batch first publishes');
+	assert.equal(result.publishedStatus, 'published', JSON.stringify(result));
+	assert.equal(result.versionCount, 2, 'sanity: a mixed batch really does publish two successor versions');
+	assert.equal(result.r02HasNewHeader, true);
+	assert.equal(result.r02HasStaleHeader, false);
+	// The relocation half publishes ON TOP of r02's bytes, which already carry the rewritten
+	// header. Re-rendering it there would only rewrite it to the identical text, so the header
+	// is deliberately joined once, to the first version -- and the second inherits it.
+	assert.equal(result.r03HasNewHeader, true, 'the second version inherits the header the first one rewrote');
+	assert.equal(result.r03HasStaleHeader, false);
+	assert.equal(result.r03AlphaFollowsBeta, true, 'sanity: the deferred relocation half really applied');
+	assert.equal(result.r03HasRewrittenTail, true, 'sanity: the in-place half survived into the second version');
+});

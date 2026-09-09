@@ -31,6 +31,21 @@ import {
 	strictManagedRevision,
 } from "./artifact-naming.js";
 
+/**
+ * How this profile spells a revision label with its ordinal left as a placeholder
+ * (`rNN` under a domain whose revision prefix is `r`, `vNN` under one whose prefix is
+ * `v`), and its first two concrete labels.
+ *
+ * Prose only: every one of these three is read by a caller -- JSON-Schema `description`
+ * strings and refusal messages -- and never by a matcher. `artifact-naming.ts` owns every
+ * pattern that actually parses a filename. They existed here as the hardcoded literals
+ * `rNN`, `r01` and `r02`, which are simply false for any domain that does not spell its
+ * revisions with an `r`.
+ */
+const REVISION_PLACEHOLDER = `${DOMAIN.artifact.revisionPattern}NN`;
+const FIRST_REVISION_LABEL = artifact.revisionLabel(1);
+const SECOND_REVISION_LABEL = artifact.revisionLabel(2);
+
 const GUIDE_DIRECTORY = "guidance/paper-guide";
 const PROPOSAL_DIRECTORY = artifact.directory;
 const MAX_READ_BYTES = 64 * 1024;
@@ -499,7 +514,7 @@ const proposalWorkspaceSchema = Type.Object(
 		continuityManifest: Type.Optional(continuityManifestSchema),
 		source: Type.Optional(
 			Type.String({
-				description: `Exact latest marker-owned ${artifact.stem}-rNN.md root-lineage or ${artifact.stem}-<lineage>-rNN.md explicit-lineage filename.`,
+				description: `Exact latest marker-owned ${artifact.stem}-${REVISION_PLACEHOLDER}.md root-lineage or ${artifact.stem}-<lineage>-${REVISION_PLACEHOLDER}.md explicit-lineage filename.`,
 				minLength: 1,
 				maxLength: MAX_NAME_LENGTH,
 				pattern: managedRevisionSchemaPattern(),
@@ -1109,7 +1124,7 @@ function assertShape(params: ProposalWorkspaceInput): void {
 	) {
 		throw blocked(
 			"the action/resource fields do not form an allowed operation.",
-			"Use inventory/read/write as documented; derive and derive_revision retain fixed-base compatibility; derive_successor requires only proposal, the exact latest source filename and SHA-256, a greater same-lineage -rNN slug, and a bounded exact patch manifest.",
+			`Use inventory/read/write as documented; derive and derive_revision retain fixed-base compatibility; derive_successor requires only proposal, the exact latest source filename and SHA-256, a greater same-lineage -${REVISION_PLACEHOLDER} slug, and a bounded exact patch manifest.`,
 		);
 	}
 }
@@ -3424,6 +3439,10 @@ function continuityFailure(
 	throw candidateRejected(operation, code, message, nextStep, { itemId, ...evidence });
 }
 
+/** `Number.isInteger` itself, re-declared with the type predicate its lib signature omits.
+ *  Not a wrapper: the same function object is invoked, and it reads no `this`. */
+const isInteger = Number.isInteger as (value: unknown) => value is number;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -3463,7 +3482,7 @@ function validateContinuityManifestShape(
 			operation,
 			"continuity-source-identity",
 			"continuityManifest source is not an exact safe managed revision identity",
-			`Use one ${artifact.stem}-<lineage>-rNN.md filename and the lowercase SHA-256 of its complete marker-owned bytes.`,
+			`Use one ${artifact.stem}-<lineage>-${REVISION_PLACEHOLDER}.md filename and the lowercase SHA-256 of its complete marker-owned bytes.`,
 			"source",
 		);
 	}
@@ -3479,7 +3498,7 @@ function validateContinuityManifestShape(
 			operation,
 			"continuity-source-identity",
 			"continuityManifest source is not an earlier revision in the candidate lineage",
-			"Select the exact latest marker-owned revision from the same lineage and derive a greater rNN target.",
+			`Select the exact latest marker-owned revision from the same lineage and derive a greater ${REVISION_PLACEHOLDER} target.`,
 			"source",
 			{ sourceTarget: source.target, candidateSlug },
 		);
@@ -3635,7 +3654,7 @@ async function assertContinuitySourceIsLatest(
 		? sourceTarget.match(ROOT_MANAGED_REVISION_TARGET_MARKDOWN)
 		: null;
 	if (!sourceMatch && !rootSourceMatch) {
-		continuityFailure(operation, "continuity-source-identity", "continuity source revision identity is invalid", "Use an exact marker-owned terminal rNN target.", "source");
+		continuityFailure(operation, "continuity-source-identity", "continuity source revision identity is invalid", `Use an exact marker-owned terminal ${REVISION_PLACEHOLDER} target.`, "source");
 	}
 	const directory = await canonicalDirectory(projectRoot, PROPOSAL_DIRECTORY);
 	const entries = await readdir(directory, { withFileTypes: true });
@@ -3665,7 +3684,7 @@ async function assertContinuitySourceIsLatest(
 			operation,
 			"continuity-source-stale",
 			"continuityManifest source is not the latest matching revision target in its lineage",
-			"Inventory the lineage again and bind the manifest to the greatest current terminal rNN target.",
+			`Inventory the lineage again and bind the manifest to the greatest current terminal ${REVISION_PLACEHOLDER} target.`,
 			"source",
 			{ sourceTarget, newerTargets: newerMatchingTargets },
 		);
@@ -4172,7 +4191,7 @@ async function assertNewManagedProposalTargetAvailable(
 	if (await inspectProposalTarget(target)) {
 		throw blocked(
 			"derive requires a new proposal target and never replaces an existing file.",
-			"Choose a new -rNN slug; overwrite capabilities do not apply to derive.",
+			`Choose a new -${REVISION_PLACEHOLDER} slug; overwrite capabilities do not apply to derive.`,
 		);
 	}
 }
@@ -4248,7 +4267,7 @@ async function atomicCreateManagedProposal(
 		if (await inspectProposalTarget(target)) {
 			throw blocked(
 				"derive requires a new proposal target and never replaces an existing file.",
-				"Choose a new -rNN slug; overwrite capabilities do not apply to derive.",
+				`Choose a new -${REVISION_PLACEHOLDER} slug; overwrite capabilities do not apply to derive.`,
 			);
 		}
 		const output = Buffer.from(`${ARTIFACT_MARKER}${body}`, "utf8");
@@ -4292,7 +4311,7 @@ async function atomicCreateManagedProposal(
 				if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
 					throw blocked(
 						"the derived proposal target appeared before atomic publication.",
-						"Inspect it and choose a new -rNN slug.",
+						`Inspect it and choose a new -${REVISION_PLACEHOLDER} slug.`,
 					);
 				}
 				throw error;
@@ -4338,12 +4357,16 @@ async function createInitialProposal(
 	content: string | undefined,
 	signal?: AbortSignal,
 ): Promise<ToolResult> {
-	if (slug !== "r01") {
+	// The first revision's slug IS the profile's own first-revision label, never the literal
+	// `"r01"`: `managedRevisionFilename('ROOT', 1)` -- what `proposal-workspace-adapter.ts`
+	// checks the candidate's filename against -- is spelled `<stem>-v01.md` under a domain
+	// whose revision prefix is `v`, so a hardcoded `"r01"` here refused every such candidate.
+	if (slug !== FIRST_REVISION_LABEL) {
 		throw candidateRejected(
 			"initial_create",
 			"initial-target-identity",
-			`INITIAL_CREATE publishes only ${artifact.stem}-r01.md`,
-			"Use slug r01 for the first managed proposal.",
+			`INITIAL_CREATE publishes only ${artifact.stem}-${FIRST_REVISION_LABEL}.md`,
+			`Use slug ${FIRST_REVISION_LABEL} for the first managed proposal.`,
 			{ slug },
 		);
 	}
@@ -4421,8 +4444,8 @@ function validateSuccessorIdentity(
 	) {
 		successorFailure(
 			"successor-source-identity",
-			"source must be one exact terminal-rNN managed proposal filename",
-			`Inventory managed ${PROPOSAL_DIRECTORY} and pass the exact latest root or explicit-lineage terminal-rNN filename.`,
+			`source must be one exact terminal-${REVISION_PLACEHOLDER} managed proposal filename`,
+			`Inventory managed ${PROPOSAL_DIRECTORY} and pass the exact latest root or explicit-lineage terminal-${REVISION_PLACEHOLDER} filename.`,
 		);
 	}
 	if (typeof sourceSha256 !== "string" || !/^[a-f0-9]{64}$/.test(sourceSha256)) {
@@ -4448,8 +4471,8 @@ function validateSuccessorIdentity(
 	if (!validRootTransition && !validExplicitTransition) {
 		successorFailure(
 			"successor-lineage-identity",
-			"target slug must remain in the exact source lineage; root revisions must advance by exactly one rNN",
-			`For ${artifact.stem}-r01.md use r02; otherwise keep the explicit lineage prefix unchanged and choose a greater rNN slug.`,
+			`target slug must remain in the exact source lineage; root revisions must advance by exactly one ${REVISION_PLACEHOLDER}`,
+			`For ${artifact.stem}-${FIRST_REVISION_LABEL}.md use ${SECOND_REVISION_LABEL}; otherwise keep the explicit lineage prefix unchanged and choose a greater ${REVISION_PLACEHOLDER} slug.`,
 			{ source, slug: safeSlug },
 		);
 	}
@@ -4560,7 +4583,7 @@ function validateSuccessorPatches(
 			}
 			const selector=candidate.selector;let structuralStart:number|undefined;let structuralEnd:number|undefined;
 			if(selector!==undefined){
-				if(!isRecord(selector)||typeof selector.entryId!=="string"||!Number.isInteger(selector.startByte)||!Number.isInteger(selector.endByte)||typeof selector.textSha256!=="string"||selector.documentSha256!==sourceSha256)successorFailure("successor-structural-selector","structural selector is invalid or stale","Rebuild the patch from the exact current source.",{patchId:id});
+				if(!isRecord(selector)||typeof selector.entryId!=="string"||!isInteger(selector.startByte)||!isInteger(selector.endByte)||typeof selector.textSha256!=="string"||selector.documentSha256!==sourceSha256)successorFailure("successor-structural-selector","structural selector is invalid or stale","Rebuild the patch from the exact current source.",{patchId:id});
 				const sourceBytes=Buffer.from(source,"utf8");if(selector.startByte<ARTIFACT_MARKER_BUFFER.length||selector.endByte<=selector.startByte||selector.endByte>sourceBytes.length)successorFailure("successor-structural-range","structural selector range is invalid","Use exact entry byte bounds after the immutable artifact marker.",{patchId:id});
 				const range=sourceBytes.subarray(selector.startByte,selector.endByte);if(createHash("sha256").update(range).digest("hex")!==selector.textSha256||range.toString("utf8")!==oldText)successorFailure("successor-structural-hash","structural selector bytes do not match oldText","Rebuild the patch from exact entry bytes.",{patchId:id});
 				structuralStart=sourceBytes.subarray(0,selector.startByte).toString("utf8").length;structuralEnd=sourceBytes.subarray(0,selector.endByte).toString("utf8").length;
@@ -4884,7 +4907,7 @@ async function deriveSuccessorProposal(
 		successorFailure(
 			"successor-target-collision",
 			"the immutable successor target already exists or is not a safe standalone target",
-			"Inventory the lineage and choose the next unused terminal-rNN slug.",
+			`Inventory the lineage and choose the next unused terminal-${REVISION_PLACEHOLDER} slug.`,
 			{ targetSlug: identity.slug, reason: error instanceof Error ? error.message : String(error) },
 		);
 	}
@@ -5176,25 +5199,25 @@ export function createProposalWorkspaceTool(
 		name: "proposal_workspace",
 		label: "Proposal Workspace",
 		description: options.operationGuard
-			? "DOCUMENT_OPERATION proposal workspace. Reads remain sandboxed; mutations fail closed except one preflight-bound initial r01 write or one exact latest/SHA-bound incremental derive_successor under the declared operation budget."
-			: `Sandboxed proposal workspace. Reads only eligible proposal evidence and marker-owned managed targets; writes only ${PROPOSAL_DIRECTORY}/${artifact.stem}-<slug>.md. derive_successor atomically patches the exact SHA-bound latest root or explicit-lineage managed revision into a new immutable same-lineage rNN target with byte-level untouched-region verification. Legacy derive and derive_revision remain available for fixed-base compatibility. All other filesystem access is denied.`,
+			? `DOCUMENT_OPERATION proposal workspace. Reads remain sandboxed; mutations fail closed except one preflight-bound initial ${FIRST_REVISION_LABEL} write or one exact latest/SHA-bound incremental derive_successor under the declared operation budget.`
+			: `Sandboxed proposal workspace. Reads only eligible proposal evidence and marker-owned managed targets; writes only ${PROPOSAL_DIRECTORY}/${artifact.stem}-<slug>.md. derive_successor atomically patches the exact SHA-bound latest root or explicit-lineage managed revision into a new immutable same-lineage ${REVISION_PLACEHOLDER} target with byte-level untouched-region verification. Legacy derive and derive_revision remain available for fixed-base compatibility. All other filesystem access is denied.`,
 		promptSnippet: "Use the sandboxed proposal corpus and proposal target workspace",
 		promptGuidelines: options.operationGuard
 			? [
 					"Use proposal_workspace exclusively for document-operation filesystem access; if it blocks or is unavailable, stop.",
 					"Inventory and read only bounded eligible proposal resources. Generic filesystem and shell tools remain outside this boundary.",
-					"Mutation is limited to the exact proposal route approved by document_operation_guard: write only for INITIAL_CREATE r01, or derive_successor only for existing incremental updates.",
+					`Mutation is limited to the exact proposal route approved by document_operation_guard: write only for INITIAL_CREATE ${FIRST_REVISION_LABEL}, or derive_successor only for existing incremental updates.`,
 					"Pass the active operation_id and one-time operationAuthorization unchanged. Never request append, derive, derive_revision, authorize_overwrite, a route mismatch, an undeclared patch, a second attempt, tests, maintenance, or infrastructure mutation.",
 				]
 			: [
 					"Use proposal_workspace exclusively for proposal-deliberation filesystem access; if it blocks or is unavailable, stop and report the failure.",
 					`Use proposal_workspace read/managed_target with the exact generated filename to resume or migrate an existing marker-owned draft; never use it for bases or manual ${PROPOSAL_DIRECTORY}.`,
-					`When a latest managed proposal exists, use derive_successor with its exact terminal-rNN filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root ${artifact.stem}-r01.md advances only with slug r02; explicit lineages retain the greater same-lineage terminal-rNN rule, and root/explicit transitions are forbidden.`,
-					`Use legacy derive only for initial fixed-base creation or backward-compatible flows: ${DOMAIN.deriveBase}, a new slug ending -rNN, and bounded additive insertions anchored to exact unique base text or anchor={equationLabel} / anchor={numberedTag} with position=after.`,
+					`When a latest managed proposal exists, use derive_successor with its exact terminal-${REVISION_PLACEHOLDER} filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root ${artifact.stem}-${FIRST_REVISION_LABEL}.md advances only with slug ${SECOND_REVISION_LABEL}; explicit lineages retain the greater same-lineage terminal-${REVISION_PLACEHOLDER} rule, and root/explicit transitions are forbidden.`,
+					`Use legacy derive only for initial fixed-base creation or backward-compatible flows: ${DOMAIN.deriveBase}, a new slug ending -${REVISION_PLACEHOLDER}, and bounded additive insertions anchored to exact unique base text or anchor={equationLabel} / anchor={numberedTag} with position=after.`,
 					"Use inventory/displays with bounded offset/limit and read/display with a returned displayId to inspect parser-exact fixed-base display blocks; IDs are deterministic for exact block bytes and duplicate occurrence, and stale IDs fail closed.",
 					"Use inventory/sections with bounded offset/limit to obtain stable fixed-base sectionId selectors, heading text/level, byte extents, and inherited display counts; a section extends from its ATX heading through the next heading of the same or higher level.",
 					"Use proposal_workspace derive_revision only for an explicitly researcher-authorized correction: select bounded exact complete base blocks and/or authorizedSectionRemovals by current sectionId, provide one numberedTag, equationLabel, displayBlock, or displayId authorization for each removed or altered inherited display, and use authorizedDisplayRelocations source/destination ids for every explicit move group.",
-					"When a latest managed target is part of a derive or derive_revision decision, pass continuityManifest with its exact terminal-rNN filename, complete-file SHA-256, and bounded required, forbidden, or supersession assertions; publication fails closed unless latest-source and fully composed candidate byte counts match exactly.",
+					`When a latest managed target is part of a derive or derive_revision decision, pass continuityManifest with its exact terminal-${REVISION_PLACEHOLDER} filename, complete-file SHA-256, and bounded required, forbidden, or supersession assertions; publication fails closed unless latest-source and fully composed candidate byte counts match exactly.`,
 					"Treat proposal_workspace derive and derive_revision as fail-closed pre-publish transactions: fully composed bytes must preserve standalone ATX headings, Markdown block boundaries, exact non-moved display/heading coverage and order, authorized move-group coverage/order, guarded flat-domain definitions, and any supplied continuityManifest before atomic target creation.",
 					"When replacing a proposal target, call authorize_overwrite for its exact slug and use the returned unexpired capability on the next write; never claim approval or send a boolean replacement flag.",
 				],
@@ -5321,7 +5344,7 @@ export function createProposalWorkspaceTool(
 	};
 }
 
-import { ChatDeliberationService, createFilesystemInitialRevisionPublicationPort, DraftMaterializationService, InitialRevisionCreationService, LifecycleV1PublicRouter, ProposalDeliberationOrchestrator, ProposalWorkspaceAdapter, defaultPiSessionDraftLifecycleAdapter, getRuntimeMetrics, getSharedPiSessionDraftRegistry, loadDocumentState, MAX_CHAT_DOCUMENT_CONTEXT_BYTES, MAX_CHAT_GUIDE_CONTEXT_BYTES, recordLifecycleMetric, recordRouteMetric, resolveIntent, resolveLatestManagedRevision, runConsistencyAudit, runProposalDeliberationSelfAudit, type ChatDocumentContext, type ChatGuideFragment, type DraftMaterializationPolicy, type DraftMaterializationRequest, type PiSessionDraftLifecycleAdapter, type PiSessionDraftRegistry, type ReviewerAdapter, type SemanticEditPlanner, type TutorAdapter } from './exports.js';
+import { ChatDeliberationService, createFilesystemInitialRevisionPublicationPort, DraftMaterializationService, InitialRevisionCreationService, LifecycleV1PublicRouter, ProposalDeliberationOrchestrator, ProposalWorkspaceAdapter, defaultPiSessionDraftLifecycleAdapter, getRuntimeMetrics, getSharedPiSessionDraftRegistry, loadDocumentState, MAX_CHAT_DOCUMENT_CONTEXT_BYTES, MAX_CHAT_GUIDE_CONTEXT_BYTES, recordLifecycleMetric, recordRouteMetric, resolveIntent, resolveLatestManagedRevision, runConsistencyAudit, runProposalDeliberationSelfAudit, type ChatDocumentContext, type ChatGuideFragment, type DraftMaterializationPolicy, type EditAction, type DraftMaterializationRequest, type PiSessionDraftLifecycleAdapter, type PiSessionDraftRegistry, type ReviewerAdapter, type SemanticEditPlanner, type TutorAdapter } from './exports.js';
 import { createSuccessorAcceptanceRegistry, type SuccessorAcceptanceRegistry } from './successor-acceptance-registry.js';
 
 type GlobalRouteStage = 'LIFECYCLE' | 'DIRECT_DOCUMENT' | 'CHAT_DELIBERATION' | 'DRAFT_MATERIALIZATION' | 'MAINTENANCE' | 'CREATE_INITIAL_REVISION' | 'EXISTING_FALLBACK';
@@ -5333,6 +5356,23 @@ const DIRECT_DOCUMENT_INTENTS = new Set(['MODIFY', 'INSERT', 'DELETE', 'MOVE', '
 const MAINTENANCE_OPERATION = 'MAINTENANCE';
 const CREATE_SUCCESSOR_OPERATION = 'CREATE_SUCCESSOR';
 const CREATE_INITIAL_REVISION_OPERATION = 'CREATE_INITIAL_REVISION';
+
+/**
+ * The caller-facing projection of a `CREATE_INITIAL_REVISION` refusal: its `nextAction` and its
+ * one blocker. Extracted from the nested ternary it replaced because a third refusal code --
+ * `INITIAL_REVISION_CANONICAL_FORM_VIOLATION`, raised when the COMPOSED v1 breaks the domain's
+ * own canonical form -- carries evidence the other two do not, and a caller told only "blocked"
+ * cannot repair a source document it was never shown.
+ */
+function projectInitialRevisionRefusal(result:{code:string;violations?:readonly {rule:string;line:number;detail:string}[]}):{nextAction:string;blockers:{code:string;message:string}[]}{
+ if(result.code==='MANAGED_PROPOSAL_ALREADY_EXISTS')
+  return {nextAction:'use_existing_managed_proposal',blockers:[{code:result.code,message:'A managed proposal already exists; CREATE_INITIAL_REVISION never overwrites or duplicates it.'}]};
+ if(result.code==='INITIAL_REVISION_CANONICAL_FORM_VIOLATION'){
+  const evidence=(result.violations??[]).map((violation)=>`line ${violation.line}: ${violation.rule} -- ${violation.detail}`).join('; ');
+  return {nextAction:'repair_canonical_form',blockers:[{code:result.code,message:`The composed first revision violates this domain's canonical form, so nothing was written. Repair the idea or the declared source it came from, then retry: ${evidence}`}]};
+ }
+ return {nextAction:'supply_initial_idea',blockers:[{code:result.code,message:'Provide a non-empty idea in instruction.'}]};
+}
 const MANAGED_CHAT_DOCUMENT_FILENAME = strictManagedRevision;
 const MANAGED_ARTIFACT_MARKER = artifact.marker;
 
@@ -5356,6 +5396,11 @@ export function resolveChatDocumentFilename(rawFilename: unknown): { filename?: 
  * directory is absent (never throws), so projects without one (or existing fixtures that never
  * configured one) are unaffected. `required: true` presence is enforced separately -- only at
  * `CREATE_INITIAL_REVISION`, by `missingRequiredSources` below -- never here.
+ *
+ * TWO shapes are collected from each declared directory, nested first and flat second: the
+ * legacy `<folder>/<folder>.md` per-paper shape, and plain `.md` files sitting directly in the
+ * directory. A managed revision is the latter, so a source declaring another skill's managed
+ * directory delivered nothing at all until the flat pass existed.
  */
 async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGuideFragment[]> {
  let root: string;
@@ -5400,6 +5445,38 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
    if (!text) continue;
    bytes += Buffer.byteLength(text);
    fragments.push({ path: `${source.path}/${folder}/${markdownName}`, content: text });
+  }
+  // Flat Markdown sitting DIRECTLY in the declared source directory, after the nested
+  // `<folder>/<folder>.md` shape above and never instead of it.
+  //
+  // The nested shape is what the legacy single guide was -- one directory per ingested
+  // paper -- and `proposal-deliberation` still depends on it. It is NOT what a managed
+  // revision is: a managed revision is a flat file named `<stem>-<lineage>-<label>.md`
+  // sitting directly in its own directory. So a domain that declares another skill's
+  // managed directory as a source (the latest proposal, whose claims the experiments
+  // document exists to test) used to get the WORST of both: `missingRequiredSources`
+  // enforced the directory's presence, and this loader then descended one level, found
+  // no sub-directories, and delivered nothing. The source was required, present, and
+  // silent.
+  //
+  // Same budget, same silence for an absent directory, same read-only path checks.
+  const files = entries
+   .filter((entry) => entry.isFile() && GUIDE_MARKDOWN.test(entry.name))
+   .map((entry) => entry.name)
+   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const name of files) {
+   if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
+   let canonicalPath: string;
+   try {
+    canonicalPath = await canonicalRegularFile(directory, name, "source Markdown");
+   } catch {
+    continue;
+   }
+   const buffer = await readFile(canonicalPath);
+   const text = buffer.subarray(0, MAX_CHAT_GUIDE_CONTEXT_BYTES - bytes).toString("utf8");
+   if (!text) continue;
+   bytes += Buffer.byteLength(text);
+   fragments.push({ path: `${source.path}/${name}`, content: text });
   }
  }
  return fragments;
@@ -5665,7 +5742,7 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
     const effectiveSourceFilename=params.sourceFilename??(confirmedBaseResolution&&confirmedBaseResolution.status!=='empty'?confirmedBaseResolution.latest.filename:undefined);
     // FORBIDDEN is mutation authority: an explicitly selected managed document may be loaded as immutable tutor context only.
     const resolvedDocument=resolveChatDocumentFilename(effectiveSourceFilename);
-    const chatDocument=resolvedDocument.filename?await loadChatDocumentContext(projectRoot,resolvedDocument.filename):resolvedDocument;
+    const chatDocument:{filename?:string;document?:ChatDocumentContext;reason?:string}=resolvedDocument.filename?await loadChatDocumentContext(projectRoot,resolvedDocument.filename):resolvedDocument;
     // Paper-guide initial context (task 3.5/3.6, spec I2): loaded once, only for this conversation's first turn.
     const guideFragments=!openDeliberation?await loadGuideDirectoryFragments(projectRoot):[];
     const result=chatDocument.reason
@@ -5700,11 +5777,12 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
     const result=await initialRevisionCreation.execute({idea:params.instruction,...(guideFragments.length?{guideFragments}:{})});
     const publicResult=result.status==='created'
      ?{status:'created' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:result.filename,targetRevision:result.revision,targetSha256:result.documentSha256,canonicalMetadata:result.canonicalMetadata,mutations:1 as const,receiptId:`${result.filename}:${result.revision}`,manifestStatus:'NOT_TRACKED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:null}
-     :{status:'blocked' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:null,mutations:0 as const,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:result.code==='MANAGED_PROPOSAL_ALREADY_EXISTS'?'use_existing_managed_proposal':'supply_initial_idea',blockers:[{code:result.code,message:result.code==='MANAGED_PROPOSAL_ALREADY_EXISTS'?'A managed proposal already exists; CREATE_INITIAL_REVISION never overwrites or duplicates it.':'Provide a non-empty idea in instruction.'}]};
+     :{status:'blocked' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:null,mutations:0 as const,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',...projectInitialRevisionRefusal(result)};
     return {content:[{type:'text',text:JSON.stringify(publicResult)}],details:publicResult};
    }
    const resolvedIntent=resolveIntent(params.instruction).intent;
    const requestedOperation=params.operation??resolvedIntent;
+   /* `lifecycle` is `route.stage==='LIFECYCLE'`, which resolveGlobalRoute only selects when the explicit operation or the resolved intent is already in LIFECYCLE_OPERATIONS; line 5786 then keeps it or falls back to that same resolved intent, so both arms are lifecycle operations here */
    const lifecycle=route.stage==='LIFECYCLE';
    const operation=lifecycle?(LIFECYCLE_OPERATIONS.has(requestedOperation)?requestedOperation:resolvedIntent):requestedOperation;
    const metricsBefore=getRuntimeMetrics();
@@ -5716,13 +5794,17 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
     recordLifecycleMetric(operation==='WITHDRAW_REVISION'
      ?(result.outcome==='COMMITTED'||result.outcome==='ALREADY_COMMITTED'?'withdrawal_committed':'withdrawal_rejected')
      :(result.outcome==='COMMITTED'||result.outcome==='ALREADY_COMMITTED'?'restore_committed':'restore_rejected'));
-    const publicResult=projectLifecycleV1PublicResult(operation,requestId,result);
+    const publicResult=projectLifecycleV1PublicResult(operation as 'WITHDRAW_REVISION'|'RESTORE_WITHDRAWN_REVISION',requestId,result);
     return {content:[{type:'text',text:JSON.stringify(publicResult)}],details:publicResult};
    }
-   const {operation:_operation,conversationId,draftMaterialization:_draftMaterialization,maintenanceTaskId:_maintenanceTaskId,idempotencyKey:_idempotencyKey,...existingParams}=params;
+   // `resolvedDecisions` is declared `Type.Array(Type.Unknown())` in the schema above because the
+   // payload is untrusted JSON; its element contract is `EditAction`, enforced at runtime inside
+   // `ambient-supplied-planner.ts` (`parseProposedEdit`, `allowedKeysFor`, `unexpectedKeys`), which is
+   // what `V2Request.resolvedDecisions` declares. Restated here at that parse boundary only.
+   const {operation:_operation,conversationId,draftMaterialization:_draftMaterialization,maintenanceTaskId:_maintenanceTaskId,idempotencyKey:_idempotencyKey,...existingParams}=params as Omit<typeof params,'resolvedDecisions'>&{resolvedDecisions?:readonly EditAction[]};
    const priorConclusion=route.stage==='DIRECT_DOCUMENT'?chatDeliberation.latestConclusion(conversationId):undefined;
    const conversationSource=operation===CREATE_SUCCESSOR_OPERATION?chatDeliberation.currentManagedDocument(conversationId)?.filename:undefined;
-   const executionParams=lifecycle?{...existingParams,operation}:{...existingParams,...(operation===CREATE_SUCCESSOR_OPERATION?{operation,sessionIdentity:sessionIdentity(ctx),...(conversationSource&&!params.sourceFilename?{sourceFilename:conversationSource}:{})}:{}),...(priorConclusion?{priorConclusion}:{})};
+   const executionParams=lifecycle?{...existingParams,operation:operation as 'WITHDRAW_REVISION'|'RESTORE_WITHDRAWN_REVISION'}:{...existingParams,...(operation===CREATE_SUCCESSOR_OPERATION?{operation,sessionIdentity:sessionIdentity(ctx),...(conversationSource&&!params.sourceFilename?{sourceFilename:conversationSource}:{})}:{}),...(priorConclusion?{priorConclusion}:{})};
    const result=await orchestrator.execute(executionParams);
    let audit,selfAudit;
    if(!lifecycle&&result.status==='published'){

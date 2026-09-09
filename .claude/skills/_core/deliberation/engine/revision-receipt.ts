@@ -3,7 +3,8 @@ import type { ManagedRevisionName } from './artifact-naming.js';
 
 export type InitialPublicationReceipt = {
 	kind: 'INITIAL_PUBLICATION';
-	targetRevision: 'r01';
+	/** The profile's own first-revision label (`artifact.revisionLabel(1)`), never the literal `'r01'`. */
+	targetRevision: string;
 	/** Was a fixed-stem-and-first-revision literal string type; see `revision-domain.ts`'s `CreateR01PayloadV1.target.filename` for why this is `ManagedRevisionName`, not plain `string`. */
 	targetFilename: ManagedRevisionName;
 	documentShaAfter: string;
@@ -25,7 +26,8 @@ export type InitialPublicationReceipt = {
  */
 export type ManagedInitialRevisionReceipt = {
 	operation: 'CREATE_INITIAL_REVISION';
-	targetRevision: 'r01';
+	/** The profile's own first-revision label (`artifact.revisionLabel(1)`), never the literal `'r01'`. */
+	targetRevision: string;
 	targetFilename: string;
 	documentShaAfter: string;
 	derivedStateStatus: 'COMMITTED';

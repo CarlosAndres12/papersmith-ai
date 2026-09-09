@@ -1,5 +1,5 @@
 import type { CanonicalProposalMetadata, CreateR01PayloadV1, MaterializationClaimProvenance } from './revision-domain.js';
-import { managedRevisionFilename } from './artifact-naming.js';
+import { artifact, managedRevisionFilename } from './artifact-naming.js';
 import { DOMAIN } from './domain-profile.js';
 
 /** Change 8, option (b): v1's own default change summary, rendered only when `profile.artifact.changeHeader` is declared -- the header must exist as a span in v1 for a later successor to replace. The managed directory holds only `.gitkeep` today, so this is zero migration. */
@@ -60,7 +60,7 @@ export class InitialRevisionRenderer {
 			kind: 'CREATE_R01',
 			payloadVersion: 1,
 			markdown,
-			target: { filename: managedRevisionFilename('ROOT', 1), revision: 'r01' },
+			target: { filename: managedRevisionFilename('ROOT', 1), revision: artifact.revisionLabel(1) },
 			canonicalMetadata: structuredClone(input.canonicalMetadata),
 		};
 	}
