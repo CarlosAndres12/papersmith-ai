@@ -32,7 +32,7 @@ and is the current one.
 | Stage | Establishes | Behind you when |
 | --- | --- | --- |
 | `bound` | Which revision is current and which entry of it the change touches | `STATUS` named the latest and the target resolved to an entry |
-| `validated` | The protocol, the metric and the baseline came from a search, not a guess | A URL with no dated tag, or a baseline with no repository or venue year, stops this stage |
+| `validated` | The protocol, the metric, the baseline, the dataset and the scheme are stated and came from a search, not a guess | A URL with no dated tag, a baseline with no repository or venue year, a `**Dataset:**` line not given or given twice, or a scheme line that shows no test, no seeds or no repetitions, stops this stage |
 | `deliberated` | The change was argued through rather than typed | **the user said so** — nothing here measures it, and nothing may |
 | `composed` | The replacement exists written as the experiment, not a description of it | A block exists carrying the experiment and what it must meet |
 | `published` | The successor exists carrying the artifact marker and is the current revision | This is the arrival; it is behind nobody |
@@ -89,6 +89,8 @@ For the rest of this deliberation:
 - **Recycle the area benchmark, and justify every deviation in writing.** When the benchmark exists it is the source of truth for metrics, splits, protocol and baselines. Departing from it is legitimate and sometimes necessary; departing from it silently is what a reviewer catches.
 - **Cost is part of the design.** An experiment whose estimated cost nobody wrote down is an experiment nobody decided to run. Every experiment carries a priority (core / ablation / optional) and an estimated cost.
 - **What was left out is part of the argument.** A plan that names no excluded alternative reads as a plan that considered none.
+- **Open the deliberation from the dataset, not the protocol.** What the plan runs on bounds everything decided after it — which metrics make sense, which baselines are comparable, which split is legitimate. v1 injects no skeleton for this: if the dataset is not already named in the idea text or a required source, `CREATE_INITIAL_REVISION` cannot compose a document that will pass, and discovering that after drafting wastes the whole revision.
+- **Always propose and present the validation scheme — never merely accept one the user names unexamined.** The seeds, repetitions and significance test the area expects are exactly what [External validation](#external-validation-before-any-draft) exists to search for. A scheme accepted unexamined is a scheme a reviewer will reject, and — same as the dataset — nothing composes a placeholder for you: a scheme decided after the fact never makes it into v1.
 
 These criteria are not optional style advice — apply them to every proposed change before it becomes a `resolvedDecisions` entry.
 
@@ -185,9 +187,18 @@ Every body row of a baselines table whose first cell is non-empty must carry:
 
 The check strips verification tags before looking for the year, so a freshly `[verified: 2026-09-08]` URL never stands in for a venue the row does not name. An empty first cell is not a baseline, so a spacer row raises nothing.
 
+### The two declarations a plan owes
+
+Two more labels, matched anywhere in the bytes (no named section required), using the same bold shape `**Success criterion:**` already uses:
+
+- **`**Dataset:** <name and split>`, exactly once** (`dataset-declaration-missing` / `dataset-declaration-repeated`). Zero and two-or-more are both refused — two lines are an ambiguity about which dataset the plan uses, and the engine will not pick one silently. A value that reduces to a placeholder (`TBD`, `n/a`, `pending`, …) is refused exactly like an empty label: a presence rule alone guarantees the line exists, not that it says anything.
+- **`**Validation scheme:** <test, seeds, repetitions>`, exactly once** (`validation-scheme-declaration-missing` / `-repeated`). The value must also name a statistical test, its seeds and its repetitions, or it is refused: naming no test (`validation-scheme-without-test`), no seeds clause (`validation-scheme-without-seeds`), or no repetitions clause (`validation-scheme-without-repetitions`). There is no closed vocabulary of test names — a legitimate test never seen before is accepted, and a denylisted placeholder or a bare statistical output (`p-value`, `significance`) alongside a real test does not block it. A seeds clause accepts `seeds`, `semillas`, `initialisations`, `initializations` or `runs`, each still paired with its own digit in the same clause.
+
+Both rules are hard blocks, at the same severity as the four above: never an acknowledged loss, always a refusal. The dataset also becomes a preservation atom (below); the validation scheme does not — a presence rule guarantees a dataset line exists in every published version, but not that it is the *same* one, and a silent swap between versions invalidates everything the `validated` stage searched.
+
 ## Preservation: what must not vanish in silence
 
-`profile.preservation.extractAtoms` declares five atom kinds. Losing one between two versions is reported on preview and refused on accept unless you acknowledge it by id.
+`profile.preservation.extractAtoms` declares six atom kinds. Losing one between two versions is reported on preview and refused on accept unless you acknowledge it by id.
 
 | Kind | What it is |
 | --- | --- |
@@ -196,6 +207,7 @@ The check strips verification tags before looking for the year, so a freshly `[v
 | `success-criterion` | A criterion declared as `**Success criterion:** …` (optionally on a list bullet). |
 | `figure` | A figure placeholder standing alone on its own line. An image reference used inline inside a sentence is prose, not a declared figure. |
 | `url` | A cited external URL. Keyed by the URL itself, so the id you echo back is legible: `url:https://example.org/alpha-net`. |
+| `dataset` | A declared `**Dataset:** …` line, keyed by its normalized text so a caller can echo the id back: `dataset:cifar-10 (train/test split as distributed)`. The validation scheme takes no atom of its own — see [The two declarations a plan owes](#the-two-declarations-a-plan-owes). |
 
 Atoms are **presence-based, never counted**: repeating a figure reference does not multiply it, and rewording a paragraph that happened to mention it twice is not a loss. A document with none of these declares zero atoms, which the core reports as *not applicable* rather than as a vacuous pass.
 
@@ -237,15 +249,13 @@ Advisory means the conflict does not block preview; it blocks the **accept** tur
 
 **Be aware of what the CLI does not hand you.** The public CLI response projects a blocked result down to `status`, `category` and `message`, so `SOURCE_AUTHORITY_CONFLICT` arrives without the conflict list, and `CANDIDATE_VALIDATION_FAILED` arrives without naming which rule failed (`proposal-workspace.ts`, `projectProposalDeliberationPublicResult`). The remedy is not to fish for detail from the engine — it is to write the candidate correctly in the first place, using the rules above.
 
-## Creating v1, and the gap nothing enforces
+## Creating v1, checked by the same gate as every successor
 
 When `STATUS` reports zero managed revisions, create v1 explicitly with `CREATE_INITIAL_REVISION` (see [usage examples](references/usage.md)). The engine loads the declared sources for this one call and composes v1 from your idea text plus those source fragments, included **verbatim** under a `## Paper Guide Reference` heading, one `### <path>` subsection per fragment (`initial-revision-renderer.ts`, `renderFromIdea`).
 
-**Nothing validates that content.** `initial-revision-creation.ts` runs no content validation at all — it contains no reference to `validateCandidate`, to `violations`, or to preservation. The whole gate described above lives on the successor path and only there.
+**v1 is checked, not exempt.** `initial-revision-creation.ts` imports `violations` from the canonical-form gate and runs it against the composed v1 markdown before any write: a candidate that fails [The canonical form](#the-canonical-form) is refused with `status: 'blocked'`, `code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION'`, and nothing is written. This is the same `violations()` check the successor path runs — not a second gate, the identical one.
 
-So the concrete hazard: if the area benchmark's guide contains a **filled results table**, those numbers are pasted into v1 unchecked, and the document ships with fabricated values in it. Only a later successor over that same region would ever catch them.
-
-**The rule, which you must obey and which nothing enforces: when composing v1, never carry a filled results table through from a source.** Strip it to headers with empty cells, or cite the source instead of pasting it. The same applies to any URL arriving from a source without a verification tag — an untagged URL in v1 is untagged, and it will block the first successor that touches its region.
+So the concrete consequence: because v1 has no skeleton and injects no placeholder, **both of this domain's declared labels must already exist in your idea text or in a required source** (`proposals/`, `guidance/data-paper/`) before `CREATE_INITIAL_REVISION` can succeed at all — a `**Validation scheme:** TBD` skeleton would block every v1 forever, since the denylist refuses it too. The same discipline applies to a filled results table pasted verbatim from the area benchmark's guide: it fails `report-table-fabricated-value` at v1 exactly as it would on any successor. Strip it to headers with empty cells, or cite the source instead of pasting it. The same applies to any URL arriving from a source without a verification tag.
 
 ## Resolving the base version
 

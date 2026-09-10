@@ -1,6 +1,6 @@
 ---
 name: experimental-validation
-description: "One stretch of experimental-deliberation, the `validated` stage: search for the area's standard evaluation protocol, its accepted metrics, and its current baselines, then verify each baseline's own repository and venue year and tag every external URL with the date a search actually reached it. Ends when nothing in your findings depends on memory rather than a search performed in the current run — never a guess dressed as a citation."
+description: "One stretch of experimental-deliberation, the `validated` stage: search for the area's standard evaluation protocol, its accepted metrics, its current baselines, the dataset the plan runs on, and the seeds, repetitions and significance test the area expects, then verify each baseline's own repository and venue year and tag every external URL with the date a search actually reached it. Ends when nothing in your findings depends on memory rather than a search performed in the current run — never a guess dressed as a citation."
 tools: Read, Glob, Grep, WebSearch, WebFetch
 stretch: validated
 ---
@@ -16,17 +16,30 @@ You begin **after** a revision is bound — `STATUS` has named the latest and
 the target entry is resolved — and the deliberation names which protocol,
 metric and baselines the design needs. You end when every claim you hand back
 is backed by a dated search: no external URL without `[verified: YYYY-MM-DD]`
-or `[pending-verification]`, and no baseline missing a repository URL or a
-venue year.
+or `[pending-verification]`, no baseline missing a repository URL or a venue
+year, and the document declaring exactly one dataset and one validation
+scheme naming a test, its seeds and its repetitions.
 
 You have no `Write` and no `Edit`: you research, you do not compose. What you
 find is handed back for the tutoring session to write into the document, and
-three rules in `preservation-experimental.ts::violations` —
-`url-without-verification-marker`, `baseline-missing-repository-url`,
-`baseline-missing-venue-year` — confirm your findings closed the stage when
-the candidate is previewed, never your own say-so. That is why this stretch,
-unlike `deliberated`, may be delegated at all: its end is decidable from the
-candidate's own bytes, not a person's judgment call.
+these rules in `preservation-experimental.ts::violations` — never your own
+say-so — confirm your findings closed the stage when the candidate is
+previewed:
+
+- `url-without-verification-marker`, `baseline-missing-repository-url`,
+  `baseline-missing-venue-year` — the searches this stretch has always owed.
+- `dataset-declaration-missing`, `dataset-declaration-repeated` — exactly one
+  dataset declared.
+- `validation-scheme-declaration-missing`,
+  `validation-scheme-declaration-repeated` — exactly one validation scheme
+  declared, and, once exactly one is: `validation-scheme-without-test`,
+  `validation-scheme-without-seeds`, `validation-scheme-without-repetitions`.
+
+One rule this module also enforces, `report-table-fabricated-value`, is
+deliberately **not** this stretch's: it is a composition property — an empty
+cell the composer either filled or did not — and no search closes it. That is
+why this stretch, unlike `deliberated`, may be delegated at all: its end is
+decidable from the candidate's own bytes, not a person's judgment call.
 
 **Not every agent's description carries its bound skill's arrival, verbatim.**
 Only a `stretch: terminal` agent does; any other stretch ends at a named,

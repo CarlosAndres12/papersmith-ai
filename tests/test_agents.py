@@ -75,6 +75,15 @@ ENTRANCE_CLAIMS = (
     "the implementation skill",
 )
 
+# Every `rule: "<id>"` literal `preservation-experimental.ts::violations`
+# pushes, anchored the same way `ARRIVAL_LINE`/`STAGE_LINE` are: a syntactic
+# shape, not a hand-kept list, so a rule added or renamed there is what moves
+# this -- never a second place somebody has to remember to update. The module
+# writes every violation it produces in this exact shape (change "the two
+# declarations a plan owes" refactored the two cardinality checks onto it
+# specifically so this pattern would see them).
+RULE_ID_LITERAL = re.compile(r'rule:\s*"([a-z0-9-]+)"')
+
 
 def flat(text: str) -> str:
     """Whitespace-flattened, because these files are hard-wrapped and "this
@@ -690,3 +699,52 @@ class AgentBindingTests(unittest.TestCase):
                 f"{phrase!r} no longer appears in any domain that declares an "
                 f"entrance -- it is a dead string, and the agents checked "
                 f"against it are no longer being checked for anything")
+
+    def test_the_validation_agents_rule_enumeration_derives_from_the_module(
+            self) -> None:
+        """The class of defect this change found, closed for good.
+
+        `experimental-validation.md` (`stretch: validated`) once enumerated
+        the rules that confirm its stage closed as a hand-kept prose list --
+        exactly the shape that drifted the day this change found it: two new
+        rules landed in `preservation-experimental.ts::violations` and the
+        agent kept reporting the stage done while both blocked publication.
+
+        This derives the expected set from the module itself (every `rule:
+        "<id>"` literal `violations()` can push -- `RULE_ID_LITERAL`, read the
+        same anchored way as the north's own single-line literals above) and
+        requires each one to be MENTIONED, by its exact backtick-quoted id,
+        somewhere in the agent's body.
+
+        Deliberately NOT a check that every rule must be described as
+        CONFIRMING the stage: `report-table-fabricated-value` is a genuine,
+        permanent exclusion (a composition property no search closes), named
+        in its own "not this stretch" sentence rather than the confirming
+        list -- and a naive "every rule is in the confirming list" check
+        would be WRONG, going red on that correct omission. Presence alone,
+        in either an inclusion or an explicit exclusion, is what this module's
+        own curation is built to need: a rule this file has never seen before
+        must be classified one way or the other before this passes again.
+        """
+        module = (SKILLS / "experimental-deliberation" /
+                   "preservation-experimental.ts")
+        self.assertTrue(module.is_file(), f"{module} does not exist")
+        source = module.read_text(encoding="utf-8")
+        declared_rules = sorted(set(RULE_ID_LITERAL.findall(source)))
+        self.assertGreaterEqual(
+            len(declared_rules), 10,
+            f"expected at least 10 rule ids in {module.name}, found "
+            f"{len(declared_rules)}: {declared_rules} -- this check would "
+            f"otherwise be vacuous")
+
+        agent = AGENTS / "experimental-validation.md"
+        self.assertTrue(agent.is_file(), f"{agent} does not exist")
+        body = agent.read_text(encoding="utf-8")
+        unclassified = [rule_id for rule_id in declared_rules
+                        if f"`{rule_id}`" not in body]
+        self.assertEqual(
+            unclassified, [],
+            f"{agent.name} never mentions {unclassified} by its exact "
+            f"backtick-quoted id -- classify each one, either among the "
+            f"rules that confirm the `validated` stage closed, or in an "
+            f"explicit sentence naming it as not this stretch's concern")

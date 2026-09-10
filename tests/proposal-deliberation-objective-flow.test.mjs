@@ -8,6 +8,12 @@
 // `SKILL.md`, and checks the pair agrees by text -- rather than naming one
 // skill's stages, which is what let a second domain silently inherit the
 // first domain's destination (change 11, "a north a second domain can hold").
+//
+// The doctrine-match comparison additionally holds the `establishes` and
+// `behindWhen` columns equal, not only the stage names -- closing the gap in
+// which a profile's stage content and `SKILL.md`'s stage table could drift
+// while the previous version of this suite stayed green (change "the two
+// declarations a plan owes").
 import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -32,16 +38,53 @@ function extractBlock(source, key) {
 	return source.slice(blockStart, closeIdx);
 }
 
+/** Parses the profile's `objective.stages` array into stage/establishes/
+ * behindWhen triples via one combined per-stage match, instead of three
+ * independent regexes scanning the whole block -- which silently misaligned
+ * their index-paired arrays whenever a stage omitted a field. `stageCount` is
+ * derived independently, from the bare `stage: "..."` token alone, so a stage
+ * the combined regex failed to match (a malformed or reordered field) is
+ * caught rather than silently shrinking `triples`. */
 function parseObjective(block) {
-	const stages = [...block.matchAll(/stage:\s*"([^"]+)"/g)].map((m) => m[1]);
-	const behindWhens = [...block.matchAll(/behindWhen:\s*"([^"]*(?:\\.[^"]*)*)"/g)].map((m) => m[1]);
-	const arrivalMatch = block.match(/\n\t+arrival:\s*"([^"]*(?:\\.[^"]*)*)"/);
+	const stageCount = [...block.matchAll(/\n\t+stage:\s*"([^"]+)"/g)].length;
+	const triples = [...block.matchAll(/stage:\s*"([^"]+)",\s*establishes:\s*"([^"]*(?:\\.[^"]*)*)",\s*behindWhen:\s*"([^"]*(?:\\.[^"]*)*)",/g)]
+		.map((m) => ({ stage: m[1], establishes: m[2], behindWhen: m[3] }));
+	assert.equal(
+		triples.length,
+		stageCount,
+		`parsed ${triples.length} stage/establishes/behindWhen triples but found ${stageCount} "stage:" declarations -- a stage is missing establishes or behindWhen, or the fields are out of order`,
+	);
+	const stages = triples.map((t) => t.stage);
+	const behindWhens = triples.map((t) => t.behindWhen);
 	// `humanStops` is a string ARRAY, not an object -- `extractBlock` looks for `{`,
 	// so it is parsed directly here instead.
+	const arrivalMatch = block.match(/\n\t+arrival:\s*"([^"]*(?:\\.[^"]*)*)"/);
 	const humanStopsMatch = block.match(/\n\t+humanStops:\s*\[([\s\S]*?)\n\t+\],/);
 	const humanStops = humanStopsMatch ? [...humanStopsMatch[1].matchAll(/"([^"]*(?:\\.[^"]*)*)"/g)].map((m) => m[1]) : [];
 	const entrances = [...block.matchAll(/arrivesAt:\s*"([^"]+)"/g)].map((m) => m[1]);
-	return { stages, behindWhens, arrival: arrivalMatch ? arrivalMatch[1] : null, humanStops, entrances };
+	return { stages, behindWhens, triples, arrival: arrivalMatch ? arrivalMatch[1] : null, humanStops, entrances };
+}
+
+/** Parses the objective-flow doctrine table's body rows into stage/establishes/
+ * behindWhen triples. Splits on a pipe not preceded by a backslash, so a cell
+ * containing its own backtick span (`` `STATUS` named the latest… ``) parses
+ * correctly instead of choking a raw backtick split -- and an escaped pipe
+ * inside a cell survives as a literal `|` rather than ending the cell early. */
+function parseDoctrineTable(skillSource) {
+	const start = skillSource.indexOf('## The objective flow');
+	assert.ok(start >= 0, 'SKILL.md has no objective-flow section');
+	const arrivalIdx = skillSource.indexOf('**Arrival:**', start);
+	assert.ok(arrivalIdx >= 0, "SKILL.md's objective-flow section has no **Arrival:** line");
+	const table = skillSource.slice(start, arrivalIdx);
+	const lines = table.split('\n').filter((line) => line.startsWith('| `'));
+	return lines.map((line) => {
+		const raw = line.split(/(?<!\\)\|/u);
+		assert.equal(raw[0], '', `doctrine row does not open with a bare pipe: ${line}`);
+		assert.equal(raw[raw.length - 1], '', `doctrine row does not close with a bare pipe: ${line}`);
+		const cells = raw.slice(1, -1).map((cell) => cell.trim().replace(/\\\|/gu, '|'));
+		assert.equal(cells.length, 3, `doctrine row has ${cells.length} cells, expected exactly 3: ${line}`);
+		return { stage: cells[0].replace(/^`|`$/gu, ''), establishes: cells[1], behindWhen: cells[2] };
+	});
 }
 
 async function discoverPairs() {
@@ -67,6 +110,40 @@ const norm = (text) => text.replace(/\s+/g, ' ').trim();
 // read -- the honest gap this project's own doctrine insists on naming rather
 // than papering over.
 const REFUSES_MEASUREMENT = /the user said so|nothing (?:here )?measures/i;
+
+/** Normalizes doctrine text and profile text onto one comparable shape:
+ * unescape the TS string escapes this repo's `objective` fields actually use,
+ * strip backtick/bold markers, fold an em-dash, en-dash or a double hyphen to
+ * a space, lowercase, replace every remaining non-alphanumeric run with a
+ * space, then trim. */
+function normalizeDoctrine(text) {
+	return text
+		.replace(/\\"/gu, '"')
+		.replace(/\\n/gu, ' ')
+		.replace(/\\t/gu, ' ')
+		.replace(/[`*]/gu, '')
+		.replace(/--|[—–]/gu, ' ')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/gu, ' ')
+		.trim();
+}
+
+/** Everything before the first `": "` that sits outside a backtick span -- the
+ * doctrine table legitimately omits a colon-introduced rationale clause the
+ * profile field is allowed to keep (design D5, option (d), "head-equality").
+ * Returns the text unchanged when no such colon exists, so a cell with no
+ * rationale clause is compared in full on both sides. */
+function head(text) {
+	let inBacktick = false;
+	for (let at = 0; at < text.length - 1; at += 1) {
+		if (text[at] === '`') {
+			inBacktick = !inBacktick;
+			continue;
+		}
+		if (!inBacktick && text[at] === ':' && text[at + 1] === ' ') return text.slice(0, at);
+	}
+	return text;
+}
 
 test('exactly two profiles declare a north (a third is a decision)', () => {
 	assert.equal(pairs.length, 2, `expected 2 profiles declaring objective, found ${pairs.length}: ${pairs.map((p) => p.skillName).join(', ')}`);
@@ -124,12 +201,7 @@ for (const { skillName, objective, skillSource } of pairs) {
 
 	test(`${skillName}: the doctrine states the same stages, in the same order`, () => {
 		assert.ok(skillSource, `${skillName}/SKILL.md is missing`);
-		const start = skillSource.indexOf('## The objective flow');
-		assert.ok(start >= 0, `${skillName}/SKILL.md has no objective-flow section`);
-		const arrivalIdx = skillSource.indexOf('**Arrival:**', start);
-		assert.ok(arrivalIdx >= 0, `${skillName}/SKILL.md's objective-flow section has no **Arrival:** line`);
-		const table = skillSource.slice(start, arrivalIdx);
-		const rows = table.split('\n').filter((line) => line.startsWith('| `')).map((line) => line.split('`')[1]);
+		const rows = parseDoctrineTable(skillSource).map((row) => row.stage);
 		assert.deepEqual(rows, objective.stages, `${skillName}'s doctrine table does not match its profile's declared stages`);
 	});
 
@@ -140,6 +212,39 @@ for (const { skillName, objective, skillSource } of pairs) {
 		const docArrival = rest.slice(0, rest.indexOf('\n\n')).trim();
 		assert.equal(norm(docArrival).toLowerCase().replace(/[.]$/, ''), norm(objective.arrival).toLowerCase(),
 			`${skillName}'s doctrine arrival text does not match its profile's arrival, after whitespace normalisation`);
+	});
+
+	test(`${skillName}: the doctrine's establishes column matches the profile's, normalized`, () => {
+		const doctrineRows = parseDoctrineTable(skillSource);
+		assert.equal(doctrineRows.length, objective.triples.length,
+			`${skillName}: doctrine table has ${doctrineRows.length} rows, profile declares ${objective.triples.length} stages`);
+		for (let at = 0; at < doctrineRows.length; at += 1) {
+			const doctrine = doctrineRows[at];
+			const profile = objective.triples[at];
+			assert.equal(doctrine.stage, profile.stage,
+				`${skillName}: doctrine row ${at} is stage "${doctrine.stage}", profile stage ${at} is "${profile.stage}" -- order mismatch`);
+			assert.equal(
+				normalizeDoctrine(doctrine.establishes),
+				normalizeDoctrine(profile.establishes),
+				`${skillName}/${profile.stage}: doctrine "Establishes" cell does not match the profile's establishes text, after normalization`,
+			);
+		}
+	});
+
+	test(`${skillName}: the doctrine's behindWhen column matches the profile's head, normalized`, () => {
+		const doctrineRows = parseDoctrineTable(skillSource);
+		assert.equal(doctrineRows.length, objective.triples.length,
+			`${skillName}: doctrine table has ${doctrineRows.length} rows, profile declares ${objective.triples.length} stages`);
+		for (let at = 0; at < doctrineRows.length; at += 1) {
+			const doctrine = doctrineRows[at];
+			const profile = objective.triples[at];
+			assert.equal(
+				normalizeDoctrine(head(doctrine.behindWhen)),
+				normalizeDoctrine(head(profile.behindWhen)),
+				`${skillName}/${profile.stage}: doctrine "Behind you when" head does not match the profile's behindWhen head, after normalization -- ` +
+					'the doctrine table may omit a colon-introduced rationale clause the profile keeps, but must not diverge before the colon',
+			);
+		}
 	});
 }
 

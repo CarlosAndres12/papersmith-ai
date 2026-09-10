@@ -56,6 +56,11 @@ const TARGET_FILENAME = `experiments-${LINEAGE}-v02.md`;
 //  - nothing here asserts an outcome, so this domain's `sourceAuthority` -- the data
 //    paper bounding what may be claimed -- finds no conflict to acknowledge. The
 //    body cells are empty for the same reason the gate demands: a run fills them.
+//  - the dataset and validation-scheme declarations (change "the two declarations a
+//    plan owes") live in their OWN section, never inside `## Protocol` -- the stub
+//    planner's replace action is scoped to the Protocol section alone, so a
+//    declaration placed inside it would be silently dropped by the edit and the
+//    successor would fail its own canonical-form check.
 const SEED = `# Experiments
 
 ## Changes
@@ -67,6 +72,12 @@ const SEED = `# Experiments
 ## Protocol
 
 Each run trains on the source split and evaluates on the held-out target split.
+
+## Data and validation
+
+**Dataset:** DomainShift-Synth, source/target split as distributed
+
+**Validation scheme:** paired t-test, 5 seeds, 10 repetitions
 
 ## Reported results
 

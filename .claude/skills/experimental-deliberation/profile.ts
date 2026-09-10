@@ -165,8 +165,8 @@ export const profile: DeliberationDomainProfile = {
 			},
 			{
 				stage: "validated",
-				establishes: "the protocol, the metric and the baseline came from a search, not a guess",
-				behindWhen: "a URL with no dated tag, or a baseline with no repository or venue year, stops this stage",
+				establishes: "the protocol, the metric, the baseline, the dataset and the scheme are stated and came from a search, not a guess",
+				behindWhen: "a URL with no dated tag, a baseline with no repository or venue year, a `**Dataset:**` line not given or given twice, or a scheme line that shows no test, no seeds or no repetitions, stops this stage",
 			},
 			{
 				stage: "deliberated",

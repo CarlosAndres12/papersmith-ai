@@ -60,6 +60,30 @@ const SUCCESS_CRITERION = /^[ \t]*(?:[-*+][ \t]+)?\*\*Success criteri(?:on|a):?\
 const EXTERNAL_URL = /https?:\/\/[^\s|)\]]+/gu;
 
 /**
+ * A declared label, in the exact bold shape `**Success criterion:**` already uses,
+ * plus one widening: the colon may sit inside or outside the bold, and is not
+ * captured either way -- `**Dataset**: x` and `**Dataset:** x` key the same
+ * declaration. Takes a LITERAL label; never caller text.
+ */
+const DECLARATION = (label: string) => new RegExp(`^[ \\t]*(?:[-*+][ \\t]+)?\\*\\*${label}:?\\*\\*:?[ \\t]*(.+?)[ \\t]*$`, "gmu");
+
+/** The two declarations an experiments document owes a reader: what it runs on, and how the result will be decided. */
+const DATASET = DECLARATION("Dataset");
+const VALIDATION_SCHEME = DECLARATION("Validation scheme");
+
+type Declared = { readonly value: string; readonly line: number };
+
+/** Every line matching `pattern`, in document order, with the label stripped and the rest of the line as its value. */
+function declarations(source: string, pattern: RegExp): Declared[] {
+    const out: Declared[] = [];
+    for (const match of source.matchAll(pattern)) {
+        const start = match.index ?? 0;
+        out.push({ value: (match[1] ?? "").trim(), line: lineAt(source, start) });
+    }
+    return out;
+}
+
+/**
  * The pending-verification convention, and the whole of it.
  *
  * The problem this solves is that the bytes cannot know whether a search ran.
@@ -87,6 +111,148 @@ const EXTERNAL_URL = /https?:\/\/[^\s|)\]]+/gu;
 const VERIFICATION_TAG_SOURCE = "\\[pending-verification\\]|\\[verified: \\d{4}-\\d{2}-\\d{2}\\]";
 const VERIFICATION_TAG_FOLLOWS = new RegExp(`^[)\\].,;:!?]*[ \\t]*(?:${VERIFICATION_TAG_SOURCE})`, "u");
 const VERIFICATION_TAG_ANYWHERE = new RegExp(VERIFICATION_TAG_SOURCE, "gu");
+
+/**
+ * The `dataset` atom's key: `atom.text` keeps the declared line's original
+ * casing, but the id two authors of the same dataset would echo back has to be
+ * the same id even when they wrote it slightly differently. Four steps, each
+ * meaning-preserving, each with a precedent already in this file:
+ *
+ *   1. Strip a verification tag (`VERIFICATION_TAG_ANYWHERE`) -- load-bearing:
+ *      the URL rule FORCES a tag onto any dataset line citing a URL, so a real
+ *      re-verification would flip `[pending-verification]` -> `[verified: …]`
+ *      and read as a dataset SWAP if the tag were part of the key.
+ *   2. Strip trailing sentence punctuation (`externalUrls`' own class).
+ *   3. Collapse whitespace -- a reflow is not a swap.
+ *   4. Case-fold -- `ImageNet` and `imagenet` are never two datasets.
+ *
+ * Nothing else is normalized: dropping more would let a genuine split change
+ * (`(train/test)` -> `(train/val)`) pass as unchanged, which is the failure
+ * this key exists to catch.
+ */
+function normalizeDatasetKey(value: string): string {
+    const withoutTag = value.replace(VERIFICATION_TAG_ANYWHERE, " ");
+    const withoutTrailingPunctuation = withoutTag.replace(/[.,;:!?]+$/u, "");
+    return collapse(withoutTrailingPunctuation).toLowerCase();
+}
+
+/**
+ * Every token/phrase this file's validation-scheme check needs to recognize by
+ * exact word or phrase -- never by substring, since this project has already
+ * been burned by a stopword that matched inside an unrelated word.
+ */
+const PLACEHOLDERS = ["tbd", "to be decided", "to be determined", "tba", "n/a", "na", "none", "pending", "todo", "xxx", "?", "-"];
+const NON_TEST_OUTPUTS = ["p value", "pvalue", "significance", "statistical significance", "confidence interval", "effect size"];
+const CONNECTIVES = ["a", "an", "the", "and", "or", "with", "over", "across", "on", "in", "at", "per", "of", "for", "from", "using", "use", "used", "to", "by", "plus", "then", "each"];
+/** Ruling 7: the literal word `seeds` plus a digit is not the only correct way to write this -- "five random initialisations" must not be refused. */
+const SEEDS_TERMS = new Set(["seed", "seeds", "semilla", "semillas", "initialisation", "initialisations", "initialization", "initializations", "run", "runs"]);
+const REPETITION_TERMS = new Set(["repetition", "repetitions", "repeat", "repeats", "repeated", "replicate", "replicates", "replication", "replications", "run", "runs", "trial", "trials", "fold", "folds"]);
+
+/** Hyphens between two letters folded to a space (`p-value` -> `p value`), so a hyphenated test name and its spaced-out spelling key the same clause. A hyphen NOT between two letters (a bare `-` placeholder, a numeric range) is untouched. */
+function foldHyphens(value: string): string {
+    return value.replace(/(\p{L})-(?=\p{L})/gu, "$1 ");
+}
+
+/** Every maximal run of letters/digits, lowercased input assumed -- the token grain every check below reasons in, so a stopword can only match a WHOLE token, never a substring inside one. */
+function tokensOf(value: string): string[] {
+    return value.match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** Removes `phrase`, as a whole phrase bounded by non-alphanumeric characters (never a substring match), everywhere it occurs in `value`. */
+function removePhrase(value: string, phrase: string): string {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return value.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "gu"), " ");
+}
+
+function removePhrases(value: string, phrases: readonly string[]): string {
+    return phrases.reduce((acc, phrase) => removePhrase(acc, phrase), value);
+}
+
+/** The value's clauses: split on `,`/`;`, trimmed, blanks dropped. Clause-scoped, not value-scoped, so "fixed seeds" in one clause cannot borrow a digit that belongs to a different clause's "3 repetitions". */
+function clauses(value: string): string[] {
+    return value.split(/[,;]/u).map((clause) => clause.trim()).filter((clause) => clause.length > 0);
+}
+
+/** A clause names its own digit-bearing seeds count, on its own -- borrowing no digit from a neighbour. */
+function isSeedsClause(clause: string): boolean {
+    const tokens = tokensOf(clause);
+    return tokens.some((token) => SEEDS_TERMS.has(token)) && tokens.some((token) => /^\d+$/u.test(token));
+}
+
+/** A clause names its own digit-bearing repetition count, on its own. */
+function isRepetitionsClause(clause: string): boolean {
+    const tokens = tokensOf(clause);
+    return tokens.some((token) => REPETITION_TERMS.has(token)) && tokens.some((token) => /^\d+$/u.test(token));
+}
+
+/**
+ * What is left of the value once every placeholder, non-test-output and
+ * connective PHRASE is stripped, and every bare numeral and seeds/repetitions
+ * VOCABULARY TOKEN is stripped with it.
+ *
+ * Not vocabulary -- REDUCTION. There is no closed list of test names; the
+ * question this answers is only whether anything survives being explained
+ * away, never whether what survives IS a real test.
+ *
+ * Token-scoped rather than clause-scoped, on purpose: `t-test over 5 seeds`
+ * names its test and its seeds count in the SAME clause (no comma separates
+ * them), so excluding that whole clause once it satisfies the seeds check
+ * would destroy the test name along with it -- exactly the false block a
+ * clause-exclusion design produces and this one does not.
+ */
+function testResidue(normalizedValue: string): string {
+    let residue = normalizedValue;
+    residue = removePhrases(residue, PLACEHOLDERS);
+    residue = removePhrases(residue, NON_TEST_OUTPUTS);
+    residue = removePhrases(residue, CONNECTIVES);
+    return tokensOf(residue)
+        .filter((token) => !/^\d+$/u.test(token) && !SEEDS_TERMS.has(token) && !REPETITION_TERMS.has(token))
+        .join(" ");
+}
+
+/**
+ * The validation-scheme content check (D4), run only when exactly one
+ * `**Validation scheme:**` line exists. `(a)` short-circuits `(b)` and `(c)`:
+ * a declaration that names no test cannot be judged for its seeds.
+ */
+function validationSchemeContentViolation(value: string): { rule: string; detail: string } | null {
+    const normalized = foldHyphens(value).toLowerCase();
+    if (testResidue(normalized) === "")
+        return {
+            rule: "validation-scheme-without-test",
+            detail: `${JSON.stringify(value)} names no statistical test once placeholders, non-test outputs, connectives, matched seeds/repetitions clauses and bare numerals are set aside; name the test, e.g. "paired t-test"`,
+        };
+    if (!clauses(normalized).some(isSeedsClause))
+        return {
+            rule: "validation-scheme-without-seeds",
+            detail: `${JSON.stringify(value)} names no seeds clause; one clause must carry both a seeds token (seeds, semillas, initialisations, initializations, runs) and a digit, e.g. "5 seeds"`,
+        };
+    if (!clauses(normalized).some(isRepetitionsClause))
+        return {
+            rule: "validation-scheme-without-repetitions",
+            detail: `${JSON.stringify(value)} names no repetitions clause; one clause must carry both a repetitions token (repetitions, repeats, replications, runs, trials, folds) and a digit, e.g. "10 repetitions"`,
+        };
+    return null;
+}
+
+/**
+ * Cardinality (D2): zero and two-or-more are different facts and get
+ * different ids. `line: 1` for an absence -- there is no offending line,
+ * `violations()` sorts by line, and a missing declaration then sorts first,
+ * which is the right reading order.
+ */
+type Cardinality = { readonly kind: "missing" } | { readonly kind: "repeated"; readonly lines: readonly number[] };
+
+function cardinalityOf(found: readonly Declared[]): Cardinality | null {
+    if (found.length === 0) return { kind: "missing" };
+    if (found.length > 1) return { kind: "repeated", lines: found.map((d) => d.line) };
+    return null;
+}
+
+/** `declared on lines 4, 9; exactly one \`**<label>:**\` line is required, and the engine must not pick one silently` -- the shared detail shape both repeated-declaration ids use. */
+function repeatedDetail(labelText: string, lines: readonly number[]): string {
+    return `declared on lines ${lines.join(", ")}; exactly one \`**${labelText}:**\` line is required, and the engine must not pick one silently`;
+}
 
 /**
  * The first header cell that makes a table a BASELINES table rather than a report
@@ -171,6 +337,10 @@ function externalUrls(source: string): FoundUrl[] {
  *   `success-criterion` a declared criterion the document is answerable to
  *   `figure`           a figure placeholder standing alone on its own line
  *   `url`              a cited external URL, keyed by the URL itself
+ *   `dataset`          a declared `**Dataset:**` line, keyed by its normalized text (D3) --
+ *                      so a silent swap between two versions surfaces as a loss to acknowledge,
+ *                      not merely a line that still exists. The validation scheme takes no
+ *                      atom (ruled): it is a hard block only.
  */
 export function extractAtoms(source: string): Map<string, PreservationAtom> {
     const atoms = new Map<string, PreservationAtom>();
@@ -191,6 +361,9 @@ export function extractAtoms(source: string): Map<string, PreservationAtom> {
     // Keyed by the URL itself rather than by a digest: the id is what a caller has
     // to echo back to authorise a removal, and a citation is legible where a hash is not.
     for (const found of externalUrls(source)) add("url", found.value, found.value);
+    // Keyed by its own normalized text (D3), same reason as `url` -- the id a caller
+    // echoes back to authorise a loss has to be legible.
+    for (const declared of declarations(source, DATASET)) add("dataset", normalizeDatasetKey(declared.value), collapse(declared.value));
     return atoms;
 }
 
@@ -223,7 +396,67 @@ export function violations(source: string): PreservationViolation[] {
                 line: found.line,
                 detail: `${found.value} must be followed by [pending-verification] or [verified: YYYY-MM-DD]; an unmarked URL claims a search that left no trace`,
             });
+    datasetViolations(source, out);
+    validationSchemeViolations(source, out);
     return out.sort((left, right) => left.line - right.line);
+}
+
+/**
+ * The dataset declaration (D1-D2, ruling 6): exactly one `**Dataset:**` line,
+ * and it must not reduce to a denylisted placeholder -- the identical denylist
+ * the validation scheme uses, because a presence rule alone guarantees a line
+ * EXISTS, never that it SAYS anything.
+ */
+function datasetViolations(source: string, out: PreservationViolation[]): void {
+    const found = declarations(source, DATASET);
+    const cardinality = cardinalityOf(found);
+    if (cardinality?.kind === "missing") {
+        out.push({
+            rule: "dataset-declaration-missing",
+            line: 1,
+            detail: "an experiments document declares its data once, as `**Dataset:** <name and split>` on its own line; a label with nothing after it declares nothing",
+        });
+        return;
+    }
+    if (cardinality?.kind === "repeated") {
+        out.push({ rule: "dataset-declaration-repeated", line: found[1].line, detail: repeatedDetail("Dataset", cardinality.lines) });
+        return;
+    }
+    const [only] = found;
+    if (only && isPlaceholderOnly(only.value))
+        out.push({
+            rule: "dataset-declaration-missing",
+            line: only.line,
+            detail: `${JSON.stringify(only.value)} reduces to a placeholder once the same denylist the validation scheme uses is set aside; a placeholder declares nothing, exactly like an empty label`,
+        });
+}
+
+/** Ruling 6: the dataset takes the identical denylist the validation scheme uses (D4's `PLACEHOLDERS`) -- a presence rule alone guarantees the line EXISTS, never that it SAYS anything. */
+function isPlaceholderOnly(value: string): boolean {
+    const normalized = foldHyphens(value).toLowerCase();
+    return tokensOf(removePhrases(normalized, PLACEHOLDERS)).length === 0;
+}
+
+/** The validation-scheme declaration (D2, D4): exactly one line, naming a test, its seeds and its repetitions. */
+function validationSchemeViolations(source: string, out: PreservationViolation[]): void {
+    const found = declarations(source, VALIDATION_SCHEME);
+    const cardinality = cardinalityOf(found);
+    if (cardinality?.kind === "missing") {
+        out.push({
+            rule: "validation-scheme-declaration-missing",
+            line: 1,
+            detail: "an experiments document declares its validation scheme once, as `**Validation scheme:** <test, seeds, repetitions>` on its own line, naming a statistical test, its seeds and its repetitions; a label with nothing after it declares nothing",
+        });
+        return;
+    }
+    if (cardinality?.kind === "repeated") {
+        out.push({ rule: "validation-scheme-declaration-repeated", line: found[1].line, detail: repeatedDetail("Validation scheme", cardinality.lines) });
+        return;
+    }
+    const [only] = found;
+    if (!only) return;
+    const content = validationSchemeContentViolation(only.value);
+    if (content) out.push({ rule: content.rule, line: only.line, detail: content.detail });
 }
 
 /** A named baseline owes a reader two things: where the code is, and where the work was published. */

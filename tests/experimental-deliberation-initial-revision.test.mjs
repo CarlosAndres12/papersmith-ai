@@ -55,7 +55,20 @@ const DATA_PAPER_FRAGMENT = 'The dataset splits are fixed by the data paper and 
 // The latest managed proposal: a FLAT file sitting directly in its own managed directory --
 // which is what a managed revision is, and what the loader never picked up.
 const PROPOSAL_FILENAME = 'research-concept-cross-site-latent-r03.md';
-const PROPOSAL_FRAGMENT = 'The proposal claims one shared latent code carries across acquisition sites.';
+// Carries this domain's two declarations (change "the two declarations a plan owes") as
+// EXTRA lines, appended to the original claim rather than replacing it, so
+// `written.includes(PROPOSAL_FRAGMENT)` below still proves the whole fragment -- claim
+// and declarations together -- reached v1 verbatim.
+const PROPOSAL_FRAGMENT = `The proposal claims one shared latent code carries across acquisition sites.
+
+**Dataset:** DomainShift-Synth, source/target split as distributed
+
+**Validation scheme:** paired t-test, 5 seeds, 10 repetitions`;
+// The same claim, WITHOUT either declaration -- mirrors `PROPOSAL_WITH_FILLED_TABLE`'s
+// shape below: nothing here is malformed, the composed v1 is simply missing what the
+// canonical form now demands, and `CREATE_INITIAL_REVISION` must refuse it exactly as it
+// refuses a filled report-table cell.
+const PROPOSAL_FRAGMENT_WITHOUT_DECLARATIONS = 'The proposal claims one shared latent code carries across acquisition sites.';
 
 // The same flat proposal, carrying a report table whose body cell is already filled in. Nothing
 // about this file is malformed; it is simply a document that reports a number, and an
@@ -233,6 +246,24 @@ test('a source fragment carrying a filled report-table cell refuses the first re
 	// source document it was never shown.
 	assert.match(details.blockers[0].message, /report-table-fabricated-value/);
 	assert.match(details.blockers[0].message, /"0\.71"/);
+	assert.equal(details.nextAction, 'repair_canonical_form');
+	assert.deepEqual(onDisk, [], 'nothing may be written when the composed candidate is refused');
+	assert.equal(details.mutations, 0);
+});
+
+// ---------------------------------------------------------------------------
+// The two declarations a plan owes -- v1 is checked, not only successors
+// ---------------------------------------------------------------------------
+
+test('a proposal declaring neither the dataset nor the validation scheme refuses the first revision instead of publishing it', async () => {
+	const { details, onDisk } = await createInitialRevision(`${PROPOSAL_FRAGMENT_WITHOUT_DECLARATIONS}\n`);
+	assert.equal(details.status, 'blocked', `a document missing both declarations must never become v1: ${JSON.stringify(details)}`);
+	assert.deepEqual(details.blockers?.map((blocker) => blocker.code), ['INITIAL_REVISION_CANONICAL_FORM_VIOLATION'],
+		JSON.stringify(details.blockers));
+	// Same double evidence discipline as the filled-cell case: both missing declarations
+	// must be named, not just the block itself.
+	assert.match(details.blockers[0].message, /dataset-declaration-missing/);
+	assert.match(details.blockers[0].message, /validation-scheme-declaration-missing/);
 	assert.equal(details.nextAction, 'repair_canonical_form');
 	assert.deepEqual(onDisk, [], 'nothing may be written when the composed candidate is refused');
 	assert.equal(details.mutations, 0);
