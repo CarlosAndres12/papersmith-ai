@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -13,10 +14,11 @@ from types import SimpleNamespace
 from unittest import mock
 
 from papersmith.bridges import audit as audit_bridge
+from papersmith.bridges import python as python_bridge
 from papersmith.bridges import remote as remote_bridge
 from papersmith.cli import main
 from papersmith.core import config, executor, init as init_module, ledger, target
-from papersmith.core.exit_codes import DRIFT_ERROR, SUCCESS
+from papersmith.core.exit_codes import DRIFT_ERROR, EXECUTION_ERROR, SUCCESS
 from papersmith.errors import UserError
 
 
@@ -28,6 +30,7 @@ def _workspace(tmp_path: Path) -> Path:
 
 def _write_local_manifest(workspace: Path, *, sharded: bool = False) -> None:
     values = "\n      values: [11, 22]\n      parameter: \"--seed\"" if sharded else ""
+    enabled = str(sharded).lower()
     workspace.joinpath("papersmith.yaml").write_text(
         f'''version: "1"
 name: "{workspace.name}"
@@ -37,13 +40,57 @@ compute_targets:
   targets:
     local:
       provider: "local"
+    kaggle-gpu-pool:
+      provider: "kaggle"
+      account_pool: "default"
+      accelerator: "GPU_T4_X2"
+      internet_access: true
+      max_timeout_hours: 9
+      auto_pull_artifacts: true
+    slurm-cluster:
+      provider: "remote-ssh"
+      host: "hpc.university.edu"
+      partition: "gpu-a100"
+      nodes: 1
+      gpus_per_node: 2
+      walltime: "12:00:00"
 execution_profiles:
   smoke:
     target: "local"
     entrypoint: "python -c \\\"print(42)\\\""
     timeout_seconds: 30
     sharding:
-      enabled: {str(sharded).lower()}{values}
+      enabled: {enabled}{values}
+  kaggle-train:
+    target: "kaggle-gpu-pool"
+    entrypoint: "python implementations/paper/src/train.py"
+    timeout_seconds: 30
+    sharding:
+      enabled: {enabled}{values}
+  slurm-train:
+    target: "slurm-cluster"
+    entrypoint: "python implementations/paper/src/train.py"
+    timeout_seconds: 30
+''',
+        encoding="utf-8",
+    )
+
+
+def _write_broken_ssh_manifest(workspace: Path) -> None:
+    workspace.joinpath("papersmith.yaml").write_text(
+        f'''version: "1"
+name: "{workspace.name}"
+title: "Execution Test"
+compute_targets:
+  default: "broken-ssh"
+  targets:
+    broken-ssh:
+      provider: "remote-ssh"
+execution_profiles:
+  smoke:
+    target: "broken-ssh"
+    entrypoint: "python implementations/paper/src/train.py"
+    timeout_seconds: 30
 ''',
         encoding="utf-8",
     )
@@ -199,3 +246,353 @@ class ExecutorTests(unittest.TestCase):
         self.patch(audit_bridge, "check_generated", lambda *args, **kwargs: ["PI.md"])
         result = audit_bridge.execute(workspace, check_drift=True)
         assert result == DRIFT_ERROR
+
+    # Phase 1: Fixture Foundation (tasks 1.1-1.2)
+
+    def test_manifest_helper_includes_kaggle_and_slurm_shapes(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        data = config.load_papersmith_yaml(workspace)
+        targets = data["compute_targets"]["targets"]
+        assert {"local", "kaggle-gpu-pool", "slurm-cluster"} <= set(targets)
+        kaggle = targets["kaggle-gpu-pool"]
+        assert kaggle["provider"] == "kaggle"
+        assert kaggle["account_pool"] == "default"
+        assert kaggle["accelerator"] == "GPU_T4_X2"
+        assert kaggle["internet_access"] is True
+        assert kaggle["max_timeout_hours"] == 9
+        assert kaggle["auto_pull_artifacts"] is True
+        slurm = targets["slurm-cluster"]
+        assert slurm["provider"] == "remote-ssh"
+        assert slurm["host"] == "hpc.university.edu"
+        assert slurm["partition"] == "gpu-a100"
+        assert slurm["walltime"] == "12:00:00"
+        profiles = data["execution_profiles"]
+        assert profiles["kaggle-train"]["target"] == "kaggle-gpu-pool"
+        assert profiles["slurm-train"]["target"] == "slurm-cluster"
+
+    def test_hermetic_mock_idiom_seals_all_seams(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+
+        def _fail_if_called(*args, **kwargs):
+            raise AssertionError("hermetic boundary breached: subprocess dispatched")
+
+        with mock.patch.object(executor.subprocess, "run", _fail_if_called):
+            with mock.patch.object(target.subprocess, "run", _fail_if_called):
+                with mock.patch.object(target, "run_script", _fail_if_called):
+                    with mock.patch.object(python_bridge, "run_script", _fail_if_called):
+                        with mock.patch.object(shutil, "which", return_value="/usr/bin/python"):
+                            assert shutil.which("python") == "/usr/bin/python"
+                            code, result = target.check_target(workspace, "local")
+                            assert code == SUCCESS
+                            assert result["reachable"] is True
+                            dry = executor.run_profile(workspace, "smoke", dry_run=True)
+                            assert dry["status"] == "ok"
+                            assert ledger.read(workspace)[-1]["dry_run"] is True
+
+    # Phase 2: Target Check/Set Matrix (tasks 2.1-2.4)
+
+    def test_target_check_local_unknown_and_unsupported(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        with mock.patch.object(shutil, "which", return_value="/usr/bin/python"):
+            code, result = target.check_target(workspace, "local")
+            assert code == SUCCESS
+            assert result["name"] == "local"
+            assert result["provider"] == "local"
+            assert result["reachable"] is True
+        with mock.patch.object(shutil, "which", return_value=None):
+            code, result = target.check_target(workspace, "local")
+            assert code == SUCCESS
+            assert result["reachable"] is True
+        with self.assertRaisesRegex(UserError, "unknown compute target"):
+            target.check_target(workspace, "does-not-exist")
+        fake_yaml = {
+            "compute_targets": {
+                "default": "weird-cloud",
+                "targets": {"weird-cloud": {"provider": "quantum"}},
+            }
+        }
+        with mock.patch.object(config, "load_papersmith_yaml", lambda *args, **kwargs: fake_yaml):
+            with self.assertRaisesRegex(UserError, "unsupported target provider"):
+                target.check_target(workspace, "weird-cloud")
+
+    def test_target_check_kaggle_up_and_down(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        seen: dict = {}
+
+        def _fake_ok(root, script, args=(), **kwargs):
+            seen["args"] = list(args)
+            seen["script"] = str(script)
+            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout='{"ok": true}\n', stderr="")
+
+        with mock.patch.object(target, "run_script", _fake_ok):
+            with mock.patch.object(python_bridge, "run_script", _fake_ok):
+                code, result = target.check_target(workspace, "kaggle-gpu-pool")
+                assert code == SUCCESS
+                assert result["reachable"] is True
+                assert result["provider"] == "kaggle"
+                assert seen["args"] == ["list", "--json"]
+                assert seen["script"].endswith("accounts_cli.py")
+
+        def _fake_down(root, script, args=(), **kwargs):
+            return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="auth failed\n")
+
+        with mock.patch.object(target, "run_script", _fake_down):
+            with mock.patch.object(python_bridge, "run_script", _fake_down):
+                code, result = target.check_target(workspace, "kaggle-gpu-pool")
+                assert code == EXECUTION_ERROR
+                assert result["reachable"] is False
+                assert "auth failed" in result["detail"]
+
+    def test_target_check_ssh_up_down_and_missing_host(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        seen: dict = {}
+
+        def _fake_ok(*args, **kwargs):
+            seen["argv"] = list(args[0])
+            return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(target.subprocess, "run", _fake_ok):
+            code, result = target.check_target(workspace, "slurm-cluster")
+            assert code == SUCCESS
+            assert result["reachable"] is True
+            assert seen["argv"][0] == "ssh"
+            assert "hpc.university.edu" in seen["argv"]
+            assert "true" in seen["argv"]
+
+        def _fake_down(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args[0], returncode=1, stdout="", stderr="timeout\n")
+
+        with mock.patch.object(target.subprocess, "run", _fake_down):
+            code, result = target.check_target(workspace, "slurm-cluster")
+            assert code == EXECUTION_ERROR
+            assert result["reachable"] is False
+
+        broken = _workspace(self.new_tmp())
+        _write_broken_ssh_manifest(broken)
+
+        def _must_not_run(*args, **kwargs):
+            raise AssertionError("missing host must refuse before ssh")
+
+        with mock.patch.object(target.subprocess, "run", _must_not_run):
+            with self.assertRaisesRegex(UserError, "has no host"):
+                target.check_target(broken, "broken-ssh")
+
+    def test_target_set_persistence_round_trip(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        selected = target.set_target(workspace, "slurm-cluster")
+        assert selected == {"name": "slurm-cluster", "provider": "remote-ssh"}
+        assert config.load_workspace_config(workspace)["execution_engine"]["active_compute_target"] == "slurm-cluster"
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            assert main(["target", "set", "kaggle-gpu-pool", str(workspace)]) == SUCCESS
+        assert "kaggle-gpu-pool" in buffer.getvalue()
+        assert config.load_workspace_config(workspace)["execution_engine"]["active_compute_target"] == "kaggle-gpu-pool"
+
+    # Phase 3: Run Dispatch Matrix (tasks 3.1-3.5)
+
+    def test_run_profile_local_failure_mapping(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        with mock.patch.object(
+            executor.subprocess, "run",
+            return_value=subprocess.CompletedProcess(args=["python"], returncode=0, stdout="", stderr=""),
+        ):
+            result = executor.run_profile(workspace, "smoke")
+            assert result["status"] == "ok"
+            assert result["jobs"][0]["exit"] == SUCCESS
+        with mock.patch.object(
+            executor.subprocess, "run",
+            return_value=subprocess.CompletedProcess(args=["python"], returncode=1, stdout="", stderr="boom"),
+        ):
+            result = executor.run_profile(workspace, "smoke")
+            assert result["status"] == "failed"
+            assert result["jobs"][0]["exit"] == EXECUTION_ERROR
+        with mock.patch.object(
+            executor.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["python"], timeout=30),
+        ):
+            result = executor.run_profile(workspace, "smoke")
+            assert result["status"] == "failed"
+            assert result["jobs"][0]["exit"] == EXECUTION_ERROR
+        with mock.patch.object(executor.subprocess, "run", side_effect=OSError("boom")):
+            result = executor.run_profile(workspace, "smoke")
+            assert result["status"] == "failed"
+            assert result["jobs"][0]["exit"] == EXECUTION_ERROR
+
+    def test_run_profile_kaggle_dry_run_and_consented_unit_forwarding(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace, sharded=True)
+
+        def _must_not_dispatch(*args, **kwargs):
+            raise AssertionError("dry-run dispatched a subprocess")
+
+        with mock.patch.object(executor.subprocess, "run", _must_not_dispatch):
+            dry = executor.run_profile(workspace, "kaggle-train", dry_run=True, shard=0)
+            assert dry["status"] == "ok"
+            command = dry["jobs"][0]["command"]
+            assert "submit" in command
+            assert "--target" in command
+            assert "--entrypoint" in command
+            assert "--backend" in command
+            backend = command[command.index("--backend") + 1]
+            assert backend == "kaggle"
+            entrypoint = command[command.index("--entrypoint") + 1]
+            assert entrypoint.endswith("train.py")
+            assert "--worker" not in command
+            assert "--smoke" not in command
+
+        captured: dict = {}
+
+        def _fake_run(command, **kwargs):
+            captured["argv"] = list(command)
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(executor.subprocess, "run", _fake_run):
+            result = executor.run_profile(workspace, "kaggle-train", shard=0, consent="tok123")
+            assert result["status"] == "ok"
+            argv = captured["argv"]
+            assert "submit" in argv
+            assert "--target" in argv
+            assert "--entrypoint" in argv
+            assert "--backend" in argv
+            assert "--unit" in argv
+            assert "11" in argv
+            assert "--consent" in argv
+            assert argv[argv.index("--consent") + 1] == "tok123"
+
+        captured_none: dict = {}
+
+        def _fake_run_none(command, **kwargs):
+            captured_none["argv"] = list(command)
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(executor.subprocess, "run", _fake_run_none):
+            result = executor.run_profile(workspace, "kaggle-train", shard=1, consent=None)
+            assert result["status"] == "ok"
+            argv = captured_none["argv"]
+            assert "submit" in argv
+            assert "--consent" not in argv
+            assert "--unit" in argv
+            assert "22" in argv
+
+    def test_run_profile_ssh_sbatch_argv_and_dispatch(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        dry = executor.run_profile(workspace, "slurm-train", dry_run=True)
+        assert dry["status"] == "ok"
+        command = dry["jobs"][0]["command"]
+        assert command[0] == "ssh"
+        assert "hpc.university.edu" in command
+        assert "sbatch" in command
+        assert "--partition" in command
+        assert "gpu-a100" in command
+        assert "--time" in command
+        assert "12:00:00" in command
+        assert "--wrap" in command
+        captured: dict = {}
+
+        def _fake_run(command, **kwargs):
+            captured["argv"] = list(command)
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(executor.subprocess, "run", _fake_run):
+            result = executor.run_profile(workspace, "slurm-train", dry_run=False)
+            assert result["status"] == "ok"
+            assert captured["argv"][0] == "ssh"
+            assert "sbatch" in captured["argv"]
+        broken = _workspace(self.new_tmp())
+        _write_broken_ssh_manifest(broken)
+        with self.assertRaisesRegex(UserError, "requires host"):
+            executor.run_profile(broken, "smoke", dry_run=True)
+
+    def test_target_override_precedence_and_entrypoint_fallback(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        overridden = executor.run_profile(workspace, "smoke", target_override="kaggle-gpu-pool", dry_run=True)
+        assert overridden["target"] == "kaggle-gpu-pool"
+        assert overridden["jobs"][0]["provider"] == "kaggle"
+        assert "submit" in overridden["jobs"][0]["command"]
+        overridden_ssh = executor.run_profile(workspace, "smoke", target_override="slurm-cluster", dry_run=True)
+        assert overridden_ssh["target"] == "slurm-cluster"
+        assert overridden_ssh["jobs"][0]["command"][0] == "ssh"
+        fallback_job = {
+            "entrypoint": "echo hello world",
+            "command": ["echo", "hello", "world"],
+            "command_text": "echo hello world",
+            "shard_value": None,
+        }
+        fallback = executor._remote_command(workspace, fallback_job, {"backend": "kaggle"}, consent=None)
+        entrypoint = fallback[fallback.index("--entrypoint") + 1]
+        assert entrypoint.endswith("runner.ipynb")
+        normal_job = {
+            "entrypoint": "python implementations/paper/src/train.py",
+            "command": ["python", "implementations/paper/src/train.py"],
+            "command_text": "python implementations/paper/src/train.py",
+            "shard_value": None,
+        }
+        normal = executor._remote_command(workspace, normal_job, {"backend": "kaggle"}, consent="tok")
+        entrypoint = normal[normal.index("--entrypoint") + 1]
+        assert entrypoint.endswith("train.py")
+        assert "--consent" in normal
+
+    def test_failing_exit_ledger_rows(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        with mock.patch.object(
+            executor.subprocess, "run",
+            return_value=subprocess.CompletedProcess(args=["python"], returncode=1, stdout="", stderr="fail"),
+        ):
+            result = executor.run_profile(workspace, "smoke", dry_run=False)
+            assert result["status"] == "failed"
+            assert result["jobs"][0]["exit"] == EXECUTION_ERROR
+        rows = ledger.read(workspace)
+        assert rows[-1]["dry_run"] is False
+        assert rows[-1]["exit"] == EXECUTION_ERROR
+        assert rows[-1]["exit"] != 0
+        assert rows[-1]["profile"] == "smoke"
+        kaggle_workspace = _workspace(self.new_tmp())
+        _write_local_manifest(kaggle_workspace)
+        with mock.patch.object(
+            executor.subprocess, "run",
+            return_value=subprocess.CompletedProcess(args=["submit"], returncode=1, stdout="", stderr="remote fail"),
+        ):
+            result = executor.run_profile(kaggle_workspace, "kaggle-train", dry_run=False, consent="tok")
+            assert result["status"] == "failed"
+        rows = ledger.read(kaggle_workspace)
+        assert rows[-1]["dry_run"] is False
+        assert rows[-1]["exit"] != 0
+
+    # Phase 4: CLI Wiring (task 4.1)
+
+    def test_cli_main_wiring_for_target_and_run(self) -> None:
+        workspace = _workspace(self.new_tmp())
+        _write_local_manifest(workspace)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            assert main(["target", "set", "slurm-cluster", str(workspace)]) == SUCCESS
+        assert "slurm-cluster" in buffer.getvalue()
+        with mock.patch.object(shutil, "which", return_value="/usr/bin/python"):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                assert main(["target", "check", "local", str(workspace)]) == SUCCESS
+            assert "reachable" in buffer.getvalue()
+
+        def _must_not_dispatch(*args, **kwargs):
+            raise AssertionError("dry-run dispatched a subprocess")
+
+        with mock.patch.object(executor.subprocess, "run", _must_not_dispatch):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                assert main([
+                    "run", "smoke", "--target", "kaggle-gpu-pool",
+                    "--consent", "tok123", "--dry-run", str(workspace),
+                ]) == SUCCESS
+            output = buffer.getvalue()
+            assert '"dry_run": true' in output
+            assert "submit" in output
+            assert "tok123" in output
