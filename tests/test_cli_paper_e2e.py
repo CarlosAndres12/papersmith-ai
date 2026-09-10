@@ -22,6 +22,7 @@ import contextlib
 import io
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import tempfile
@@ -122,6 +123,21 @@ def _fake_kaggle_bin(bin_dir: Path, monkeypatch=None) -> Path:
     else:
         os.environ["PATH"] = new_path
     return exe
+
+
+@contextlib.contextmanager
+def _no_network():
+    def _refuse(*a, **k): raise AssertionError("network blocked: socket.connect refused")
+    with mock.patch.object(socket.socket, "connect", side_effect=_refuse), \
+            mock.patch("socket.create_connection", side_effect=_refuse):
+        yield
+
+def _make_remote_target(tmp: str, name: str = "FEM-TOLLA") -> tuple[Path, Path]:
+    target = Path(tmp) / "repo"
+    notebook = target / name / "Notebooks" / "a.ipynb"
+    notebook.parent.mkdir(parents=True, exist_ok=True)
+    notebook.write_text("{}", encoding="utf-8")
+    return target, notebook
 
 
 class TestHelpers(unittest.TestCase):
@@ -674,3 +690,107 @@ class TestRunJourney(unittest.TestCase):
         with contextlib.redirect_stdout(audit_buf):
             assert main(["audit", str(workspace), "--check-drift"]) == 0
         assert "drift: clean" in audit_buf.getvalue()
+
+
+# --- Unit 3: Hermeticity guards + smoke wrapper + registration (RED) ---
+
+
+class TestHermeticity(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_socket_connect_refuses_on_any_attempt(self) -> None:
+        with _no_network():
+            with self.assertRaises(AssertionError):
+                socket.socket().connect(("example.invalid", 80))
+            with self.assertRaises(AssertionError):
+                socket.create_connection(("example.invalid", 80))
+
+    def test_offline_status_passes_with_socket_disabled(self) -> None:
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        with _no_network():
+            assert main(["status", str(workspace)]) == 0
+
+    def test_offline_stubbed_ingest_passes_with_socket_disabled(self) -> None:
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        with _no_network(), _stub_extract():
+            assert main(["ingest", str(FIXTURE_PDF), str(workspace)]) == 0
+        md_path = workspace / "guidance" / "reference-papers" / "paper" / "paper.md"
+        assert r"\tag" in md_path.read_text(encoding="utf-8")
+
+    def test_live_submit_without_consent_refuses_pre_adapter(self) -> None:
+        from test_remote_execution import PACKER, REMOTE_CLI, MultiWorkerFakeAdapter
+
+        tmp_path = self.new_tmp()
+        target, notebook = _make_remote_target(str(tmp_path))
+        adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)], forbid_submit=True)
+        with mock.patch.object(
+            PACKER, "select",
+            side_effect=AssertionError("packer.select must never run before consent"),
+        ):
+            with self.assertRaises(REMOTE_CLI.ConsentError) as caught:
+                REMOTE_CLI.cmd_submit(
+                    target=target, entrypoint=notebook, requested=1,
+                    adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                )
+        assert "consent" in str(caught.exception).lower()
+        assert adapter.submit_calls == []
+
+    def test_live_submit_strips_kaggle_env_and_ignores_kaggle_config(self) -> None:
+        from test_remote_execution import MultiWorkerFakeAdapter, REMOTE_CLI
+
+        tmp_path = self.new_tmp()
+        target, notebook = _make_remote_target(str(tmp_path))
+        fake_home = tmp_path / "fake-home"
+        fake_home.mkdir()
+        scrubbed = {k: v for k, v in os.environ.items() if not k.startswith("KAGGLE_")}
+        scrubbed["KAGGLE_API_TOKEN"] = "should-be-stripped"
+        opened: list[str] = []
+        _real_open = open
+
+        def _guard_open(file, *args, **kwargs):
+            if ".kaggle" in str(file):
+                opened.append(str(file))
+                raise AssertionError(f"kaggle config read blocked: {file}")
+            return _real_open(file, *args, **kwargs)
+
+        adapter = MultiWorkerFakeAdapter(workers=[("w1", 2)], forbid_submit=True)
+        with mock.patch.dict(os.environ, scrubbed, clear=True):
+            assert os.environ["KAGGLE_API_TOKEN"] == "should-be-stripped"
+            with mock.patch.object(Path, "home", return_value=fake_home):
+                with mock.patch("builtins.open", side_effect=_guard_open):
+                    with self.assertRaises(REMOTE_CLI.ConsentError):
+                        REMOTE_CLI.cmd_submit(
+                            target=target, entrypoint=notebook, requested=1,
+                            adapter=adapter, source_digest=lambda t, n: "d" * 64,
+                        )
+        assert adapter.submit_calls == []
+        assert opened == [], f"kaggle config was read: {opened}"
+        assert not (fake_home / ".kaggle").exists()
+
+
+class TestSmokeWrapper(unittest.TestCase):
+    def test_smoke_script_exists_executable_and_reuses_fixtures(self) -> None:
+        script = REPO_ROOT / "scripts" / "cli-paper-smoke.sh"
+        assert script.is_file(), "missing scripts/cli-paper-smoke.sh"
+        assert os.access(script, os.X_OK), "smoke wrapper must be executable"
+        text = script.read_text(encoding="utf-8")
+        for marker in ("init", "status", "ingest", "dry-run", "audit"):
+            assert marker in text, f"smoke wrapper must cover {marker}"
+        assert "tests/fixtures/e2e" in text, "smoke must reuse tests/fixtures/e2e/"
+
+
+class TestSuiteBudget(unittest.TestCase):
+    def test_suite_stays_under_800_lines(self) -> None:
+        own = Path(__file__).read_text(encoding="utf-8").splitlines()
+        assert len(own) < 800, f"suite budget exceeded: {len(own)} lines"
+
+    def test_e2e_layer_registered_in_config(self) -> None:
+        text = (REPO_ROOT / "openspec" / "config.yaml").read_text(encoding="utf-8")
+        assert "test_cli_paper_e2e" in text, "e2e layer must register tests/test_cli_paper_e2e.py"
