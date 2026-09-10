@@ -274,3 +274,403 @@ class TestInitStatus(unittest.TestCase):
         # the "fail" is the drift detection naming the path, not a non-zero exit.
         assert rc == 0
         assert "CLAUDE.md" in buffer.getvalue()
+
+
+# --- Unit 2: Ingest/deliberate/implement/remote/run/audit legs + journey ---
+# Hermetic legs via in-process main([...]); boundaries faked per design:
+# stubbed download/extract, local node engine (no model call), demo git target
+# (no notebook exec), FakeAdapter + fake kaggle exe (no live Kaggle),
+# --dry-run / audit findings-only (no dispatch, no repair).
+
+
+def _make_demo_target(workspace: Path, name: str = "demo") -> Path:
+    """Create a minimal git-backed implementation target for verify/probe."""
+    target = workspace / "implementations" / name
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["src"]\n', encoding="utf-8"
+    )
+    (target / "README.md").write_text("# Demo target\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(target)], check=True)
+    subprocess.run(["git", "-C", str(target), "config", "user.email", "e2e@test.com"], check=True)
+    subprocess.run(["git", "-C", str(target), "config", "user.name", "e2e"], check=True)
+    subprocess.run(["git", "-C", str(target), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(target), "commit", "-qm", "init demo target"], check=True)
+    return target
+
+
+class TestIngest(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_ingest_stubbed_exit_zero_writes_markdown_with_latex(self) -> None:
+        import contextlib
+        import io
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        buffer = io.StringIO()
+        with _stub_extract(), contextlib.redirect_stdout(buffer):
+            rc = main(["ingest", str(FIXTURE_PDF), str(workspace)])
+        assert rc == 0
+        assert "Ingested:" in buffer.getvalue()
+        md_path = workspace / "guidance" / "reference-papers" / "paper" / "paper.md"
+        assert md_path.is_file(), "stubbed ingest wrote no markdown"
+        text = md_path.read_text(encoding="utf-8")
+        canned = CANNED_MD.read_text(encoding="utf-8")
+        assert text == canned, "ingest must copy the canned expectation byte-for-byte"
+        assert r"\mathcal" in text, "paper markdown must carry LaTeX"
+        assert r"\tag" in text, "paper markdown must carry equation tags"
+
+    def test_ingest_writes_figure_and_index(self) -> None:
+        import json
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        with _stub_extract():
+            assert main(["ingest", str(FIXTURE_PDF), str(workspace)]) == 0
+        fig = workspace / "guidance" / "reference-papers" / "paper" / "_page_1_Figure_1.png"
+        assert fig.is_file(), "stub must write one figure file"
+        assert fig.read_bytes().startswith(b"\x89PNG"), "figure must be a PNG"
+        index_path = workspace / "guidance" / "reference-papers" / "index.json"
+        assert index_path.is_file(), "ingest must refresh the reference index"
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        assert payload["entries"], "index must list the ingested paper"
+        assert any(entry["id"] == "paper" for entry in payload["entries"])
+
+
+class TestDeliberate(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_deliberate_init_then_status_names_revision(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = main(["deliberate", str(workspace), "--action", "init",
+                       "--instruction", "E2E deliberate probe"])
+        assert rc == 0
+        created = json.loads(buffer.getvalue())
+        assert created["status"] == "created"
+        target = created["targetFilename"]
+        assert target.endswith("-r01.md")
+        assert (workspace / "proposals" / target).is_file()
+        status_buf = io.StringIO()
+        with contextlib.redirect_stdout(status_buf):
+            assert main(["deliberate", str(workspace), "--action", "status"]) == 0
+        status = json.loads(status_buf.getvalue())
+        assert status["status"] == "ok"
+        assert status["latest"] == target, "status must name the managed revision"
+        assert any(entry["filename"] == target for entry in status["managedRevisions"])
+
+    def test_deliberate_runs_without_model_call(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        scrubbed = {key: value for key, value in os.environ.items()
+                    if "ANTHROPIC" not in key and "OPENAI" not in key and "MODEL" not in key}
+        with mock.patch.dict(os.environ, scrubbed, clear=True):
+            assert "ANTHROPIC_API_KEY" not in os.environ
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                rc = main(["deliberate", str(workspace), "--action", "init",
+                           "--instruction", "E2E keyless probe"])
+            assert rc == 0, "deliberate init must be keyless with no model call"
+            created = json.loads(buffer.getvalue())
+            assert (workspace / "proposals" / created["targetFilename"]).is_file()
+            status_buf = io.StringIO()
+            with contextlib.redirect_stdout(status_buf):
+                assert main(["deliberate", str(workspace), "--action", "status"]) == 0
+            assert created["targetFilename"] in status_buf.getvalue()
+
+
+class TestImplement(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def _workspace_with_revision(self, tmp_path: Path) -> Path:
+        import contextlib
+        import io
+
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            assert main(["deliberate", str(workspace), "--action", "init",
+                         "--instruction", "E2E implement probe"]) == 0
+        _make_demo_target(workspace)
+        return workspace
+
+    def test_implement_verify_reports_structure_without_notebook_exec(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        workspace = self._workspace_with_revision(self.new_tmp())
+        assert list((workspace / "implementations" / "demo").glob("*.ipynb")) == []
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = main(["implement", str(workspace), "--action", "verify",
+                       "--target", "implementations/demo", "--name", "Demo"])
+        assert rc == 0
+        payload = json.loads(buffer.getvalue())
+        assert payload["target"].endswith("implementations/demo")
+        assert "structure" in payload, "verify must report structure"
+        assert list((workspace / "implementations" / "demo").rglob("*.ipynb")) == [], \
+            "verify must not execute or create notebooks"
+
+    def test_implement_probe_names_next_step(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        workspace = self._workspace_with_revision(self.new_tmp())
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = main(["implement", str(workspace), "--action", "probe",
+                       "--target", "implementations/demo", "--name", "Demo"])
+        assert rc == 0
+        payload = json.loads(buffer.getvalue())
+        assert payload["status"] == "ok"
+        assert payload["nextStep"], "probe must name its next step"
+        assert isinstance(payload["nextStep"], str)
+        assert list((workspace / "implementations" / "demo").rglob("*.ipynb")) == [], \
+            "probe must not execute notebooks"
+
+
+class TestRemote(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_remote_pack_status_via_fake_adapter_and_fake_exe(self) -> None:
+        from test_remote_execution import ADAPTER, LEDGER, FakeAdapter
+
+        tmp_path = self.new_tmp()
+        old_path = os.environ.get("PATH", "")
+        self.addCleanup(os.environ.__setitem__, "PATH", old_path)
+        exe = _fake_kaggle_bin(tmp_path / "bin")
+        assert shutil.which("kaggle") == str(exe), "fake bin must win on PATH"
+        assert subprocess.run([str(exe), "kernels", "status", "x"],
+                              capture_output=True, timeout=30).returncode == 0
+        adapter = FakeAdapter(worker_id="fake-e2e", capacity=2)
+        workers = adapter.workers()
+        assert workers[0].id == "fake-e2e"
+        job = ADAPTER.Job(entrypoint=Path("Notebooks/a.ipynb"), run_config={},
+                          worker=workers[0].id)
+        submission = adapter.submit(job)
+        assert submission.id.startswith("fake-")
+        assert adapter.poll(submission.id).state in ADAPTER.STATES
+        with tempfile.TemporaryDirectory() as ledger_tmp:
+            ledger_path = Path(ledger_tmp) / "ledger.jsonl"
+            digest = "d" * 64
+            LEDGER.append(ledger_path, LEDGER.submitted_event(
+                entrypoint="Notebooks/a.ipynb", source_digest=digest,
+                submission_id=submission.id, worker=workers[0].id,
+                requested_capacity=1, granted_capacity=1))
+            lines = ledger_path.read_text(encoding="utf-8").splitlines()
+            state = LEDGER.fold(lines, live_digest=digest)
+            assert state.entrypoints[("Notebooks/a.ipynb", "fake-e2e")].state == "pending"
+            LEDGER.append(ledger_path, LEDGER.returned_event(
+                submission_id=submission.id, artifact_path="/out/x",
+                observed_concurrency=1))
+            lines = ledger_path.read_text(encoding="utf-8").splitlines()
+            folded = LEDGER.fold(lines, live_digest=digest)
+            assert folded.verdicts[submission.id] == "current"
+            assert folded.entrypoints[("Notebooks/a.ipynb", "fake-e2e")].state == "returned"
+        with tempfile.TemporaryDirectory() as fetch_tmp:
+            fetched = adapter.fetch(submission.id, Path(fetch_tmp) / "out")
+            assert fetched.complete is True
+
+    def test_remote_bridge_maps_pack_and_status_without_network(self) -> None:
+        from types import SimpleNamespace
+
+        from papersmith.bridges import remote as remote_bridge
+        from papersmith.errors import UserError
+
+        pack = SimpleNamespace(operation="pack", target="ws", entrypoint=None, backend=None,
+                               account=None, job=None, submission_id=None, dest=None,
+                               consent=None, smoke=False, unit=[], force=False, resolve=False,
+                               service="kaggle", job_name="e2e-job", product="demo",
+                               commit=None, repo_url="https://example.com/repo.git",
+                               repo_ref="main", run_module="mod", run_function="fn",
+                               clone_path=[], regenerate=False, extra=[])
+        command = remote_bridge.command_args(pack)
+        assert command[0] == "generate-job"
+        assert "--service" in command and "kaggle" in command
+        assert "--job-name" in command and "e2e-job" in command
+        status_args = SimpleNamespace(operation="status", target="ws",
+                                      entrypoint="Notebooks/a.ipynb", backend=None,
+                                      account=None, job=None, submission_id=None, dest=None,
+                                      consent=None, smoke=False, unit=[], force=False,
+                                      resolve=False, service=None, job_name=None,
+                                      product=None, commit=None, repo_url=None, repo_ref=None,
+                                      run_module=None, run_function=None,
+                                      clone_path=[], regenerate=False, extra=[])
+        assert remote_bridge.command_args(status_args) == [
+            "status", "--target", "ws", "--entrypoint", "Notebooks/a.ipynb"]
+        with self.assertRaisesRegex(UserError, "remote pack requires"):
+            remote_bridge.command_args(SimpleNamespace(
+                operation="pack", target=None, entrypoint=None, backend=None,
+                account=None, job=None, submission_id=None, dest=None, consent=None,
+                smoke=False, unit=[], force=False, resolve=False, service=None,
+                job_name=None, product=None, commit=None, repo_url=None,
+                repo_ref=None, run_module=None, run_function=None,
+                clone_path=[], regenerate=False, extra=[]))
+
+
+class TestRunAudit(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_run_dry_run_plans_only(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        from papersmith.core import executor, ledger
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        dispatched = False
+
+        def _fail_if_dispatched(*args, **kwargs):
+            nonlocal dispatched
+            dispatched = True
+            raise AssertionError("dry-run dispatched a subprocess")
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(executor.subprocess, "run", side_effect=_fail_if_dispatched):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = main(["run", "smoke_and_invariants", "--dry-run", str(workspace)])
+        assert rc == 0
+        assert dispatched is False, "dry-run must plan without launching"
+        assert "dry-run: no job was dispatched" in err.getvalue()
+        payload = json.loads(out.getvalue())
+        assert payload["status"] == "ok"
+        assert payload["jobs"][0]["dry_run"] is True
+        assert ledger.read(workspace)[0]["dry_run"] is True
+
+    def test_audit_drift_probe_reports_gaps_as_findings(self) -> None:
+        import contextlib
+        import io
+
+        from papersmith.core.exit_codes import DRIFT_ERROR
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path)
+        _link_node_modules(workspace)
+        clean = io.StringIO()
+        with contextlib.redirect_stdout(clean):
+            assert main(["audit", str(workspace), "--check-drift"]) == 0
+        assert "drift: clean" in clean.getvalue()
+        (workspace / "CLAUDE.md").write_text(
+            (workspace / "CLAUDE.md").read_text(encoding="utf-8") + "\n<!-- drift probe -->\n",
+            encoding="utf-8")
+        drifted = io.StringIO()
+        with contextlib.redirect_stdout(drifted):
+            rc = main(["audit", str(workspace), "--check-drift"])
+        assert rc == DRIFT_ERROR, "drift probe must report gaps, never fix them"
+        assert "drift" in drifted.getvalue().lower()
+        assert "CLAUDE.md" in drifted.getvalue(), "drift report must name the path"
+        assert "<!-- drift probe -->" in (workspace / "CLAUDE.md").read_text(encoding="utf-8"), \
+            "audit must expose drift as findings only, never repair it"
+
+
+class TestRunJourney(unittest.TestCase):
+    def new_tmp(self) -> Path:
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return Path(holder.name)
+
+    def test_journey_ordered_init_to_audit_green_in_one_workspace(self) -> None:
+        import contextlib
+        import io
+        import json
+
+        from test_remote_execution import ADAPTER, LEDGER, FakeAdapter
+
+        from papersmith.core import ledger as run_ledger
+
+        tmp_path = self.new_tmp()
+        workspace = _make_workspace(tmp_path, name="e2e-journey")
+        _link_node_modules(workspace)
+        assert main(["status", str(workspace)]) == 0
+        with _stub_extract():
+            assert main(["ingest", str(FIXTURE_PDF), str(workspace)]) == 0
+        md_path = workspace / "guidance" / "reference-papers" / "paper" / "paper.md"
+        assert md_path.is_file() and r"\tag" in md_path.read_text(encoding="utf-8")
+        assert (workspace / "guidance" / "reference-papers" / "paper"
+                / "_page_1_Figure_1.png").is_file()
+        init_buf = io.StringIO()
+        with contextlib.redirect_stdout(init_buf):
+            assert main(["deliberate", str(workspace), "--action", "init",
+                         "--instruction", "E2E journey probe"]) == 0
+        revision = json.loads(init_buf.getvalue())["targetFilename"]
+        status_buf = io.StringIO()
+        with contextlib.redirect_stdout(status_buf):
+            assert main(["deliberate", str(workspace), "--action", "status"]) == 0
+        assert revision in status_buf.getvalue()
+        _make_demo_target(workspace)
+        verify_buf = io.StringIO()
+        with contextlib.redirect_stdout(verify_buf):
+            assert main(["implement", str(workspace), "--action", "verify",
+                         "--target", "implementations/demo", "--name", "Demo"]) == 0
+        assert "structure" in verify_buf.getvalue()
+        probe_buf = io.StringIO()
+        with contextlib.redirect_stdout(probe_buf):
+            assert main(["implement", str(workspace), "--action", "probe",
+                         "--target", "implementations/demo", "--name", "Demo"]) == 0
+        assert json.loads(probe_buf.getvalue())["nextStep"]
+        old_path = os.environ.get("PATH", "")
+        self.addCleanup(os.environ.__setitem__, "PATH", old_path)
+        assert _fake_kaggle_bin(tmp_path / "bin").is_file()
+        adapter = FakeAdapter(worker_id="fake-journey", capacity=2)
+        worker = adapter.workers()[0].id
+        submission = adapter.submit(ADAPTER.Job(entrypoint=Path("Notebooks/a.ipynb"),
+                                                run_config={}, worker=worker))
+        assert adapter.poll(submission.id).state in ADAPTER.STATES
+        with tempfile.TemporaryDirectory() as ledger_tmp:
+            ledger_path = Path(ledger_tmp) / "ledger.jsonl"
+            digest = "e" * 64
+            LEDGER.append(ledger_path, LEDGER.submitted_event(
+                entrypoint="Notebooks/a.ipynb", source_digest=digest,
+                submission_id=submission.id, worker=worker,
+                requested_capacity=1, granted_capacity=1))
+            LEDGER.append(ledger_path, LEDGER.returned_event(
+                submission_id=submission.id, artifact_path="/out/journey",
+                observed_concurrency=1))
+            assert LEDGER.fold(
+                ledger_path.read_text(encoding="utf-8").splitlines(),
+                live_digest=digest).verdicts[submission.id] == "current"
+        run_out, run_err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(run_out), contextlib.redirect_stderr(run_err):
+            assert main(["run", "smoke_and_invariants", "--dry-run", str(workspace)]) == 0
+        assert "dry-run: no job was dispatched" in run_err.getvalue()
+        assert run_ledger.read(workspace)[0]["dry_run"] is True
+        audit_buf = io.StringIO()
+        with contextlib.redirect_stdout(audit_buf):
+            assert main(["audit", str(workspace), "--check-drift"]) == 0
+        assert "drift: clean" in audit_buf.getvalue()
