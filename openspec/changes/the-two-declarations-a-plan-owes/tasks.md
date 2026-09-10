@@ -65,6 +65,6 @@ Review budget risk: Low against the session's 1400-line budget
 
 ## Phase 6: Full verification
 
-- [x] 6.1 `npm test` — full suite, compare against 559-pass baseline. — 593 pass, 0 fail, 0 skipped.
+- [x] 6.1 `npm test` — full suite, compare against 559-pass baseline. — **595 pass, 0 fail, 0 skipped** (corrected: the figure first recorded here was 593, measured before task 5.2's two D7-identity tests landed; 595 was re-measured independently at HEAD by the orchestrator and again by verify).
 - [x] 6.2 `.venv/bin/python -m unittest discover -s tests` (3.12, not bare `python3`). — 2783 pass, 6 skipped, 0 fail.
 - [x] 6.3 Both must be green before commit. One conventional commit, no AI attribution.

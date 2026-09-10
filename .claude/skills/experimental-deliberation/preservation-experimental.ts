@@ -144,7 +144,7 @@ function normalizeDatasetKey(value: string): string {
 const PLACEHOLDERS = ["tbd", "to be decided", "to be determined", "tba", "n/a", "na", "none", "pending", "todo", "xxx", "?", "-"];
 const NON_TEST_OUTPUTS = ["p value", "pvalue", "significance", "statistical significance", "confidence interval", "effect size"];
 const CONNECTIVES = ["a", "an", "the", "and", "or", "with", "over", "across", "on", "in", "at", "per", "of", "for", "from", "using", "use", "used", "to", "by", "plus", "then", "each"];
-/** Ruling 7: the literal word `seeds` plus a digit is not the only correct way to write this -- "five random initialisations" must not be refused. */
+/** Ruling 7: the literal word `seeds` is not the only correct way to name the count -- `semillas`, `initialisations`, `runs`, `trials` and `folds` all satisfy it. The COUNT itself must be a digit token (`10 random initialisations`, never `ten`): a spelled-number vocabulary would go stale in exactly the way the closed test-name vocabulary was rejected for. */
 const SEEDS_TERMS = new Set(["seed", "seeds", "semilla", "semillas", "initialisation", "initialisations", "initialization", "initializations", "run", "runs"]);
 const REPETITION_TERMS = new Set(["repetition", "repetitions", "repeat", "repeats", "repeated", "replicate", "replicates", "replication", "replications", "run", "runs", "trial", "trials", "fold", "folds"]);
 
