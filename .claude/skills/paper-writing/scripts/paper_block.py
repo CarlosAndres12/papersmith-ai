@@ -7,20 +7,34 @@ a sibling change. All I/O is binary end to end: universal-newlines text mode
 would rewrite every CRLF in the file and break the byte-identity invariant
 silently, which is exactly the failure this module exists to prevent.
 
-Public surface used by this work unit's tests (CLI wiring for `open`,
-`status` and `substitute` is a later, separate work unit):
+Public surface, disk-touching functions first (the ones `paper_cli.py` wires
+directly):
 
-    parse(data)            -> ParsedDocument   (raises MARKER_MALFORMED,
-                                                 BLOCK_UNPAIRED, BLOCK_DUPLICATED,
-                                                 BLOCK_NESTED)
-    project(data)           -> bytes            (independent re-derivation:
-                                                  re-parses from scratch and
-                                                  strips every block region)
-    status(data)            -> dict              (read-only block table)
-    build_candidate(...)    -> (bytes, bytes)     (pure; the in-memory half of
-                                                    the 9-step algorithm)
-    identity_invariant(...) -> None               (raises SUBSTITUTION_NOT_LOCAL)
+    read_status(paper_dir)   -> dict              (resolves main.tex, hands
+                                                     its bytes to status())
+    open_block(paper_dir, block_id, ...) -> dict   (impure; end to end)
     substitute(paper_dir, block_id, ...) -> dict   (impure; end to end)
+
+And the pure engine underneath, reusable without touching disk:
+
+    parse(data)              -> ParsedDocument   (raises TEX_UNDECODABLE,
+                                                    MARKER_MALFORMED,
+                                                    BLOCK_UNPAIRED,
+                                                    BLOCK_DUPLICATED,
+                                                    BLOCK_NESTED)
+    project(data)             -> bytes            (independent re-derivation:
+                                                     re-parses from scratch and
+                                                     strips every block region)
+    status(data)              -> dict              (read-only block table)
+    resolve_main_tex(paper_dir) -> Path            (raises PAPER_ABSENT,
+                                                      PAPER_NOT_A_DIRECTORY)
+    validate_block_id(id)     -> None              (raises BLOCK_ID_MALFORMED)
+    build_candidate(...)      -> (bytes, bytes)     (pure; the in-memory half
+                                                       of substitute's 9-step
+                                                       algorithm)
+    build_open_candidate(...) -> bytes              (pure; the in-memory half
+                                                       of open)
+    identity_invariant(...)   -> None               (raises SUBSTITUTION_NOT_LOCAL)
 """
 from __future__ import annotations
 
@@ -45,6 +59,41 @@ _ID = rb"[A-Za-z0-9._-]+"
 _HEX64 = rb"[0-9a-f]{64}"
 _BEGIN_RE = re.compile(rb"^%% paper-writing block (?P<id>" + _ID + rb") begin sha256=(?P<digest>" + _HEX64 + rb")$")
 _END_RE = re.compile(rb"^%% paper-writing block (?P<id>" + _ID + rb") end$")
+
+#: Text-mode twin of `_ID`, for validating a caller-supplied `--block <id>`
+#: before it is used to look anything up. Shape only, per this module's own
+#: docstring — a sibling change owns meaning.
+_BLOCK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def validate_block_id(block_id: str) -> None:
+    """Refuses `BLOCK_ID_MALFORMED` (invocation-defect) when `block_id` does
+    not match the shape grammar `[A-Za-z0-9._-]+`. The caller can clear this
+    by changing the invocation alone, which is what makes it invocation
+    rather than work-state.
+    """
+    if not _BLOCK_ID_RE.match(block_id):
+        raise Refused(
+            "BLOCK_ID_MALFORMED",
+            f"{block_id!r} does not match the required shape [A-Za-z0-9._-]+",
+        )
+
+
+def _check_decodable(data: bytes) -> None:
+    """Refuses `TEX_UNDECODABLE` (work-state) when `data` cannot be decoded
+    to locate marker lines (design step 2). Binary I/O is used end to end for
+    every read and write (`Binary I/O Only`) — this check never re-encodes
+    `data` or uses the decoded text for anything; it exists only to catch a
+    file whose bytes are not even valid UTF-8, which cannot be reasoned about
+    as LaTeX source carrying ASCII marker lines at all.
+    """
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused(
+            "TEX_UNDECODABLE",
+            f"main.tex bytes cannot be decoded to locate marker lines: {exc}",
+        )
 
 
 @dataclass(frozen=True)
@@ -180,6 +229,7 @@ def pair_markers(markers: list[dict]) -> tuple[dict[str, tuple[dict, dict]], lis
 def parse(data: bytes) -> ParsedDocument:
     """Scan and pair in one call — the shape every other function in this
     module builds on."""
+    _check_decodable(data)
     markers = scan_markers(data)
     pairs, order = pair_markers(markers)
     return ParsedDocument(markers=markers, pairs=pairs, order=order)
@@ -352,6 +402,34 @@ def _pre_image_path(paper_dir: Path) -> Path:
     return paper_dir / ".paper-writing" / "main.tex.prev"
 
 
+def resolve_main_tex(paper_dir: Path) -> Path:
+    """Resolve `<paper_dir>/main.tex` for a block operation — `open`,
+    `status`, `substitute` — none of which ever create `paper/` themselves;
+    only `scaffold` does that.
+
+    Refuses `PAPER_ABSENT` (work-state) when `paper_dir` or `main.tex` under
+    it does not exist, and `PAPER_NOT_A_DIRECTORY` (work-state) when
+    `paper_dir` exists as a non-directory.
+    """
+    if not paper_dir.exists():
+        raise Refused("PAPER_ABSENT", f"{paper_dir} does not exist; run scaffold first")
+    if not paper_dir.is_dir():
+        raise Refused("PAPER_NOT_A_DIRECTORY", f"{paper_dir} exists and is not a directory")
+    tex_path = paper_dir / "main.tex"
+    if not tex_path.is_file():
+        raise Refused("PAPER_ABSENT", f"{tex_path} does not exist; run scaffold first")
+    return tex_path
+
+
+def read_status(paper_dir: Path) -> dict:
+    """The disk-reading wrapper that makes the pure `status()` a CLI verb:
+    resolves `main.tex`, reads it, hands the bytes to `status()`. Never
+    writes — `status()` itself never has, and this adds no write either.
+    """
+    tex_path = resolve_main_tex(paper_dir)
+    return status(tex_path.read_bytes())
+
+
 def substitute(
     paper_dir: Path,
     block_id: str,
@@ -375,7 +453,8 @@ def substitute(
          crash between the two writes leaves the pre-image identical to
          `main.tex`, which is harmless.
     """
-    tex_path = paper_dir / "main.tex"
+    validate_block_id(block_id)
+    tex_path = resolve_main_tex(paper_dir)
     pre = tex_path.read_bytes()
     pre_digest = hashlib.sha256(pre).hexdigest()
 
@@ -397,4 +476,89 @@ def substitute(
         "block": block_id,
         "digest": hashlib.sha256(written_body).hexdigest(),
         "rendering": "unproven",
+    }
+
+
+def build_open_candidate(
+    pre: bytes,
+    parsed: ParsedDocument,
+    block_id: str,
+    *,
+    after: str | None,
+    at_end: bool,
+) -> bytes:
+    """The pure half of `open`: an empty begin/end pair for `block_id`,
+    inserted at the position the caller named. Installs an empty pair only —
+    never content; the first write to a new block is always `open` then
+    `substitute`.
+
+    Refuses `BLOCK_DUPLICATED` (work-state) if `block_id` already has a
+    pair, and `ANCHOR_ABSENT` (invocation-defect) if `after` names an id
+    with no pair. Ordering is the caller's business, never derived here.
+
+    Hard rule: never inserts a blank line it was not asked for. Appending at
+    the end of a file whose last byte is not already a newline adds exactly
+    the one byte needed so the new marker starts its own line — the same
+    discipline `_ensure_trailing_newline` applies to a substituted body —
+    never a blank line, which would be two.
+    """
+    if block_id in parsed.pairs:
+        raise Refused("BLOCK_DUPLICATED", f"id {block_id!r} already has a pair")
+
+    if after is not None:
+        if after not in parsed.pairs:
+            raise Refused("ANCHOR_ABSENT", f"no block named {after!r}")
+        _, anchor_end = parsed.pairs[after]
+        insert_at = anchor_end["end"]
+        gap = b""
+    else:
+        assert at_end
+        insert_at = len(pre)
+        gap = b"\n" if pre and not pre.endswith(b"\n") else b""
+
+    empty_digest = hashlib.sha256(b"").hexdigest()
+    pair = (
+        f"%% paper-writing block {block_id} begin sha256={empty_digest}\n".encode("ascii")
+        + f"%% paper-writing block {block_id} end\n".encode("ascii")
+    )
+    return pre[:insert_at] + gap + pair + pre[insert_at:]
+
+
+def open_block(
+    paper_dir: Path,
+    block_id: str,
+    *,
+    after: str | None = None,
+    at_end: bool = False,
+) -> dict:
+    """The disk-writing half of `open` — the exact same CAS + pre-image +
+    atomic-replace shape as `substitute` (design steps 7–9). The shared
+    `identity_invariant` is reused as-is, not reimplemented: a newly opened
+    block's own bytes sit entirely inside its own (new) region, so
+    `project()` excludes them on both sides of the write either way — an
+    insertion that corrupted a byte outside every region is exactly the
+    violation the shared invariant already catches.
+    """
+    validate_block_id(block_id)
+    tex_path = resolve_main_tex(paper_dir)
+    pre = tex_path.read_bytes()
+    pre_digest = hashlib.sha256(pre).hexdigest()
+
+    parsed = parse(pre)
+    candidate = build_open_candidate(pre, parsed, block_id, after=after, at_end=at_end)
+    identity_invariant(pre, candidate)
+
+    current = tex_path.read_bytes()
+    if hashlib.sha256(current).hexdigest() != pre_digest:
+        raise Refused(
+            "TEX_MOVED",
+            "main.tex changed on disk between this call's read and its write",
+        )
+
+    _atomic_replace(_pre_image_path(paper_dir), pre)
+    _atomic_replace(tex_path, candidate)
+
+    return {
+        "block": block_id,
+        "position": f"after:{after}" if after is not None else "at-end",
     }

@@ -6,10 +6,10 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-This first slice wires only `scaffold`. `open`, `status` and `substitute`
-land once `paper_block.py`'s engine has its own CLI wiring — a later,
-separate work unit; importing it here before then would wire commands this
-slice's own tests do not cover.
+Wires four verbs: `scaffold`, `open`, `status`, `substitute`. Left
+extensible on purpose — a sibling change (`the-contract-is-data-not-code`)
+registers into this same front door afterwards; nothing here assumes it is
+the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_block  # noqa: E402
 import paper_scaffold  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
@@ -30,10 +31,92 @@ from impl_refusals import Refused  # noqa: E402
 #: bare relative name.
 CLI_PATH = Path(__file__).resolve()
 
+#: The two classes every refusal below is sorted into, matching
+#: `implementation_cli.py`'s own vocabulary: can the caller clear this by
+#: changing the invocation alone (`INVOCATION_DEFECT`), or does clearing it
+#: require acting on the repository (`WORK_STATE`)?
+INVOCATION_DEFECT = "invocation-defect"
+WORK_STATE = "work-state"
+
+#: Every refusal code reachable from a command below, classified. Derived
+#: against and held to `reachable_paper_refusal_codes()`
+#: (`tests/test_paper_writing.py`) in both directions: nothing reachable is
+#: unclassified, and nothing classified here is unreachable. Never a code
+#: this file merely documents — every entry is a code some command really
+#: raises, directly or through `paper_block.py` / `paper_scaffold.py`.
+REFUSAL_CLASSIFICATION: dict[str, str] = {
+    # --- scaffold ------------------------------------------------------
+    "PAPER_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
+    "PAPER_NOT_A_DIRECTORY": WORK_STATE,
+    "SCAFFOLD_ENTRY_WRONG_TYPE": WORK_STATE,
+    # --- shared block resolution (open, status, substitute) ------------
+    "PAPER_ABSENT": WORK_STATE,
+    "TEX_UNDECODABLE": WORK_STATE,
+    "BLOCK_ID_MALFORMED": INVOCATION_DEFECT,
+    # --- marker grammar --------------------------------------------------
+    "MARKER_MALFORMED": WORK_STATE,
+    "BLOCK_DUPLICATED": WORK_STATE,
+    "BLOCK_UNPAIRED": WORK_STATE,
+    "BLOCK_NESTED": WORK_STATE,
+    # --- open ------------------------------------------------------------
+    "ANCHOR_ABSENT": INVOCATION_DEFECT,
+    "OPEN_POSITION_REQUIRED": INVOCATION_DEFECT,
+    "OPEN_POSITION_CONFLICT": INVOCATION_DEFECT,
+    # --- substitute --------------------------------------------------------
+    "BLOCK_ABSENT": WORK_STATE,
+    "BLOCK_HAND_EDITED": WORK_STATE,
+    "CONTENT_CARRIES_MARKER": INVOCATION_DEFECT,
+    "NOTHING_TO_ADOPT": INVOCATION_DEFECT,
+    "SUBSTITUTE_MODE_REQUIRED": INVOCATION_DEFECT,
+    "ADOPT_BODY_CONFLICT": INVOCATION_DEFECT,
+    "SUBSTITUTION_NOT_LOCAL": WORK_STATE,
+    "TEX_MOVED": WORK_STATE,
+}
+
 
 def cmd_scaffold(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     return paper_scaffold.scaffold(paper_dir)
+
+
+def cmd_status(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_block.read_status(paper_dir)
+
+
+def cmd_open(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    positions_given = [flag for flag in ("after", "at_end") if getattr(args, flag, None)]
+    if not positions_given:
+        raise Refused(
+            "OPEN_POSITION_REQUIRED",
+            "--after <id> or --at-end is required.",
+        )
+    if len(positions_given) > 1:
+        raise Refused(
+            "OPEN_POSITION_CONFLICT",
+            "--after and --at-end were given together; exactly one position is required.",
+        )
+    return paper_block.open_block(paper_dir, args.block, after=args.after, at_end=bool(args.at_end))
+
+
+def cmd_substitute(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    modes_given = [flag for flag in ("body", "adopt") if getattr(args, flag, None)]
+    if not modes_given:
+        raise Refused(
+            "SUBSTITUTE_MODE_REQUIRED",
+            "--body <path|-> or --adopt is required.",
+        )
+    if len(modes_given) > 1:
+        raise Refused(
+            "ADOPT_BODY_CONFLICT",
+            "--body and --adopt were given together; --adopt takes no body.",
+        )
+    if args.adopt:
+        return paper_block.substitute(paper_dir, args.block, adopt=True)
+    raw = sys.stdin.buffer.read() if args.body == "-" else Path(args.body).read_bytes()
+    return paper_block.substitute(paper_dir, args.block, new_body=raw)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,10 +129,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="override paper/ location; must resolve inside the repository root",
     )
 
+    p_status = sub.add_parser("status", help="report the block table, read-only")
+    p_status.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+
+    p_open = sub.add_parser("open", help="insert an empty block pair, never content")
+    p_open.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_open.add_argument("--block", required=True, help="block id to open")
+    p_open.add_argument("--after", default=None, help="insert immediately after this block's end marker")
+    p_open.add_argument("--at-end", action="store_true", help="insert at the end of the document")
+
+    p_substitute = sub.add_parser("substitute", help="replace one block's body, or adopt a hand edit")
+    p_substitute.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_substitute.add_argument("--block", required=True, help="block id to substitute")
+    p_substitute.add_argument("--body", default=None, help="path to the new body, or - for stdin")
+    p_substitute.add_argument(
+        "--adopt", action="store_true",
+        help="accept the on-disk body as the new baseline; rewrites the digest, never the body",
+    )
+
     return parser
 
 
-_COMMANDS = {"scaffold": cmd_scaffold}
+COMMANDS = ("scaffold", "status", "open", "substitute")
+_COMMANDS = {
+    "scaffold": cmd_scaffold,
+    "status": cmd_status,
+    "open": cmd_open,
+    "substitute": cmd_substitute,
+}
 
 
 def main(argv: list[str] | None = None) -> int:

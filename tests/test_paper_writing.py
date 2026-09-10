@@ -9,15 +9,18 @@ one CLI subprocess test, which scaffolds under the already-gitignored
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import unittest.mock
+import uuid
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parents[1]
@@ -25,11 +28,13 @@ SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_scaffold  # noqa: E402
 import paper_block  # noqa: E402
+import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
 CLI = SKILL_SCRIPTS / "paper_cli.py"
+CORE_IMPLEMENTATION = FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"
 
 
 def _marker_pair(block_id: str, body: bytes) -> bytes:
@@ -487,6 +492,580 @@ class CRLFTests(unittest.TestCase):
         self.assertNotEqual(text_mode_bytes, post)
         self.assertIn(b"\r\n", post)
         self.assertNotIn(b"\r\n", text_mode_bytes)
+
+
+class TexUndecodableTests(unittest.TestCase):
+    """block-substitution spec: a `main.tex` that cannot even be decoded to
+    locate marker lines refuses rather than being reasoned about as source."""
+
+    def test_undecodable_bytes_refuse_tex_undecodable(self) -> None:
+        data = b"\xff\xfe not valid utf-8 \x80\x81"
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.parse(data)
+
+        self.assertEqual(ctx.exception.code, "TEX_UNDECODABLE")
+
+
+class BlockIdShapeTests(unittest.TestCase):
+    """design step 1: `--block <id>` shape, checked before it is ever used
+    to look anything up."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+
+    def test_malformed_block_id_refuses_on_substitute(self) -> None:
+        _write_fixture(self.paper_dir, _marker_pair("a", b"body\n"))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(self.paper_dir, "not a valid id!", new_body=b"x\n")
+
+        self.assertEqual(ctx.exception.code, "BLOCK_ID_MALFORMED")
+
+    def test_malformed_block_id_refuses_on_open(self) -> None:
+        _write_fixture(self.paper_dir, b"")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.open_block(self.paper_dir, "bad id", at_end=True)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_ID_MALFORMED")
+
+
+class ResolveMainTexTests(unittest.TestCase):
+    """`open`, `status`, `substitute` never create `paper/` themselves —
+    only `scaffold` does — so each refuses cleanly when it is missing."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+
+    def test_substitute_on_absent_paper_dir_refuses_paper_absent(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(self.paper_dir, "a", new_body=b"x\n")
+
+        self.assertEqual(ctx.exception.code, "PAPER_ABSENT")
+
+    def test_substitute_when_paper_is_a_file_refuses_paper_not_a_directory(self) -> None:
+        self.paper_dir.parent.mkdir(parents=True, exist_ok=True)
+        self.paper_dir.write_bytes(b"not a directory")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(self.paper_dir, "a", new_body=b"x\n")
+
+        self.assertEqual(ctx.exception.code, "PAPER_NOT_A_DIRECTORY")
+
+    def test_status_on_missing_main_tex_refuses_paper_absent(self) -> None:
+        self.paper_dir.mkdir(parents=True)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.read_status(self.paper_dir)
+
+        self.assertEqual(ctx.exception.code, "PAPER_ABSENT")
+
+
+class OpenBlockTests(unittest.TestCase):
+    """block-substitution spec: `open` installs an empty pair, never
+    content."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+
+    def _fixture(self) -> bytes:
+        return (
+            b"\\documentclass{article}\n\\begin{document}\n\n"
+            + _marker_pair("a", b"Body A.\n")
+            + b"\n\\end{document}\n"
+        )
+
+    def test_open_after_anchor_inserts_empty_pair_and_leaves_prefix_unchanged(self) -> None:
+        fixture = self._fixture()
+        _write_fixture(self.paper_dir, fixture)
+        anchor_end = fixture.index(b"%% paper-writing block a end") + len(
+            b"%% paper-writing block a end\n"
+        )
+
+        paper_block.open_block(self.paper_dir, "b", after="a")
+
+        post = (self.paper_dir / "main.tex").read_bytes()
+        self.assertEqual(post[:anchor_end], fixture[:anchor_end])
+        empty_digest = hashlib.sha256(b"").hexdigest()
+        self.assertIn(
+            f"%% paper-writing block b begin sha256={empty_digest}\n"
+            "%% paper-writing block b end\n".encode("ascii"),
+            post,
+        )
+        parsed = paper_block.parse(post)
+        self.assertEqual(set(parsed.order), {"a", "b"})
+
+    def test_open_on_existing_id_refuses_block_duplicated(self) -> None:
+        fixture = self._fixture()
+        _write_fixture(self.paper_dir, fixture)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.open_block(self.paper_dir, "a", at_end=True)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_DUPLICATED")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), fixture)
+
+    def test_open_after_missing_anchor_refuses_anchor_absent(self) -> None:
+        fixture = self._fixture()
+        _write_fixture(self.paper_dir, fixture)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.open_block(self.paper_dir, "b", after="missing")
+
+        self.assertEqual(ctx.exception.code, "ANCHOR_ABSENT")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), fixture)
+
+    def test_open_at_end_never_inserts_a_blank_line(self) -> None:
+        fixture = (b"Preamble line.\n" + _marker_pair("a", b"Body.\n")).rstrip(b"\n")
+        _write_fixture(self.paper_dir, fixture)
+
+        paper_block.open_block(self.paper_dir, "b", at_end=True)
+
+        post = (self.paper_dir / "main.tex").read_bytes()
+        added = post[len(fixture):]
+        # Exactly one newline completes the unterminated last line — never a
+        # blank line, which would be two in a row.
+        self.assertTrue(added.startswith(b"\n%% paper-writing block b begin"))
+        self.assertFalse(added.startswith(b"\n\n"))
+
+
+class CLIWiringTests(unittest.TestCase):
+    """CLI wiring for `open`, `status`, `substitute` — exercised as real
+    subprocesses against `paper_cli.py`. `paper_cli.py` always resolves
+    `--paper` against the REAL repository root (there is no injection point
+    through the CLI, unlike `paper_scaffold.resolve_paper_dir`'s own
+    `forge_root` kwarg), so — like
+    `ScaffoldTests.test_cli_scaffold_verb_runs_and_emits_json` — every
+    fixture here lives under the already-gitignored `implementations/` tree
+    and is removed afterward, never under a system temp directory outside
+    the repository, which `PAPER_OUTSIDE_REPOSITORY` would correctly refuse."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        test_root = FORGE_ROOT / "implementations" / f".paper-writing-cli-wiring-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        self.paper_dir = test_root / "paper"
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CLI), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def _scaffold(self) -> None:
+        proc = self._run("scaffold", "--paper", str(self.paper_dir))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_status_reports_the_block_table_without_writing(self) -> None:
+        self._scaffold()
+        (self.paper_dir / "main.tex").write_bytes(_marker_pair("intro", b"Intro body.\n"))
+        before = (self.paper_dir / "main.tex").read_bytes()
+
+        proc = self._run("status", "--paper", str(self.paper_dir))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        ids = {b["id"] for b in payload["blocks"]}
+        self.assertEqual(ids, {"intro"})
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), before)
+
+    def test_open_then_substitute_round_trip(self) -> None:
+        self._scaffold()
+
+        proc = self._run("open", "--paper", str(self.paper_dir), "--block", "intro", "--at-end")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        body_path = Path(self._tmp.name) / "body.txt"
+        body_path.write_bytes(b"New introduction.\n")
+        proc = self._run(
+            "substitute", "--paper", str(self.paper_dir),
+            "--block", "intro", "--body", str(body_path),
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["rendering"], "unproven")
+        final = (self.paper_dir / "main.tex").read_bytes()
+        self.assertIn(b"New introduction.\n", final)
+
+    def test_substitute_body_from_stdin_dash(self) -> None:
+        self._scaffold()
+        self._run("open", "--paper", str(self.paper_dir), "--block", "intro", "--at-end")
+
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "substitute", "--paper", str(self.paper_dir),
+             "--block", "intro", "--body", "-"],
+            input="From stdin.\n", capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        final = (self.paper_dir / "main.tex").read_bytes()
+        self.assertIn(b"From stdin.\n", final)
+
+    def test_substitute_with_neither_body_nor_adopt_refuses_substitute_mode_required(self) -> None:
+        self._scaffold()
+        self._run("open", "--paper", str(self.paper_dir), "--block", "intro", "--at-end")
+
+        proc = self._run("substitute", "--paper", str(self.paper_dir), "--block", "intro")
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "SUBSTITUTE_MODE_REQUIRED")
+
+    def test_substitute_with_body_and_adopt_together_refuses_adopt_body_conflict(self) -> None:
+        self._scaffold()
+        self._run("open", "--paper", str(self.paper_dir), "--block", "intro", "--at-end")
+        body_path = Path(self._tmp.name) / "body.txt"
+        body_path.write_bytes(b"x\n")
+
+        proc = self._run(
+            "substitute", "--paper", str(self.paper_dir), "--block", "intro",
+            "--body", str(body_path), "--adopt",
+        )
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "ADOPT_BODY_CONFLICT")
+
+    def test_open_with_neither_position_refuses_open_position_required(self) -> None:
+        self._scaffold()
+
+        proc = self._run("open", "--paper", str(self.paper_dir), "--block", "intro")
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "OPEN_POSITION_REQUIRED")
+
+    def test_open_with_both_positions_refuses_open_position_conflict(self) -> None:
+        self._scaffold()
+
+        proc = self._run(
+            "open", "--paper", str(self.paper_dir), "--block", "intro",
+            "--after", "nope", "--at-end",
+        )
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "OPEN_POSITION_CONFLICT")
+
+
+PAPER_BLOCK_SOURCE = (SKILL_SCRIPTS / "paper_block.py").read_text(encoding="utf-8")
+
+
+def _run_against_mutant(anchor: str, replacement: str, dotted_test: str) -> subprocess.CompletedProcess:
+    """Copy `paper_block.py` into a fresh, uniquely named temp tree at the
+    SAME relative depth the real script lives at (so the module's own
+    `parents[2]` resolution still finds `_core/implementation`), patch its
+    source with exactly one substitution, and run `dotted_test` against the
+    mutant by pre-seeding `sys.modules["paper_block"]` in a bootstrap script
+    — so the mutant is used regardless of any `sys.path` manipulation
+    `tests/test_paper_writing.py` performs on its own (it inserts the REAL
+    scripts directory at position 0 on import, which would otherwise win a
+    plain `sys.path` race and silently run every mutation against the
+    original file).
+
+    Asserts the anchor matched EXACTLY once and the bytes actually changed
+    before running anything: a matched-but-unapplied substitution, or one
+    applied to more than one site, is not the mutation this call claims to
+    run — and `git diff --stat` cannot catch it either, since the mutant
+    lives in a temp directory this repository never tracks.
+    """
+    occurrences = PAPER_BLOCK_SOURCE.count(anchor)
+    if occurrences != 1:
+        raise AssertionError(
+            f"anchor {anchor!r} matched {occurrences} times in paper_block.py; "
+            "expected exactly 1 for the mutation to be well-defined")
+    mutated = PAPER_BLOCK_SOURCE.replace(anchor, replacement, 1)
+    if mutated == PAPER_BLOCK_SOURCE:
+        raise AssertionError("the substitution produced no byte change")
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="paper-writing-mutant-"))
+    module_name = f"paper_block_mutant_{uuid.uuid4().hex}"
+    try:
+        core_dst = tmp_root / "_core" / "implementation"
+        core_dst.mkdir(parents=True)
+        shutil.copy2(CORE_IMPLEMENTATION / "impl_refusals.py", core_dst / "impl_refusals.py")
+
+        scripts_dst = tmp_root / "paper-writing" / "scripts"
+        scripts_dst.mkdir(parents=True)
+        mutant_path = scripts_dst / f"{module_name}.py"
+        mutant_path.write_text(mutated, encoding="utf-8")
+
+        # A directory created this call, never reused across mutations: no
+        # __pycache__ can be stale here. PYTHONDONTWRITEBYTECODE below also
+        # stops one from being written during this very run.
+        bootstrap = tmp_root / "bootstrap.py"
+        bootstrap.write_text(
+            "import importlib.util\n"
+            "import sys\n"
+            "import unittest\n"
+            "\n"
+            f"spec = importlib.util.spec_from_file_location({module_name!r}, {str(mutant_path)!r})\n"
+            "mutant = importlib.util.module_from_spec(spec)\n"
+            # Registered under its OWN name too, not only under 'paper_block':
+            # @dataclass's field-type resolution reads `sys.modules[cls.__module__]`
+            # (== the unique spec name) during `exec_module` itself, and a module
+            # missing from sys.modules under its own name makes exec_module crash
+            # before a single line of the mutation is ever exercised -- a failure
+            # mode indistinguishable from a genuine test failure by exit code
+            # alone, which is exactly why this is asserted separately below.
+            f"sys.modules[{module_name!r}] = mutant\n"
+            "sys.modules['paper_block'] = mutant\n"
+            "spec.loader.exec_module(mutant)\n"
+            # A marker unittest's own runner never prints, so the caller can
+            # tell 'the mutant module failed to even import' (a harness
+            # defect) apart from 'unittest ran the named test and it failed'
+            # (the actual proof this whole harness exists to produce) --
+            # both exit non-zero, and only one of them says anything about
+            # the mutation.
+            "print('MUTANT_IMPORTED_OK')\n"
+            "\n"
+            f"program = unittest.main(module=None, argv=['prog', {dotted_test!r}], exit=False)\n"
+            "sys.exit(0 if program.result.wasSuccessful() else 1)\n",
+            encoding="utf-8",
+        )
+
+        env = dict(os.environ)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        existing_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = str(FORGE_ROOT) + (os.pathsep + existing_path if existing_path else "")
+
+        return subprocess.run(
+            [sys.executable, str(bootstrap)],
+            cwd=str(FORGE_ROOT), capture_output=True, text=True, timeout=60, env=env,
+        )
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
+
+class MutationProofTests(unittest.TestCase):
+    """Independent byte-identity verification, executed rather than
+    asserted in prose. Each mutation below runs against a real subprocess
+    and the corresponding guard test's own exit code is read, not guessed
+    at.
+
+    Every assertion below is two-part on purpose. `MUTANT_IMPORTED_OK` in
+    stdout proves the mutant module actually loaded and `unittest` actually
+    ran the named test against it; without that check, a subprocess that
+    crashed on import (before the named test ever ran) and a subprocess
+    where the guard genuinely failed are the same non-zero exit code, and
+    this harness would be proving nothing about the mutation at all — the
+    exact failure mode measured once already (`@dataclass` field-type
+    resolution needs the mutant registered in `sys.modules` under its own
+    `__name__`, not only under `'paper_block'`).
+    """
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_m1_region_start_one_byte_earlier_fails_the_byte_identity_test(self) -> None:
+        # Mutates the WRITE path (`build_candidate`'s own slicing), not the
+        # independent verification (`project()`, left untouched). A shift
+        # applied symmetrically inside `project()` alone is invisible by
+        # construction -- both sides of the comparison would be blind to the
+        # exact same swallowed byte, and this was measured, not assumed: an
+        # earlier version of this test mutated `project()`'s region list
+        # instead and passed green with no guard ever firing. Shifting the
+        # boundary actually used to slice `pre` when building the candidate
+        # drops one real byte from what reaches disk, which the UNMUTATED,
+        # independently re-parsing `project()` then genuinely disagrees
+        # about.
+        proc = _run_against_mutant(
+            'candidate = pre[:begin["start"]] + new_begin_line + written_body + pre[end["start"]:]',
+            'candidate = pre[:begin["start"] - 1] + new_begin_line + written_body + pre[end["start"]:]',
+            "tests.test_paper_writing.InvariantTests.test_only_the_named_block_changes_three_conjuncts",
+        )
+
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_m2_text_mode_open_against_crlf_fixture_fails_the_byte_identity_test(self) -> None:
+        # `newline=None` universal-newlines mode, opened via the builtin
+        # `open()` -- matching the CRLFTests fixture's own control assertion
+        # exactly, so this exercises the real CRLF-flattening semantics the
+        # spec's M2 names, not an unrelated crash from a keyword argument
+        # `Path.read_text()` does not accept on this interpreter.
+        #
+        # For THIS fixture specifically, the guard that actually fires first
+        # is `BLOCK_HAND_EDITED`, not `SUBSTITUTION_NOT_LOCAL`: the target
+        # block's own body also carries CRLF, so flattening corrupts its
+        # on-disk digest before the in-memory byte-identity check ever runs.
+        # A fixture whose block body carried no CRLF would instead reach
+        # `identity_invariant` and fail there -- both are real guards inside
+        # the same safety net (design.md, "Guards that protect but are not
+        # net layers"), and either one refusing is the property this test
+        # proves: text-mode corruption never reaches disk.
+        proc = _run_against_mutant(
+            'pre = tex_path.read_bytes()\n    pre_digest = hashlib.sha256(pre).hexdigest()\n\n'
+            '    parsed = parse(pre)\n    candidate, written_body = build_candidate(',
+            'with open(tex_path, "r", newline=None) as _h:\n'
+            '        pre = _h.read().encode("utf-8")\n'
+            '    pre_digest = hashlib.sha256(pre).hexdigest()\n\n'
+            '    parsed = parse(pre)\n    candidate, written_body = build_candidate(',
+            "tests.test_paper_writing.CRLFTests"
+            ".test_crlf_block_round_trips_untouched_and_text_mode_would_corrupt_it",
+        )
+
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_m3_skipped_digest_comparison_fails_the_hand_edit_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if on_disk_digest != begin["digest"]:',
+            "if False:",
+            "tests.test_paper_writing.BlockCoreTests.test_hand_edited_body_refuses_naming_both_digests",
+        )
+
+        self._assert_guard_failed_under_mutation(proc)
+
+
+REFUSAL_CONSTRUCTORS = ("Refused",)
+REFUSAL_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
+
+
+def _refusal_code_argument(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _refusal_sites(node, owner: str) -> list[tuple[str, str | None]]:
+    """Every refusal constructed anywhere under `node`, as `(owner, code)` —
+    the same shape `test_proposal_implementation.py` uses for its own
+    roster, scoped here to this skill's three files."""
+    sites: list[tuple[str, str | None]] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            sites += _refusal_sites(child, child.name)
+            continue
+        if (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                and child.func.id in REFUSAL_CONSTRUCTORS):
+            sites.append(
+                (owner, _refusal_code_argument(child.args[0]) if child.args else None))
+        sites += _refusal_sites(child, owner)
+    return sites
+
+
+def _module_code_constants(tree) -> set[str]:
+    constants = set()
+    for statement in tree.body:
+        if not isinstance(statement, (ast.Assign, ast.AnnAssign)) or statement.value is None:
+            continue
+        for node in ast.walk(statement.value):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and REFUSAL_CODE_RE.match(node.value)):
+                constants.add(node.value)
+    return constants
+
+
+def _codes_from_sites(sites, constants: set[str]) -> set[str]:
+    codes = {code for _, code in sites if code is not None}
+    if any(code is None for _, code in sites):
+        codes |= constants
+    return codes
+
+
+def unreadable_paper_refusal_sites() -> set[tuple[str, str]]:
+    sites = set()
+    for source in (CLI, SKILL_SCRIPTS / "paper_block.py", SKILL_SCRIPTS / "paper_scaffold.py"):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        sites |= {(source.name, owner)
+                  for owner, code in _refusal_sites(tree, "<module>")
+                  if code is None}
+    return sites
+
+
+def reachable_paper_refusal_codes() -> set[str]:
+    """Every refusal code a `paper_cli.py` command can raise, derived from
+    source — never hand-listed. The same shape as
+    `test_proposal_implementation.reachable_refusal_codes`: a closure from
+    `paper_cli.py`'s `cmd_*` roots (following calls into helpers defined in
+    `paper_cli.py` itself), UNIONED with a whole-module scan of
+    `paper_block.py` and `paper_scaffold.py` — this skill's own helper
+    modules, playing the role `_core/implementation/*.py` plays for the
+    sibling skill. `impl_refusals.py` contributes nothing: it raises no
+    `Refused` of its own (design.md's `Own modules; import only Refused`
+    decision) — the whole point of that choice being that this skill's
+    roster and the sibling skill's roster never share an entry neither owns.
+    """
+    tree = ast.parse(CLI.read_text(encoding="utf-8"))
+    definitions = {node.name: node for node in tree.body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    roots = [f"cmd_{command}" for command in paper_cli.COMMANDS]
+    for root in roots:
+        if root not in definitions:
+            raise AssertionError(f"paper_cli.py defines no {root}")
+    constants = _module_code_constants(tree)
+    codes: set[str] = set()
+    seen: set[str] = set()
+    frontier = list(roots)
+    while frontier:
+        name = frontier.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        definition = definitions[name]
+        codes |= _codes_from_sites(_refusal_sites(definition, name), constants)
+        frontier += [node.id for node in ast.walk(definition)
+                     if isinstance(node, ast.Name)
+                     and isinstance(node.ctx, ast.Load)
+                     and node.id in definitions]
+    for source in (SKILL_SCRIPTS / "paper_block.py", SKILL_SCRIPTS / "paper_scaffold.py"):
+        module = ast.parse(source.read_text(encoding="utf-8"))
+        codes |= _codes_from_sites(_refusal_sites(module, "<module>"),
+                                    _module_code_constants(module))
+    return codes
+
+
+class RefusalRosterTests(unittest.TestCase):
+    """Every refusal reachable from a `paper_cli.py` command is classified,
+    and nothing is classified that no command can reach — the lock
+    `GatingRefusalRosterTests` holds `implementation_cli.py` to, derived
+    rather than hand-listed so a new `Refused` anywhere in this skill's
+    three files goes red here until somebody classifies it."""
+
+    def test_every_reachable_refusal_is_classified(self) -> None:
+        missing = sorted(reachable_paper_refusal_codes() - set(paper_cli.REFUSAL_CLASSIFICATION))
+        self.assertEqual(
+            missing, [],
+            "these codes are reachable and the roster classifies none of them; a "
+            "refusal nobody decided about is the defect this roster exists to make "
+            "impossible")
+
+    def test_the_roster_classifies_nothing_unreachable(self) -> None:
+        extra = sorted(set(paper_cli.REFUSAL_CLASSIFICATION) - reachable_paper_refusal_codes())
+        self.assertEqual(
+            extra, [],
+            "the roster classifies these and no command can reach them")
+
+    def test_every_classification_is_invocation_defect_or_work_state(self) -> None:
+        allowed = {paper_cli.INVOCATION_DEFECT, paper_cli.WORK_STATE}
+        bad = {code: cls for code, cls in paper_cli.REFUSAL_CLASSIFICATION.items()
+               if cls not in allowed}
+        self.assertEqual(bad, {})
+
+    def test_the_derivation_has_no_unreadable_sites(self) -> None:
+        """No refusal in this skill's three files raises a code this walk
+        cannot read as a string literal — asserted rather than assumed, so a
+        future dynamic code site is looked at by a human instead of silently
+        widening to a module's constants."""
+        self.assertEqual(unreadable_paper_refusal_sites(), set())
+
+    def test_the_derivation_finds_the_measured_count(self) -> None:
+        """Sanity check on the derivation itself: a change that adds,
+        removes or renames a refusal anywhere reachable should move this
+        number, never a typo in the walk above."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 21)
 
 
 if __name__ == "__main__":
