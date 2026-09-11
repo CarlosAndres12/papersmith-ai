@@ -28,8 +28,7 @@ identity refactor: the rendered value is unchanged for every caller.
 ## Commit shas
 
 - Before F5 (digests captured, F5 not yet applied): `14d97e9aa0ea9f1169286f55dfabe2d8425bfb00`
-- After F5: filled in after this commit lands (see `git log -1` in the apply
-  progress record and the orchestrator return).
+- After F5: `5c72ba5` (`fix(proposal-implementation): F5 -- PRODUCT_DATA read from the tuple, not spelled twice`)
 
 ## Instrument 1 — identity at the constant
 
