@@ -10,6 +10,7 @@ fails loudly instead of passing slowly, and the mutation tests reuse
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import sys
 import tempfile
@@ -558,6 +559,58 @@ class ResolverMutationProofTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+class LiteratureSearchAbsenceTests(unittest.TestCase):
+    """`literature-search`, three scenarios ("Discovery issues an open
+    search", "Discovery candidate reaches resolution", "Consensus cannot
+    supply a verdict") describe behaviour that is deliberately ABSENT from
+    this CLI -- discovery runs entirely through the agent's own MCP servers,
+    and there is no Consensus connector anywhere in this codebase
+    (`design.md`, Decision 3; `paper_resolve.py` module docstring). Static
+    inspection confirmed this in `verify-report.md`, but a comment cannot
+    fail when the absence stops being true -- these tests can. Each
+    assertion is derived from the running module or from every file the
+    skill actually ships, not from a hand-maintained list, so a future
+    change that wires discovery search, a Consensus connector, or a
+    free-text query builder into this CLI trips one of these by name."""
+
+    def test_no_skill_script_references_an_mcp_config(self) -> None:
+        # "Discovery issues an open search" / "Discovery candidate reaches
+        # resolution": discovery search runs through the agent's MCP, never
+        # through this CLI. Scans every .py file this skill ships (derived
+        # via glob, not a hand-picked file list) for a reference to the MCP
+        # config this CLI is documented to never read.
+        offenders = []
+        for path in sorted(SKILL_SCRIPTS.glob("*.py")):
+            lowered = path.read_text(encoding="utf-8").lower()
+            if ".mcp.json" in lowered or "mcpservers" in lowered:
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f"MCP config referenced in: {offenders}")
+
+    def test_no_free_text_query_construction_function_exists(self) -> None:
+        # "Discovery issues an open search": a free-text query builder would
+        # be the mechanism a discovery search needs; none exists here.
+        # `resolve_identifier` is identifier-based only. Derived from the
+        # module's own public surface via `inspect`, not a hardcoded name.
+        offenders = []
+        for name, func in inspect.getmembers(paper_resolve, inspect.isfunction):
+            if func.__module__ != paper_resolve.__name__:
+                continue  # imported from elsewhere (paper_scaffold, Refused)
+            params = list(inspect.signature(func).parameters)
+            name_is_suspect = "query" in name.lower() or "search" in name.lower()
+            param_is_suspect = any("query" in p.lower() for p in params)
+            if name_is_suspect or param_is_suspect:
+                offenders.append(name)
+        self.assertEqual(offenders, [], f"query-construction function(s): {offenders}")
+
+    def test_consensus_is_not_a_resolver(self) -> None:
+        # "Consensus cannot supply a verdict": no Consensus connector exists
+        # anywhere in this codebase. Checked directly against the running
+        # module's own closed resolver surface, not a string search.
+        self.assertNotIn("consensus", paper_resolve.RESOLVERS)
+        self.assertNotIn("consensus", paper_resolve.ROLES)
+        self.assertNotIn("consensus", paper_resolve._ENDPOINT_BUILDERS)
 
 
 def _cite_record(cite_key: str, *, resolver: str = "", metadata_digest: str = "") -> dict:

@@ -73,3 +73,32 @@ Chain strategy: stacked-to-main
 
 - [x] 5.1 Update `SKILL.md`'s refusal-roster paragraph and verb table for `bib build` / `validate`.
 - [x] 5.2 Run `_shared/tools/check_citations.py` against this tasks artifact (deferred from drafting per design.md's own note: "this executor has no shell tool"; run here during `sdd-apply`). One flagged citation: `SKILL.md` read as an attempted `class:` symbol lookup and reported "no such class defined" — a false positive (`SKILL.md` is a backticked filename, not a class), not a broken citation. No other citation in `tasks.md` failed to resolve.
+
+## Phase 6: Corrective batch — verify-report.md's 3 CRITICAL findings
+
+`sdd-verify` (id 1661) found 32/35 scenarios compliant, 0 functional defects, but
+FAILed on the strict rule that a spec scenario needs a *named, executing* test,
+not static inspection. All three gaps are in `literature-search`, all describe
+behaviour deliberately absent from this CLI.
+
+- [x] 6.1 Test: no source file in the skill's `scripts/` references an MCP
+  config — scans every `.py` file under `SKILL_SCRIPTS` (via glob, not a
+  hand-picked list) for `.mcp.json`/`mcpServers`, closing "Discovery issues an
+  open search" / "Discovery candidate reaches resolution".
+- [x] 6.2 Test: `paper_resolve.py` defines no free-text query-construction
+  function — derived via `inspect` over the module's own public surface
+  (name or parameter containing "query"/"search"), closing the same two
+  scenarios' mechanism gap.
+- [x] 6.3 Test: `"consensus"` is not among `paper_resolve.RESOLVERS`,
+  `paper_resolve.ROLES`, or `paper_resolve._ENDPOINT_BUILDERS` — closing
+  "Consensus cannot supply a verdict".
+- [x] 6.4 Mutation-proved all three: added `"consensus"` to `RESOLVERS`
+  (6.3 fails), added a `build_search_query(query)` function (6.2 fails),
+  appended an `.mcp.json`-referencing string to `paper_resolve.py` (6.1
+  fails) — each mutant reverted, zero production diff. `LiteratureSearchAbsenceTests`
+  in `tests/test_paper_evidence.py`, commit `bc592f7`.
+
+No production code touched (WARNING and 2 SUGGESTIONS from verify-report.md
+stay open, out of this batch's scope). Full mandated test command re-run
+green: `npm test` 559/559, `.venv/bin/python -m unittest discover -s tests -p
+'test_*.py'` 3160 tests OK (6 skipped), `npm run typecheck` clean.
