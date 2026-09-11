@@ -14631,6 +14631,31 @@ def _require_no_open_defect(target: Path, name: str) -> None:
             "detail.")
 
 
+def _extra_document_fidelity_status(
+        revision: str | None, index: int, stale: list, missing_provenance: list,
+        untested: list, unreached: list, benchmark_undeclared: bool) -> str:
+    """One document BEYOND document 0's own `fidelity_status` (Cut 3,
+    `a-revision-is-two-documents`, C8, D7) -- the SAME four shared,
+    document-count-invariant conditions `cmd_verify`'s own fold for
+    document 0 already checks (Phase 12's own measured finding: none of
+    `stale`/`missing_provenance`/`untested`/`unreached` names a
+    per-document fact -- they are all about the shared source tree),
+    plus the one thing that genuinely differs per document: whether THIS
+    document's own revision text even resolves. Never applied to document
+    0, whose own fold is `cmd_verify`'s inline block, unedited -- this
+    function would answer differently for a `revision` that names a file
+    absent only from `index`'s own directory, which document 0's fold was
+    never asked to check.
+    """
+    if not revision or revision_source(revision, index) is None:
+        return "unknown"
+    if stale or missing_provenance or untested or unreached:
+        return "drift"
+    if benchmark_undeclared:
+        return "undeclared"
+    return "ok"
+
+
 def cmd_verify(args: argparse.Namespace) -> dict:
     target = resolve_target(args.target)
     name = validate_name(args.name)
@@ -15061,6 +15086,17 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "missingProvenance": missing_provenance,
             "invariantsWithoutTest": untested,
             "modules": modules,
+            # Cut 3 (C8, D7): additive, absent under one document.
+            # `fidelity.status` keeps reporting document 0 -- no existing
+            # key is renamed, re-nested, or made conditional.
+            **({"fidelityByDocument": [
+                    {"label": DOCUMENTS[0]["label"], "status": fidelity_status},
+                    *({"label": DOCUMENTS[index]["label"],
+                       "status": _extra_document_fidelity_status(
+                           revision, index, stale, missing_provenance, untested,
+                           unreached, resolved["status"] == "undeclared")}
+                      for index in range(1, len(DOCUMENTS))),
+                ]} if len(DOCUMENTS) > 1 else {}),
         },
         "lfs": lfs_state(target),
         # Whether the document a human reads obeys the rules the numbers already do.
