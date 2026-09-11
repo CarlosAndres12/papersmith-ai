@@ -56,6 +56,8 @@ import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-g
 import paper_latex  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the sole subprocess seam (latexmk), invocation, log parse, verdict; for the roster derivation
 import paper_figure  # noqa: E402 -- a-diagram-that-compiles-or-says-why: source/manifest layout, stop A, the compile pipeline, the repair-budget ledger; `render`/`place` verbs
 import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: components/separation/caption/mandatory checks over the contract's `figure:` declaration; imported ahead of any verb calling it directly (the same shape `paper_region.py`/`paper_guidance.py` already established) so its refusals are reachable the moment the import lands
+import paper_coupling_evidence  # noqa: E402,F401 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module); imported ahead of `verify`'s own wiring, the same shape `paper_region.py`/`paper_obligation.py` already established
+import paper_verify  # noqa: E402,F401 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`); imported ahead of `verify`'s own wiring too
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -235,6 +237,14 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "MANDATORY_DIAGRAM_ABSENT": WORK_STATE,
     "LATEX_LOG_ABSENT": WORK_STATE,
     "LATEX_OUTCOME_UNEXPLAINED": WORK_STATE,
+    # --- the-couplings-hold-or-they-do-not: verify's own declaration
+    # record (`paper_coupling_evidence.py`; imported ahead of `verify`'s
+    # own wiring, same shape as `paper_region.py`/`paper_obligation.py`
+    # above). Every other tier of inability `verify` reports (an absent
+    # provenance region, an undeclared block, an unreadable section
+    # corpus) is an `unmeasured_reason` string in the report payload, never
+    # a `Refused` -- only the whole-record-absent tier refuses the run -----
+    "DECLARATION_RECORD_ABSENT": WORK_STATE,
 }
 
 

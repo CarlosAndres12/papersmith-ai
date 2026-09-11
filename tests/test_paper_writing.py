@@ -10,6 +10,7 @@ one CLI subprocess test, which scaffolds under the already-gitignored
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import inspect
 import json
@@ -38,6 +39,8 @@ import paper_audit  # noqa: E402
 import paper_write  # noqa: E402
 import paper_style  # noqa: E402
 import paper_leak  # noqa: E402
+import paper_coupling_evidence  # noqa: E402
+import paper_verify  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -1573,14 +1576,401 @@ class ModuleCompletenessTests(unittest.TestCase):
         self.assertEqual(on_disk, imported)
 
 
+# =====================================================================
+# the-couplings-hold-or-they-do-not
+# =====================================================================
+
+#: The three canonical, declared contribution names -- shared by every
+#: fixture below so a single ordered comparison exercises coupling 1,
+#: coupling 4's methods-diagram reuse, and the chain's own closure check
+#: against the same document-bound set.
+_COUPLING_CONTRIBUTIONS = ["Adaptive Caching", "Async Prefetch", "Bounded Retry"]
+
+#: The section corpus this capability's own fixture installs -- five files,
+#: eight blocks, covering the fact every check derives its block set from
+#: (`contributions`, `problem-statement`, `gap`, `limitations`). No
+#: `figure:` obligation anywhere: this fixture is deliberately independent
+#: of `a-diagram-that-compiles-or-says-why`.
+_COUPLING_SECTIONS = {
+    "01-introduction.md": {
+        "section": "introduction", "position": 1,
+        "blocks": [
+            {"id": "intro-contrib", "requires_facts": ["contributions"],
+             "requires_declarations": [], "citations": "none"},
+            {"id": "intro-gap", "requires_facts": ["gap"],
+             "requires_declarations": [], "citations": "none"},
+        ],
+    },
+    "02-methods.md": {
+        "section": "methods", "position": 2,
+        "blocks": [
+            {"id": "methods-contrib", "requires_facts": ["contributions"],
+             "requires_declarations": [], "citations": "none"},
+            {"id": "methods-chain", "requires_facts": ["problem-statement"],
+             "requires_declarations": [], "citations": "none"},
+        ],
+    },
+    "03-related-work.md": {
+        "section": "related-work", "position": 3,
+        "blocks": [
+            {"id": "related-work-gap", "requires_facts": ["gap"],
+             "requires_declarations": [], "citations": "none"},
+        ],
+    },
+    "04-abstract.md": {
+        "section": "abstract", "position": 4,
+        "blocks": [
+            {"id": "abstract-contrib", "requires_facts": ["contributions"],
+             "requires_declarations": [], "citations": "none"},
+        ],
+    },
+    "05-conclusions.md": {
+        "section": "conclusions", "position": 5,
+        "blocks": [
+            {"id": "conclusions-contrib", "requires_facts": ["contributions"],
+             "requires_declarations": [], "citations": "none"},
+            {"id": "conclusions-future", "requires_facts": ["limitations"],
+             "requires_declarations": [], "citations": "discovery"},
+        ],
+    },
+}
+
+#: Every block's body bytes in the fully-declared green fixture -- literal
+#: enough that each check's own mechanical extraction (first-occurrence
+#: order, role-prefixed chain lines, `\\item`/`Closing:` gap shape,
+#: `\\cite{}`) is exercised against real bytes, never a hand-built
+#: `Evidence` alone. Order inside `intro-contrib`/`methods-contrib`/
+#: `abstract-contrib`/`conclusions-contrib` matches `_COUPLING_CONTRIBUTIONS`
+#: exactly, so the unmutated tree is reachable-green on coupling 1.
+_COUPLING_BODIES = {
+    "intro-contrib": (
+        b"This work makes three contributions: Adaptive Caching improves "
+        b"hit rates, Async Prefetch reduces stalls, and Bounded Retry "
+        b"avoids cascading failures.\n"
+    ),
+    "intro-gap": (
+        b"\\item first study\n\\item second study\n"
+        b"Closing: nobody has studied the combination.\n"
+    ),
+    "methods-contrib": (
+        b"Section 3 implements Adaptive Caching first, then Async "
+        b"Prefetch, and finally Bounded Retry.\n"
+    ),
+    "methods-chain": (
+        b"Problem: Bounded Retry addresses cascading failures under load.\n"
+        b"Contribution: Bounded Retry limits retries safely.\n"
+        b"Property: Bounded Retry is measured by retry count.\n"
+        b"Instrument: Bounded Retry is captured by the profiler.\n"
+        b"Evidence: Bounded Retry reduces failures after deployment.\n"
+    ),
+    "related-work-gap": (
+        b"\\item first study\n\\item second study\n"
+        b"Closing: nobody has studied the combination.\n"
+    ),
+    "abstract-contrib": (
+        b"In brief: Adaptive Caching, Async Prefetch, and Bounded Retry "
+        b"together cut overhead.\n"
+    ),
+    "conclusions-contrib": (
+        b"We summarize Adaptive Caching, Async Prefetch, and Bounded Retry "
+        b"as the paper's contributions.\n"
+    ),
+    "conclusions-future": (
+        b"Future work should extend Bounded Retry \\cite{future2027}.\n"
+    ),
+}
+
+#: Blocks whose `substitute` call also records provenance -- both point at
+#: the SAME contract file (`02-methods.md`), so `contract-currency`'s own
+#: "one edit flags a whole section" requirement is directly exercisable: a
+#: one-byte edit to that one file must stale BOTH blocks, not only one.
+_COUPLING_PROVENANCE_BLOCKS = ("methods-contrib", "methods-chain")
+
+
+def _write_coupling_sections(sections_dir: Path) -> None:
+    sections_dir.mkdir(parents=True, exist_ok=True)
+    for name, header in _COUPLING_SECTIONS.items():
+        text = "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n"
+        (sections_dir / name).write_text(text, encoding="utf-8")
+
+
+def _coupling_record(**overrides) -> dict:
+    """The fully-declared green `paper/couplings.json` record. `overrides`
+    replaces whole top-level keys (never deep-merged) -- a mutation test
+    that wants "the same record, minus one field" builds that dict itself
+    from this function's own return value, which is the point: no hidden
+    default is mutated in place."""
+    record = {
+        "facts": {
+            "contributions": list(_COUPLING_CONTRIBUTIONS),
+            "limitations": ["lim-overhead"],
+        },
+        "chain": {"links": [{"word": "Bounded Retry"}]},
+        "artefacts": {
+            "setup_cells": ["cell-alpha", "cell-beta"],
+            "results_artefacts": ["cell-alpha"],
+        },
+        "future_work": {
+            "directions": [
+                {"id": "extend-retry", "limitation": "lim-overhead", "cite_key": "future2027"},
+            ],
+        },
+        "blocks": {block_id: True for block_id in _COUPLING_BODIES},
+    }
+    record.update(overrides)
+    return record
+
+
+def _build_coupling_paper(
+    paper_dir: Path, sections_dir: Path, *,
+    bodies: dict | None = None, record: dict | None = None,
+    provenance_blocks=_COUPLING_PROVENANCE_BLOCKS, write_refs_bib: bool = True,
+) -> None:
+    """Builds a real, on-disk fixture tree through the SAME production
+    calls an operator would use (`scaffold`, `open`, `substitute
+    --contract`) -- never a hand-assembled `main.tex`, so every marker
+    digest and every provenance `contract_sha256` is genuine rather than
+    computed by this helper a second, possibly-drifting way."""
+    _write_coupling_sections(sections_dir)
+    paper_scaffold.scaffold(paper_dir)
+    bodies = _COUPLING_BODIES if bodies is None else bodies
+    for block_id, body in bodies.items():
+        paper_block.open_block(paper_dir, block_id, at_end=True)
+        contract = sections_dir / "02-methods.md" if block_id in provenance_blocks else None
+        paper_block.substitute(paper_dir, block_id, new_body=body, contract=contract)
+    if write_refs_bib:
+        (paper_dir / "refs.bib").write_text(
+            "@article{future2027,\n  title={Future Work},\n  year={2027}\n}\n",
+            encoding="utf-8",
+        )
+    record = _coupling_record() if record is None else record
+    (paper_dir / "couplings.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+class EvidenceTests(unittest.TestCase):
+    """`paper_coupling_evidence.py`: the record grammar, and M6."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+
+    def test_gather_reads_the_declared_record_and_the_provenance_region(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(evidence.record["facts"]["contributions"], _COUPLING_CONTRIBUTIONS)
+        self.assertIsNotNone(evidence.provenance)
+        self.assertEqual(
+            {entry["block"] for entry in evidence.provenance["body"]["records"]},
+            set(_COUPLING_PROVENANCE_BLOCKS),
+        )
+        self.assertEqual(evidence.block_bodies["intro-contrib"], _COUPLING_BODIES["intro-contrib"])
+        self.assertEqual(
+            evidence.blocks_by_fact["contributions"][0],
+            ("abstract-contrib", "conclusions-contrib", "intro-contrib", "methods-contrib"),
+        )
+
+    def test_gather_without_provenance_reports_it_absent(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir, provenance_blocks=())
+
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertIsNone(evidence.provenance)
+        self.assertEqual(evidence.contract_drift, {})
+
+    def test_mutation_6_absent_declaration_record_refuses_and_writes_nothing(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        (self.paper_dir / "couplings.json").unlink()
+        before = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "DECLARATION_RECORD_ABSENT")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), before)
+
+    def test_mutation_6_empty_declaration_record_refuses(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        (self.paper_dir / "couplings.json").write_text("{}", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "DECLARATION_RECORD_ABSENT")
+
+    def test_headerless_sections_report_unreadable_never_refuse(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        (self.sections_dir / "01-introduction.md").write_text("no front matter here\n", encoding="utf-8")
+
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(
+            evidence.blocks_by_fact["contributions"], ((), "SECTION_CONTRACTS_UNREADABLE"),
+        )
+
+    def test_no_block_requires_an_unused_fact(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(evidence.blocks_by_fact["dataset"], ((), "NO_BLOCK_REQUIRES_FACT"))
+
+
+class ReportShapeTests(unittest.TestCase):
+    """`paper_verify.py`'s report: the closed roster is one declaration,
+    proven both directions, and `unmeasured` is never counted in `holds`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_report_carries_exactly_one_object_per_check_both_directions(self) -> None:
+        report = paper_verify.run(self.evidence)
+
+        reported = [entry["check"] for entry in report["checks"]]
+        self.assertEqual(reported, list(paper_verify.CHECKS))
+        self.assertEqual(set(reported), set(paper_verify.CHECKS))
+
+    def test_buckets_sum_to_the_roster_length_and_unmeasured_excluded_from_holds(self) -> None:
+        report = paper_verify.run(self.evidence)
+
+        self.assertEqual(report["holds"] + report["fails"] + report["unmeasured"], len(paper_verify.CHECKS))
+        unmeasured_checks = [entry["check"] for entry in report["checks"] if entry["verdict"] == "unmeasured"]
+        self.assertNotIn("holds", [entry["verdict"] for entry in report["checks"] if entry["check"] in unmeasured_checks])
+
+    def test_every_unmeasured_reason_used_is_in_the_closed_roster(self) -> None:
+        report = paper_verify.run(self.evidence)
+
+        for entry in report["checks"]:
+            if entry["verdict"] == "unmeasured":
+                self.assertIn(entry["unmeasured_reason"], paper_verify.UNMEASURED_REASONS)
+            else:
+                self.assertIsNone(entry["unmeasured_reason"])
+
+    def test_gap_check_is_unconditionally_unmeasured_and_all_declared_sides_carry_the_limit(self) -> None:
+        report = paper_verify.run(self.evidence)
+        by_check = {entry["check"]: entry for entry in report["checks"]}
+
+        self.assertEqual(by_check["gap"]["verdict"], "unmeasured")
+        self.assertEqual(by_check["gap"]["unmeasured_reason"], "ASSISTED_READING_REQUIRED")
+
+    def test_two_declared_sides_limit_is_derived_never_hand_listed(self) -> None:
+        # None of the seven checks' baseline `sides` are ALL declared
+        # (`skill-audit`'s own shape prefers a derived side wherever one is
+        # possible), so this is a report-level property of `_entry` itself,
+        # proven directly -- never a hand-list of which check ever reaches
+        # it, matching design.md's own "a test derives that condition from
+        # the report rather than a hand-list".
+        all_declared = paper_verify._entry(
+            "contribution-list", classification="mechanical", verdict="pass",
+            sides=[
+                {"name": "a", "source": "declared", "origin": "x"},
+                {"name": "b", "source": "declared", "origin": "y"},
+            ],
+            evidence={}, limits=[], unmeasured_reason=None,
+        )
+        self.assertIn("TWO_DECLARED_SIDES", all_declared["limits"])
+
+        mixed = paper_verify._entry(
+            "contribution-list", classification="mechanical", verdict="pass",
+            sides=[
+                {"name": "a", "source": "declared", "origin": "x"},
+                {"name": "b", "source": "derived", "origin": "y"},
+            ],
+            evidence={}, limits=[], unmeasured_reason=None,
+        )
+        self.assertNotIn("TWO_DECLARED_SIDES", mixed["limits"])
+
+        # And the real report: no check's baseline sides are all declared.
+        report = paper_verify.run(self.evidence)
+        for entry in report["checks"]:
+            if entry["sides"] and all(side["source"] == "declared" for side in entry["sides"]):
+                self.assertIn("TWO_DECLARED_SIDES", entry["limits"])
+
+
+class ReadOnlyTests(unittest.TestCase):
+    """The three-way proof `verify` never writes: the AST lock, an executed
+    content manifest, and M8 -- the manifest test itself, mutated."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+
+    def _forbidden_write_calls(self, source_path: Path) -> list:
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        forbidden_names = {
+            "write_bytes", "write_text", "mkdir", "unlink", "replace", "rename",
+        }
+        forbidden_modules = {"shutil", "tempfile"}
+        hits: list = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in forbidden_modules:
+                        hits.append(f"import {alias.name}")
+            if isinstance(node, ast.Attribute) and node.attr in forbidden_names:
+                hits.append(node.attr)
+            if isinstance(node, ast.Attribute) and node.attr in ("substitute", "open_block"):
+                if isinstance(node.value, ast.Name) and node.value.id == "paper_block":
+                    hits.append(f"paper_block.{node.attr}")
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open":
+                # A bare `open(...)` call -- this module never opens a file
+                # directly (Path.read_bytes/read_text are used instead), so
+                # any occurrence at all is worth naming.
+                hits.append("open(...)")
+        return hits
+
+    def test_ast_lock_finds_no_write_operation_in_either_module(self) -> None:
+        for name in ("paper_coupling_evidence.py", "paper_verify.py"):
+            with self.subTest(module=name):
+                self.assertEqual(self._forbidden_write_calls(SKILL_SCRIPTS / name), [])
+
+    def test_content_manifest_unchanged_by_a_real_verify_run(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+
+        def _manifest() -> dict:
+            return {
+                str(path.relative_to(self.paper_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in sorted(self.paper_dir.rglob("*")) if path.is_file()
+            }
+
+        before = _manifest()
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+        paper_verify.run(evidence)
+        after = _manifest()
+
+        self.assertEqual(before, after)
+
+    def test_mutation_8_a_write_in_paper_verify_fails_the_manifest_guard(self) -> None:
+        proc = _run_against_mutant(
+            "def run(evidence) -> dict:",
+            'def run(evidence) -> dict:\n'
+            '    import pathlib as _pl\n'
+            '    _pl.Path(evidence.paper_dir, "main.tex").write_bytes(b"x")',
+            "tests.test_paper_writing.ReadOnlyTests.test_content_manifest_unchanged_by_a_real_verify_run",
+            source_path=SKILL_SCRIPTS / "paper_verify.py",
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("MUTANT_IMPORTED_OK", proc.stdout)
+
+
 class ZZLiveAgentGuardTests(unittest.TestCase):
     """`writing-orchestration` spec, `Requirement: No Live Agent Invocation
     In Tests`. Named `ZZ...` so it sorts alphabetically last among this
     module's own test classes (`unittest.TestLoader` iterates `dir(module)`,
     which is sorted) -- every subprocess-launching test class defined above
     (`ScaffoldTests`, `CLIWiringTests`, `MutationProofTests`,
-    `WriterMutationProofTests`) has therefore already run by the time this
-    assertion executes. The monitor itself (top of this file) is installed
+    `WriterMutationProofTests`, `ReadOnlyTests`, `CouplingVerifyCLITests`)
+    has therefore already run by the time this assertion executes. The monitor itself (top of this file) is installed
     at import time, so it also covers any subprocess launched by another
     test module collected alongside this one under `python -m unittest
     discover`, for as long as this module stays imported."""
@@ -2072,8 +2462,17 @@ class RefusalRosterTests(unittest.TestCase):
         `SHARED_COMPONENT`, `CAPTION_INCOMPLETE`, `MANDATORY_DIAGRAM_ABSENT`
         -- 5), and `paper_contract.py`'s own `_parse_figure` adds
         `MALFORMED_FIGURE_OBLIGATION` (1) to an already-imported module --
-        8 + 5 + 1 = 14 new codes."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 93)
+        8 + 5 + 1 = 14 new codes. Moved from 93 to 94 in
+        `the-couplings-hold-or-they-do-not`: `paper_cli.py` starts importing
+        `paper_coupling_evidence.py` (`DECLARATION_RECORD_ABSENT` -- 1) and
+        `paper_verify.py` (raises no `Refused` of its own), both ahead of
+        `verify`'s own wiring -- the same shape `paper_region.py`/
+        `paper_obligation.py` already established, forced this time by
+        `ModuleCompletenessTests` rather than chosen: that test holds every
+        on-disk script to being imported by `paper_cli.py` the moment it
+        exists, so the import could not wait for Work Unit 3 the way
+        tasks.md's own 3.7 originally phrased it."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 94)
 
 
 if __name__ == "__main__":
