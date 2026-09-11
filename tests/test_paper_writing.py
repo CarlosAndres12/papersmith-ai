@@ -1050,6 +1050,64 @@ class ContractHeaderTests(unittest.TestCase):
         self.assertIsNone(header.blocks[0]["figure"]["components_from"])
 
 
+def _derive_figure_holders(sections_dir: Path = SECTIONS_DIR) -> dict:
+    """`filename -> block_id` for EVERY block in `sections_dir` that
+    declares a `figure:` obligation -- DERIVED by parsing every real
+    `sections/*.md` file's own header, never a fixed list of ids typed by
+    hand.
+
+    W3 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+    WARNING): this class used to hard-code a `_HOLDERS = {...}` dict of
+    exactly three known ids. A hand-typed list like that is complete by
+    coincidence, not by construction -- it can never notice a NEW
+    figure-declaring block added later, because nothing forces whoever adds
+    one to also remember to update a dict elsewhere in a different file.
+    Module-level (not a class attribute) so a mutated COPY of the corpus
+    can also be scanned from `tests/test_paper_figure.py`'s own mutation
+    proof, without needing to instantiate this TestCase."""
+    holders: dict[str, str] = {}
+    for path in sorted(sections_dir.glob("*.md")):
+        header, _body = paper_contract.parse(path.read_bytes())
+        for block in header.blocks:
+            if block["figure"] is not None:
+                holders[path.name] = block["id"]
+    return holders
+
+
+def _assert_proof_classified_blocks_carry_their_derivation(
+    sections_dir: Path, holders: dict, realism_proof: dict,
+) -> None:
+    """For every derived `(filename, block_id)` classified `"proof:..."` in
+    `realism_proof`, the REAL, on-disk header at `sections_dir` MUST
+    currently declare a non-null `figure.components_from` for that block --
+    read fresh from disk every call, never assumed from yesterday's shape.
+
+    W3: a `"proof:..."` entry asserts a named test proves this block's
+    Components Check is load-bearing; that claim is only true while the
+    contract still names a fact for it. `components_from` moved from
+    required to optional to close the original CRITICAL (a check silently
+    wired to nothing); the cheapest way to reopen the identical hole is for
+    a future edit to drop the field from a `"proof:..."`-classified block
+    without also reclassifying its entry to `"exempt:<reason>"`. Raises
+    `AssertionError` (not a `self.assert*` call) so this same function is
+    callable, and its failure observable, from OUTSIDE a `TestCase` --
+    `tests/test_paper_figure.py`'s own mutation proof calls this directly
+    against a mutated copy and asserts it raises."""
+    for filename, block_id in holders.items():
+        entry = realism_proof.get(block_id)
+        if entry is None or not entry.startswith("proof:"):
+            continue
+        header, _body = paper_contract.parse((sections_dir / filename).read_bytes())
+        block = next(b for b in header.blocks if b["id"] == block_id)
+        figure = block["figure"]
+        if figure is None or figure["components_from"] is None:
+            raise AssertionError(
+                f"{filename}: {block_id} is classified {entry!r} (a load-bearing Components "
+                "Check proof), but its real figure.components_from is now None -- either "
+                "restore the field or reclassify this entry to 'exempt:<reason>'"
+            )
+
+
 class FigureObligationTranscriptionTests(unittest.TestCase):
     """design.md, `Open Questions`: "a test asserts each `excludes` entry and
     the `components_from` fact name occur in the holder contract's prose,
@@ -1059,18 +1117,12 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
     about a human having stated it (design.md's own narrower-than-the-
     sibling's scoping note)."""
 
-    _HOLDERS = {
-        "01-materials-and-methods.md": "mm-proposal",
-        "02-experimental-setup.md": "es-assessment",
-        "05-related-work.md": "rw-synthesis-artefact",
-    }
-
     @staticmethod
     def _normalize(text: str) -> str:
         return " ".join(text.split())
 
     def test_every_excludes_entry_and_components_from_occur_in_the_holders_own_prose(self) -> None:
-        for filename, block_id in self._HOLDERS.items():
+        for filename, block_id in _derive_figure_holders().items():
             path = SECTIONS_DIR / filename
             header, body = paper_contract.parse(path.read_bytes())
             block = next(b for b in header.blocks if b["id"] == block_id)
@@ -1133,7 +1185,7 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
                     child.name for child in node.body if isinstance(child, ast.FunctionDef)
                 }
 
-        for filename, block_id in self._HOLDERS.items():
+        for filename, block_id in _derive_figure_holders().items():
             self.assertIn(
                 block_id, self._COMPONENTS_REALISM_PROOF,
                 f"{filename}: {block_id} declares figure: but names no realism proof or exemption",
@@ -1154,6 +1206,31 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
                     entry.startswith("exempt:") and len(entry) > len("exempt:"),
                     f"{block_id}: exemption entry must state a non-empty reason: {entry!r}",
                 )
+
+    def test_every_proof_classified_block_currently_carries_the_derivation_it_claims(self) -> None:
+        """W3 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+        WARNING): `components_from` moved from required to optional to
+        close the original CRITICAL. Optionality is itself the cheapest way
+        to reopen the identical hole by silent omission -- nothing before
+        this test locked the REAL, on-disk `mm-proposal` header to keep
+        declaring `components_from`; a future edit could drop it and every
+        existing test would stay green, because the one existing
+        transcription-lock test
+        (`test_every_figure_declaring_block_names_a_realism_proof_or_an_
+        exemption`) only checks that a NAMED test method still exists in
+        `test_paper_figure.py`, never that the real header still matches
+        the classification. Proven load-bearing, not merely asserted, by
+        `tests/test_paper_figure.py`'s own
+        `ComponentsFromDerivationGuardTests` -- it calls the exact function
+        this test calls, against a mutated copy of this real file, and
+        confirms the guard raises."""
+        holders = _derive_figure_holders(SECTIONS_DIR)
+        try:
+            _assert_proof_classified_blocks_carry_their_derivation(
+                SECTIONS_DIR, holders, self._COMPONENTS_REALISM_PROOF,
+            )
+        except AssertionError as exc:
+            self.fail(str(exc))
 
 
 class RedactorInputContractTests(unittest.TestCase):

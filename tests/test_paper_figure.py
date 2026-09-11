@@ -18,7 +18,9 @@ unconditionally, on every machine.
 """
 from __future__ import annotations
 
+import argparse
 import ast
+import dataclasses
 import json
 import os
 import shutil
@@ -37,6 +39,7 @@ import paper_contract  # noqa: E402
 import paper_latex  # noqa: E402
 import paper_figure  # noqa: E402
 import paper_obligation  # noqa: E402
+import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -464,15 +467,35 @@ class ObligationTests(unittest.TestCase):
 
     def test_mandatory_true_with_no_pdf_refuses_mandatory_diagram_absent(self) -> None:
         with self.assertRaises(Refused) as ctx:
-            paper_obligation.check_mandatory(self._FIGURE, False, "mm-proposal")
+            paper_obligation.check_mandatory(self._FIGURE, False, "mm-proposal", ["a", "b"])
         self.assertEqual(ctx.exception.code, "MANDATORY_DIAGRAM_ABSENT")
 
-    def test_mandatory_true_with_a_pdf_passes(self) -> None:
-        paper_obligation.check_mandatory(self._FIGURE, True, "mm-proposal")
+    def test_mandatory_true_with_a_pdf_and_components_passes(self) -> None:
+        paper_obligation.check_mandatory(self._FIGURE, True, "mm-proposal", ["a", "b"])
 
     def test_mandatory_false_with_no_pdf_does_not_refuse(self) -> None:
         paper_obligation.check_mandatory(
-            dict(self._FIGURE, mandatory=False), False, "rw-synthesis-artefact",
+            dict(self._FIGURE, mandatory=False), False, "rw-synthesis-artefact", [],
+        )
+
+    def test_mandatory_true_with_a_pdf_but_zero_components_refuses_mandatory_diagram_absent(
+        self,
+    ) -> None:
+        """W2 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+        WARNING): a PDF's mere existence used to be the only thing this
+        check verified -- every other check in this module is satisfied
+        vacuously by an empty manifest, so a `mandatory: true` block with a
+        compiled-but-empty diagram used to pass every obligation. Reproduces
+        the verifier's own item-3 finding at the pure-function level: a
+        manifest of zero components, for a mandatory block, with the PDF
+        present, must still refuse."""
+        with self.assertRaises(Refused) as ctx:
+            paper_obligation.check_mandatory(self._FIGURE, True, "mm-proposal", [])
+        self.assertEqual(ctx.exception.code, "MANDATORY_DIAGRAM_ABSENT")
+
+    def test_mandatory_false_with_zero_components_does_not_refuse(self) -> None:
+        paper_obligation.check_mandatory(
+            dict(self._FIGURE, mandatory=False), True, "rw-synthesis-artefact", [],
         )
 
     def test_a_table_choice_for_block_05_carries_no_diagram_obligation(self) -> None:
@@ -529,8 +552,74 @@ class Section02ComponentsCheckOmittedTests(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "EXCLUDED_COMPONENT")
         with self.assertRaises(Refused) as ctx:
-            paper_obligation.check_mandatory(figure, False, "es-assessment")
+            paper_obligation.check_mandatory(figure, False, "es-assessment", ["Dataset A"])
         self.assertEqual(ctx.exception.code, "MANDATORY_DIAGRAM_ABSENT")
+
+
+class ComponentsFromDerivationGuardTests(unittest.TestCase):
+    """W3 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+    WARNING): `components_from` moved from required to optional to close
+    the original CRITICAL (a Components Check silently wired to nothing).
+    Optionality is itself the cheapest way to reopen the identical hole by
+    silent omission, and the orchestrator's own prior brief said so.
+
+    `test_paper_writing.FigureObligationTranscriptionTests.
+    test_every_proof_classified_block_currently_carries_the_derivation_it_
+    claims` is the standing guard against that. This class proves the guard
+    is load-bearing, not decorative, by EXECUTING the exact mutation the
+    finding names: strip `components_from` from a COPY of the REAL, on-disk
+    `sections/01-materials-and-methods.md` (the tracked file is never
+    touched -- read once, and re-read at the end to confirm) and confirm
+    that the guard's own function raises. If it stayed green under this
+    mutation, it would be proving nothing."""
+
+    def test_stripping_components_from_the_real_mm_proposal_header_turns_the_guard_red(self) -> None:
+        sys.path.insert(0, str(FORGE_ROOT / "tests"))
+        import test_paper_writing as twp  # noqa: E402  -- local import, avoids a load-order cycle
+
+        real_path = SECTIONS_DIR / "01-materials-and-methods.md"
+        real_bytes = real_path.read_bytes()
+
+        header, body = paper_contract.parse(real_bytes)
+        header_dict = dataclasses.asdict(header)
+        mutated = False
+        for block in header_dict["blocks"]:
+            if block["id"] == "mm-proposal":
+                self.assertIsNotNone(
+                    block["figure"], "mm-proposal declares no figure: -- fixture is stale",
+                )
+                self.assertIsNotNone(
+                    block["figure"]["components_from"],
+                    "mm-proposal already declares no components_from -- fixture is stale, "
+                    "nothing to mutate",
+                )
+                block["figure"]["components_from"] = None
+                mutated = True
+        self.assertTrue(mutated, "mm-proposal not found in the real header -- fixture is stale")
+
+        mutant_header_bytes = b"---\n" + json.dumps(header_dict).encode("utf-8") + b"\n---\n"
+        mutant_bytes = mutant_header_bytes + body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            mutant_dir = Path(tmp) / "sections"
+            mutant_dir.mkdir()
+            (mutant_dir / "01-materials-and-methods.md").write_bytes(mutant_bytes)
+
+            holders = twp._derive_figure_holders(mutant_dir)
+            self.assertEqual(holders, {"01-materials-and-methods.md": "mm-proposal"})
+
+            with self.assertRaises(AssertionError) as ctx:
+                twp._assert_proof_classified_blocks_carry_their_derivation(
+                    mutant_dir, holders,
+                    twp.FigureObligationTranscriptionTests._COMPONENTS_REALISM_PROOF,
+                )
+            self.assertIn("mm-proposal", str(ctx.exception))
+            self.assertIn("None", str(ctx.exception))
+
+        # The mutation happened entirely on a temp copy -- confirm the
+        # tracked file itself was never touched (sdd-apply's own hard rule:
+        # a restore is confirmed by content digest, never assumed).
+        self.assertEqual(real_path.read_bytes(), real_bytes)
 
 
 class PlacementVerbTests(unittest.TestCase):
@@ -872,6 +961,121 @@ class CLIWiringTests(unittest.TestCase):
                 )
                 self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                 self.assertEqual(json.loads(proc.stdout)["obligations"], {"checked": True})
+
+    def test_real_section_02_es_assessment_mandatory_but_empty_manifest_refuses(self) -> None:
+        """W2 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+        WARNING): reproduces the verifier's own item-3 finding, driven
+        exactly the way the verifier measured it -- `render --section
+        02-experimental-setup --block es-assessment` (the REAL, on-disk
+        `mandatory: true` contract) against a diagram whose manifest
+        declares ZERO components. Before the fix, this compiled and passed
+        every obligation check (`check_mandatory` only ever checked PDF
+        existence; every other check is satisfied vacuously by an empty
+        list). After the fix, it refuses `MANDATORY_DIAGRAM_ABSENT`."""
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        (self.paper_dir / "Figures" / "diagEmpty.tex").write_text(
+            "% intentionally no node markers\n", encoding="utf-8",
+        )
+        (self.paper_dir / "Figures" / "diagEmpty.diagram.json").write_text(
+            json.dumps({"components": [], "encodings": [], "caption": "Figure. Empty."}),
+            encoding="utf-8",
+        )
+        record_path = Path(self._tmp.name) / "record-empty.jsonl"
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagEmpty",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "02-experimental-setup", "--block", "es-assessment",
+            "--sections", str(SECTIONS_DIR),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "MANDATORY_DIAGRAM_ABSENT")
+
+
+_SKILL_MD = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "SKILL.md"
+_DIAGRAM_AUTHOR_MD = FORGE_ROOT / ".claude" / "agents" / "diagram-author.md"
+
+#: Declared, not discovered -- the ONE render flag this suite itself
+#: injects (`--latexmk-path`, "test-only" in its own `argparse` help text)
+#: and therefore never expects an operator-facing doc to mention. Every
+#: OTHER render flag below is read from the real parser, never named here.
+_RENDER_TEST_ONLY_FLAGS = frozenset({"--latexmk-path"})
+
+
+def _render_subparser() -> argparse.ArgumentParser:
+    """`build_parser()`'s own `render` subparser, read directly -- the same
+    idiom `tests/test_remote_execution.py`'s own `_subparser_option_
+    strings` already established for `remote_cli.py`."""
+    parser = paper_cli.build_parser()
+    subparsers_action = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    return subparsers_action.choices["render"]
+
+
+def _render_option_strings() -> frozenset:
+    return frozenset(_render_subparser()._option_string_actions)
+
+
+def _obligation_gating_flags() -> frozenset:
+    """The render flags whose OWN argparse help text names the obligation
+    checks -- derived from `build_parser()`'s own help strings, never a
+    flag-name list typed by hand here. Today this resolves to exactly
+    `--section`/`--block`, the two flags the prior WARNING named as
+    undocumented in `diagram-author.md` -- derived, so a future flag
+    change to the obligation-gating condition keeps this test honest
+    without anyone updating a second list."""
+    return frozenset(
+        opt
+        for action in _render_subparser()._actions
+        for opt in action.option_strings
+        if opt.startswith("--") and "obligation" in (action.help or "")
+    )
+
+
+class RenderDocSurfaceTests(unittest.TestCase):
+    """W4 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
+    WARNING, carried over from the prior FAIL's own W-prior-2): `SKILL.md`
+    and `.claude/agents/diagram-author.md` document `render`'s flags in
+    prose; nothing tied that prose to the real `argparse` surface, so a
+    future flag rename or removal (as already happened once to
+    `--expected-components`) could leave stale documentation with nothing
+    to catch it. The doc-vs-argparse consistency test the prior corrective
+    was supposed to add was lost in the revert of a dead attempt -- this
+    class restores an equivalent, reading the real flag set from
+    `build_parser()` itself rather than naming flags by hand."""
+
+    def test_every_real_render_flag_is_documented_in_skill_md(self) -> None:
+        """`SKILL.md`'s own `render`/`place` table is a COMPLETE flag
+        reference (confirmed by reading it: every flag below `--latexmk-
+        path` already appears there) -- so every non-test-only flag the
+        real parser declares MUST be documented here."""
+        flags = _render_option_strings() - {"-h", "--help"} - _RENDER_TEST_ONLY_FLAGS
+        text = _SKILL_MD.read_text(encoding="utf-8")
+        for flag in sorted(flags):
+            self.assertIn(flag, text, f"SKILL.md: real render flag {flag!r} is undocumented")
+
+    def test_diagram_author_names_every_obligation_gating_flag(self) -> None:
+        """`diagram-author.md` is workflow prose, not a full flag
+        reference -- scoped to the flags that actually gate the obligation
+        checks (derived from their own argparse help text), the exact
+        pair the prior WARNING named as missing."""
+        flags = _obligation_gating_flags()
+        self.assertTrue(flags, "no render flag's help text names 'obligation' -- derivation broke")
+        text = _DIAGRAM_AUTHOR_MD.read_text(encoding="utf-8")
+        for flag in sorted(flags):
+            self.assertIn(
+                flag, text, f"diagram-author.md: obligation-gating flag {flag!r} is undocumented",
+            )
+
+    def test_the_removed_expected_components_flag_stays_off_the_real_surface(self) -> None:
+        """Regression lock for the exact drift this WARNING names: a
+        removed flag must never quietly come back. `--expected-components`
+        was removed by a prior corrective task specifically because it let
+        an operator supply a wrong expected list and silently invert the
+        Components Check."""
+        self.assertNotIn("--expected-components", _render_option_strings())
 
 
 class DiagramMutationProofTests(unittest.TestCase):

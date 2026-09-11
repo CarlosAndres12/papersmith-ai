@@ -93,12 +93,36 @@ def check_caption(
             raise Refused("CAPTION_INCOMPLETE", f"caption never decodes {undecoded}")
 
 
-def check_mandatory(figure: dict, pdf_exists: bool, block_id: str) -> None:
+def check_mandatory(
+    figure: dict, pdf_exists: bool, block_id: str, manifest_components: list,
+) -> None:
     """`diagram-obligation` spec, `Requirement: Mandatory Diagram
     Presence`: refuses `MANDATORY_DIAGRAM_ABSENT` naming `block_id` when
-    `mandatory: true` and no compiled diagram exists."""
+    `mandatory: true` and either no compiled diagram exists, or one exists
+    but declares zero components.
+
+    The zero-components case (W2, `a-diagram-that-compiles-or-says-why`'s
+    corrective re-verify, WARNING): a PDF's mere existence was the ONLY
+    thing this check ever verified. Every other check in this module is
+    satisfied vacuously by an empty manifest --
+    `check_excluded`/`check_caption` iterate `manifest_components` and
+    simply never run their own loop bodies when it is empty, and
+    `check_components` does not run at all for a block with no
+    `components_from`. A `mandatory: true` block with a manifest of zero
+    components therefore compiled and passed every obligation check that
+    existed before this fix -- an obligation any empty thing satisfies is
+    not an obligation. `manifest_components` is REQUIRED, not defaulted,
+    so a caller cannot silently opt back into the old, PDF-existence-only
+    behaviour."""
     if figure["mandatory"] and not pdf_exists:
         raise Refused(
             "MANDATORY_DIAGRAM_ABSENT",
             f"block {block_id!r} declares figure.mandatory=true with no compiled diagram",
+        )
+    if figure["mandatory"] and not manifest_components:
+        raise Refused(
+            "MANDATORY_DIAGRAM_ABSENT",
+            f"block {block_id!r} declares figure.mandatory=true, but the compiled diagram's "
+            "own manifest declares zero components -- a diagram that shows nothing does not "
+            "satisfy the obligation",
         )

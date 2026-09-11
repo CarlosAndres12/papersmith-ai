@@ -731,7 +731,7 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     paper_obligation.check_caption(
         figure, manifest_components, manifest.get("encodings", []), manifest.get("caption", ""),
     )
-    paper_obligation.check_mandatory(figure, paths["pdf"].is_file(), args.block)
+    paper_obligation.check_mandatory(figure, paths["pdf"].is_file(), args.block, manifest_components)
 
     sibling_components = {args.figure_id: manifest_components}
     for sibling_manifest_path in sorted(paths["tex"].parent.glob("*.diagram.json")):
