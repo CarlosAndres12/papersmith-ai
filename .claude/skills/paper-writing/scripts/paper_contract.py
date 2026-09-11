@@ -44,8 +44,23 @@ _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED + _TOP_LEVEL_OPTIONAL
 _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
 #: `mode` widened the same way at block level — a block's own `mode`
 #: overrides the section-level default when present (`resolve_mode` below).
-_BLOCK_OPTIONAL = ("optional", "after", "mode")
+#: `figure` widened in `a-diagram-that-compiles-or-says-why`
+#: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
+#: a per-block diagram obligation, read by `paper_obligation.py` and never
+#: hardcoded against a section or block id.
+_BLOCK_OPTIONAL = ("optional", "after", "mode", "figure")
 _BLOCK_ALLOWED = _BLOCK_REQUIRED + _BLOCK_OPTIONAL
+
+#: A `figure` object's own six subkeys — all required, nothing else
+#: admitted (`diagram-obligation` spec, `Requirement: Obligations Read From
+#: Contract Front Matter`; `section-contract` spec, `Requirement: Front
+#: Matter Schema`). `caption_decodes` is deliberately a boolean, not a list
+#: of encodings — WHICH encodings exist is a property of the diagram itself
+#: and lives in `<id>.diagram.json`, never duplicated into the contract.
+_FIGURE_REQUIRED = (
+    "components_from", "ordered", "excludes",
+    "caption_enumerates", "caption_decodes", "mandatory",
+)
 
 _AFTER_REQUIRED = ("target", "source")
 _SOURCE_REQUIRED = ("file", "quote")
@@ -164,6 +179,54 @@ def _validate_mode_object(raw, owner: str) -> dict:
     return {"value": value, "source": dict(source)}
 
 
+def _parse_figure(raw, owner: str) -> dict:
+    """`diagram-obligation` spec, `Requirement: Obligations Read From
+    Contract Front Matter`; `section-contract` spec, `Requirement: Front
+    Matter Schema`. Refuses `MALFORMED_FIGURE_OBLIGATION` naming the
+    missing or unknown key, or a wrong-typed value. `components_from` is
+    validated through `paper_vocabulary.validate_fact` — an invented fact
+    refuses `UNKNOWN_FACT`, reused verbatim rather than a second vocabulary
+    (design.md, "Refusal codes and their classification")."""
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' must be an object")
+    missing = [key for key in _FIGURE_REQUIRED if key not in raw]
+    if missing:
+        raise Refused("MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' missing {missing[0]!r}")
+    unknown = [key for key in raw if key not in _FIGURE_REQUIRED]
+    if unknown:
+        raise Refused(
+            "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' carries unknown key {unknown[0]!r}"
+        )
+
+    components_from = raw["components_from"]
+    if not isinstance(components_from, str):
+        raise Refused(
+            "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure.components_from' must be a string"
+        )
+    paper_vocabulary.validate_fact(components_from)
+
+    for bool_key in ("ordered", "caption_enumerates", "caption_decodes", "mandatory"):
+        if not isinstance(raw[bool_key], bool):
+            raise Refused(
+                "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure.{bool_key}' must be a boolean"
+            )
+
+    excludes = raw["excludes"]
+    if not isinstance(excludes, list) or not all(isinstance(item, str) for item in excludes):
+        raise Refused(
+            "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure.excludes' must be a list of strings"
+        )
+
+    return {
+        "components_from": components_from,
+        "ordered": raw["ordered"],
+        "excludes": list(excludes),
+        "caption_enumerates": raw["caption_enumerates"],
+        "caption_decodes": raw["caption_decodes"],
+        "mandatory": raw["mandatory"],
+    }
+
+
 def _parse_block(raw, section: str) -> dict:
     if not isinstance(raw, dict):
         raise Refused("MALFORMED_HEADER", f"{section}: each block must be an object")
@@ -215,6 +278,14 @@ def _parse_block(raw, section: str) -> dict:
     if raw.get("mode") is not None:
         block_mode = _validate_mode_object(raw["mode"], f"{section}.{block_id}")
 
+    # Same `raw.get(...) is not None` convention as `mode` above: this
+    # function's own output round-trips through re-serialization elsewhere
+    # (`paper_graph.py`'s corpus assembly), so an explicit JSON `null` MUST
+    # mean the same thing as the key being absent.
+    block_figure = None
+    if raw.get("figure") is not None:
+        block_figure = _parse_figure(raw["figure"], f"{section}.{block_id}")
+
     return {
         "id": block_id,
         "requires_facts": list(facts),
@@ -223,6 +294,7 @@ def _parse_block(raw, section: str) -> dict:
         "optional": optional,
         "after": block_after,
         "mode": block_mode,
+        "figure": block_figure,
     }
 
 

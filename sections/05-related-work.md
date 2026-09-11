@@ -41,7 +41,15 @@
         "contributions"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "figure": {
+        "components_from": "contributions",
+        "ordered": false,
+        "excludes": [],
+        "caption_enumerates": true,
+        "caption_decodes": false,
+        "mandatory": false
+      }
     }
   ]
 }

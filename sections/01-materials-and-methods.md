@@ -33,7 +33,15 @@
         "implementation"
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "figure": {
+        "components_from": "contributions",
+        "ordered": true,
+        "excludes": ["dataset", "baseline"],
+        "caption_enumerates": true,
+        "caption_decodes": true,
+        "mandatory": true
+      }
     }
   ]
 }

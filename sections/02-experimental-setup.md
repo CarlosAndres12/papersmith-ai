@@ -18,7 +18,15 @@
         "gap"
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "figure": {
+        "components_from": "dataset",
+        "ordered": false,
+        "excludes": ["internal component of the proposal"],
+        "caption_enumerates": true,
+        "caption_decodes": false,
+        "mandatory": true
+      }
     },
     {
       "id": "es-training-details",
