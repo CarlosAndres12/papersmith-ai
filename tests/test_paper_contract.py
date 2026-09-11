@@ -507,6 +507,18 @@ def _quote_source(file: str, quote: str) -> dict:
     return {"file": file, "quote": quote}
 
 
+def _quote_in_body(file_path: Path, quote: str) -> bool:
+    """The transcription lock's own check (`GraphTests`,
+    `test_every_transcribed_afters_quote_is_a_substring_of_its_named_file`):
+    whitespace-collapsed, against `paper_contract.parse`'s own parsed prose
+    BODY only -- never the raw file, whose header JSON always re-serializes
+    whatever `quote` a `source` entry holds, verbatim."""
+    _header, body = paper_contract.parse(file_path.read_bytes())
+    collapsed_body = " ".join(body.decode("utf-8").split())
+    collapsed_quote = " ".join(quote.split())
+    return collapsed_quote in collapsed_body
+
+
 class GraphTests(unittest.TestCase):
     """`section-contract` spec: flat id namespace, `after` transcription and
     resolution, the exactly-two literal cross-section edges, and the
@@ -587,10 +599,18 @@ class GraphTests(unittest.TestCase):
         return paper_graph.assemble_corpus(SECTIONS_DIR)
 
     def test_every_transcribed_afters_quote_is_a_substring_of_its_named_file(self) -> None:
+        # Reads the parsed BODY only, via `paper_contract.parse`'s own
+        # header/body split -- never the raw file text. A whole-file read is
+        # vacuous for any edge whose `source.file` is the SAME file as the
+        # header that transcribes it (`introduction.block-3` -> `related-
+        # work`, sourced in its own `06-introduction.md`): that header's own
+        # JSON always re-serializes `quote` verbatim, so a substring check
+        # against the raw bytes finds it there regardless of what the prose
+        # says. Checking the body only closes that hole -- proven by
+        # `test_a_fabricated_quote_on_a_self_referential_edge_fails_the_lock`
+        # below, which replays this exact check with a prose-absent quote on
+        # that exact edge and confirms it now fails.
         corpus = self._real_corpus()
-
-        def collapsed(text: str) -> str:
-            return " ".join(text.split())
 
         checked = 0
         for section_id, header in corpus.sections.items():
@@ -599,15 +619,76 @@ class GraphTests(unittest.TestCase):
                 entries += raw_block["after"]
             for entry in entries:
                 source = entry["source"]
-                file_path = FORGE_ROOT / source["file"]
-                file_text = collapsed(file_path.read_text(encoding="utf-8"))
-                self.assertIn(
-                    collapsed(source["quote"]), file_text,
-                    f"{section_id}: quote not found verbatim (whitespace-collapsed) in {source['file']}",
+                self.assertTrue(
+                    _quote_in_body(FORGE_ROOT / source["file"], source["quote"]),
+                    f"{section_id}: quote not found verbatim (whitespace-collapsed) in "
+                    f"{source['file']}'s prose body",
                 )
                 checked += 1
 
         self.assertGreater(checked, 0, "no transcribed after entries were found to check")
+
+    def test_a_fabricated_quote_on_a_self_referential_edge_fails_the_lock(self) -> None:
+        """Reproduces the verifier's own falsification exactly, on a temp
+        copy -- never the tracked file. `introduction.block-3`'s `after`
+        names `related-work`, sourced in `06-introduction.md`, the SAME file
+        as its own holder section: self-sourced, the one shape (of the two
+        shipped literal edges) that made the OLD, whole-file-reading lock
+        vacuous, because that file's header always re-serializes whatever
+        `quote` it holds. Substitute a prose-absent quote into ONLY the
+        header field (the body is untouched) and confirm: the OLD shape
+        (raw-whole-file substring) still reports it found -- the exact hole
+        -- while the body-only check above correctly reports it absent.
+        A fix proven only by "the old test still passes" would prove
+        nothing, since that test passed while broken."""
+        real_path = SECTIONS_DIR / "06-introduction.md"
+        header, body = paper_contract.parse(real_path.read_bytes())
+        self.assertEqual(header.section, "introduction")
+
+        fabricated_quote = "Purple elephants never write in Related Work order at all."
+        body_text = " ".join(body.decode("utf-8").split())
+        self.assertNotIn(
+            fabricated_quote, body_text,
+            "fixture assumption: the fabrication is absent from the real prose",
+        )
+
+        def _tamper(raw_block: dict) -> dict:
+            if raw_block["id"] != "block-3":
+                return raw_block
+            tampered = dict(raw_block)
+            tampered["after"] = [
+                {**entry, "source": {**entry["source"], "quote": fabricated_quote}}
+                for entry in raw_block["after"]
+            ]
+            return tampered
+
+        tampered_header = {
+            "section": header.section,
+            "position": header.position,
+            "after": header.after,
+            "blocks": [_tamper(raw_block) for raw_block in header.blocks],
+        }
+        tampered_bytes = _header_bytes(tampered_header) + body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tampered_path = Path(tmp) / "06-introduction.md"
+            tampered_path.write_bytes(tampered_bytes)
+
+            # OLD lock shape: raw-whole-file substring check. It finds the
+            # fabrication -- not in the prose, but in the header's own JSON,
+            # which the tamper just wrote into that same file. This is
+            # exactly the vacuity `verify-report.md`'s Finding W1 proved.
+            raw_text = " ".join(tampered_path.read_text(encoding="utf-8").split())
+            self.assertIn(
+                fabricated_quote, raw_text,
+                "fixture assumption: the tampered header still re-serializes the fabrication verbatim",
+            )
+
+            # NEW lock shape (this test's fix): body-only. It does not.
+            self.assertFalse(
+                _quote_in_body(tampered_path, fabricated_quote),
+                "the body-only check reported a prose-absent, fabricated quote as found -- still vacuous",
+            )
 
     # --- exactly two literal cross-section edges, derived not hand-listed --
 
@@ -722,6 +803,75 @@ class OrderTests(unittest.TestCase):
             self.assertLess(index["introduction.block-2"], index[rw_block])
             self.assertLess(index["introduction.block-4"], index[rw_block])
             self.assertLess(index[rw_block], index["introduction.block-3"])
+
+    def test_back_matter_renders_last_while_its_writing_order_place_is_graph_derived_not_fact_derived(self) -> None:
+        """`writing-readiness` spec, Requirement: Derived Writing Order,
+        Scenario "Position reports rendering order separately from writing
+        order". Back matter is the discriminating case: every one of its
+        blocks requires zero facts, so a writing-order deriver that (wrongly)
+        used readiness/fact-satisfaction as its ordering signal would place
+        every back-matter block FIRST, ahead of anything still waiting on a
+        fact -- back matter renders LAST (the highest `position` in the
+        shipped corpus). This test pins both halves down: `position` is read
+        directly off the header as a value separate from the derived order
+        (rendering order), and the derived order does not place a
+        zero-missing-facts block ahead of fact-blocked ones (writing order is
+        graph-derived, not readiness-derived) -- back matter carries no
+        `after` edge of its own, transcribed or position-derived, so nothing
+        in the graph names it either."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+
+        # Rendering order: back matter's own `position` is the maximum among
+        # every shipped section -- a fact read straight off the header,
+        # computed nowhere near the graph.
+        self.assertEqual(
+            corpus.sections["back-matter"].position,
+            max(header.position for header in corpus.sections.values()),
+        )
+
+        # Back matter carries no `after` edge anywhere -- section-level or
+        # block-level -- so nothing transcribed constrains its place, and it
+        # is not `title-and-keywords` (the one section that receives a
+        # position-derived edge). Its place in the writing order is decided
+        # only by the (absent) `after` edges naming it, never by `position`.
+        bm_header = corpus.sections["back-matter"]
+        self.assertEqual(bm_header.after, [])
+        for raw_block in bm_header.blocks:
+            self.assertEqual(raw_block["after"], [])
+
+        # Readiness: every back-matter block requires zero facts, so a
+        # (wrong) fact-only ordering signal would rank every one of them
+        # ahead of any block still waiting on a fact.
+        readiness = paper_readiness.compute_readiness(
+            corpus, satisfied_facts=set(), satisfied_declarations=set()
+        )
+        bm_qualified_ids = {r["block"] for r in readiness if r["block"].startswith("back-matter.")}
+        self.assertTrue(bm_qualified_ids, "fixture assumption: back matter ships at least one block")
+        for entry in readiness:
+            if entry["block"] in bm_qualified_ids:
+                self.assertEqual(entry["missing_facts"], [])
+
+        fact_blocked_qualified_ids = {r["block"] for r in readiness if r["missing_facts"]}
+        self.assertTrue(
+            fact_blocked_qualified_ids,
+            "fixture assumption: at least one shipped block still needs a fact",
+        )
+
+        # Writing order: derived from the graph. If readiness/fact-count
+        # decided placement, every zero-missing-facts back-matter block would
+        # land before every still-fact-blocked block above. It does not --
+        # the graph, not readiness, decides.
+        edges = paper_graph.collect_edges(corpus)
+        order = paper_graph.derive_order(corpus, edges)
+        index = {qid: i for i, qid in enumerate(order)}
+
+        for bm_qid in bm_qualified_ids:
+            for fact_blocked_qid in fact_blocked_qualified_ids:
+                self.assertGreater(
+                    index[bm_qid], index[fact_blocked_qid],
+                    f"{bm_qid} (zero missing facts) landed before {fact_blocked_qid} (still fact-blocked) "
+                    "in the writing order -- readiness, not the graph, appears to be deciding placement",
+                )
 
     def test_a_two_block_mutual_after_cycle_refuses_order_cycle_naming_both(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
