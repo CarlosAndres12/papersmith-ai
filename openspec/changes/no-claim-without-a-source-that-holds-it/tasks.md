@@ -50,11 +50,11 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: Work Unit 2 — Sourced Bibliography
 
-- [ ] 3.1 RED: a hand-composed entry (no cached `metadata_digest` blob) refuses `ENTRY_UNSOURCED` with the `OPENER` never installed — proves no network needed (sourced-bibliography Req 1).
-- [ ] 3.2 GREEN: `paper_bib.py` — sole producer `entry_from_record(record)`; no function/flag accepts caller-composed entry text; `refs.bib` rebuilt whole and sorted, never appended (design Decision 4).
-- [ ] 3.3 RED then GREEN: `CITE_WITHOUT_ENTRY` and `ENTRY_WITHOUT_CITE` fire independently, from two separate fixture blocks (sourced-bibliography Req 2).
-- [ ] 3.4 Wire `bib build` verb into `paper_cli.py`; extend `REFUSAL_CLASSIFICATION`.
-- [ ] 3.5 Test: roster reachability/classification re-run, measured count updated for the new codes.
+- [x] 3.1 RED: a hand-composed entry (no cached `metadata_digest` blob) refuses `ENTRY_UNSOURCED` with the `OPENER` never installed — proves no network needed (sourced-bibliography Req 1).
+- [x] 3.2 GREEN: `paper_bib.py` — sole producer `entry_from_record(paper_dir, record)`; no function/flag accepts caller-composed entry text; `refs.bib` rebuilt whole and sorted, never appended (design Decision 4).
+- [x] 3.3 RED then GREEN: `CITE_WITHOUT_ENTRY` and `ENTRY_WITHOUT_CITE` fire independently, from two separate fixtures (sourced-bibliography Req 2).
+- [x] 3.4 Wire `bib build` verb into `paper_cli.py` (nested subparser: `bib` → `build`); extend `REFUSAL_CLASSIFICATION`.
+- [x] 3.5 Test: roster reachability/classification re-run, measured count updated 54 → 57.
 
 ## Phase 4: Work Unit 3 — Citation Validation and Placement
 

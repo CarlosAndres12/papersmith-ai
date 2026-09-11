@@ -1054,8 +1054,10 @@ class RefusalRosterTests(unittest.TestCase):
         and `paper_resolve.py` (`PAPERSMITH_CONFIG_UNREADABLE`,
         `UNKNOWN_ROLE`, `DISCOVERY_UNAVAILABLE`, `RESOLVER_ROLE_EMPTY`,
         `RESOLVER_UNREACHABLE`, `IDENTIFIER_UNRESOLVED`) -- 1 + 2 + 6 = 9
-        new codes."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 54)
+        new codes. Moved from 54 to 57 in WU2, which wires `bib build`:
+        `paper_bib.py` adds `ENTRY_UNSOURCED`, `CITE_WITHOUT_ENTRY`,
+        `ENTRY_WITHOUT_CITE`."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 57)
 
 
 if __name__ == "__main__":

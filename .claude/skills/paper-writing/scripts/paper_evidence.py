@@ -12,6 +12,7 @@ Public surface:
     EvidenceRecord.from_verdict(...)      -> EvidenceRecord
     append_record(paper_dir, record, ...) -> dict
     read_records(paper_dir, block_id)     -> list[dict]
+    read_all_records(paper_dir)           -> list[dict]
     classify_guidance_child(path, sections_dir=...) -> "evidence"|"style"|"ambiguous"
     write_evidence_manifest(folder, section_id, papers) -> dict
 
@@ -261,6 +262,23 @@ def read_records(paper_dir: Path, block_id: str) -> list[dict]:
         if not line:
             continue
         records.append(json.loads(line))
+    return records
+
+
+def read_all_records(paper_dir: Path) -> list[dict]:
+    """Every evidence record across every block's own store, oldest first
+    within each block. `paper_bib.build_refs_bib` (WU2) is the real caller:
+    assembling `refs.bib` needs every block's cited sources in one pass, not
+    one block at a time."""
+    store_dir = paper_dir / ".paper-writing" / "evidence"
+    if not store_dir.is_dir():
+        return []
+    records: list[dict] = []
+    for path in sorted(store_dir.glob("*.jsonl")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
     return records
 
 

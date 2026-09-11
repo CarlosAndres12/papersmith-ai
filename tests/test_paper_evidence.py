@@ -9,6 +9,7 @@ fails loudly instead of passing slowly, and the mutation tests reuse
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -22,6 +23,7 @@ SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
 SECTIONS_DIR = FORGE_ROOT / "sections"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_cli  # noqa: E402
+import paper_bib  # noqa: E402
 import paper_evidence  # noqa: E402
 import paper_resolve  # noqa: E402
 import paper_scaffold  # noqa: E402
@@ -556,6 +558,124 @@ class ResolverMutationProofTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+def _cite_record(cite_key: str, *, resolver: str = "", metadata_digest: str = "") -> dict:
+    return {
+        "block_id": "b", "regime": "discovery", "claim": "c", "cite_key": cite_key,
+        "identifier": "10.1/x", "resolver": resolver, "metadata_digest": metadata_digest,
+        "source_md": "", "quote": "", "locator": {}, "verdict": "holds", "round": 1,
+    }
+
+
+class BibProducerTests(unittest.TestCase):
+    """WU2: `sourced-bibliography`, Requirement: Every Entry Originates From
+    Resolved Metadata. `entry_from_record` is the sole producer; every check
+    here runs with the raising `OPENER` installed and no network access."""
+
+    def setUp(self) -> None:
+        self._real_opener = paper_resolve.OPENER
+        paper_resolve.OPENER = _RaisingOpener()
+        self.addCleanup(self._restore_opener)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.paper_dir.mkdir()
+
+    def _restore_opener(self) -> None:
+        paper_resolve.OPENER = self._real_opener
+
+    def _resolved_result(self, cite_key: str) -> dict:
+        payload = json.dumps({"title": f"Paper {cite_key}", "doi": f"10.1/{cite_key}", "publication_year": 2024}).encode()
+        digest = hashlib.sha256(payload).hexdigest()
+        result = {
+            "identifier": f"10.1/{cite_key}", "resolver": "openalex", "metadata_digest": digest,
+            "title": f"Paper {cite_key}", "doi": f"10.1/{cite_key}", "year": 2024,
+        }
+        paper_resolve.cache_metadata(self.paper_dir, result)
+        return result
+
+    def test_a_hand_composed_entry_refuses_entry_unsourced_offline(self) -> None:
+        # No cache, no resolver, no digest -- and the OPENER is a
+        # _RaisingOpener the whole test class refuses to ever call. This
+        # check needs no network (sourced-bibliography, Scenario: A
+        # hand-typed entry is refused offline).
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.entry_from_record(self.paper_dir, _cite_record("hand-typed"))
+        self.assertEqual(ctx.exception.code, "ENTRY_UNSOURCED")
+
+    def test_a_digest_with_no_matching_cache_blob_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.entry_from_record(
+                self.paper_dir, _cite_record("ghost", resolver="openalex", metadata_digest="deadbeef"),
+            )
+        self.assertEqual(ctx.exception.code, "ENTRY_UNSOURCED")
+
+    def test_a_resolved_entry_is_accepted(self) -> None:
+        result = self._resolved_result("smith2024")
+        record = _cite_record("smith2024", resolver="openalex", metadata_digest=result["metadata_digest"])
+        entry = paper_bib.entry_from_record(self.paper_dir, record)
+        self.assertEqual(entry["cite_key"], "smith2024")
+        self.assertEqual(entry["title"], "Paper smith2024")
+
+    def test_build_refs_bib_rebuilds_whole_and_sorted(self) -> None:
+        result_b = self._resolved_result("bkey")
+        result_a = self._resolved_result("akey")
+        records = [
+            _cite_record("bkey", resolver="openalex", metadata_digest=result_b["metadata_digest"]),
+            _cite_record("akey", resolver="openalex", metadata_digest=result_a["metadata_digest"]),
+        ]
+        built = paper_bib.build_refs_bib(self.paper_dir, records)
+        self.assertEqual(built["entries"], ["akey", "bkey"])
+        text = (self.paper_dir / "refs.bib").read_text(encoding="utf-8")
+        self.assertLess(text.index("akey"), text.index("bkey"))
+
+    def test_build_refs_bib_rebuilds_whole_never_appends(self) -> None:
+        refs_path = self.paper_dir / "refs.bib"
+        refs_path.write_text("@misc{stale,\n  title = {Should Be Gone},\n}\n", encoding="utf-8")
+        result = self._resolved_result("fresh")
+        record = _cite_record("fresh", resolver="openalex", metadata_digest=result["metadata_digest"])
+        paper_bib.build_refs_bib(self.paper_dir, [record])
+        text = refs_path.read_text(encoding="utf-8")
+        self.assertNotIn("stale", text)
+        self.assertIn("fresh", text)
+
+    def test_one_unsourced_record_refuses_the_whole_rebuild_before_any_byte_written(self) -> None:
+        refs_path = self.paper_dir / "refs.bib"
+        refs_path.write_text("@misc{untouched,\n}\n", encoding="utf-8")
+        pre = refs_path.read_bytes()
+        with self.assertRaises(Refused):
+            paper_bib.build_refs_bib(self.paper_dir, [_cite_record("no-provenance")])
+        self.assertEqual(refs_path.read_bytes(), pre)
+
+
+class ReciprocalCheckTests(unittest.TestCase):
+    """`sourced-bibliography`, Requirement: Reciprocal Citation/Entry
+    Checks -- each direction fires independently, from two separate
+    fixtures."""
+
+    def test_cite_without_entry_fires_independently(self) -> None:
+        main_tex = rb"\cite{missing-entry}"
+        refs_bib = b""
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.check_reciprocal(main_tex, refs_bib)
+        self.assertEqual(ctx.exception.code, "CITE_WITHOUT_ENTRY")
+        self.assertIn("missing-entry", ctx.exception.detail)
+
+    def test_entry_without_cite_fires_independently(self) -> None:
+        main_tex = b"no citations here"
+        refs_bib = b"@misc{orphan-entry,\n  title = {X},\n}\n"
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.check_reciprocal(main_tex, refs_bib)
+        self.assertEqual(ctx.exception.code, "ENTRY_WITHOUT_CITE")
+        self.assertIn("orphan-entry", ctx.exception.detail)
+
+    def test_a_fully_reciprocal_bibliography_passes(self) -> None:
+        main_tex = rb"\cite{a-key} and \cite{b-key}"
+        refs_bib = b"@misc{a-key,\n}\n@misc{b-key,\n}\n"
+        report = paper_bib.check_reciprocal(main_tex, refs_bib)
+        self.assertEqual(report["cited"], ["a-key", "b-key"])
+        self.assertEqual(report["entries"], ["a-key", "b-key"])
 
 
 if __name__ == "__main__":

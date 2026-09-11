@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, or resolve a citation's metadata against OpenAlex/Crossref/arXiv. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve. Offline except `resolve`, which sits behind a config role that can be emptied."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, or rebuild refs.bib from cached resolved metadata. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build. Offline except `resolve`, which sits behind a config role that can be emptied."
 ---
 
 # Paper Writing
@@ -13,12 +13,13 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Ten verbs, wired into one front door (`scripts/paper_cli.py`):
+Eleven verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
-decisions — `the-paper-carries-its-own-decisions`), and `resolve` (citation
-metadata resolution — `no-claim-without-a-source-that-holds-it`). To the
+decisions — `the-paper-carries-its-own-decisions`), and `resolve`,
+`bib build` (citation resolution and a sourced bibliography —
+`no-claim-without-a-source-that-holds-it`). To the
 substitution engine, block ids stay opaque strings — shape only
 (`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
 exist, what each requires, and where in the document they belong, entirely
@@ -300,6 +301,21 @@ is never a secret — leaving it empty just means requests go out without it.
 a claim is a judgment the agent makes by reading a located span
 (`EvidenceSpan.locate`, `paper_evidence.py`) — this module only ever proves
 a span is real, byte for byte; it never decides what the span means.
+
+`bib build` rebuilds `paper/refs.bib` WHOLE, sorted, exclusively from
+cached resolved metadata — never appended, never hand-typed:
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py bib build
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `bib build` | Rebuilds `refs.bib` from every block's cached, resolved evidence records; checks both `\cite{}`/entry directions | `ENTRY_UNSOURCED`, `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE` |
+
+A hand-typed entry (no `resolver`/`metadata_digest` provenance) refuses
+`ENTRY_UNSOURCED` before a single byte of `refs.bib` is rewritten — checked
+entirely offline, since the provenance is either cached already or it is not.
 
 **Observing before declaring: the `insumos-observer` agent.** For the five
 facts an outside observer can check against evidence (`formulation`,

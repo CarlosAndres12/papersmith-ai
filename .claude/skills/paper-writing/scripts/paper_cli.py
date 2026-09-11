@@ -6,16 +6,17 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires ten verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires eleven verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
 (from `the-contract-is-data-not-code`); `declare`, `plan` (from
-`the-paper-carries-its-own-decisions`, Slices B and C2); and `resolve`
-(from `no-claim-without-a-source-that-holds-it`, WU1 — the one path that
-makes this CLI not offline end to end, keyless and behind a role
-`papersmith.yaml` can empty). Left extensible on purpose; nothing here
-assumes it is the last verb this file will ever grow.
+`the-paper-carries-its-own-decisions`, Slices B and C2); and `resolve`,
+`bib build` (from `no-claim-without-a-source-that-holds-it`, WU1/WU2 —
+`resolve` is the one path that makes this CLI not offline end to end,
+keyless and behind a role `papersmith.yaml` can empty; `bib build` rebuilds
+`refs.bib` whole from cached resolved metadata only). Left extensible on
+purpose; nothing here assumes it is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -38,6 +39,7 @@ import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substit
 import paper_objective  # noqa: E402,F401 -- this skill's own declared north (tests/test_agents.py); raises no Refused of its own
 import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the claim<->source record
 import paper_resolve  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the urllib resolution client
+import paper_bib  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU2: refs.bib from cached metadata
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -156,6 +158,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "RESOLVER_ROLE_EMPTY": WORK_STATE,
     "RESOLVER_UNREACHABLE": WORK_STATE,
     "IDENTIFIER_UNRESOLVED": WORK_STATE,
+    # --- the bibliography that cannot be typed (paper_bib.py; WU2) ------
+    "ENTRY_UNSOURCED": WORK_STATE,
+    "CITE_WITHOUT_ENTRY": WORK_STATE,
+    "ENTRY_WITHOUT_CITE": WORK_STATE,
 }
 
 
@@ -276,6 +282,17 @@ def cmd_resolve(args: argparse.Namespace) -> dict:
     )
     paper_resolve.cache_metadata(paper_dir, result)
     return result
+
+
+def cmd_bib(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    records = paper_evidence.read_all_records(paper_dir)
+    result = paper_bib.build_refs_bib(paper_dir, records)
+    tex_path = paper_block.resolve_main_tex(paper_dir)
+    reciprocal = paper_bib.check_reciprocal(
+        tex_path.read_bytes(), (paper_dir / "refs.bib").read_bytes(),
+    )
+    return {**result, "reciprocal": reciprocal}
 
 
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
@@ -485,6 +502,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="which papersmith.yaml connector role this call is validated against",
     )
 
+    p_bib = sub.add_parser("bib", help="paper/refs.bib management -- never hand-typed")
+    bib_sub = p_bib.add_subparsers(dest="bib_command", required=True)
+    p_bib_build = bib_sub.add_parser(
+        "build", help="rebuild refs.bib whole, sorted, from cached resolved metadata only",
+    )
+    p_bib_build.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+
     p_plan = sub.add_parser(
         "plan", help="read-only: guidance classes, declaration/fact fill state, provenance state",
     )
@@ -506,7 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve",
+    "resolve", "bib",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -519,6 +546,7 @@ _COMMANDS = {
     "declare": cmd_declare,
     "plan": cmd_plan,
     "resolve": cmd_resolve,
+    "bib": cmd_bib,
 }
 
 
