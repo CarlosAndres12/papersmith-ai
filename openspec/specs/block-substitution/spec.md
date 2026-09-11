@@ -217,6 +217,7 @@ invocation-defect or work-state:
 | `NOTHING_TO_ADOPT` | `--adopt` runs against a block whose on-disk digest already matches the recorded one | invocation-defect |
 | `SUBSTITUTION_NOT_LOCAL` | a write would alter bytes outside the target block | work-state |
 | `TEX_MOVED` | `main.tex` changed identity between read and write | work-state |
+| `CONTRACT_UNREADABLE` | `substitute` supplies `--contract <path>` and the path cannot be read | work-state |
 
 #### Scenario: Duplicated id
 
@@ -307,3 +308,44 @@ phase's scope.
 - THEN it holds the state immediately before the second substitution
   only; the state before the first substitution is not recoverable
   through this mechanism or through git, because neither retains it
+
+### Requirement: substitute Accepts an Optional --contract Flag
+
+`substitute` MUST accept an optional `--contract <path>`. Supplying it
+MUST NOT alter what bytes are written to the target block's region — it
+only adds a provenance record (`contract-provenance`, `Requirement: A
+Provenance Record Is Written Only at substitute Time`) once the
+substitution itself succeeds. `substitute` MUST refuse
+`CONTRACT_UNREADABLE` (work-state) when `--contract <path>` is given and
+the path cannot be read, and MUST write nothing — neither the block body
+nor a provenance record — in that case.
+
+#### Scenario: A provenanced substitution writes the same bytes as an unprovenanced one
+
+- GIVEN identical block content submitted twice, once with `--contract
+  sections/intro.md` and once without
+- WHEN both substitutions run against otherwise-identical starting files
+- THEN the resulting block bytes are identical in both cases; only the
+  `provenance` region differs
+
+#### Scenario: An unreadable contract path refuses before any write
+
+- GIVEN `--contract sections/missing.md` names a path that does not exist
+- WHEN `substitute` runs
+- THEN it refuses `CONTRACT_UNREADABLE`, and neither the block nor the
+  `provenance` region is written
+
+### Requirement: --contract Is Additive to the Existing Refusal Roster
+
+Every refusal `substitute` already raises (`BLOCK_ABSENT`,
+`BLOCK_HAND_EDITED`, `CONTENT_CARRIES_MARKER`, `SUBSTITUTE_MODE_REQUIRED`,
+`ADOPT_BODY_CONFLICT`, `SUBSTITUTION_NOT_LOCAL`, `TEX_MOVED`) MUST still
+fire exactly as before when `--contract` is supplied; `CONTRACT_UNREADABLE`
+is checked before any of them mutate `main.tex`, and MUST NOT suppress or
+reorder any existing refusal that would otherwise fire.
+
+#### Scenario: A hand-edited block still refuses even with --contract
+
+- GIVEN a hand-edited block and a valid `--contract <path>`
+- WHEN `substitute` targets that block
+- THEN it refuses `BLOCK_HAND_EDITED`, exactly as without `--contract`
