@@ -51,6 +51,8 @@ import paper_validate  # noqa: E402 -- no-claim-without-a-source-that-holds-it, 
 import paper_bindings  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: binding map reconciliation/resolution/typing/mode
 import paper_audit  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: verbatim Disqualifiers reconciliation
 import paper_write  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: the write pipeline and its attempt ledger
+import paper_style  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: style-reference resolution and R; for the roster derivation
+import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: register/overlap proof and the eight-token tripwire; for the roster derivation
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -205,6 +207,8 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "MODE_ABSENT": WORK_STATE,
     "EVIDENCE_SET_REQUIRED": WORK_STATE,
     "AUDIT_EXHAUSTED": WORK_STATE,
+    # --- the eight-token tripwire (paper_leak.py; WU2) ---------------------
+    "STYLE_OVERLAP": WORK_STATE,
 }
 
 

@@ -176,3 +176,16 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
 
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {"status": "written", "block": contract.block_id, "verdicts": audit_result["verdicts"], **result}
+
+
+def style_channel_report(recorded_samples: list, register_result: dict | None, overlap_result: dict | None) -> dict:
+    """Ruling 2 (orchestrator, this change): an empty `R` — every
+    style-reference resolved `noEquivalent` — means register distance
+    measures nothing and overlap is vacuously satisfied, so the style
+    channel reports `unmeasured` rather than a silent pass. Joins
+    `unprovenanced`/`unclassified`/`ambiguous` in this skill's own
+    uncertainty vocabulary (`design.md`, Decision D8's sibling for the style
+    channel)."""
+    if not recorded_samples:
+        return {"status": "unmeasured"}
+    return {"status": "measured", "register": register_result, "overlap": overlap_result}

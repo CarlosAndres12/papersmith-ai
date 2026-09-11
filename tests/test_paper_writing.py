@@ -36,6 +36,8 @@ import paper_vocabulary  # noqa: E402
 import paper_bindings  # noqa: E402
 import paper_audit  # noqa: E402
 import paper_write  # noqa: E402
+import paper_style  # noqa: E402
+import paper_leak  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -1331,6 +1333,20 @@ class WritingPipelineTests(unittest.TestCase):
         self.assertEqual(result["attempt"], 1)
 
 
+class StyleChannelReportingTests(unittest.TestCase):
+    """Ruling 2 (orchestrator, this change): an all-`noEquivalent` style set
+    reports `unmeasured`, it does not pass."""
+
+    def test_empty_style_set_reports_unmeasured(self) -> None:
+        result = paper_write.style_channel_report([], None, None)
+        self.assertEqual(result["status"], "unmeasured")
+
+    def test_nonempty_style_set_reports_measured(self) -> None:
+        recorded = [{"reference": "paperA", "span": "x"}]
+        result = paper_write.style_channel_report(recorded, {"pass": True}, {"pass": True})
+        self.assertEqual(result["status"], "measured")
+
+
 # =====================================================================
 # Ruling 1 -- the no-subprocess seam, with exactly one named exception
 # =====================================================================
@@ -1432,11 +1448,170 @@ class ZZLiveAgentGuardTests(unittest.TestCase):
         self.assertEqual(_live_agent_launches, [])
 
 
+# =====================================================================
+# the-writer-may-assert-only-what-it-was-given -- Work Unit 2
+# =====================================================================
+
+
+class StyleChannelTests(unittest.TestCase):
+    """`style-channel` spec."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.guidance_dir = Path(self._tmp.name) / "guidance"
+
+    def _make_reference(self, name: str) -> Path:
+        folder = self.guidance_dir / name
+        folder.mkdir(parents=True)
+        (folder / ".paper-writing.json").write_text(
+            json.dumps({"class": "style-reference"}), encoding="utf-8"
+        )
+        return folder
+
+    def test_a_style_reference_resolves_its_equivalent_block(self) -> None:
+        folder = self._make_reference("paperA")
+        md = folder / "paperA.md"
+        md.write_text("Intro text. The equivalent block reads exactly like this, whole.\n", encoding="utf-8")
+        proposals = [{
+            "reference": "paperA", "source_md": str(md),
+            "span": "The equivalent block reads exactly like this, whole.",
+        }]
+        recorded, no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+        self.assertEqual(no_equivalent, [])
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["reference"], "paperA")
+
+    def test_a_resolved_block_is_passed_intact_never_truncated(self) -> None:
+        folder = self._make_reference("paperA")
+        whole = "Sentence one. Sentence two. Sentence three."
+        md = folder / "paperA.md"
+        md.write_text(whole, encoding="utf-8")
+        proposals = [{"reference": "paperA", "source_md": str(md), "span": whole}]
+        recorded, _no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+        self.assertEqual(recorded[0]["span"], whole)
+
+    def test_r_contains_exactly_the_shown_samples(self) -> None:
+        folder_a = self._make_reference("paperA")
+        folder_b = self._make_reference("paperB")
+        md_a = folder_a / "paperA.md"
+        md_a.write_text("Block A body.", encoding="utf-8")
+        md_b = folder_b / "paperB.md"
+        md_b.write_text("Block B body.", encoding="utf-8")
+        proposals = [
+            {"reference": "paperA", "source_md": str(md_a), "span": "Block A body."},
+            {"reference": "paperB", "source_md": str(md_b), "span": "Block B body."},
+        ]
+        recorded, no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+        self.assertEqual(no_equivalent, [])
+        self.assertEqual({entry["reference"] for entry in recorded}, {"paperA", "paperB"})
+        self.assertEqual({entry["span"] for entry in recorded}, {"Block A body.", "Block B body."})
+
+    def test_a_proposed_span_not_byte_present_refuses_span_not_in_source(self) -> None:
+        folder = self._make_reference("paperA")
+        md = folder / "paperA.md"
+        md.write_text("Real content only.", encoding="utf-8")
+        proposals = [{"reference": "paperA", "source_md": str(md), "span": "Fabricated content."}]
+        with self.assertRaises(Refused) as ctx:
+            paper_style.resolve_style_set(self.guidance_dir, proposals)
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+
+    def test_no_equivalent_degrades_to_the_empty_style_set(self) -> None:
+        self._make_reference("paperA")
+        recorded, no_equivalent = paper_style.resolve_style_set(
+            self.guidance_dir, [{"reference": "paperA", "noEquivalent": True}],
+        )
+        self.assertEqual(recorded, [])
+        self.assertEqual(no_equivalent, ["paperA"])
+
+    def test_zero_style_references_is_the_empty_style_set(self) -> None:
+        recorded, no_equivalent = paper_style.resolve_style_set(self.guidance_dir, [])
+        self.assertEqual(recorded, [])
+        self.assertEqual(no_equivalent, [])
+
+
+class StyleLeakDetectionTests(unittest.TestCase):
+    """`style-leak-detection` spec. This is the second of the two decisive
+    proofs for this change: write one block three times -- two unstyled,
+    one styled -- and check both inequalities for real."""
+
+    def test_register_distance_rises_with_style_reported_with_its_control(self) -> None:
+        unstyled_a = "The system computes the objective. It reports the result plainly."
+        unstyled_b = "The method evaluates the loss. It states the outcome directly."
+        styled = (
+            "Verily, the apparatus doth compute yon objective most curiously! Behold, it "
+            "proclaimeth the result unto thee, exceedingly and most plainly indeed, forsooth!"
+        )
+        result = paper_leak.register_distance_holds(styled, unstyled_a, unstyled_b)
+        self.assertIn("d_S_AB", result)
+        self.assertIn("d_AB", result)
+        self.assertGreater(result["d_S_AB"], result["d_AB"])
+        self.assertTrue(result["pass"], result)
+
+    def test_dropping_the_ab_control_fails_construction(self) -> None:
+        with self.assertRaises(TypeError):
+            paper_leak.register_distance_holds("styled text", "unstyled a text")
+
+    def test_overlap_stays_at_the_chance_floor_passes(self) -> None:
+        samples = [{"reference": "paperA", "span": "the quick brown fox jumps over the lazy dog today"}]
+        unstyled_a = "an unrelated sentence about something else entirely today"
+        unstyled_b = "a different unrelated sentence about another topic today"
+        styled = "yet another styled sentence sharing almost nothing with the sample"
+        result = paper_leak.relative_overlap_holds(styled, unstyled_a, unstyled_b, samples)
+        self.assertTrue(result["pass"], result)
+
+    def test_styled_overlap_exceeding_both_baselines_fails(self) -> None:
+        samples = [{"reference": "paperA", "span": "the quick brown fox jumps over the lazy dog today"}]
+        unstyled_a = "completely unrelated text about nothing shared here at all"
+        unstyled_b = "another unrelated sentence sharing nothing with the sample text"
+        styled = "the quick brown fox jumps over the lazy dog today, verbatim and whole"
+        result = paper_leak.relative_overlap_holds(styled, unstyled_a, unstyled_b, samples)
+        self.assertFalse(result["pass"], result)
+        self.assertGreater(result["overlap_S"], max(result["overlap_A"], result["overlap_B"]))
+
+    def test_relative_overlap_holds_signature_carries_no_threshold(self) -> None:
+        sig = inspect.signature(paper_leak.relative_overlap_holds)
+        self.assertEqual(list(sig.parameters), ["styled", "unstyled_a", "unstyled_b", "samples"])
+        for name in sig.parameters:
+            self.assertNotIn("threshold", name.lower())
+            self.assertNotIn("min_token", name.lower())
+
+    def test_a_near_verbatim_lifted_sentence_refuses_style_overlap(self) -> None:
+        samples = [{"reference": "paperA", "span": "one two three four five six seven eight nine"}]
+        styled = "prefix text one two three four five six seven eight nine suffix text"
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_tripwire(styled, samples)
+        self.assertEqual(ctx.exception.code, "STYLE_OVERLAP")
+        self.assertIn("paperA", ctx.exception.detail)
+
+    def test_shared_math_notation_does_not_trip_the_tripwire(self) -> None:
+        shared_math = r"\(\alpha \beta \gamma \delta \epsilon \zeta \eta \theta \iota\)"
+        samples = [{"reference": "paperA", "span": f"Some prose. {shared_math} More prose."}]
+        styled = f"Different prose entirely. {shared_math} Also different."
+        hits = paper_leak.tripwire_spans(styled, samples)
+        self.assertEqual(hits, [])
+
+    def test_overlap_ignores_text_in_the_reference_file_outside_r(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ref_file = Path(tmp) / "reference.md"
+            ref_file.write_text(
+                "Recorded content only here today. UNRECORDED SECRET one two three four "
+                "five six seven eight",
+                encoding="utf-8",
+            )
+            samples = [{
+                "reference": "paperA", "source_md": str(ref_file),
+                "span": "Recorded content only here today.",
+            }]
+            styled = "UNRECORDED SECRET one two three four five six seven eight"
+            self.assertEqual(paper_leak.overlap_against_set(styled, samples), 0)
+            self.assertEqual(paper_leak.tripwire_spans(styled, samples), [])
+
+
 class WriterMutationProofTests(unittest.TestCase):
-    """`tasks.md` 1.11 -- the five Work Unit 1 mutations named in the
-    proposal, executed for real against the three new WU1 modules,
-    mirroring `MutationProofTests` above. WU2 adds two more
-    (`tasks.md` 2.3/2.5) once `paper_style.py`/`paper_leak.py` land."""
+    """`tasks.md` 1.11/2.3/2.5 -- the seven mutations named in the
+    proposal, executed for real against the five new modules, mirroring
+    `MutationProofTests` above."""
 
     def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
         output = proc.stdout + proc.stderr
@@ -1489,6 +1664,27 @@ class WriterMutationProofTests(unittest.TestCase):
             "        return []",
             "tests.test_paper_writing.ContractAuditTests.test_a_contract_missing_the_heading_refuses",
             source_path=SKILL_SCRIPTS / "paper_audit.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_6_optional_ab_control_fails_the_typeerror_guard(self) -> None:
+        proc = _run_against_mutant(
+            "def register_distance_holds(styled: str, unstyled_a: str, unstyled_b: str) -> dict:",
+            'def register_distance_holds(styled: str, unstyled_a: str, unstyled_b: str = "") -> dict:',
+            "tests.test_paper_writing.StyleLeakDetectionTests.test_dropping_the_ab_control_fails_construction",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_7_reading_the_reference_file_fails_the_recorded_set_guard(self) -> None:
+        proc = _run_against_mutant(
+            'return max(_longest_run(tokens, paper_style.normalize_tokens(sample["span"])) '
+            "for sample in samples)",
+            "return max(_longest_run(tokens, paper_style.normalize_tokens("
+            'Path(sample["source_md"]).read_text(encoding="utf-8"))) for sample in samples)',
+            "tests.test_paper_writing.StyleLeakDetectionTests"
+            ".test_overlap_ignores_text_in_the_reference_file_outside_r",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
         )
         self._assert_guard_failed_under_mutation(proc)
 
@@ -1712,19 +1908,19 @@ class RefusalRosterTests(unittest.TestCase):
         `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`,
         `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT`, plus
         `cmd_validate`'s own `VALIDATE_VERDICT_REQUIRED` in this file -- 7 + 1
-        = 8 new codes. Moved from 65 to 78 in WU1 of `the-writer-may-assert-
-        only-what-it-was-given`: `paper_contract.py`'s `mode` widening adds
-        `UNKNOWN_MODE` (1); `write` wires and starts importing
+        = 8 new codes. Moved from 65 to 79 in `the-writer-may-assert-only-
+        what-it-was-given`: `paper_contract.py`'s `mode` widening adds
+        `UNKNOWN_MODE` (1); WU1 wires `write` and starts importing
         `paper_bindings.py` (`UNBOUND_SENTENCE`, `BINDING_ORPHANED`,
         `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`,
         `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION` -- 6),
         `paper_audit.py` (`DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`,
         `VERDICT_BULLET_UNKNOWN` -- 3) and `paper_write.py`
-        (`MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `AUDIT_EXHAUSTED` -- 3) --
-        1 + 6 + 3 + 3 = 13 new codes. WU2 moves this to 79 by starting to
-        import `paper_leak.py` (`STYLE_OVERLAP` -- 1) and `paper_style.py`
-        (raises none of its own, reusing `SPAN_NOT_IN_SOURCE`)."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 78)
+        (`MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `AUDIT_EXHAUSTED` -- 3);
+        WU2 starts importing `paper_leak.py` (`STYLE_OVERLAP` -- 1) and
+        `paper_style.py` (raises none of its own, reusing
+        `SPAN_NOT_IN_SOURCE`) -- 1 + 6 + 3 + 3 + 1 = 14 new codes."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 79)
 
 
 if __name__ == "__main__":

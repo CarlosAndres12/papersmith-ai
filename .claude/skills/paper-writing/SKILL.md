@@ -412,6 +412,19 @@ contract's own `sections/*.md` file and its evidence set are both already
 readable; an agent asked to draft or audit against a source it cannot read
 cannot distinguish "nothing to cite" from "cannot be checked."
 
+The style channel follows the same shuttle shape: the orchestrating agent
+delegates to the `style-sampler` agent per `style-reference`-classed
+`guidance/` folder, and its verified, recorded account becomes `R` — the
+only material any later overlap check may compare a styled draft against.
+An all-`noEquivalent` style set reports the style channel `unmeasured`
+(`paper_write.style_channel_report`), not a silent pass: an unmeasured
+register/overlap check proves nothing about whether style leaked.
+
+**Measure this before delegating (style-sampler):** confirm the guidance
+registry has already classed at least one folder `style-reference`; an
+agent asked to sample against a registry that classes nothing cannot
+distinguish "no style channel wanted" from "nothing to sample yet."
+
 ### `mode`: how a block is licensed to argue
 
 `sections/*.md` headers may now declare a `mode` — `transposition` or
@@ -427,6 +440,27 @@ evidence bindings — a block reporting an existing result. `argument`
 additionally admits `discovery`-class evidence — a block making a claim
 about the field. Binding a `discovery`-class record under `transposition`
 refuses `MODE_VIOLATION`.
+
+### The style-leak proof: register rises, overlap does not
+
+Style must not carry content. Proven, not asserted, by drafting one block
+three times against identical contract, evidence and mode — twice with an
+empty style set (`A`, `B`) and once with the real one (`S`) — then checking
+two measurements:
+
+- **Register distance**, `d(S,{A,B})`, must exceed `d(A,B)` — the A/B
+  control is a required argument to `paper_leak.register_distance_holds`,
+  never optional, so the control cannot be silently dropped.
+- **N-gram overlap**, `overlap(S,R) <= max(overlap(A,R), overlap(B,R))` —
+  self-calibrating against whatever chance floor two unstyled drafts
+  already share, with `paper_leak.relative_overlap_holds` taking no
+  threshold parameter at all.
+
+Independent of both: any shared run of **eight or more** normalized tokens
+between a styled draft and a sample in `R` refuses `STYLE_OVERLAP` by name
+— a tripwire, not the proof; tuning it can never move the guarantee above,
+because the guarantee's own function reads no threshold. Both measurements
+read `R` alone, never a reference file directly.
 
 ## Refusal roster
 
