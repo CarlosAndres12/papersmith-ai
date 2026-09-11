@@ -28024,6 +28024,9 @@ _ENGLISH_COUNTS = {
     # of the `cmd_*` bodies alone.
     110: "One hundred and ten", 111: "One hundred and eleven",
     112: "One hundred and twelve",
+    # Cut 3 (`a-revision-is-two-documents`, Phase 9, D3): one new reachable
+    # work-state code, `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`.
+    113: "One hundred and thirteen",
 }
 
 
@@ -28382,7 +28385,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
             {("implementation_engine.py", "cmd_name"),
              ("impl_steps.py", "_verdict_result")})
 
-    def test_the_derivation_finds_the_measured_one_hundred_and_twelve(self):
+    def test_the_derivation_finds_the_measured_one_hundred_and_thirteen(self):
         """Sanity check on the derivation itself, not on the roster: a change
         that adds, removes or renames a refusal anywhere a gating command can
         reach should move this number, never a typo in the walk above.
@@ -28396,9 +28399,13 @@ class GatingRefusalRosterTests(unittest.TestCase):
         altogether. The forty-two it gained were not added by any change; they
         were always raised, always reachable, and never seen. One hundred and
         twelve is that reading plus `PRODUCT_DIR_MISNAMED`, which nine write
-        verbs now raise before they can open a second product tree.
+        verbs now raise before they can open a second product tree. One
+        hundred and thirteen (`a-revision-is-two-documents`, Cut 3, D3) is
+        that reading plus `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`, raised
+        inside `cmd_position` itself -- measured here, never predicted, per
+        that change's own design.
         """
-        self.assertEqual(len(reachable_refusal_codes()), 112)
+        self.assertEqual(len(reachable_refusal_codes()), 113)
 
     def test_the_roster_classifies_nothing_a_gating_command_cannot_raise(self):
         """The reverse direction, and the half the forward lock cannot give.

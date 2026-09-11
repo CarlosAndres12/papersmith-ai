@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -50,10 +51,20 @@ _BLOCK_OPEN_MARKER = rb"<!--\s*position\b"
 #: (implementation_cli.py) is the migration path: a fresh header, sequence
 #: items preserved by witness identity, ticks re-derived from scratch under
 #: the new grammar.
+#: The optional trailing group (Cut 3, `a-revision-is-two-documents`, D3):
+#: a compact, whitespace-free carrier for every document beyond document 0.
+#: `revision=`/`sha256=` keep meaning document 0, exactly as they always
+#: have; this group is appended AFTER `target=`, never reordering or
+#: reshaping a field already on disk. `\S+` alone (matching
+#: `_encode_extra_documents`'s own base64 alphabet, which contains no
+#: whitespace) is what lets this group carry an arbitrary number of
+#: `{label, revision, revisionSha256}` entries without inventing a
+#: delimiter that might collide with a label or revision name.
 _BLOCK_OPEN_RE = re.compile(
     rb"<!--\s*position\s+revision=(?P<revision>\S+)\s+"
     rb"sha256=(?P<sha256>[0-9a-f]{64})\s+derivedAt=(?P<derivedAt>\S+)\s+"
-    rb"session=(?P<session>\S+)\s+target=(?P<target>\S+)\s*-->"
+    rb"session=(?P<session>\S+)\s+target=(?P<target>\S+)"
+    rb"(?:\s+documents=(?P<documents>\S+))?\s*-->"
 )
 
 #: The exact opener the grammar's first revision wrote, kept only so
@@ -131,6 +142,25 @@ WITNESS_RE = re.compile(
     r"`@(?P<kind>[a-z]+)(?P<leveled>:level)?(?: (?P<operand>[^`]+))?`\s*$")
 
 
+def _encode_extra_documents(entries: list[dict]) -> bytes:
+    """The header's `documents=` group value, for every document beyond
+    document 0 (Cut 3, D3): canonical, separator-free JSON, base64-encoded
+    -- the base64 alphabet carries no whitespace, so this always satisfies
+    `\\S+` regardless of what a label or revision name itself contains.
+    """
+    payload = json.dumps(entries, separators=(",", ":"), sort_keys=True)
+    return base64.urlsafe_b64encode(payload.encode("utf-8"))
+
+
+def _decode_extra_documents(raw: bytes) -> list[dict]:
+    """The inverse of `_encode_extra_documents`. Raises `ValueError` (bad
+    base64) or a `json.JSONDecodeError` (bad JSON) on a corrupt group --
+    both are caught by `locate_block`'s own caller and folded into the
+    identical `POSITION_BLOCK_MALFORMED` class every other opener parse
+    failure already raises."""
+    return json.loads(base64.urlsafe_b64decode(raw).decode("utf-8"))
+
+
 def locate_block(data: bytes, allow_legacy: bool = False) -> dict | None:
     """Find the position block's byte span in `data`, or say there is none.
 
@@ -180,6 +210,26 @@ def locate_block(data: bytes, allow_legacy: bool = False) -> dict | None:
             "POSITION_BLOCK_MALFORMED",
             "no matching `<!-- /position -->` closer was found for the opener.")
 
+    # Cut 3 (D3): `None` when the group did not match at all (a legacy
+    # header, or a document-0-only header written before this cut) --
+    # never confused with an empty list, which is what an EMPTY-but-present
+    # group would decode to. `_LEGACY_BLOCK_OPEN_RE` names no `documents`
+    # group at all, so `header.group("documents")` below would raise
+    # `IndexError` on a legacy match; `legacy` is checked first for exactly
+    # that reason.
+    documents = None
+    if not legacy:
+        documents_raw = header.group("documents")
+        if documents_raw is not None:
+            try:
+                documents = _decode_extra_documents(documents_raw)
+            except (ValueError, UnicodeDecodeError) as exc:
+                raise Refused(
+                    "POSITION_BLOCK_MALFORMED",
+                    "the `<!-- position ... -->` opener's `documents=` "
+                    f"group does not decode as this grammar's compact "
+                    f"per-document encoding: {exc}") from exc
+
     return {
         "start": header.start(),
         "end": close + len(BLOCK_CLOSE),
@@ -190,6 +240,7 @@ def locate_block(data: bytes, allow_legacy: bool = False) -> dict | None:
         "session": header.group("session").decode("ascii"),
         "target": None if legacy else header.group("target").decode("ascii"),
         "legacy": legacy,
+        "documents": documents,
     }
 
 
@@ -1051,11 +1102,22 @@ def render(header: dict, items: list[dict]) -> str:
     caller's; this only lays out the fixed grammar around them, so a caller
     that wants marks left untouched for an unmeasured witness passes items
     whose `mark` it never changed.
+
+    `header.get("documents")` (Cut 3, D3): the trailing `documents=` group
+    is emitted only when this key is present AND non-empty -- absent or
+    empty, the opener's bytes are IDENTICAL to this function's pre-Cut-3
+    output, byte for byte. `revision`/`revisionSha256` keep meaning
+    document 0 regardless.
     """
+    documents = header.get("documents")
+    documents_field = (
+        f" documents={_encode_extra_documents(documents).decode('ascii')}"
+        if documents else "")
     lines = [
         f"<!-- position revision={header['revision']} "
         f"sha256={header['revisionSha256']} derivedAt={header['derivedAt']} "
-        f"session={header['session']} target={header['target']} -->"
+        f"session={header['session']} target={header['target']}"
+        f"{documents_field} -->"
     ]
     for item in items:
         witness = item["witness"]

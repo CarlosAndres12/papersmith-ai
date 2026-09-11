@@ -4518,6 +4518,20 @@ def _admissibility_extra_documents(revision: str | None) -> list[dict]:
             for entry in _extra_document_revisions(revision)]
 
 
+def _position_extra_documents(revision: str | None) -> list[dict]:
+    """`{label, revision, revisionSha256}` for every document beyond
+    document 0, for the position header's own additive `documents=` group
+    (Cut 3, `a-revision-is-two-documents`, D3). Same shape as
+    `_admissibility_extra_documents`, kept as its own small function
+    rather than shared: each site class lands in its own commit (design.md
+    D2's own ordering rule), and a shared helper introduced mid-class would
+    couple C2's landing to C3's already-committed code.
+    """
+    return [{"label": entry["label"], "revision": entry["revision"],
+             "revisionSha256": entry["sha256"]}
+            for entry in _extra_document_revisions(revision)]
+
+
 def is_managed_artifact(path: Path) -> bool:
     """Whether a file carries the publisher's marker as its very first bytes.
 
@@ -10423,7 +10437,9 @@ def cmd_position(args: argparse.Namespace) -> dict:
 
     **`status: "unchanged"` skips the write entirely.** Comparing the
     complete item list — witness, text, mark, and count — old vs new, plus
-    `(revision, revisionSha256, targetLevel)`, but never `derivedAt`, which
+    `(revision, revisionSha256, targetLevel)` and, under two or more
+    declared documents (Cut 3, `a-revision-is-two-documents`, D3), the
+    additive `documents` group too — but never `derivedAt`, which
     would differ on every single call and defeat the comparison: a refresh
     that finds nothing to flip and nothing to rebind, or a reconcile that
     discovers nothing new, leaves the file and the ledger untouched. Writing
@@ -10492,6 +10508,24 @@ def cmd_position(args: argparse.Namespace) -> dict:
         holder_digests[path] = impl_position.digest_bytes(data)
         block = impl_position.locate_block(data, allow_legacy=True)
         if block is not None:
+            # Cut 3 (`a-revision-is-two-documents`, D3): a header's
+            # `documents=` group only ever makes sense under a profile
+            # declaring more than one document. `impl_position.py` itself
+            # is domain-neutral and cannot know `len(DOCUMENTS)`, so the
+            # engine is the one place this mismatch is caught -- refused,
+            # never half-read. The opposite direction (no `documents=`
+            # group, read under a two-document profile) is the ordinary
+            # migration case `allow_legacy` already generalizes: it still
+            # opens, with `revision`/`sha256` meaning document 0 exactly as
+            # today, and gets the group added on the next write.
+            if block.get("documents") is not None and len(DOCUMENTS) <= 1:
+                raise Refused(
+                    "POSITION_HEADER_DOCUMENT_COUNT_MISMATCH",
+                    f"{path.relative_to(target)}'s position header carries "
+                    "a `documents=` group naming more than one document, "
+                    "but this target's own profile declares only one; the "
+                    "header was written under a different document count "
+                    "than this invocation is running with.")
             holders_with_block.append((path, block))
     if len(holders_with_block) > 1:
         raise Refused(
@@ -10589,6 +10623,8 @@ def cmd_position(args: argparse.Namespace) -> dict:
             "resolve": position_finding_resolution(args, []),
             "revision": args.revision,
             "revisionSha256": revision_sha256, "targetLevel": None,
+            **({"documents": _position_extra_documents(args.revision)}
+               if len(DOCUMENTS) > 1 else {}),
         }
     else:
         items = impl_position.parse_items(existing_block["body"])
@@ -10649,6 +10685,12 @@ def cmd_position(args: argparse.Namespace) -> dict:
     if record_shape is not None:
         raise Refused("POSITION_RECORD_MALFORMED", record_shape)
     header["target"] = target_level
+    # Cut 3 (`a-revision-is-two-documents`, D3): additive, absent under one
+    # document -- `render` never emits the `documents=` group unless this
+    # key is present and non-empty, so the header's bytes are unchanged at
+    # `len(DOCUMENTS) == 1`.
+    if len(DOCUMENTS) > 1:
+        header["documents"] = _position_extra_documents(args.revision)
 
     evidence = _position_write_evidence(target, name, getattr(args, "shards", None))
     evidence["targetLevel"] = target_level
@@ -10706,6 +10748,11 @@ def cmd_position(args: argparse.Namespace) -> dict:
         and existing_block["revision"] == args.revision
         and existing_block["revisionSha256"] == revision_sha256
         and existing_block["target"] == target_level
+        # Cut 3 (D3): dark under one document -- `header.get("documents")`
+        # is absent there, so this comparison is skipped entirely and the
+        # condition is exactly what it was before this cut existed.
+        and (len(DOCUMENTS) <= 1
+             or existing_block.get("documents") == header.get("documents"))
         and not wrote
     )
 
@@ -10728,6 +10775,8 @@ def cmd_position(args: argparse.Namespace) -> dict:
             "sequence": sequence, "revision": existing_block["revision"],
             "revisionSha256": existing_block["revisionSha256"],
             "targetLevel": target_level,
+            **({"documents": existing_block.get("documents")}
+               if len(DOCUMENTS) > 1 else {}),
         }
 
     before_bytes = target_path.read_bytes() if target_path.exists() else b""
@@ -10748,7 +10797,9 @@ def cmd_position(args: argparse.Namespace) -> dict:
         {"kind": "position", "session": args.session, "revision": args.revision,
          "revisionSha256": revision_sha256, "targetLevel": target_level,
          "holder": str(target_path.relative_to(target)),
-         "wrote": wrote, "left": left, "at": header["derivedAt"]})
+         "wrote": wrote, "left": left, "at": header["derivedAt"],
+         **({"documents": header.get("documents")}
+            if len(DOCUMENTS) > 1 else {})})
 
     return {
         "command": "position", "target": str(target), "name": name,
@@ -10758,6 +10809,7 @@ def cmd_position(args: argparse.Namespace) -> dict:
         "resolve": position_finding_resolution(args, sequence),
         "sequence": sequence, "revision": args.revision,
         "revisionSha256": revision_sha256, "targetLevel": target_level,
+        **({"documents": header.get("documents")} if len(DOCUMENTS) > 1 else {}),
     }
 
 
@@ -15668,6 +15720,13 @@ GATING_REFUSALS: dict[str, str] = {
     # The shape half of the same declaration. A work state for the identical
     # reason: nothing in the invocation can fix an entry the target wrote.
     "POSITION_RECORD_MALFORMED": WORK_STATE,
+    # Cut 3 (`a-revision-is-two-documents`, D3): a header's own `documents=`
+    # group and this invocation's declared document count disagree. Neither
+    # side is a flag this command accepts -- the header lives in the
+    # document, the document count lives in the target's own profile -- so
+    # this is a work state, the identical reasoning `POSITION_STEP_UNKNOWN`
+    # and `POSITION_RECORD_UNKNOWN` already state just above.
+    "POSITION_HEADER_DOCUMENT_COUNT_MISMATCH": WORK_STATE,
 
     # --- the guards every gating command runs before it does anything -------
     # `resolve_target`, `require_clean_worktree` and `require_non_forge_
@@ -16362,6 +16421,12 @@ _WORK_STATE_RESOLUTIONS = {
               "which); write the entry as `{\"path\": ..., "
               "\"requiredScale\": {...}}` now, or say why that record is "
               "not addressable yet, and why?"),
+    "POSITION_HEADER_DOCUMENT_COUNT_MISMATCH": lambda args: _refusal_question(
+        args, "the position header carries a `documents=` group naming "
+              "more than one document, but this target's own profile "
+              "declares only one (the refusal detail names the file); was "
+              "this header written under a different document count, and "
+              "should the profile or the header change to agree, and why?"),
     "POSITION_LEVELS_UNDECLARED": lambda args: _refusal_question(
         args, "an item in this sequence is marked as reaching a rung and the "
               "target's benchmark package declares no `__levels__` ladder for "
