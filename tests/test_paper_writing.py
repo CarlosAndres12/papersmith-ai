@@ -1050,8 +1050,8 @@ class ContractHeaderTests(unittest.TestCase):
         self.assertIsNone(header.blocks[0]["figure"]["components_from"])
 
 
-def _derive_figure_holders(sections_dir: Path = SECTIONS_DIR) -> dict:
-    """`filename -> block_id` for EVERY block in `sections_dir` that
+def _derive_figure_holders(sections_dir: Path = SECTIONS_DIR) -> list:
+    """`[(filename, block_id), ...]` for EVERY block in `sections_dir` that
     declares a `figure:` obligation -- DERIVED by parsing every real
     `sections/*.md` file's own header, never a fixed list of ids typed by
     hand.
@@ -1064,18 +1064,32 @@ def _derive_figure_holders(sections_dir: Path = SECTIONS_DIR) -> dict:
     one to also remember to update a dict elsewhere in a different file.
     Module-level (not a class attribute) so a mutated COPY of the corpus
     can also be scanned from `tests/test_paper_figure.py`'s own mutation
-    proof, without needing to instantiate this TestCase."""
-    holders: dict[str, str] = {}
+    proof, without needing to instantiate this TestCase.
+
+    W3's OWN re-verify (latent WARNING, cousin of the same finding class):
+    the first version of this derivation replaced the hand-typed dict with
+    a FRESH `dict[str, str]` keyed by `path.name`, assigned INSIDE the loop
+    over that file's own blocks -- `holders[path.name] = block["id"]`. A
+    second figure-declaring block in the same file silently overwrote the
+    first, reopening the exact collapse this function exists to close.
+    Nothing in the real corpus exercised it (each of the three real
+    figure-declaring contracts holds exactly one such block), so it was
+    unreachable, not absent. A list of `(filename, block_id)` pairs cannot
+    collapse the same way -- proven by
+    `FigureHolderDerivationDoesNotCollapseTests`, which builds a synthetic
+    contract with two figure-declaring blocks in one file and confirms both
+    survive."""
+    holders: list = []
     for path in sorted(sections_dir.glob("*.md")):
         header, _body = paper_contract.parse(path.read_bytes())
         for block in header.blocks:
             if block["figure"] is not None:
-                holders[path.name] = block["id"]
+                holders.append((path.name, block["id"]))
     return holders
 
 
 def _assert_proof_classified_blocks_carry_their_derivation(
-    sections_dir: Path, holders: dict, realism_proof: dict,
+    sections_dir: Path, holders: list, realism_proof: dict,
 ) -> None:
     """For every derived `(filename, block_id)` classified `"proof:..."` in
     `realism_proof`, the REAL, on-disk header at `sections_dir` MUST
@@ -1093,7 +1107,7 @@ def _assert_proof_classified_blocks_carry_their_derivation(
     callable, and its failure observable, from OUTSIDE a `TestCase` --
     `tests/test_paper_figure.py`'s own mutation proof calls this directly
     against a mutated copy and asserts it raises."""
-    for filename, block_id in holders.items():
+    for filename, block_id in holders:
         entry = realism_proof.get(block_id)
         if entry is None or not entry.startswith("proof:"):
             continue
@@ -1106,6 +1120,57 @@ def _assert_proof_classified_blocks_carry_their_derivation(
                 "Check proof), but its real figure.components_from is now None -- either "
                 "restore the field or reclassify this entry to 'exempt:<reason>'"
             )
+
+
+class FigureHolderDerivationDoesNotCollapseTests(unittest.TestCase):
+    """`a-diagram-that-compiles-or-says-why`'s re-verify, WARNING (latent):
+    `_derive_figure_holders` built its `dict[str, str]` return by assigning
+    `holders[path.name] = block["id"]` INSIDE the loop over that file's own
+    blocks -- exactly the shape it exists to close (a second figure-
+    declaring block in the same contract silently overwrites the first, and
+    that block then drops out of every anti-drift check reading this map).
+    No real `sections/*.md` file currently holds two such blocks, so this
+    was unreachable through the corpus; it is reachable through a
+    synthetic contract that names it directly."""
+
+    _FIGURE = {
+        "ordered": False, "excludes": [], "caption_enumerates": False,
+        "caption_decodes": False, "mandatory": False,
+    }
+
+    def _two_figure_block_header(self) -> dict:
+        block = {
+            "id": None, "requires_facts": [], "requires_declarations": [], "citations": "none",
+            "figure": dict(self._FIGURE),
+        }
+        first = dict(block, id="fig-a")
+        second = dict(block, id="fig-b")
+        return {"section": "demo", "position": 1, "blocks": [first, second]}
+
+    def test_two_figure_declaring_blocks_in_one_file_both_survive_derivation(self) -> None:
+        header_dict = self._two_figure_block_header()
+        # Round-trips through the real parser first, matching every other
+        # fixture in this module -- a malformed synthetic header would prove
+        # nothing about the real collapse.
+        paper_contract.parse_header(header_dict)
+
+        file_bytes = b"---\n" + json.dumps(header_dict).encode("utf-8") + b"\n---\nbody\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            sections_dir.mkdir()
+            (sections_dir / "two-figures.md").write_bytes(file_bytes)
+
+            holders = _derive_figure_holders(sections_dir)
+
+        holder_block_ids = [block_id for filename, block_id in holders if filename == "two-figures.md"]
+        self.assertIn(
+            "fig-a", holder_block_ids,
+            "fig-a dropped out of the derivation -- the second block overwrote it",
+        )
+        self.assertIn(
+            "fig-b", holder_block_ids,
+            "fig-b dropped out of the derivation -- a same-filename collapse lost a block",
+        )
 
 
 class FigureObligationTranscriptionTests(unittest.TestCase):
@@ -1122,7 +1187,7 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
         return " ".join(text.split())
 
     def test_every_excludes_entry_and_components_from_occur_in_the_holders_own_prose(self) -> None:
-        for filename, block_id in _derive_figure_holders().items():
+        for filename, block_id in _derive_figure_holders():
             path = SECTIONS_DIR / filename
             header, body = paper_contract.parse(path.read_bytes())
             block = next(b for b in header.blocks if b["id"] == block_id)
@@ -1185,7 +1250,7 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
                     child.name for child in node.body if isinstance(child, ast.FunctionDef)
                 }
 
-        for filename, block_id in _derive_figure_holders().items():
+        for filename, block_id in _derive_figure_holders():
             self.assertIn(
                 block_id, self._COMPONENTS_REALISM_PROOF,
                 f"{filename}: {block_id} declares figure: but names no realism proof or exemption",

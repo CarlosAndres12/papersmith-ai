@@ -606,7 +606,7 @@ class ComponentsFromDerivationGuardTests(unittest.TestCase):
             (mutant_dir / "01-materials-and-methods.md").write_bytes(mutant_bytes)
 
             holders = twp._derive_figure_holders(mutant_dir)
-            self.assertEqual(holders, {"01-materials-and-methods.md": "mm-proposal"})
+            self.assertEqual(holders, [("01-materials-and-methods.md", "mm-proposal")])
 
             with self.assertRaises(AssertionError) as ctx:
                 twp._assert_proof_classified_blocks_carry_their_derivation(
