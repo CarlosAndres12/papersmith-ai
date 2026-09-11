@@ -4435,15 +4435,23 @@ def read_provenance(path: Path) -> dict | None:
     return None
 
 
-def proposals_root() -> Path:
-    """Where managed revisions live.
+def proposals_root(index: int = 0) -> Path:
+    """Where managed revisions live, for the document at `index`.
+
+    `index=0` (the default) is byte-identical to this function's pre-Cut-3
+    shape: the SAME env var name, the SAME fallback. A second document
+    (Cut 3, `a-revision-is-two-documents`, M5) cannot share that one
+    variable, so `IMPLEMENTATION_PROPOSALS_1` overrides `DOCUMENTS[1]`
+    and nothing else -- no generic `IMPLEMENTATION_PROPOSALS_0` alias was
+    added; the bare variable already means document 0.
 
     Overridable so the forge's own tests can drive the skill from a neutral
     fixture instead of somebody's research. A paper forge must not have its test
     suite depend on one paper.
     """
-    override = os.environ.get("IMPLEMENTATION_PROPOSALS")
-    return Path(override) if override else DOCUMENTS_DIRECTORY
+    env_key = "IMPLEMENTATION_PROPOSALS" if index == 0 else f"IMPLEMENTATION_PROPOSALS_{index}"
+    override = os.environ.get(env_key)
+    return Path(override) if override else DOCUMENTS[index]["directory"]
 
 
 #: The first bytes a published revision carries, and the only fact about a
@@ -4456,14 +4464,43 @@ def proposals_root() -> Path:
 MANAGED_ARTIFACT_MARKER = b"<!-- proposal-workspace:artifact:v1 -->\n"
 
 
-def revision_source(revision: str | None) -> str | None:
-    """The bound revision's text, read from the proposals directory."""
+def revision_source(revision: str | None, index: int = 0) -> str | None:
+    """The bound revision's text, read from the proposals directory at
+    `index` (document 0 by default -- byte-identical to this function's
+    pre-Cut-3 shape). One revision NAME resolves against every declared
+    document's own directory: `a-revision-is-two-documents` (Cut 3) means
+    exactly that -- a revision is the pair of files that name shares
+    across `DOCUMENTS[0]`'s and `DOCUMENTS[1]`'s roots, not two
+    independently-named artifacts.
+    """
     if not revision:
         return None
-    path = proposals_root() / revision
+    path = proposals_root(index) / revision
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _extra_document_revisions(revision: str | None) -> list[dict]:
+    """`{label, revision, sha256}` for every declared document beyond
+    document 0 (Cut 3, D1b) -- additive, meaningful only when a caller has
+    already confirmed `len(DOCUMENTS) > 1`; this helper does not re-check
+    that guard itself, mirroring `_authorization_binding`'s own division of
+    labour with its caller. `sha256` is `None` for a document whose
+    revision file is not (yet) readable at that index -- the identical
+    "reported, never refused" tolerance `revision_source` itself already
+    keeps for document 0, extended per-index rather than special-cased.
+    """
+    entries = []
+    for index in range(1, len(DOCUMENTS)):
+        source = revision_source(revision, index)
+        sha256 = (hashlib.sha256(source.encode("utf-8")).hexdigest()
+                  if source is not None else None)
+        entries.append({
+            "label": DOCUMENTS[index]["label"], "revision": revision,
+            "sha256": sha256,
+        })
+    return entries
 
 
 def is_managed_artifact(path: Path) -> bool:
@@ -12570,6 +12607,32 @@ _AUTHORIZATION_BINDING_KEYS = (
 )
 
 
+def _authorization_binding_keys(record_or_binding: dict) -> tuple[str, ...]:
+    """Which keys THIS mapping's own re-digest must cover (Cut 3,
+    `a-revision-is-two-documents`, design.md D1c) -- the eight base keys
+    `_AUTHORIZATION_BINDING_KEYS` always names, plus `documentRevisions`
+    **only when the mapping itself already carries that key**. Presence,
+    never a null value -- the exact discriminator `GATE_AUTHORIZATION_
+    SUPERSEDED`'s own `"proposalDigest" not in record` check already trusts
+    one layer up (M3), extended here for the harder case: `revisionSha256`
+    itself is present in BOTH shapes and only its meaning would change, so
+    no absence test on it could ever see the difference. `documentRevisions`
+    is the key that genuinely is absent under one document, and it is what
+    this helper actually discriminates on.
+
+    `_AUTHORIZATION_BINDING_KEYS` itself stays a literal 8-tuple, unedited
+    (D1c, the trap): growing it directly would make every already-minted
+    ONE-document record on disk re-digest over a ninth key it never carried
+    (`record.get()` returning `None`), failing every token in every clone.
+    Routing `own_binding`'s own comprehension through this helper instead is
+    what keeps a one-document record's re-digest touching exactly the eight
+    keys it was originally minted with.
+    """
+    if "documentRevisions" in record_or_binding:
+        return _AUTHORIZATION_BINDING_KEYS + ("documentRevisions",)
+    return _AUTHORIZATION_BINDING_KEYS
+
+
 def _verify_gate_authorization(events: list, token: str, binding: dict) -> dict:
     """The full check behind `gate --authorization <token>` (design "What
     `gate` refuses"), run once, immediately before `append_event`, over
@@ -12617,7 +12680,8 @@ def _verify_gate_authorization(events: list, token: str, binding: dict) -> dict:
          if e.get("kind") == "authorization" and e.get("token") == token),
         None)
     if record is not None:
-        own_binding = {key: record.get(key) for key in _AUTHORIZATION_BINDING_KEYS}
+        own_binding = {key: record.get(key)
+                       for key in _authorization_binding_keys(record)}
         # `mintOrdinal` is part of the digest payload `_find_or_mint_
         # authorization` hashes (the timestamp-collision fix); it must be
         # folded back in here too, or every genuinely minted token would
@@ -12680,6 +12744,20 @@ def _verify_gate_authorization(events: list, token: str, binding: dict) -> dict:
             "token authorizes one exact launch, never a different one.")
     if any(record[key] != binding[key] for key in
            ("commit", "entrypoint", "rung", "revisionSha256", "positionStatus")):
+        raise Refused(
+            "GATE_AUTHORIZATION_STALE",
+            f"token {token!r} was minted against a pin, entrypoint, rung, "
+            "revision or position status that no longer match what this "
+            "gate call just re-derived -- a fact this launch depends on "
+            "moved, never merely elapsed time. Publish a fresh "
+            "authorization with `offer`.")
+    # Additive (Cut 3, `a-revision-is-two-documents`, D1): a second check,
+    # never folded into the five-key tuple above -- under one document
+    # `binding` never carries `documentRevisions` at all (D1b), so this
+    # branch never runs and the check above stays byte-identical to its
+    # pre-cut shape. Under two or more, a document beyond the first moving
+    # is exactly as stale a fact as `revisionSha256` moving.
+    if "documentRevisions" in binding and record.get("documentRevisions") != binding["documentRevisions"]:
         raise Refused(
             "GATE_AUTHORIZATION_STALE",
             f"token {token!r} was minted against a pin, entrypoint, rung, "
@@ -13172,6 +13250,14 @@ def cmd_gate(args: argparse.Namespace) -> dict:
         # freshly re-derived one (see the comment beside
         # `_AUTHORIZATION_BINDING_KEYS` itself).
         "proposalDigest": _proposal_digest(events, campaign),
+        # Cut 3 (`a-revision-is-two-documents`, D1b): a spread, not a ninth
+        # named key -- `AuthorizationBindingKeysStructuralTests` reads this
+        # literal's own keys by `ast` and a spread entry is invisible to
+        # that walk, so the structural test stays reading exactly the eight
+        # keys `_AUTHORIZATION_BINDING_KEYS` declares while this dict still
+        # carries a ninth, at runtime, under two or more documents.
+        **({"documentRevisions": _extra_document_revisions(args.revision)}
+           if len(DOCUMENTS) > 1 else {}),
     }
     record = _verify_gate_authorization(events, args.authorization, gate_binding)
 
@@ -13324,8 +13410,8 @@ def _offer_launch_action(target, name, args, rcli, position, evidence, job_dir):
     }
 
 
-def _authorization_binding(action: dict, revision_sha256: str, position_status: str,
-                           events: list, campaign: dict) -> dict:
+def _authorization_binding(action: dict, revision: str | None, revision_sha256: str,
+                           position_status: str, events: list, campaign: dict) -> dict:
     """The identity two mints of the SAME upcoming launch must agree on
     (design decision 3, "mint-if-absent") -- everything the engine itself
     re-derives about what is about to be launched, and nothing an agent's
@@ -13354,6 +13440,19 @@ def _authorization_binding(action: dict, revision_sha256: str, position_status: 
     same way `gate --unit` already authorizes the whole campaign, not one
     job's slice of it. Never from argv; there is no `--proposal` flag
     anywhere in this file.
+
+    `documentRevisions` (Cut 3, `a-revision-is-two-documents`, D1b) is
+    present in the returned mapping **only when `len(DOCUMENTS) > 1`**,
+    added by the `**` spread below rather than by a ninth named key in
+    this literal -- `AuthorizationBindingKeysStructuralTests` reads this
+    return's dict-literal keys statically by `ast`, and a spread entry is
+    invisible to that walk, which is what keeps the structural test
+    reading exactly the eight keys `_AUTHORIZATION_BINDING_KEYS` declares,
+    unedited, while the mapping this function actually RETURNS at runtime
+    still grows a ninth key under two documents. `revision` (the
+    caller's own `args.revision`, never re-derived here) is what
+    `_extra_document_revisions` resolves against `DOCUMENTS[1:]`'s own
+    directories -- one revision name, one file per document.
     """
     binding = action["binding"]
     return {
@@ -13362,6 +13461,8 @@ def _authorization_binding(action: dict, revision_sha256: str, position_status: 
         "rung": binding["rung"], "revisionSha256": revision_sha256,
         "positionStatus": position_status,
         "proposalDigest": _proposal_digest(events, campaign),
+        **({"documentRevisions": _extra_document_revisions(revision)}
+           if len(DOCUMENTS) > 1 else {}),
     }
 
 
@@ -13598,7 +13699,7 @@ def cmd_offer(args: argparse.Namespace) -> dict:
         if action["id"] != "launch":
             continue
         binding = _authorization_binding(
-            action, revision_sha256, position["status"], events, campaign)
+            action, args.revision, revision_sha256, position["status"], events, campaign)
         token = _find_or_mint_authorization(
             ledger_path, events, binding, args.session, recorded_at)
         action["binding"]["authorization"] = token
