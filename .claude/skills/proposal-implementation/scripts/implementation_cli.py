@@ -7532,7 +7532,7 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     source = revision_source(args.revision)
     if source is None:
         raise Refused("REVISION_UNREADABLE",
-                      f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+                      f"{args.revision!r} is not readable under {proposals_root()}; "
                       "admissibility cannot be ruled on and no remedy may be measured.")
 
     tags = set(TAG_RE.findall(source))
@@ -10359,7 +10359,7 @@ def cmd_position(args: argparse.Namespace) -> dict:
     if source is None:
         raise Refused(
             "REVISION_UNREADABLE",
-            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            f"{args.revision!r} is not readable under {proposals_root()}; "
             "the position header cannot be bound to a revision.")
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
@@ -12979,7 +12979,7 @@ def cmd_gate(args: argparse.Namespace) -> dict:
     if source is None:
         raise Refused(
             "REVISION_UNREADABLE",
-            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            f"{args.revision!r} is not readable under {proposals_root()}; "
             "a gate cannot be recorded against a revision that cannot be read.")
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
@@ -13506,7 +13506,7 @@ def cmd_offer(args: argparse.Namespace) -> dict:
     if source is None:
         raise Refused(
             "REVISION_UNREADABLE",
-            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            f"{args.revision!r} is not readable under {proposals_root()}; "
             "offer cannot publish an action set against a revision that "
             "cannot be read.")
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
@@ -13680,7 +13680,7 @@ def cmd_close(args: argparse.Namespace) -> dict:
     if source is None:
         raise Refused(
             "REVISION_UNREADABLE",
-            f"{args.revision!r} is not readable under {FORGE_ROOT / 'proposals'}; "
+            f"{args.revision!r} is not readable under {proposals_root()}; "
             "close cannot require a position true against a revision that "
             "cannot be read.")
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
