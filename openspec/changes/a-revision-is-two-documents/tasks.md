@@ -53,41 +53,41 @@ Chain strategy: stacked-to-main
 
 ## Phase 0 — Slice A baseline (A0)
 
-- [ ] 0.1 `.venv/bin/python -m unittest discover -s tests`: paste `Ran`/`OK (skipped=6)`.
-- [ ] 0.2 `npm test`: paste `595/595`.
-- [ ] 0.3 Seal run: `sha256(tests/seal/digests.json)`, paste; `git diff --exit-code tests/seal/` exits 0.
+- [x] 0.1 `.venv/bin/python -m unittest discover -s tests`: paste `Ran`/`OK (skipped=6)`. Measured: `Ran 2874 tests in 632.070s` / `OK (skipped=6)`.
+- [x] 0.2 `npm test`: paste `595/595`. Measured: `pass 595` / `fail 0`.
+- [x] 0.3 Seal run: `sha256(tests/seal/digests.json)`, paste; `git diff --exit-code tests/seal/` exits 0. Measured: `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75`; diff exit 0.
 
 ## Phase 1 — RED first: indexed-leaf refusals (A1)
 
-- [ ] 1.1 `test(...)` commit only: add refusal cases to `tests/test_implementation_profile.py` for `documents[1].directory` and `documents[0].label` missing, each naming the exact indexed leaf, and for `documents: []` refusing `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[0]`.
-- [ ] 1.2 Confirm RED before any resolver or profile change; checkout the `test(...)` commit alone and re-run to prove it is red in isolation.
+- [x] 1.1 `test(...)` commit only: add refusal cases to `tests/test_implementation_profile.py` for `documents[1].directory` and `documents[0].label` missing, each naming the exact indexed leaf, and for `documents: []` refusing `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[0]`. Commit `f5d2258`.
+- [x] 1.2 Confirm RED before any resolver or profile change; checkout the `test(...)` commit alone and re-run to prove it is red in isolation. Confirmed: all 3 new cases FAILED (message named the bare `documents.directory`/`documents.label`, never the indexed form) before Phase 2's resolver change.
 
 ## Phase 2 — Resolver per-index walk + one-entry list + accessor (A2)
 
-- [ ] 2.1 `impl_domain_profile.py`: replace `_REQUIRED_ABSOLUTE_ONLY`'s single `("documents", "directory")` pair and `_REQUIRED_PRESENCE`'s `("documents", "label")` pair with a per-entry walk emitting indexed leaf names (`documents[N].directory`, `documents[N].label`).
-- [ ] 2.2 `impl_profile.py`: `documents` becomes a one-entry list, same literal values.
-- [ ] 2.3 `implementation_engine.py`: `DOCUMENTS = PROFILE["documents"]`; `DOCUMENTS_DIRECTORY = DOCUMENTS[0]["directory"]`, `DOCUMENTS_LABEL = DOCUMENTS[0]["label"]` — spelling unchanged, value unchanged at `len == 1`.
-- [ ] 2.4 Phase 1's RED cases turn GREEN. Implementation commit.
-- [ ] 2.5 Seal run: 28/28 byte-identical.
+- [x] 2.1 `impl_domain_profile.py`: replace `_REQUIRED_ABSOLUTE_ONLY`'s single `("documents", "directory")` pair and `_REQUIRED_PRESENCE`'s `("documents", "label")` pair with a per-entry walk emitting indexed leaf names (`documents[N].directory`, `documents[N].label`).
+- [x] 2.2 `impl_profile.py`: `documents` becomes a one-entry list, same literal values.
+- [x] 2.3 `implementation_engine.py`: `DOCUMENTS = PROFILE["documents"]`; `DOCUMENTS_DIRECTORY = DOCUMENTS[0]["directory"]`, `DOCUMENTS_LABEL = DOCUMENTS[0]["label"]` — spelling unchanged, value unchanged at `len == 1`.
+- [x] 2.4 Phase 1's RED cases turn GREEN. Implementation commit `f5f97ab`. All 28 tests in `test_implementation_profile.py` green (including all existing profile fixtures updated to the list shape).
+- [x] 2.5 Seal run: 28/28 byte-identical. Confirmed via `test_implementation_seal.py` (44 tests OK) and `git diff --exit-code tests/seal/` = 0.
 
 ## Phase 3 — Fixture profile + `IMPLEMENTATION_PROPOSALS_1` (A3)
 
-- [ ] 3.1 `tests/fixtures/two_documents/impl_profile.py`: two-entry `documents` list, written to a `tempfile` dir at run time via the same `_write_scratch_profile` mechanism Cut 2 uses; `_SKILL` re-anchored to the real skill directory.
-- [ ] 3.2 `tests/seal/harness.py`: add `IMPLEMENTATION_PROPOSALS_1` to `ALLOWED_ENV_KEYS`. The bare `IMPLEMENTATION_PROPOSALS` keeps overriding document 0 only (M5) — no generic `IMPLEMENTATION_PROPOSALS_0` alias.
-- [ ] 3.3 Seal run: 28/28 byte-identical.
+- [x] 3.1 `tests/fixtures/two_documents/impl_profile.py`: two-entry `documents` list, written to a `tempfile` dir at run time via the same `_write_scratch_profile` mechanism Cut 2 uses; `_SKILL` re-anchored to the real skill directory. Commit `cecc40d`.
+- [x] 3.2 `tests/seal/harness.py`: add `IMPLEMENTATION_PROPOSALS_1` to `ALLOWED_ENV_KEYS`. The bare `IMPLEMENTATION_PROPOSALS` keeps overriding document 0 only (M5) — no generic `IMPLEMENTATION_PROPOSALS_0` alias. Same commit `cecc40d`.
+- [x] 3.3 Seal run: 28/28 byte-identical. `git diff --exit-code -- tests/seal/cases.json tests/seal/digests.json tests/seal/corpus.py` = 0; `harness.py`'s sanctioned 9-line diff is the only change under `tests/seal/`.
 
 ## Phase 4 — Pair corpus + its own goldens (A4)
 
-- [ ] 4.1 `tests/pair/cases.json` + `tests/pair/digests.json`: new roster, own goldens, driven through `seal_harness.run_case` via `_build_env_with_profile_override`. No entry added to `tests/seal/digests.json`.
-- [ ] 4.2 **Measure, then assert** which pair-corpus case reaches each pair branch introduced in Slice A (resolver per-index refusal, `DOCUMENTS[1]` presence). Name the reaching case per branch — do not assert first and hunt for a case.
-- [ ] 4.3 Seal run: existing 28 unaffected; `git diff --exit-code tests/seal/` exits 0.
+- [x] 4.1 `tests/pair/cases.json` + `tests/pair/digests.json`: new roster, own goldens, driven through `seal_harness.run_case` via a profile-override wrapper (same mechanism as `_build_env_with_profile_override`). No entry added to `tests/seal/digests.json` (asserted directly in `test_implementation_pair.py::SealCorpusUntouchedByPairCorpusTests`). Commit `cb74e88`.
+- [x] 4.2 **Measure, then assert** which pair-corpus case reaches each pair branch introduced in Slice A. Named: `pair-two-documents-resolve` reaches "DOCUMENTS[1] presence" (a real subprocess loads a two-document profile and completes normally, exit 0); `pair-second-document-missing-directory-refuses` reaches the resolver's per-index refusal (real subprocess, nonzero exit, stderr names `documents[1].directory` exactly — proven directly against raw stdout+stderr, not only the digested `CaseResult`).
+- [x] 4.3 Seal run: existing 28 unaffected; `git diff --exit-code tests/seal/` exits 0 (verified after Phase 3+4 committed; `SealCorpusUntouchedTests` — Cut 2's own dirty-tree gate — confirmed green post-commit).
 
 ## Phase 5 — Positive control (A5, D8) — precondition gate before Slice B
 
-- [ ] 5.1 Under `.venv/bin/python` only. Mutate `documents[0].directory` to a fresh `tempfile.mkdtemp()` sibling; assert **exactly** `admit-e0`, `close-e0`, `gate-e0`, `offer-e0`, `position-e0` move and no other — the set already recorded in `MEASURED_MOVERS["documents.directory"]`.
-- [ ] 5.2 **If this does not reproduce, stop.** Every zero-mover reading in this session becomes void; do not proceed to Slice B until it reproduces under `.venv/bin/python` (never system `python3`, which breaks `CLI_INVOCATION` and crashes both sides identically).
-- [ ] 5.3 Confirm Slice A moved **zero** digests overall — the structural claim of D4, proven only by this seal run, not assumed from the accessor's shape.
-- [ ] 5.4 Slice A close-out: both suites pasted, `git diff --exit-code tests/seal/` exits 0. Slice A is independently landable here.
+- [x] 5.1 Under `.venv/bin/python` only. Mutate `documents[0].directory` to a fresh `tempfile.mkdtemp()` sibling; assert **exactly** `admit-e0`, `close-e0`, `gate-e0`, `offer-e0`, `position-e0` move and no other — the set already recorded in `MEASURED_MOVERS["documents.directory"]`. **Reproduced exactly**: `EXPECTED == MOVED == ['admit-e0', 'close-e0', 'gate-e0', 'offer-e0', 'position-e0']`, isolated run with explicit anchor-discipline assertions (1/0 before, 0/1 after mutation). Also confirmed via the suite's own `PerLeafChangeMutationTests.test_every_leaf_moves_exactly_its_measured_case_set` (all 14 change-tested leaves, including `documents.directory`, green).
+- [x] 5.2 **If this does not reproduce, stop.** — N/A, it reproduced. Proceeding to Slice B is authorized by this gate.
+- [x] 5.3 Confirm Slice A moved **zero** digests overall — the structural claim of D4, proven only by this seal run, not assumed from the accessor's shape. Confirmed: `sha256(tests/seal/digests.json)` unchanged from Phase 0 baseline (`011300df7daf...`), `git diff --exit-code tests/seal/` = 0, 44/44 seal comparison tests green.
+- [x] 5.4 Slice A close-out: both suites pasted, `git diff --exit-code tests/seal/` exits 0. Slice A is independently landable here. Final measured: `.venv/bin/python -m unittest discover -s tests` → `Ran 2883 tests in 514.315s` / `OK (skipped=6)`; `npm test` → `pass 595` / `fail 0`; seal diff exit 0.
 
 ---
 
