@@ -31,16 +31,31 @@ Cut-1 field set (design.md D3, amended 2026-09-11 -- operator ruling on task
   `experimental-deliberation/profile.ts` each declare their own `objective`
   and `_core/deliberation/engine/domain-profile.ts` hardcodes neither).
 
-Nothing else. `documents`, `provenance`, `document_reader`, `findings`,
-`vocabulary`, `cli_invocation` are out of scope for Cut 1 -- each would be a
-profile field nothing here reads, and an unprovable field is the shape of a
-false guard.
+Cut-2 field set (`the-domain-crosses-the-seam`, design.md D1/D7), fifteen
+leaves landed one at a time (S3-S9), plus `vocabulary.names` landed at S13
+alongside the two neutrality locks it exists to serve. Each carries TODAY'S
+EXACT LITERAL BYTES the engine used to hardcode -- a profile supplying the
+same literal composes the same output, which is what keeps all 28 sealed
+digests byte-identical (design.md's whole bar). See design.md D1's table for
+each leaf's reader and its predicted digest mover; D2 for why the provenance
+side shares one read/write leaf per key while the findings side splits read
+keys from wire keys; D6 for why `documents.label`'s value ("proposal") is
+NOT a member of `vocabulary.names` below -- that word collides with 78 of
+152 campaign-proposal hits elsewhere in this engine and is governed by its
+own three-layer exclusion test instead.
+
+`document_reader`, `cli_invocation`, `provenance.drift_unit_key`,
+`provenance.revision_key`, `documents.marker` remain out of scope --
+`provenance.drift_unit_key` does not exist at all (it IS the shared coarse
+key `"sections"`, kept hardcoded in the engine by the B2 ruling); the other
+four carry their own recorded reasons in design.md D1.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 _SKILL = Path(__file__).resolve().parent
+_FORGE_ROOT = _SKILL.parents[2]
 
 #: WHY THIS SKILL WAS INVOKED, AND WHERE IT HAS TO ARRIVE.
 #:
@@ -128,4 +143,69 @@ PROFILE = {
     "kit": {"root": _SKILL},
     "cli": {"path": _SKILL / "scripts" / "implementation_cli.py"},
     "objective": OBJECTIVE_FLOW,
+    "provenance": {
+        # `unreached_mathematics`, `benchmark_unfaithfulness`, `wiring_proposal`,
+        # `cmd_verify`'s module row, `authored_package_init` -- the read key and
+        # the emitted key are the SAME leaf (design.md D2, "the exact silent
+        # mismatch this cut exists to remove").
+        "claim_key": "equations",
+        # `authored_package_init`'s writer (design.md D3): moves VERBATIM, one
+        # leaf, not composed from `claim_key` + a template -- composing would
+        # leave the engine holding this sentence's English grammar.
+        "authored_init_sentence": (
+            "Each module declares the sections and equations it implements in\n"
+            "`__provenance__`, and every invariant listed there has a matching\n"
+            "test under tests/.\n"),
+    },
+    "findings": {
+        # `remedy_compatibility`, `cmd_admit`'s verdict loop, `cmd_handoff`'s
+        # item builder, `cmd_verify`'s audit block.
+        "locus_key": "equations",
+        # `finding_impact`, `remedy_compatibility`, `cmd_admit`, `cmd_handoff`
+        # (including its `selectedEntryId` branch), `cmd_verify`'s audit block.
+        "remedy_locus_key": "remedy_equations",
+        # `finding_impact`'s returned dict, `cmd_handoff`'s item, `remedy_
+        # compatibility`'s return, `cmd_verify`'s audit block. Wire spelling is
+        # camelCase; read spelling is snake_case -- one leaf could not serve
+        # both without the engine transliterating (design.md D2).
+        "notation_keys": {
+            "locus": "equations",
+            "remedyLocus": "remedyEquations",
+            "unknown": "unknownEquations",
+        },
+        # M1 (design.md): the `names` lock reads the engine's whole text, so
+        # `CITATION_RE`'s pattern string moves here too -- read by
+        # `finding_impact`.
+        "citation_pattern": (
+            r"Ecs?\.?\s*\(?(\d+)\)?|Eq\.?\s*\(?(\d+)\)?|Ecuaciones?\s*\((\d+)\)"),
+    },
+    "vocabulary": {
+        # M2 (design.md): the subject vocabulary is bilingual, three
+        # grammatical forms -- English singular/plural, Spanish
+        # singular/plural, and a mass noun in both languages. Seven leaves.
+        "subject_singular": "equation",
+        "subject_plural": "equations",
+        "subject_singular_es": "ecuación",
+        "subject_plural_es": "ecuaciones",
+        "subject_collective": "mathematics",
+        "subject_collective_es": "matemática",
+        # `authored_package_init`'s `"{name} formulation"`.
+        "artifact_noun": "formulation",
+        # Declared at S13 (design.md D7), alongside the two neutrality locks
+        # it exists to serve -- NOT here. See `test_implementation_domain_lock.py`.
+    },
+    "documents": {
+        # SINGLE-ENTRY SHAPE ONLY -- `documents` becoming a list is Cut 3's
+        # job, not this one's (design.md's Interfaces/Contracts block).
+        # `proposals_root()` -> `revision_source`, `revision_discovery`, and
+        # the 5 hardcoded-path refusals. Required, absolute, existence NOT
+        # required (M3) -- validated by its own resolver tier, never
+        # `_REQUIRED_NESTED`'s exists()-walk.
+        "directory": _FORGE_ROOT / "proposals",
+        # Those same 5 refusals' prose, and `ARMS_UNDECLARED_CONSEQUENCE`.
+        # Deliberately NOT a member of `vocabulary.names` (design.md D6): this
+        # exact word collides with 78 of 152 campaign-proposal hits elsewhere
+        # in the engine and is governed by its own three-layer exclusion test.
+        "label": "proposal",
+    },
 }

@@ -56,6 +56,38 @@ _ENV_VAR = "IMPLEMENTATION_DOMAIN_PROFILE"
 #: them is a path.
 _REQUIRED_NESTED: tuple[tuple[str, str], ...] = (("kit", "root"), ("cli", "path"))
 
+#: Cut-2 (`the-domain-crosses-the-seam`, design.md D1/D7): the non-path
+#: leaves a domain profile must declare, checked for PRESENCE only -- never
+#: walked by the `..._UNSAFE_PATH` check below, which treats every
+#: `_REQUIRED_NESTED` pair as a filesystem path. `vocabulary.names` is
+#: deliberately absent here: design.md D7 lands it at S13, alongside the two
+#: neutrality locks it exists to serve, not at S2 with the other fourteen.
+_REQUIRED_PRESENCE: tuple[tuple[str, str], ...] = (
+    ("provenance", "claim_key"),
+    ("provenance", "authored_init_sentence"),
+    ("findings", "locus_key"),
+    ("findings", "remedy_locus_key"),
+    ("findings", "notation_keys"),
+    ("findings", "citation_pattern"),
+    ("vocabulary", "subject_singular"),
+    ("vocabulary", "subject_plural"),
+    ("vocabulary", "subject_singular_es"),
+    ("vocabulary", "subject_plural_es"),
+    ("vocabulary", "subject_collective"),
+    ("vocabulary", "subject_collective_es"),
+    ("vocabulary", "artifact_noun"),
+    ("documents", "label"),
+)
+
+#: `documents.directory` gets its OWN tier (design.md M3): required and
+#: absolute, like `_REQUIRED_NESTED`'s pairs, but existence is NOT required.
+#: `proposals_root()`'s own readers already tolerate an absent root --
+#: `revision_discovery` returns `empty`, `revision_source` returns `None` --
+#: so putting this leaf in `_REQUIRED_NESTED` would refuse AT IMPORT on any
+#: clone with no `proposals/` yet, turning five reported absences (the
+#: seal's own `*-e0` cases) into one fatal refusal: a behavioural delta.
+_REQUIRED_ABSOLUTE_ONLY: tuple[tuple[str, str], ...] = (("documents", "directory"),)
+
 #: `domain-profile.ts`'s own `OBJECTIVE_REQUIRED` mirrored exactly: the four
 #: top-level keys a declared north must carry.
 _OBJECTIVE_REQUIRED: tuple[str, ...] = ("purpose", "stages", "arrival", "humanStops")
@@ -140,7 +172,8 @@ def _resolve() -> Mapping[str, Any]:
             "no `PROFILE`, or it is not a mapping.")
 
     missing = []
-    for section, key in _REQUIRED_NESTED:
+    for section, key in (
+            _REQUIRED_NESTED + _REQUIRED_PRESENCE + _REQUIRED_ABSOLUTE_ONLY):
         section_value = profile.get(section)
         if not isinstance(section_value, Mapping) or key not in section_value:
             missing.append(f"{section}.{key}")
@@ -192,6 +225,21 @@ def _resolve() -> Mapping[str, Any]:
             f"IMPLEMENTATION_DOMAIN_PROFILE_UNSAFE_PATH: {configured} "
             f"declares an unsafe {', '.join(unsafe)} (must be absolute and "
             "exist on disk).")
+
+    # `_REQUIRED_ABSOLUTE_ONLY` (M3): its own tier, absolute required,
+    # existence NOT required -- a separate loop and a separate message,
+    # never merged into the one above, which is exactly what would refuse
+    # `documents.directory` at import on a clone with no `proposals/` yet.
+    unsafe_absolute_only = []
+    for section, key in _REQUIRED_ABSOLUTE_ONLY:
+        value = Path(profile[section][key])
+        if not value.is_absolute():
+            unsafe_absolute_only.append(f"{section}.{key}")
+    if unsafe_absolute_only:
+        raise ImplementationProfileError(
+            f"IMPLEMENTATION_DOMAIN_PROFILE_UNSAFE_PATH: {configured} "
+            f"declares an unsafe {', '.join(unsafe_absolute_only)} (must be "
+            "absolute; existence is not required).")
 
     return profile
 
