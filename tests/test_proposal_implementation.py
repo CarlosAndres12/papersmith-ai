@@ -15604,6 +15604,56 @@ class PositionModuleTests(unittest.TestCase):
     def test_absent_block_is_a_state_not_an_error(self):
         self.assertIsNone(impl_position.locate_block(b"# Doc\n\nNo block here.\n"))
 
+    # --- Cut 3 (`a-revision-is-two-documents`, D3): the optional `documents=` group ---
+
+    def test_a_documents_group_round_trips_through_render_and_locate_block(self):
+        """A two-document header: `revision=`/`sha256=` still name document
+        0, and the trailing group carries the rest, round-tripped exactly."""
+        extra = [{"label": "experiments", "revision": "r1.md",
+                  "revisionSha256": "b" * 64}]
+        header = {**self.HEADER, "documents": extra}
+        items = [{"ordinal": 1, "mark": " ", "text": "x",
+                  "witness": {"kind": "record", "operand": None}}]
+        text = impl_position.render(header, items).encode("utf-8")
+        self.assertIn(b"documents=", text)
+
+        block = impl_position.locate_block(text)
+        self.assertEqual(block["revision"], self.HEADER["revision"])
+        self.assertEqual(block["revisionSha256"], self.HEADER["revisionSha256"])
+        self.assertEqual(block["target"], self.HEADER["target"])
+        self.assertEqual(block["documents"], extra)
+
+    def test_a_header_without_documents_key_emits_no_group_and_decodes_to_none(self):
+        """Byte-identical to this function's pre-Cut-3 output: no `documents`
+        key at all (never an empty list) produces the exact same opener
+        bytes, and reading it back answers `documents: None`, never `[]` --
+        the two are distinct states (D3's own distinction, mirrored from
+        `locate_block`'s own absent-vs-empty discipline elsewhere)."""
+        items = [{"ordinal": 1, "mark": " ", "text": "x",
+                  "witness": {"kind": "record", "operand": None}}]
+        text = impl_position.render(self.HEADER, items)
+        expected_opener = (
+            f"<!-- position revision={self.HEADER['revision']} "
+            f"sha256={self.HEADER['revisionSha256']} "
+            f"derivedAt={self.HEADER['derivedAt']} "
+            f"session={self.HEADER['session']} target={self.HEADER['target']} -->")
+        self.assertTrue(text.startswith(expected_opener))
+        self.assertNotIn("documents=", text)
+
+        block = impl_position.locate_block(text.encode("utf-8"))
+        self.assertIsNone(block["documents"])
+
+    def test_a_malformed_documents_group_raises_position_block_malformed(self):
+        malformed = (
+            b"<!-- position revision=r1.md sha256=" + b"a" * 64 +
+            b" derivedAt=2026-08-27T00:00:00Z session=s0 target=final "
+            b"documents=not-valid-base64!!! -->\n"
+            b"- [ ] 1. x. `@record`\n"
+            b"<!-- /position -->\n")
+        with self.assertRaises(impl.Refused) as ctx:
+            impl_position.locate_block(malformed)
+        self.assertEqual(ctx.exception.code, "POSITION_BLOCK_MALFORMED")
+
     # --- derive(): three-valued, per witness kind, never guessing on absence ---
 
     def test_derive_record_ticks_on_found_and_required_scale_satisfied(self):
@@ -16656,6 +16706,71 @@ class StepOperandRefusalTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout)
         result = json.loads(proc.stdout)
         self.assertEqual(result["status"], "unchanged")
+
+
+class PositionDocumentCountMismatchTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 9, design.md D3): a
+    position header carrying a `documents=` group, read under THIS
+    process's own real one-document profile, is refused rather than
+    half-read. Runs against the real launcher (a subprocess, matching this
+    file's own `--about`-adjacent conventions), so `impl.DOCUMENTS`'
+    module-import-time value never has to be faked -- it already IS one
+    document, the real profile every other test in this file already runs
+    under.
+    """
+
+    #: A valid base64-encoded compact `documents=` payload
+    #: (`[{"label": "experiments", "revision": "r1.md",
+    #: "revisionSha256": "b"*64}]`), computed offline against the exact
+    #: production encoding this cut adds -- never hand-typed.
+    DOCUMENTS_GROUP = (
+        "W3sibGFiZWwiOiJleHBlcmltZW50cyIsInJldmlzaW9uIjoicjEubWQiLCJyZXZpc2lvblNoYT"
+        "I1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJi"
+        "YmJiYmJiYmJiYmJiYmIifV0=")
+
+    PROPOSAL_TEXT = "## 1\ntexto\n"
+    PROPOSAL_SHA256 = hashlib.sha256(PROPOSAL_TEXT.encode("utf-8")).hexdigest()
+
+    def _proposals(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "r1.md").write_text(self.PROPOSAL_TEXT, encoding="utf-8")
+        return root
+
+    def _box(self):
+        box = FORGE / "implementations" / f"_e2e_position_doc_mismatch_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text("", encoding="utf-8")
+        return box
+
+    def run_cli(self, *args, proposals=None):
+        env = dict(os.environ)
+        if proposals is not None:
+            env["IMPLEMENTATION_PROPOSALS"] = str(proposals)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_a_documents_group_read_under_a_one_document_profile_refuses(self):
+        box = self._box()
+        header = (
+            f"<!-- position revision=r1.md sha256={self.PROPOSAL_SHA256} "
+            f"derivedAt=2026-08-27T00:00:00Z session=s0 target=final "
+            f"documents={self.DOCUMENTS_GROUP} -->\n")
+        (box / "Method" / "AGREED.md").write_text(
+            header + "- [ ] 1. Something. `@record`\n<!-- /position -->\n",
+            encoding="utf-8")
+        proc = self.run_cli("position", "--target", str(box), "--name", "Method",
+                            "--revision", "r1.md", "--session", "s1",
+                            proposals=self._proposals())
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["code"],
+                         "POSITION_HEADER_DOCUMENT_COUNT_MISMATCH")
 
 
 class PositionRecordMalformedTests(unittest.TestCase):
