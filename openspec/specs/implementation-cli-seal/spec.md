@@ -13,8 +13,16 @@ discipline. Governs the seal only, not the CLI's existing runtime behavior.
 ### Requirement: Seal Capture Scope
 
 The seal MUST run all 20 subcommands (20 `cmd_*` functions, 20 `COMMANDS`
-entries) against a fixed fixture corpus, capturing raw stdout bytes and exit
-status, and MUST digest each.
+entries) against a fixed fixture corpus, invoked through the per-skill
+launcher's own entry point — never through the engine module directly, and
+never through whichever file `CLI_INVOCATION`/`CLI_PATH` happens to resolve
+to internally — capturing raw stdout bytes and exit status, and MUST digest
+each.
+
+(Previously: the entry point was implicit in `CLI_INVOCATION`; this
+requirement pinned the twenty subcommands but never named the entry point
+itself, so a launcher/engine split — introduced by Cut 1 — could silently
+seal the wrong file.)
 
 #### Scenario: Every subcommand is captured
 
@@ -27,6 +35,15 @@ status, and MUST digest each.
 - GIVEN a 21st subcommand added to `COMMANDS`
 - WHEN the coverage check runs
 - THEN it fails, naming the uncaptured subcommand
+
+#### Scenario: The sealed entry point is the launcher, not the engine
+
+- GIVEN the engine now lives at
+  `_core/implementation/engine/implementation_engine.py`, separate from the
+  per-skill launcher
+- WHEN the seal invokes any case
+- THEN the invoked path is the launcher's literal file, and if `CLI_PATH`
+  instead resolved to the engine, the case's digest would move
 
 ### Requirement: Corpus Coverage By Construction
 
@@ -144,13 +161,13 @@ seal delta, since `PRODUCT_DIRS[1] == "Data"`.
 
 The change MUST NOT alter either existing suite's pass/fail outcome beyond
 F3's sanctioned delta. `npm test` MUST remain 595/0; the Python suite MUST
-remain `Ran 2783 ... OK (skipped=6)`, both re-run and pasted after the change.
+remain `Ran 2849 ... OK (skipped=6)`, both re-run and pasted after the change.
 
 #### Scenario: Both baselines hold
 
-- GIVEN the change applied on `a851390`
+- GIVEN the change applied after the engine extraction
 - WHEN both suites re-run, output redirected to files
-- THEN `npm test` shows 595 pass/0 fail and Python shows `Ran 2783` `OK
+- THEN `npm test` shows 595 pass/0 fail and Python shows `Ran 2849` `OK
   (skipped=6)`
 
 #### Scenario: `proposal-deliberation` is untouched
