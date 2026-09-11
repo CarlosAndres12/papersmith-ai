@@ -53,6 +53,9 @@ import paper_audit  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given
 import paper_write  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: the write pipeline and its attempt ledger
 import paper_style  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: style-reference resolution and R; for the roster derivation
 import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: register/overlap proof and the eight-token tripwire; for the roster derivation
+import paper_latex  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the sole subprocess seam (latexmk), invocation, log parse, verdict; for the roster derivation
+import paper_figure  # noqa: E402 -- a-diagram-that-compiles-or-says-why: source/manifest layout, stop A, the compile pipeline, the repair-budget ledger; `render`/`place` verbs
+import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: components/separation/caption/mandatory checks over the contract's `figure:` declaration; imported ahead of any verb calling it directly (the same shape `paper_region.py`/`paper_guidance.py` already established) so its refusals are reachable the moment the import lands
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -209,6 +212,29 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "AUDIT_EXHAUSTED": WORK_STATE,
     # --- the eight-token tripwire (paper_leak.py; WU2) ---------------------
     "STYLE_OVERLAP": WORK_STATE,
+    # --- a-diagram-that-compiles-or-says-why: `render`/`place`, the sole
+    # subprocess seam (paper_latex.py), source/manifest layout and the
+    # repair ledger (paper_figure.py), and the obligation checks
+    # (paper_obligation.py, imported ahead of any verb calling it directly
+    # -- reachable the moment the import lands, the same shape
+    # paper_region.py/paper_guidance.py already established). Twelve codes
+    # from `authored-diagram`/`diagram-obligation`, plus two this skill's
+    # own design introduces for behaviour the spec described without
+    # naming a code (`LATEX_LOG_ABSENT`, `LATEX_OUTCOME_UNEXPLAINED`) -----
+    "DIAGRAM_SOURCE_ABSENT": WORK_STATE,
+    "LATEX_TOOLCHAIN_ABSENT": WORK_STATE,
+    "LATEX_PACKAGE_ABSENT": WORK_STATE,
+    "REPAIR_BUDGET_SPENT": WORK_STATE,
+    "DIAGRAM_PLOTS_DATA": WORK_STATE,
+    "MALFORMED_FIGURE_OBLIGATION": WORK_STATE,
+    "COMPONENT_MISMATCH": WORK_STATE,
+    "MANIFEST_SOURCE_MISMATCH": WORK_STATE,
+    "EXCLUDED_COMPONENT": WORK_STATE,
+    "SHARED_COMPONENT": WORK_STATE,
+    "CAPTION_INCOMPLETE": WORK_STATE,
+    "MANDATORY_DIAGRAM_ABSENT": WORK_STATE,
+    "LATEX_LOG_ABSENT": WORK_STATE,
+    "LATEX_OUTCOME_UNEXPLAINED": WORK_STATE,
 }
 
 
@@ -585,6 +611,25 @@ def cmd_write(args: argparse.Namespace) -> dict:
     return paper_write.write_block(paper_dir, contract, draft, audit_account)
 
 
+def cmd_render(args: argparse.Namespace) -> dict:
+    """`render`: compiles `paper/Figures/<id>.tex` standalone, exactly once
+    per call (`authored-diagram` spec, `Requirement: Standalone Compile`).
+    `--latexmk-path` is injectable ONLY for tests (`paper_latex.compile`'s
+    own `path` kwarg); omitted, `shutil.which` searches the real `PATH`."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_figure.render(paper_dir, args.figure_id, path=args.latexmk_path)
+
+
+def cmd_place(args: argparse.Namespace) -> dict:
+    """`place`: places an already-measured figure's PDF — compiles nothing,
+    requires provenance naming the run (`authored-diagram` spec,
+    `Requirement: Data-Figure Boundary`)."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_figure.place_figure(
+        paper_dir, args.figure_id, Path(args.pdf), Path(args.provenance),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -797,12 +842,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to a recorded agent transcript; containment-checked, never parsed for judgment",
     )
 
+    p_render = sub.add_parser(
+        "render", help="compile one diagram id standalone, exactly once, via latexmk",
+    )
+    p_render.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_render.add_argument("--figure-id", required=True, help="the diagram id under paper/Figures/")
+    p_render.add_argument(
+        "--latexmk-path", default=None,
+        help="test-only: override the PATH shutil.which searches for latexmk",
+    )
+
+    p_place = sub.add_parser(
+        "place", help="place an already-measured figure's PDF; compiles nothing, needs provenance",
+    )
+    p_place.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_place.add_argument("--figure-id", required=True, help="the diagram id under paper/Figures/")
+    p_place.add_argument("--pdf", required=True, help="path to the already-produced PDF")
+    p_place.add_argument(
+        "--provenance", required=True,
+        help="path to a JSON record naming the run this figure was measured from",
+    )
+
     return parser
 
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve", "bib", "validate", "write",
+    "resolve", "bib", "validate", "write", "render", "place",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -818,6 +890,8 @@ _COMMANDS = {
     "bib": cmd_bib,
     "validate": cmd_validate,
     "write": cmd_write,
+    "render": cmd_render,
+    "place": cmd_place,
 }
 
 

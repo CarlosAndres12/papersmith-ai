@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, or judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write. Offline except `resolve`, which sits behind a config role that can be emptied."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, or compile a standalone diagram and prove it against the contract's own figure: obligation. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write, render, place. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -13,22 +13,24 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Thirteen verbs, wired into one front door (`scripts/paper_cli.py`):
+Fifteen verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
 decisions — `the-paper-carries-its-own-decisions`), `resolve`,
 `bib build`, `validate` (citation resolution, a sourced bibliography, and
-the verdict/placement gate — `no-claim-without-a-source-that-holds-it`), and
+the verdict/placement gate — `no-claim-without-a-source-that-holds-it`),
 `write` (evidence-bound drafting, contract audit and the style-leak proof —
-`the-writer-may-assert-only-what-it-was-given`). To the substitution
-engine, block ids stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no
-meaning. The contract reader is what says which ids exist, what each
-requires, and where in the document they belong, entirely over in
-`sections/*.md`. `declare`/`plan` are what records the operator-supplied
-declarations and fact resolutions those requirements name, and reports
-where the paper stands against all of it in one read-only call — see "The
-paper's own decisions" below.
+`the-writer-may-assert-only-what-it-was-given`), and `render`/`place` (a
+diagram that compiles or says why, the repair-budget ledger, and the
+data-figure boundary — `a-diagram-that-compiles-or-says-why`). To the
+substitution engine, block ids stay opaque strings — shape only
+(`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
+exist, what each requires, and where in the document they belong, entirely
+over in `sections/*.md`. `declare`/`plan` are what records the
+operator-supplied declarations and fact resolutions those requirements
+name, and reports where the paper stands against all of it in one
+read-only call — see "The paper's own decisions" below.
 
 **This CLI is no longer offline end to end.** `resolve` is the one path
 that reaches the network — keyless, stdlib `urllib` only, against OpenAlex,
@@ -461,6 +463,83 @@ between a styled draft and a sample in `R` refuses `STYLE_OVERLAP` by name
 — a tripwire, not the proof; tuning it can never move the guarantee above,
 because the guarantee's own function reads no threshold. Both measurements
 read `R` alone, never a reference file directly.
+
+## A diagram that compiles, or says why: `render` and `place`
+
+Three more modules, from `a-diagram-that-compiles-or-says-why`:
+`paper_latex.py` (the sole holder of `subprocess` in this skill — an AST
+scan, `NoSubprocessScanTests`, holds every other script to zero),
+`paper_figure.py` (source/manifest layout, stop A, the compile pipeline,
+the repair-budget ledger), and `paper_obligation.py` (components,
+separation, caption, mandatory — pure functions over the contract's own
+`figure:` declaration, never a hardcoded section or block id).
+
+Each diagram id resolves to `paper/Figures/<id>.tex` (standalone TikZ, one
+`% node: <label>` comment per component), a sibling `<id>.diagram.json`
+manifest (`components`, `encodings`, `caption`), and — once compiled —
+`<id>.pdf` beside them. `main.tex` receives the figure only through the
+existing `substitute` verb's `\includegraphics`; no TikZ byte ever enters
+`main.tex`.
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `render --figure-id <id> [--paper <dir>]` | Compiles `<id>.tex` standalone via exactly one `latexmk` call, cross-checks the manifest both directions, and scans stop A before ever spawning the compiler | `DIAGRAM_SOURCE_ABSENT`, `MANIFEST_SOURCE_MISMATCH`, `DIAGRAM_PLOTS_DATA`, `LATEX_TOOLCHAIN_ABSENT`, `LATEX_LOG_ABSENT`, `LATEX_OUTCOME_UNEXPLAINED`, `LATEX_PACKAGE_ABSENT`, `REPAIR_BUDGET_SPENT` |
+| `place --figure-id <id> --pdf <path> --provenance <path> [--paper <dir>]` | Places an already-measured figure's PDF — compiles nothing, requires a provenance record naming the run that produced it | `DIAGRAM_SOURCE_ABSENT` (reused: the named artifact this call needs is absent) |
+
+**A repairable failure is an ordinary outcome, not a refusal.** `render`
+returns `"status": "ok"`, `"verdict": "failure"` with the parsed
+diagnostics and `attemptsUsed`/`budgetRemaining` for a compile that failed
+but is still within its four-attempt budget — spending an attempt is the
+loop's ordinary cost. Only the fifth attempt for an id refuses
+`REPAIR_BUDGET_SPENT`, naming every distinct diagnostic and source digest
+already tried; the budget survives edits between attempts (keyed to the id
+alone, never reset by a new digest) and is cleared only by an explicit
+operator acknowledgement (deleting the ledger file — `paper/.paper-writing/
+figures/<id>/ledger.json` — **is** that acknowledgement, made explicit
+rather than pretended-secure). A missing `.sty` refuses
+`LATEX_PACKAGE_ABSENT` and spends nothing: redrawing cannot fix an absent
+package.
+
+**The data-figure boundary, measured, not assumed.** Stop A
+(`paper_figure.scan_data_boundary`) refuses `DIAGRAM_PLOTS_DATA`
+pre-compile on a plotting package, a `\begin{axis}`, an external table
+read, an `\input`/`\include` escaping `paper/Figures/`, or an embedded
+coordinate series over the illustrative threshold. Stop B is the compile's
+own sandbox (`cwd` = `paper/Figures/`, `-outdir` = scratch, child env
+carrying `openin_any=p`/`openout_any=p`/`shell_escape=f`) — **measured
+against a real TeX Live 2026 install, not merely declared**: `shell_escape=f`
+genuinely blocks `\write18`, but `openin_any=p` does **not** block a literal
+absolute-path `\input{...}` on this engine (an explicit absolute path never
+goes through kpathsea's search algorithm at all). Stop A's pre-compile
+source scan is therefore the primary, load-bearing defense against that
+exact vector — never something resting on the env var alone. Placing a
+measured figure is `place`, entirely outside the compile path: no
+`latexmk` call, no ledger, no stop-A scan.
+
+**Obligations are read, never known.** A block's `figure:` declaration
+(`components_from`, `ordered`, `excludes`, `caption_enumerates`,
+`caption_decodes`, `mandatory` — all six required, `paper_contract.py`'s
+`_parse_figure`) names the fact whose ordered list the diagram's
+components must equal; `paper_obligation.py`'s pure functions
+(`check_components`, `check_excluded`, `check_shared_components`,
+`check_caption`, `check_mandatory`) check it against a manifest, never
+against a hardcoded section or block id. Deleting a `figure:` key removes
+the obligation with zero code changed. A block whose contract states the
+synthesis artefact may be a diagram **or** a table (section 05's block 5)
+carries no diagram obligation at all when the operator's choice leaves no
+`<id>.tex` — a legal table triggers nothing.
+
+**Drafting the diagram itself delegates to the `diagram-author` agent.**
+It authors the `.tex`/`.diagram.json` pair and drives its own `render`
+loop up to the repair budget, stopping at `REPAIR_BUDGET_SPENT` or an
+unrecoverable refusal for the operator to resolve — it never clears a spent
+ledger itself.
+
+**Measure this before delegating (diagram-author):** confirm the block's
+`figure:` declaration is already readable (`contract --file <path>`) and
+its `components_from` fact is already resolved (`plan`); an agent asked to
+draft a diagram against an obligation it cannot read cannot distinguish
+"no components yet" from "cannot be checked."
 
 ## Refusal roster
 
