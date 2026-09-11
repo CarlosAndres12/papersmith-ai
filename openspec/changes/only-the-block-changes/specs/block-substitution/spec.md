@@ -209,6 +209,14 @@ invocation-defect or work-state:
 | `BLOCK_HAND_EDITED` | on-disk digest mismatches the recorded one | work-state |
 | `CONTENT_CARRIES_MARKER` | supplied body contains a marker-shaped line | invocation-defect |
 | `ANCHOR_ABSENT` | `--after <id>` names an id with no pair | invocation-defect |
+| `BLOCK_ID_MALFORMED` | a supplied block id fails the exact id grammar | invocation-defect |
+| `OPEN_POSITION_REQUIRED` | `open` runs with no position flag | invocation-defect |
+| `OPEN_POSITION_CONFLICT` | `open` runs with more than one position flag | invocation-defect |
+| `SUBSTITUTE_MODE_REQUIRED` | `substitute` runs with no body source | invocation-defect |
+| `ADOPT_BODY_CONFLICT` | `substitute` supplies a body alongside `--adopt` | invocation-defect |
+| `NOTHING_TO_ADOPT` | `--adopt` runs against a block whose on-disk digest already matches the recorded one | invocation-defect |
+| `SUBSTITUTION_NOT_LOCAL` | a write would alter bytes outside the target block | work-state |
+| `TEX_MOVED` | `main.tex` changed identity between read and write | work-state |
 
 #### Scenario: Duplicated id
 
