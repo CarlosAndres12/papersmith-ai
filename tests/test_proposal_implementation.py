@@ -16257,6 +16257,37 @@ class PositionKeyExitStatusTests(unittest.TestCase):
             stale = impl.position_state(root, "Method", evidence, "r01.md", "some content")
             self.assertEqual(stale["status"], "stale")
 
+    # --- Cut 3 (`a-revision-is-two-documents`, Phase 10, D2/C1) ---
+
+    def test_bound_to_helper_computes_current_stale_unknown(self):
+        """The comparison `position_state` has always made for document 0,
+        extracted into its own function (`_bound_to`) so the SAME
+        arithmetic serves every document under two or more -- never a
+        second copy drifting beside it. Exercises a symbol that does not
+        exist before this phase's implementation lands."""
+        sha = hashlib.sha256(b"real text").hexdigest()
+        self.assertEqual(impl._bound_to(None, None, sha), "unknown")
+        self.assertEqual(impl._bound_to("r1.md", None, sha), "unknown")
+        self.assertEqual(impl._bound_to("r1.md", "real text", sha), "current")
+        self.assertEqual(impl._bound_to("r1.md", "different text", sha), "stale")
+
+    def test_position_state_accepts_extra_sources_and_stays_scalar_under_one_document(self):
+        """The new `extra_sources` parameter (additive, default `None`) must
+        not change `boundTo`'s shape under THIS process's own real
+        one-document profile -- a dict here, instead of the plain string
+        every existing caller and test already reads, would be exactly the
+        byte-identity break D2 forbids. Also exercises a signature that
+        does not accept this keyword before this phase's implementation
+        lands (`TypeError`)."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.write_position(root, "x")
+            evidence = {"smokeReady": {"job1": True}}
+            result = impl.position_state(
+                root, "Method", evidence, None, None, extra_sources=["anything"])
+            self.assertIsInstance(result["boundTo"], str)
+            self.assertEqual(result["boundTo"], "unknown")
+
     def test_position_key_never_changes_exit_status(self):
         box = FORGE / "implementations" / f"_e2e_position_{os.getpid()}"
         try:
