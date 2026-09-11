@@ -507,15 +507,33 @@ def _quote_source(file: str, quote: str) -> dict:
     return {"file": file, "quote": quote}
 
 
+def _strip_markdown_emphasis(text: str) -> str:
+    """Strips markdown emphasis markup -- a closed, enumerated whitelist of
+    exactly one character, `*` (`**bold**` and `*italic*` are the only
+    emphasis markup this corpus uses; `Six **argumentative functions**, in
+    fixed order...` in `06-introduction.md` is the shipped example that
+    forced this). This is character removal, never a fuzzy or similarity
+    match: word content is untouched, so a paraphrase or an unrelated
+    sentence still fails the substring check after stripping
+    (`ModeTranscriptionTests.test_a_paraphrased_quote_and_an_unrelated_sentence_both_still_fail`
+    proves both) -- two genuinely different sentences can never compare
+    equal just because both happen to contain asterisks."""
+    return text.replace("*", "")
+
+
 def _quote_in_body(file_path: Path, quote: str) -> bool:
     """The transcription lock's own check (`GraphTests`,
-    `test_every_transcribed_afters_quote_is_a_substring_of_its_named_file`):
-    whitespace-collapsed, against `paper_contract.parse`'s own parsed prose
-    BODY only -- never the raw file, whose header JSON always re-serializes
-    whatever `quote` a `source` entry holds, verbatim."""
+    `test_every_transcribed_afters_quote_is_a_substring_of_its_named_file`;
+    `ModeTranscriptionTests`, the same lock reused for `mode`):
+    whitespace-collapsed and markdown-emphasis-stripped
+    (`_strip_markdown_emphasis`), against `paper_contract.parse`'s own
+    parsed prose BODY only -- never the raw file, whose header JSON always
+    re-serializes whatever `quote` a `source` entry holds, verbatim. One
+    discipline shared by both `after` and `mode` transcription, on purpose
+    -- two different disciplines in one file would be worse than either."""
     _header, body = paper_contract.parse(file_path.read_bytes())
-    collapsed_body = " ".join(body.decode("utf-8").split())
-    collapsed_quote = " ".join(quote.split())
+    collapsed_body = _strip_markdown_emphasis(" ".join(body.decode("utf-8").split()))
+    collapsed_quote = _strip_markdown_emphasis(" ".join(quote.split()))
     return collapsed_quote in collapsed_body
 
 
@@ -763,6 +781,152 @@ class GraphTests(unittest.TestCase):
             pairs = {(before, after) for before, after, _source in edge_set.edges}
 
             self.assertIn(("middle.only", "title-and-keywords.only"), pairs)
+
+
+class ModeTranscriptionTests(unittest.TestCase):
+    """`section-contract` spec, `Requirement: Closed Mode Vocabulary And
+    Transcription`: a `mode` MUST be admitted only where the contract's own
+    prose states it, "mirroring the transcription discipline already
+    required of `after` edges" -- the discipline `GraphTests` above already
+    proves for `after` via `_quote_in_body` (body-only, never the raw
+    file). Before this corrective, `test_paper_writing.py`'s
+    `test_shipped_contracts_declaring_mode_resolve_it_at_every_block`
+    checked `mode`'s SHAPE and `source["file"]`, but never `source["quote"]`
+    against real prose -- this class closes that gap, the CRITICAL a
+    corrective re-verify found."""
+
+    def _real_corpus(self):
+        return paper_graph.assemble_corpus(SECTIONS_DIR)
+
+    def _declared_modes(self):
+        """Derived from the corpus, never a hand-listed set of section ids:
+        every section's own `header.mode` (`None` for the three deliberately
+        undeclared sections, `02`/`04`/`05`) plus every block's own `mode`
+        (none in the shipped corpus today, but the walk is generic -- a
+        future block-level declaration is picked up without touching this
+        test)."""
+        corpus = self._real_corpus()
+        entries = []
+        for section_id, header in corpus.sections.items():
+            if header.mode is not None:
+                entries.append((section_id, header.mode))
+            for raw_block in header.blocks:
+                block_mode = raw_block.get("mode")
+                if block_mode is not None:
+                    entries.append((f"{section_id}.{raw_block['id']}", block_mode))
+        return entries
+
+    def test_every_declared_modes_quote_is_a_substring_of_its_named_file(self) -> None:
+        entries = self._declared_modes()
+
+        for owner, mode in entries:
+            source = mode["source"]
+            self.assertTrue(
+                _quote_in_body(FORGE_ROOT / source["file"], source["quote"]),
+                f"{owner}: mode quote not found verbatim (whitespace-collapsed, "
+                f"markdown-emphasis-stripped) in {source['file']}'s prose body",
+            )
+
+        # Golden count, not a hand-listed set of section ids: the walk above
+        # is generic over the whole corpus; this pins it to the seven modes
+        # this build has actually declared -- the same "exactly N, derived
+        # not hand-listed" style `GraphTests` already uses for the two
+        # literal cross-section `after` edges.
+        self.assertEqual(len(entries), 7, "expected exactly the seven declared modes")
+
+    def test_undeclared_sections_are_absent_not_silently_passing(self) -> None:
+        """02/04/05 deliberately declare no mode (`test_paper_writing.py`'s
+        `_SECTIONS_WITHOUT_MODE`). The corpus-derived walk above must skip
+        them entirely rather than ever counting the absence as a
+        checked-and-passed entry."""
+        corpus = self._real_corpus()
+        owners = {owner for owner, _mode in self._declared_modes()}
+        for section_id in ("experimental-setup", "limitations", "related-work"):
+            header = corpus.sections[section_id]
+            self.assertIsNone(header.mode, section_id)
+            self.assertNotIn(section_id, owners)
+
+    def test_a_fabricated_mode_quote_on_a_self_sourced_entry_fails_the_lock(self) -> None:
+        """Same falsification `GraphTests` already runs for `after`
+        (`test_a_fabricated_quote_on_a_self_referential_edge_fails_the_lock`),
+        replayed for `mode` -- the exact CRITICAL this corrective closes.
+        `introduction`'s own `mode` is self-sourced (`source.file` is
+        `06-introduction.md`, the same file as the header holding it): the
+        one shape that makes a whole-file raw substring check vacuous, since
+        that file's header JSON always re-serializes whatever `quote` the
+        `mode` entry holds, verbatim."""
+        real_path = SECTIONS_DIR / "06-introduction.md"
+        header, body = paper_contract.parse(real_path.read_bytes())
+        self.assertEqual(header.section, "introduction")
+        self.assertIsNotNone(header.mode)
+        self.assertEqual(header.mode["source"]["file"], "sections/06-introduction.md")
+
+        fabricated_quote = "Purple elephants narrate every argumentative function in reverse."
+        body_text = " ".join(body.decode("utf-8").split())
+        self.assertNotIn(
+            fabricated_quote, body_text,
+            "fixture assumption: the fabrication is absent from the real prose",
+        )
+
+        tampered_header = {
+            "section": header.section,
+            "position": header.position,
+            "after": header.after,
+            "mode": {
+                "value": header.mode["value"],
+                "source": {**header.mode["source"], "quote": fabricated_quote},
+            },
+            "blocks": [dict(raw_block) for raw_block in header.blocks],
+        }
+        tampered_bytes = _header_bytes(tampered_header) + body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tampered_path = Path(tmp) / "06-introduction.md"
+            tampered_path.write_bytes(tampered_bytes)
+
+            # OLD lock shape: raw-whole-file substring check. It finds the
+            # fabrication -- not in the prose, but in the header's own JSON,
+            # which the tamper just wrote into that same file.
+            raw_text = " ".join(tampered_path.read_text(encoding="utf-8").split())
+            self.assertIn(
+                fabricated_quote, raw_text,
+                "fixture assumption: the tampered header still re-serializes the fabrication verbatim",
+            )
+
+            # NEW lock shape (this corrective's fix): body-only.
+            self.assertFalse(
+                _quote_in_body(tampered_path, fabricated_quote),
+                "the body-only check reported a prose-absent, fabricated mode quote as found",
+            )
+
+    def test_a_paraphrased_quote_and_an_unrelated_sentence_both_still_fail(self) -> None:
+        """The trap named in this corrective's own brief: normalizing
+        markdown emphasis (`**bold**`/`*italic*`) must never become a fuzzy
+        or similarity match. Feed the lock a genuine paraphrase of
+        `06-introduction.md`'s own prose (same meaning, different words) and
+        a genuinely unrelated sentence, and confirm both still fail -- proof
+        the normalization only strips literal `*` characters, never blurs
+        word content."""
+        real_path = SECTIONS_DIR / "06-introduction.md"
+
+        paraphrase = "Six persuasive roles, always in the same sequence, spread over 7 to 13 paragraphs."
+        unrelated = "The dataset was collected across three clinical sites over eighteen months."
+
+        self.assertFalse(_quote_in_body(real_path, paraphrase), "a paraphrase must not pass the lock")
+        self.assertFalse(_quote_in_body(real_path, unrelated), "an unrelated sentence must not pass the lock")
+
+    def test_the_shipped_introduction_mode_quote_passes_only_once_emphasis_is_stripped(self) -> None:
+        """Direct proof of the fix, isolated from the corpus walk above:
+        `06-introduction.md`'s real, unedited `mode.source.quote` is an
+        honest, word-for-word transcription of the real prose -- the ONLY
+        reason the old whitespace-collapse-only lock rejected it is that the
+        prose wraps two of those words in `**bold**` markup, decoration a
+        JSON quote field was never meant to have to spell out."""
+        real_path = SECTIONS_DIR / "06-introduction.md"
+        header, _body = paper_contract.parse(real_path.read_bytes())
+        quote = header.mode["source"]["quote"]
+
+        self.assertTrue(_quote_in_body(real_path, quote))
 
 
 class OrderTests(unittest.TestCase):
