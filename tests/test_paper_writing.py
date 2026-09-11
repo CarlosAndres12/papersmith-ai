@@ -2733,6 +2733,112 @@ class StyleLeakDetectionTests(unittest.TestCase):
             self.assertEqual(paper_leak.tripwire_spans(styled, samples), [])
 
 
+class ThreeDraftProofSetTests(unittest.TestCase):
+    """`style-leak-detection` spec, `Requirement: Three-Draft Proof Set`,
+    scenario "A, B, and S share every input but the style channel" --
+    flagged CRITICAL UNTESTED by this change's own corrective verify. The
+    scenario describes the orchestrating agent's live shuttle procedure
+    (three separate redactor calls), which this suite may never spawn
+    (Decision D2). What IS achievable, and was missing, is the
+    CLI-observable half: that `write_block`, given three contracts sharing
+    identical contract prose, evidence set and mode and differing ONLY in
+    `style_set`, treats every non-style field identically -- proven against
+    the exact mechanism the pipeline itself uses to recognize "the same
+    attempt" (`_attempt_key`), and end to end through three real
+    `write_block` calls."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base_dir = Path(self._tmp.name)
+
+    def _fresh_paper_dir(self, name: str) -> Path:
+        paper_dir = self.base_dir / name
+        _write_fixture(paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+        return paper_dir
+
+    def test_attempt_key_is_identical_across_a_b_and_s(self) -> None:
+        """The A/B/S split changes only `style_set`. `_attempt_key` --
+        which the one-bounded-re-draft ledger uses to decide whether two
+        submissions are "the same attempt" -- reads contract, evidence and
+        mode alone, so it must hash identically for all three regardless of
+        style."""
+        contract_a = _write_contract(citations_regime="none", evidence_set=(), style_set=())
+        contract_b = _write_contract(citations_regime="none", evidence_set=(), style_set=())
+        contract_s = _write_contract(
+            citations_regime="none", evidence_set=(),
+            style_set=({"reference": "paperA", "span": "one two three four five six"},),
+        )
+        key_a = paper_write._attempt_key(contract_a)
+        key_b = paper_write._attempt_key(contract_b)
+        key_s = paper_write._attempt_key(contract_s)
+        self.assertEqual(key_a, key_b)
+        self.assertEqual(key_a, key_s)
+
+    def test_a_and_b_and_s_produce_identical_outcomes_but_for_the_style_channel(self) -> None:
+        """Three real `write_block` calls, one shared contract shape,
+        differing only in `style_set`, each against its own fresh fixture
+        (so all three independently reach `substitute`). A and B use the
+        SAME draft -- non-style-field identity is exactly what is under
+        test, not incidental wording variance a live redactor would
+        introduce. S uses a differently-worded but content-equivalent draft
+        that shares no eight-token run with its one recorded sample, so the
+        tripwire stays silent and S reaches `written` too."""
+        contract_a = _write_contract(citations_regime="none", evidence_set=(), style_set=())
+        contract_b = _write_contract(citations_regime="none", evidence_set=(), style_set=())
+        contract_s = _write_contract(
+            citations_regime="none", evidence_set=(),
+            style_set=({"reference": "paperA", "span": "one two three four five six"},),
+        )
+        self.assertEqual(contract_a.contract_prose, contract_b.contract_prose)
+        self.assertEqual(contract_a.contract_prose, contract_s.contract_prose)
+        self.assertEqual(contract_a.mode, contract_s.mode)
+        self.assertEqual(contract_a.evidence_set, contract_s.evidence_set)
+
+        result_a = paper_write.write_block(
+            self._fresh_paper_dir("a"), contract_a, _CLEAN_DRAFT, _CLEAN_AUDIT,
+        )
+        result_b = paper_write.write_block(
+            self._fresh_paper_dir("b"), contract_b, _CLEAN_DRAFT, _CLEAN_AUDIT,
+        )
+        styled_draft = {
+            "latex": "This paragraph closes the whole demonstration.",
+            "bindings": [
+                {"sentence": "This paragraph closes the whole demonstration.", "binding": "structural"},
+            ],
+        }
+        result_s = paper_write.write_block(
+            self._fresh_paper_dir("s"), contract_s, styled_draft, _CLEAN_AUDIT,
+        )
+
+        for result in (result_a, result_b, result_s):
+            self.assertEqual(result["status"], "written")
+            self.assertEqual(result["verdicts"], result_a["verdicts"])
+
+        self.assertEqual(result_a["styleChannel"], {"status": "unmeasured"})
+        self.assertEqual(result_b["styleChannel"], {"status": "unmeasured"})
+        self.assertEqual(result_s["styleChannel"]["status"], "measured")
+
+    def test_mutation_8_style_leaking_into_the_attempt_key_fails_the_identity_guard(self) -> None:
+        """Falsifies the guard above: if `_attempt_key` were changed to
+        fold `style_set` into its payload, A and S would no longer hash
+        identically, and `test_attempt_key_is_identical_across_a_b_and_s`
+        must go red -- proving that test can actually fail, not just that
+        it currently passes."""
+        proc = _run_against_mutant(
+            '            "mode": contract.mode,\n        },',
+            '            "mode": contract.mode,\n'
+            '            "style": [dict(entry) for entry in contract.style_set],\n'
+            '        },',
+            "tests.test_paper_writing.ThreeDraftProofSetTests"
+            ".test_attempt_key_is_identical_across_a_b_and_s",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 class WriterMutationProofTests(unittest.TestCase):
     """`tasks.md` 1.11/2.3/2.5 -- the seven mutations named in the
     proposal, executed for real against the five new modules, mirroring
