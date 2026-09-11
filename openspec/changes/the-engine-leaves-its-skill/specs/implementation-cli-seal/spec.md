@@ -28,7 +28,7 @@ seal the wrong file.)
 
 #### Scenario: The sealed entry point is the launcher, not the engine
 - GIVEN the engine now lives at
-  `_core/implementation/implementation_engine.py`, separate from the
+  `_core/implementation/engine/implementation_engine.py`, separate from the
   per-skill launcher
 - WHEN the seal invokes any case
 - THEN the invoked path is the launcher's literal file, and if `CLI_PATH`

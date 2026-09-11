@@ -335,7 +335,7 @@ why the requirement must pin it, because the divergence becomes available the mo
 | S5 | Seal entry-point pin (D6); re-pointed published-commands assertions (D5) | green | B3 |
 | S6 | Proof: P0–P5, R1/R2/R3 mutations, anchor counts pasted both directions | green | — |
 
-`git mv` and the five-line reshape land in **one commit** so rename detection sees ~99.97%
+`git mv` and the five-line reshape land in **one commit**. This section originally predicted `git diff -M` would report ~99.97% rename similarity. **Measured on the landed commit, it does not: no rename pairing exists at any threshold**, because the launcher was rewritten at the same published path inside the same commit, which defeats git's rename detection regardless of `-M`. The move is still verbatim -- independently re-derived at **17,045 lines**, exactly 61 original lines touched -- but the evidence for that is the hunk diff and the seal's 28 byte-identical digests, never git's rename heuristic. A prediction about git mechanics
 similarity. Apply pastes `git diff -M --numstat`. **`git diff --stat` is not evidence for
 the launcher, the profile or the resolver** — they are new files, and a stat proves nothing
 about paths git is not yet tracking; their content is asserted by reading them.

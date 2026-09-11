@@ -147,3 +147,52 @@ non-recursive glob does not reach. This is not a new mechanism invented for the
 occasion — `.claude/skills/_core/deliberation/engine/` is already exactly this
 shape, verified on disk. The precedent this change set out to mirror had already
 answered the question.
+
+## Amendment: `objective` joins the Cut-1 profile field set (operator ruling, Phase 8)
+
+This spec was written when the Cut-1 field set was `kit.root` and `cli.path`
+only, on the stated principle that **a profile field nothing reads cannot be
+mutation-proven, and an unprovable field is the shape of a false guard.**
+
+That principle did not change. What changed is that `objective` now satisfies it.
+
+`tests/test_agents.py` discovers a skill's declared north by walking
+`(SKILLS / skill).rglob("*.py")` — a **physical** directory walk under the
+skill's own tree. `OBJECTIVE_FLOW` lived inside the engine file, so moving that
+file out of the skill took the north with it and `declared_objective(
+"proposal-implementation")` began returning `None`. Three `AgentBindingTests`
+went red on a file this change never touched.
+
+The 56 lines move verbatim into `impl_profile.py`, which lives inside the
+skill's tree, and the engine reads `PROFILE["objective"]`. The resolver
+validates it the way `domain-profile.ts` validates its own: `purpose`,
+`stages`, `arrival`, `humanStops` present, `stages` non-empty, all three
+per-stage keys present — the `artifact: {}` lesson, where a top-level presence
+check passes vacuously.
+
+### Why this is required work and not a workaround
+
+The purpose of this seam is a **second skill with its own north**.
+`experimental-implementation`'s objective flow is not this one's: different
+stages, different arrival. With `OBJECTIVE_FLOW` in the shared engine, the
+second skill would inherit the first's north and there would be no way to give
+it its own without editing the engine — precisely what the seam exists to
+prevent. `objective` had to become a profile field; the block only moved the
+date forward.
+
+The other side of this forge already settled it identically: both
+`proposal-deliberation/profile.ts` and `experimental-deliberation/profile.ts`
+declare `objective` themselves, `_core/deliberation/engine/domain-profile.ts`
+hardcodes none, and the archived change is
+`2026-09-09-a-north-a-second-domain-can-hold`.
+
+### Proven, not asserted
+
+Mutating one character of `objective.purpose` moves **11 of 28** sealed
+digests — every case reaching a refusal payload or the other stamp site —
+reproduced case-for-case by verify as a real reverted file edit. The field is
+mutation-provable, which is what earns it its place.
+
+`tests/test_agents.py` returned to 16/16 green with **zero edits to that file**
+(`git diff --stat` empty), which is the proof the relocation restored discovery
+rather than papering over the failure.
