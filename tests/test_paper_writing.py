@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -25,10 +26,16 @@ from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parents[1]
 SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
+SECTIONS_DIR = FORGE_ROOT / "sections"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_scaffold  # noqa: E402
 import paper_block  # noqa: E402
 import paper_cli  # noqa: E402
+import paper_contract  # noqa: E402
+import paper_vocabulary  # noqa: E402
+import paper_bindings  # noqa: E402
+import paper_audit  # noqa: E402
+import paper_write  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -38,6 +45,32 @@ from paper_mutation import _run_against_mutant  # noqa: E402
 
 CLI = SKILL_SCRIPTS / "paper_cli.py"
 CORE_IMPLEMENTATION = FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"
+
+
+#: Guarded, module-scoped `subprocess.Popen` monitor
+#: (`writing-orchestration` spec, `Requirement: No Live Agent Invocation In
+#: Tests`). Installed at IMPORT time, before any test in this module (or,
+#: under `python -m unittest discover`, any test collected alongside it)
+#: runs -- passive observation only, never blocking, so it cannot break an
+#: unrelated suite's own legitimate subprocess use (`git`, `sys.executable`
+#: running this skill's own CLI, etc). `paper-writing` never ships a code
+#: path that spawns an agent binary (`design.md`, Decision D2: "No
+#: agent-invoking code path exists"), so the list this accumulates is
+#: asserted empty by `ZZLiveAgentGuardTests` below.
+_AGENT_BINARY_NAMES = ("claude", "gemini", "codex", "pi", "claude-code")
+_live_agent_launches: list[list[str]] = []
+_real_popen_init = subprocess.Popen.__init__
+
+
+def _guarded_popen_init(self, args, *a, **kw):
+    argv = args if isinstance(args, (list, tuple)) else [args]
+    head = Path(str(argv[0])).name if argv else ""
+    if head in _AGENT_BINARY_NAMES:
+        _live_agent_launches.append([str(x) for x in argv])
+    return _real_popen_init(self, args, *a, **kw)
+
+
+subprocess.Popen.__init__ = _guarded_popen_init
 
 
 def _marker_pair(block_id: str, body: bytes) -> bytes:
@@ -843,6 +876,623 @@ class MutationProofTests(unittest.TestCase):
         self._assert_guard_failed_under_mutation(proc)
 
 
+# =====================================================================
+# the-writer-may-assert-only-what-it-was-given -- Work Unit 1
+# =====================================================================
+
+
+class ModeWideningTests(unittest.TestCase):
+    """`section-contract` spec delta: `mode` joins `_TOP_LEVEL_OPTIONAL`/
+    `_BLOCK_OPTIONAL`."""
+
+    def _header(self, *, section_mode=None, block_mode=None) -> dict:
+        header = {
+            "section": "demo", "position": 1,
+            "blocks": [{
+                "id": "b1", "requires_facts": [], "requires_declarations": [],
+                "citations": "none",
+            }],
+        }
+        if section_mode is not None:
+            header["mode"] = section_mode
+        if block_mode is not None:
+            header["blocks"][0]["mode"] = block_mode
+        return header
+
+    def _mode_obj(self, value: str) -> dict:
+        return {"value": value, "source": {"file": "demo.md", "quote": "some prose"}}
+
+    def test_a_valid_mode_value_parses(self) -> None:
+        header = paper_contract.parse_header(self._header(block_mode=self._mode_obj("transposition")))
+        self.assertEqual(header.blocks[0]["mode"]["value"], "transposition")
+
+    def test_an_invalid_mode_value_refuses_unknown_mode(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(block_mode=self._mode_obj("exposition")))
+        self.assertEqual(ctx.exception.code, "UNKNOWN_MODE")
+        self.assertIn("exposition", ctx.exception.detail)
+
+    def test_a_block_inherits_the_section_level_mode(self) -> None:
+        header = paper_contract.parse_header(self._header(section_mode=self._mode_obj("argument")))
+        resolved = paper_contract.resolve_mode(header, header.blocks[0])
+        self.assertEqual(resolved["value"], "argument")
+
+    def test_a_blocks_own_mode_overrides_the_section_level_default(self) -> None:
+        header = paper_contract.parse_header(self._header(
+            section_mode=self._mode_obj("argument"), block_mode=self._mode_obj("transposition"),
+        ))
+        resolved = paper_contract.resolve_mode(header, header.blocks[0])
+        self.assertEqual(resolved["value"], "transposition")
+
+    def test_neither_level_declaring_mode_resolves_to_none(self) -> None:
+        header = paper_contract.parse_header(self._header())
+        self.assertIsNone(paper_contract.resolve_mode(header, header.blocks[0]))
+
+    def test_all_ten_shipped_contracts_still_parse_with_no_mode_declared(self) -> None:
+        # `Headers Written Before mode Existed`: sections/*.md ship with no
+        # `mode` key yet, and that absence is schema-valid, not a
+        # violation -- `write`'s own readiness stage is what refuses on it
+        # (`WritingPipelineTests.test_no_mode_resolved_refuses_mode_absent`
+        # below), never this reader.
+        for path in sorted(SECTIONS_DIR.glob("*.md")):
+            header, _body = paper_contract.parse(path.read_bytes())
+            self.assertIsNone(header.mode, path.name)
+            for block in header.blocks:
+                self.assertIsNone(paper_contract.resolve_mode(header, block), (path.name, block["id"]))
+
+
+class RedactorInputContractTests(unittest.TestCase):
+    """`evidence-bound-drafting` spec, `Requirement: Redactor Input
+    Contract`."""
+
+    def test_empty_style_set_is_a_valid_input(self) -> None:
+        redactor_input = paper_bindings.RedactorInput(
+            contract_prose="Some contract prose.", evidence_set=(), mode="transposition", style_set=(),
+        )
+        self.assertEqual(redactor_input.style_set, ())
+        self.assertEqual(redactor_input.contract_prose, "Some contract prose.")
+
+
+class BindingMapTests(unittest.TestCase):
+    """`evidence-bound-drafting` spec, `Requirement: Binding Map
+    Production`, `Requirement: Draft-Versus-Map Reconciliation`,
+    `Requirement: Binding Resolution`."""
+
+    def test_every_binding_entry_names_one_of_the_three_kinds(self) -> None:
+        for raw, expected in (
+            ("evidence:E1", ("evidence", "E1")),
+            ("fact:results", ("fact", "results")),
+            ("structural", ("structural", None)),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(paper_bindings.parse_binding(raw), expected)
+
+    def test_an_unbound_sentence_refuses(self) -> None:
+        latex = "First sentence. Second sentence."
+        bindings = [{"sentence": "First sentence.", "binding": "structural"}]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.reconcile(latex, bindings)
+        self.assertEqual(ctx.exception.code, "UNBOUND_SENTENCE")
+        self.assertIn("Second sentence.", ctx.exception.detail)
+
+    def test_an_orphaned_binding_refuses(self) -> None:
+        latex = "Only sentence here."
+        bindings = [
+            {"sentence": "Only sentence here.", "binding": "structural"},
+            {"sentence": "Nothing drafted matches this.", "binding": "structural"},
+        ]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.reconcile(latex, bindings)
+        self.assertEqual(ctx.exception.code, "BINDING_ORPHANED")
+        self.assertIn("Nothing drafted matches this.", ctx.exception.detail)
+
+    def test_an_unknown_evidence_id_refuses(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="s", kind="evidence", ref="E9")]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.resolve_bindings(bindings, evidence_ids=set(), licensed_facts=set())
+        self.assertEqual(ctx.exception.code, "EVIDENCE_ID_UNKNOWN")
+        self.assertIn("E9", ctx.exception.detail)
+
+    def test_an_unlicensed_fact_id_refuses(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="s", kind="fact", ref="results")]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.resolve_bindings(bindings, evidence_ids=set(), licensed_facts=set())
+        self.assertEqual(ctx.exception.code, "FACT_NOT_LICENSED")
+        self.assertIn("results", ctx.exception.detail)
+
+    def test_licensed_ids_resolve_without_refusing(self) -> None:
+        bindings = [
+            paper_bindings.Binding(sentence="s1", kind="evidence", ref="E1"),
+            paper_bindings.Binding(sentence="s2", kind="fact", ref="results"),
+        ]
+        paper_bindings.resolve_bindings(bindings, evidence_ids={"E1"}, licensed_facts={"results"})
+
+
+class StructuralTypingTests(unittest.TestCase):
+    """`evidence-bound-drafting` spec, `Requirement: Structural Sentences
+    Are Typed` (`design.md`, Decision D3)."""
+
+    def test_a_numeral_inside_a_structural_sentence_refuses(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="We report 42% accuracy.", kind="structural", ref=None)]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.type_structural(bindings, contract_prose="")
+        self.assertEqual(ctx.exception.code, "STRUCTURAL_CARRIES_CLAIM")
+
+    def test_a_plain_structural_sentence_passes(self) -> None:
+        bindings = [
+            paper_bindings.Binding(sentence="This paragraph closes the section.", kind="structural", ref=None)
+        ]
+        paper_bindings.type_structural(bindings, contract_prose="")
+
+    def test_a_cite_command_inside_structural_refuses(self) -> None:
+        bindings = [
+            paper_bindings.Binding(
+                sentence="See the prior work \\cite{smith2020}.", kind="structural", ref=None
+            )
+        ]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.type_structural(bindings, contract_prose="")
+        self.assertEqual(ctx.exception.code, "STRUCTURAL_CARRIES_CLAIM")
+
+    def test_a_comparative_inside_structural_refuses(self) -> None:
+        bindings = [
+            paper_bindings.Binding(
+                sentence="This method is faster than the baseline.", kind="structural", ref=None
+            )
+        ]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.type_structural(bindings, contract_prose="")
+        self.assertEqual(ctx.exception.code, "STRUCTURAL_CARRIES_CLAIM")
+
+    def test_a_named_external_object_absent_from_contract_prose_refuses(self) -> None:
+        bindings = [
+            paper_bindings.Binding(
+                sentence="This closes the discussion of Transformer.", kind="structural", ref=None
+            )
+        ]
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.type_structural(bindings, contract_prose="No mention of that architecture here.")
+        self.assertEqual(ctx.exception.code, "STRUCTURAL_CARRIES_CLAIM")
+
+    def test_a_named_object_present_verbatim_in_contract_prose_passes(self) -> None:
+        bindings = [
+            paper_bindings.Binding(
+                sentence="This closes the discussion of Transformer.", kind="structural", ref=None
+            )
+        ]
+        paper_bindings.type_structural(bindings, contract_prose="This section discusses Transformer at length.")
+
+
+class ModeAdmissibilityTests(unittest.TestCase):
+    """`evidence-bound-drafting` spec, `Requirement: Mode-Admissible
+    Bindings`."""
+
+    def test_transposition_rejects_a_discovery_binding(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="s", kind="evidence", ref="D1")]
+        evidence_by_id = {"D1": {"id": "D1", "regime": "discovery"}}
+        with self.assertRaises(Refused) as ctx:
+            paper_bindings.check_mode_admissibility(bindings, "transposition", evidence_by_id)
+        self.assertEqual(ctx.exception.code, "MODE_VIOLATION")
+        self.assertIn("D1", ctx.exception.detail)
+
+    def test_argument_admits_the_same_discovery_binding(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="s", kind="evidence", ref="D1")]
+        evidence_by_id = {"D1": {"id": "D1", "regime": "discovery"}}
+        paper_bindings.check_mode_admissibility(bindings, "argument", evidence_by_id)
+
+    def test_both_modes_admit_resolution_class_evidence(self) -> None:
+        bindings = [paper_bindings.Binding(sentence="s", kind="evidence", ref="R1")]
+        evidence_by_id = {"R1": {"id": "R1", "regime": "resolution"}}
+        paper_bindings.check_mode_admissibility(bindings, "transposition", evidence_by_id)
+        paper_bindings.check_mode_admissibility(bindings, "argument", evidence_by_id)
+
+
+_SAMPLE_DISQUALIFIER = "A symbol used without being declared."
+
+
+def _contract_body(bullets: list) -> str:
+    lines = ["# Demo Contract", "", "Some prose.", "", "## Disqualifiers"]
+    lines += [f"- {bullet}" for bullet in bullets]
+    return "\n".join(lines) + "\n"
+
+
+class ContractAuditTests(unittest.TestCase):
+    """`contract-audit` spec."""
+
+    def test_bullet_text_reaches_the_audit_unchanged(self) -> None:
+        bullets = paper_audit.extract_disqualifiers(_contract_body([_SAMPLE_DISQUALIFIER]))
+        self.assertEqual(bullets, [_SAMPLE_DISQUALIFIER])
+
+    def test_a_firing_disqualifier_quotes_its_span(self) -> None:
+        body = _contract_body([_SAMPLE_DISQUALIFIER])
+        draft = "A symbol X appears with no declaration."
+        verdicts = [
+            {"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires",
+             "span": "symbol X appears with no declaration"}
+        ]
+        result = paper_audit.audit(body, draft, verdicts)
+        self.assertTrue(result["blocks"])
+        self.assertEqual(result["fired"][0]["span"], "symbol X appears with no declaration")
+
+    def test_clear_and_firing_coexist_in_one_run(self) -> None:
+        second = "A dataset described here and left unreferenced."
+        body = _contract_body([_SAMPLE_DISQUALIFIER, second])
+        draft = "A symbol X appears with no declaration."
+        verdicts = [
+            {"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires",
+             "span": "symbol X appears with no declaration"},
+            {"bullet": second, "verdict": "clear"},
+        ]
+        result = paper_audit.audit(body, draft, verdicts)
+        by_bullet = {entry["bullet"]: entry["verdict"] for entry in result["verdicts"]}
+        self.assertEqual(by_bullet[_SAMPLE_DISQUALIFIER], "fires")
+        self.assertEqual(by_bullet[second], "clear")
+
+    def test_an_all_undecidable_audit_does_not_block(self) -> None:
+        second = "A dataset described here and left unreferenced."
+        body = _contract_body([_SAMPLE_DISQUALIFIER, second])
+        verdicts = [
+            {"bullet": _SAMPLE_DISQUALIFIER, "verdict": "undecidable"},
+            {"bullet": second, "verdict": "undecidable"},
+        ]
+        result = paper_audit.audit(body, "draft text", verdicts)
+        self.assertFalse(result["blocks"])
+        self.assertEqual({entry["verdict"] for entry in result["verdicts"]}, {"undecidable"})
+
+    def test_one_firing_bullet_blocks_regardless_of_undecidables(self) -> None:
+        second, third = "second bullet text.", "third bullet text."
+        body = _contract_body([_SAMPLE_DISQUALIFIER, second, third])
+        draft = "The offending clause appears here."
+        verdicts = [
+            {"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires",
+             "span": "The offending clause appears here"},
+            {"bullet": second, "verdict": "undecidable"},
+            {"bullet": third, "verdict": "undecidable"},
+        ]
+        result = paper_audit.audit(body, draft, verdicts)
+        self.assertTrue(result["blocks"])
+        self.assertEqual(result["fired"][0]["bullet"], _SAMPLE_DISQUALIFIER)
+
+    def test_a_fires_verdict_with_no_span_downgrades_to_undecidable(self) -> None:
+        body = _contract_body([_SAMPLE_DISQUALIFIER])
+        verdicts = [{"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires", "span": ""}]
+        result = paper_audit.audit(body, "draft text", verdicts)
+        self.assertFalse(result["blocks"])
+        self.assertEqual(result["verdicts"][0]["verdict"], "undecidable")
+
+    def test_a_fires_verdict_whose_span_is_not_in_the_draft_downgrades(self) -> None:
+        body = _contract_body([_SAMPLE_DISQUALIFIER])
+        verdicts = [{"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires", "span": "not present anywhere"}]
+        result = paper_audit.audit(body, "draft text entirely unrelated", verdicts)
+        self.assertFalse(result["blocks"])
+        self.assertEqual(result["verdicts"][0]["verdict"], "undecidable")
+
+    def test_a_contract_missing_the_heading_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_audit.extract_disqualifiers(
+                "# Demo\n\nNo disqualifiers section here.\n", source_name="demo.md"
+            )
+        self.assertEqual(ctx.exception.code, "DISQUALIFIERS_ABSENT")
+        self.assertIn("demo.md", ctx.exception.detail)
+
+    def test_all_ten_shipped_contracts_carry_the_heading(self) -> None:
+        for path in sorted(SECTIONS_DIR.glob("*.md")):
+            _header, body = paper_contract.parse(path.read_bytes())
+            bullets = paper_audit.extract_disqualifiers(body.decode("utf-8"), source_name=path.name)
+            self.assertGreater(len(bullets), 0, path.name)
+
+    def test_a_verdict_naming_an_unknown_bullet_refuses(self) -> None:
+        verdicts = [{"bullet": "not a real bullet", "verdict": "clear"}]
+        with self.assertRaises(Refused) as ctx:
+            paper_audit.reconcile_verdicts([_SAMPLE_DISQUALIFIER], verdicts, "draft")
+        self.assertEqual(ctx.exception.code, "VERDICT_BULLET_UNKNOWN")
+
+    def test_a_missing_verdict_for_a_real_bullet_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_audit.reconcile_verdicts([_SAMPLE_DISQUALIFIER], [], "draft")
+        self.assertEqual(ctx.exception.code, "VERDICT_MISSING")
+
+
+def _write_contract(
+    *, block_id="mm-proposal", citations_regime="resolution", mode="transposition",
+    requires_facts=(), evidence_set=(), disqualifiers=(_SAMPLE_DISQUALIFIER,),
+) -> "paper_write.BlockContract":
+    return paper_write.BlockContract(
+        block_id=block_id,
+        contract_prose=_contract_body(list(disqualifiers)),
+        contract_source="demo.md",
+        citations_regime=citations_regime,
+        mode=mode,
+        requires_facts=tuple(requires_facts),
+        evidence_set=tuple(evidence_set),
+    )
+
+
+_CLEAN_DRAFT = {
+    "latex": "This paragraph closes the section.",
+    "bindings": [{"sentence": "This paragraph closes the section.", "binding": "structural"}],
+}
+_CLEAN_AUDIT = {"verdicts": [{"bullet": _SAMPLE_DISQUALIFIER, "verdict": "clear"}]}
+_FIRING_AUDIT = {
+    "verdicts": [
+        {"bullet": _SAMPLE_DISQUALIFIER, "verdict": "fires", "span": "This paragraph closes the section"}
+    ]
+}
+
+
+class WritingPipelineTests(unittest.TestCase):
+    """`writing-orchestration` spec. This is one of the two decisive proofs
+    for this change (per the orchestrator's launch context): the claim
+    "an assertion outside the evidence set never reaches main.tex" is
+    exercised here end to end, not merely asserted."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_a_clean_pipeline_writes_the_block(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        final = (self.paper_dir / "main.tex").read_bytes()
+        self.assertIn(b"This paragraph closes the section.", final)
+
+    def test_no_mode_resolved_refuses_mode_absent(self) -> None:
+        contract = _write_contract(citations_regime="none", mode=None)
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "MODE_ABSENT")
+
+    def test_a_citing_block_with_no_evidence_set_refuses_evidence_set_required(self) -> None:
+        contract = _write_contract(citations_regime="resolution", evidence_set=())
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "EVIDENCE_SET_REQUIRED")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_a_none_regime_block_with_no_evidence_writes_with_no_refusal(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+    def test_an_assertion_outside_the_evidence_set_never_reaches_main_tex(self) -> None:
+        """The decisive proof: give the writer an evidence set, then draft a
+        binding naming an id outside it -- and confirm main.tex never
+        changes."""
+        contract = _write_contract(
+            citations_regime="resolution", evidence_set=({"id": "E1", "regime": "resolution"},),
+        )
+        draft = {
+            "latex": "This closes on the recorded evidence. This asserts an outside claim.",
+            "bindings": [
+                {"sentence": "This closes on the recorded evidence.", "binding": "evidence:E1"},
+                {"sentence": "This asserts an outside claim.", "binding": "evidence:E9"},
+            ],
+        }
+        pre = (self.paper_dir / "main.tex").read_bytes()
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "EVIDENCE_ID_UNKNOWN")
+        self.assertIn("E9", ctx.exception.detail)
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_failing_evidence_audit_stops_before_contract_audit_runs(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        bad_draft = {
+            "latex": "First sentence. Second sentence.",
+            "bindings": [{"sentence": "First sentence.", "binding": "structural"}],
+        }
+        with unittest.mock.patch("paper_audit.audit") as mocked_audit:
+            with self.assertRaises(Refused) as ctx:
+                paper_write.write_block(self.paper_dir, contract, bad_draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "UNBOUND_SENTENCE")
+        mocked_audit.assert_not_called()
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_one_bounded_redraft_reports_fired_bullets_as_feedback(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        self.assertEqual(result["status"], "audit-fired")
+        self.assertEqual(result["attempt"], 1)
+        self.assertEqual(result["fired"][0]["bullet"], _SAMPLE_DISQUALIFIER)
+        self.assertEqual(result["fired"][0]["span"], "This paragraph closes the section")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_the_second_attempt_is_audited_with_the_same_inputs(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        # Same contract/evidence/mode -- the ledger recognizes this as
+        # attempt 2 against the SAME key, exactly what "the re-draft's
+        # input includes ... the same contract, evidence set, and mode as
+        # the first attempt" requires.
+        key_before = paper_write._attempt_key(contract)
+        ledger = paper_write._read_ledger(self.paper_dir, "mm-proposal")
+        self.assertEqual(ledger["key"], key_before)
+        self.assertEqual(ledger["attempts"], 1)
+
+    def test_two_failing_audits_leave_main_tex_unchanged_and_refuse_audit_exhausted(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        pre = (self.paper_dir / "main.tex").read_bytes()
+        paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        self.assertEqual(ctx.exception.code, "AUDIT_EXHAUSTED")
+        self.assertIn(_SAMPLE_DISQUALIFIER, ctx.exception.detail)
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_changed_input_starts_a_fresh_attempt_budget(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=())
+        paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        different_contract = _write_contract(citations_regime="none", evidence_set=(), mode="argument")
+        result = paper_write.write_block(self.paper_dir, different_contract, _CLEAN_DRAFT, _FIRING_AUDIT)
+        self.assertEqual(result["status"], "audit-fired")
+        self.assertEqual(result["attempt"], 1)
+
+
+# =====================================================================
+# Ruling 1 -- the no-subprocess seam, with exactly one named exception
+# =====================================================================
+
+#: The one file this skill will ever let import `subprocess`, for
+#: `latexmk` (`a-diagram-that-compiles-or-says-why`, not yet landed; the
+#: orchestrator's Ruling 1 for this change). Named here, not empty, so this
+#: scan already tolerates it the moment that sibling's file appears on
+#: disk. Pinned to `len(...) == 1` below: a SECOND name requires
+#: hand-editing that literal in a diff someone reads.
+SUBPROCESS_EXCEPTIONS: tuple = ("paper_latex.py",)
+
+
+def _forbidden_process_names_in(source_path: Path) -> list:
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    found: list = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("subprocess", "multiprocessing"):
+                    found.append(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module in ("subprocess", "multiprocessing"):
+            found.append(node.module)
+        elif (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                and node.value.id == "os"):
+            if node.attr in ("system", "popen") or node.attr.startswith("exec"):
+                found.append(f"os.{node.attr}")
+    return found
+
+
+def scan_forbidden_process_imports(scripts_dir: Path) -> dict:
+    """`design.md`, Decision D2 / Threat Matrix "Process integration":
+    forbids `subprocess`, `os.system`, `os.popen`, `os.exec*`,
+    `multiprocessing` across every `scripts/*.py` except
+    `SUBPROCESS_EXCEPTIONS`."""
+    violations: dict = {}
+    for path in sorted(scripts_dir.glob("*.py")):
+        if path.name in SUBPROCESS_EXCEPTIONS:
+            continue
+        found = _forbidden_process_names_in(path)
+        if found:
+            violations[path.name] = found
+    return violations
+
+
+class NoSubprocessScanTests(unittest.TestCase):
+
+    def test_exception_list_has_exactly_one_entry(self) -> None:
+        self.assertEqual(len(SUBPROCESS_EXCEPTIONS), 1)
+        self.assertEqual(SUBPROCESS_EXCEPTIONS, ("paper_latex.py",))
+
+    def test_no_shipped_script_imports_a_forbidden_process_primitive(self) -> None:
+        self.assertEqual(scan_forbidden_process_imports(SKILL_SCRIPTS), {})
+
+    def test_a_planted_subprocess_import_is_caught(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / "evil.py").write_text("import subprocess\n", encoding="utf-8")
+            violations = scan_forbidden_process_imports(tmp_dir)
+        self.assertIn("evil.py", violations)
+        self.assertIn("subprocess", violations["evil.py"])
+
+    def test_the_exception_named_file_is_tolerated_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / "paper_latex.py").write_text("import subprocess\n", encoding="utf-8")
+            violations = scan_forbidden_process_imports(tmp_dir)
+        self.assertEqual(violations, {})
+
+
+class ModuleCompletenessTests(unittest.TestCase):
+    """tasks.md 1.12 -- the highest-value task in this change: `{stems of
+    scripts/*.py}` must equal `paper_cli.py`'s own module-level import set,
+    so a module nobody imports cannot ship unclassified. RED was proven by
+    hand during implementation: a sixth, unimported module planted under
+    `scripts/` made this equality fail; removed once proven, since a
+    permanent planted file would corrupt this skill's own roster for every
+    other suite that scans `scripts/*.py`."""
+
+    def test_every_script_on_disk_is_imported_at_module_level_by_paper_cli(self) -> None:
+        on_disk = {path.stem for path in SKILL_SCRIPTS.glob("*.py")}
+        imported = {module.stem for module in paper_cli_imported_modules()} | {"paper_cli"}
+        self.assertEqual(on_disk, imported)
+
+
+class ZZLiveAgentGuardTests(unittest.TestCase):
+    """`writing-orchestration` spec, `Requirement: No Live Agent Invocation
+    In Tests`. Named `ZZ...` so it sorts alphabetically last among this
+    module's own test classes (`unittest.TestLoader` iterates `dir(module)`,
+    which is sorted) -- every subprocess-launching test class defined above
+    (`ScaffoldTests`, `CLIWiringTests`, `MutationProofTests`,
+    `WriterMutationProofTests`) has therefore already run by the time this
+    assertion executes. The monitor itself (top of this file) is installed
+    at import time, so it also covers any subprocess launched by another
+    test module collected alongside this one under `python -m unittest
+    discover`, for as long as this module stays imported."""
+
+    def test_no_agent_binary_launched_by_any_subprocess_this_run_has_made_so_far(self) -> None:
+        self.assertEqual(_live_agent_launches, [])
+
+
+class WriterMutationProofTests(unittest.TestCase):
+    """`tasks.md` 1.11 -- the five Work Unit 1 mutations named in the
+    proposal, executed for real against the three new WU1 modules,
+    mirroring `MutationProofTests` above. WU2 adds two more
+    (`tasks.md` 2.3/2.5) once `paper_style.py`/`paper_leak.py` land."""
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_1_dropped_reconciliation_fails_the_unbound_sentence_guard(self) -> None:
+        proc = _run_against_mutant(
+            "if sentence not in by_sentence:",
+            "if False:",
+            "tests.test_paper_writing.BindingMapTests.test_an_unbound_sentence_refuses",
+            source_path=SKILL_SCRIPTS / "paper_bindings.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_2_never_firing_fails_the_one_firing_bullet_blocks_guard(self) -> None:
+        proc = _run_against_mutant(
+            'fired = [entry for entry in reconciled if entry["verdict"] == "fires"]',
+            "fired = []",
+            "tests.test_paper_writing.ContractAuditTests"
+            ".test_one_firing_bullet_blocks_regardless_of_undecidables",
+            source_path=SKILL_SCRIPTS / "paper_audit.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_3_substituting_on_exhausted_audit_fails_the_exhaustion_guard(self) -> None:
+        proc = _run_against_mutant(
+            "if attempt >= 2:",
+            "if attempt >= 99:",
+            "tests.test_paper_writing.WritingPipelineTests"
+            ".test_two_failing_audits_leave_main_tex_unchanged_and_refuse_audit_exhausted",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_4_a_hardcoded_bullet_fails_the_verbatim_extraction_guard(self) -> None:
+        proc = _run_against_mutant(
+            "    return bullets",
+            '    bullets.append("HARDCODED BULLET THAT WAS NEVER IN THE CONTRACT")\n    return bullets',
+            "tests.test_paper_writing.ContractAuditTests.test_bullet_text_reaches_the_audit_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_audit.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_5_absent_heading_as_zero_disqualifiers_fails_the_guard(self) -> None:
+        proc = _run_against_mutant(
+            "        raise Refused(\n"
+            '            "DISQUALIFIERS_ABSENT", f"{source_name}: no \'## Disqualifiers\' heading"\n'
+            "        )",
+            "        return []",
+            "tests.test_paper_writing.ContractAuditTests.test_a_contract_missing_the_heading_refuses",
+            source_path=SKILL_SCRIPTS / "paper_audit.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+
 REFUSAL_CONSTRUCTORS = ("Refused",)
 REFUSAL_CODE_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$")
 
@@ -1062,8 +1712,19 @@ class RefusalRosterTests(unittest.TestCase):
         `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`,
         `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT`, plus
         `cmd_validate`'s own `VALIDATE_VERDICT_REQUIRED` in this file -- 7 + 1
-        = 8 new codes."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 65)
+        = 8 new codes. Moved from 65 to 78 in WU1 of `the-writer-may-assert-
+        only-what-it-was-given`: `paper_contract.py`'s `mode` widening adds
+        `UNKNOWN_MODE` (1); `write` wires and starts importing
+        `paper_bindings.py` (`UNBOUND_SENTENCE`, `BINDING_ORPHANED`,
+        `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`,
+        `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION` -- 6),
+        `paper_audit.py` (`DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`,
+        `VERDICT_BULLET_UNKNOWN` -- 3) and `paper_write.py`
+        (`MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `AUDIT_EXHAUSTED` -- 3) --
+        1 + 6 + 3 + 3 = 13 new codes. WU2 moves this to 79 by starting to
+        import `paper_leak.py` (`STYLE_OVERLAP` -- 1) and `paper_style.py`
+        (raises none of its own, reusing `SPAN_NOT_IN_SOURCE`)."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 78)
 
 
 if __name__ == "__main__":

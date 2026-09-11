@@ -53,6 +53,37 @@ CITATIONS_REGIMES: tuple[str, ...] = ("discovery", "resolution", "none")
 #: consumed.
 VERDICTS: tuple[str, ...] = ("holds", "does-not-hold", "insufficient")
 
+#: A block or section's drafting `mode` — exactly one of these two.
+#: `the-writer-may-assert-only-what-it-was-given`, `section-contract` spec,
+#: `Requirement: Closed Mode Vocabulary And Transcription`. `transposition`
+#: admits only `fact`/`structural`/`resolution`-class evidence bindings;
+#: `argument` additionally admits `discovery`-class evidence
+#: (`evidence-bound-drafting` spec, `Requirement: Mode-Admissible Bindings`).
+MODES: tuple[str, ...] = ("transposition", "argument")
+
+#: The closed list `paper_bindings.py`'s structural typing (D3) checks a
+#: `structural` sentence against — any of these words, case-folded, makes
+#: the sentence carry a comparison rather than pure structure. Not
+#: exhaustive of English comparatives; exhaustive of what this skill treats
+#: as a claim-bearing comparative (`design.md`, Decision D3).
+COMPARATIVES: tuple[str, ...] = (
+    "more", "less", "greater", "fewer", "higher", "lower", "better", "worse",
+    "larger", "smaller", "faster", "slower", "stronger", "weaker", "superior",
+    "inferior", "outperforms", "underperforms", "exceeds", "surpasses",
+    "improves", "degrades",
+)
+
+#: The closed list `paper_bindings.py`'s structural typing (D3) checks a
+#: `structural` sentence's numeral detection against, alongside a bare
+#: digit. Closed rather than an unfalsifiable heuristic, matching
+#: `design.md`'s own rejection of proper-noun heuristics for the sibling
+#: check.
+NUMBER_WORDS: tuple[str, ...] = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "eleven", "twelve", "dozen", "several", "many", "few",
+    "both", "half", "first", "second", "third", "fourth", "fifth",
+)
+
 
 def validate_fact(fact_id: str) -> None:
     """Refuses `UNKNOWN_FACT` (work-state) when `fact_id` is not one of the
@@ -89,3 +120,10 @@ def validate_verdict(value: str) -> None:
             "UNKNOWN_VERDICT",
             f"{value!r} is not one of the declared verdicts {VERDICTS}",
         )
+
+
+def validate_mode(value: str) -> None:
+    """Refuses `UNKNOWN_MODE` (work-state) when `value` is not one of
+    `transposition`, `argument`."""
+    if value not in MODES:
+        raise Refused("UNKNOWN_MODE", f"{value!r} is not one of the declared modes {MODES}")

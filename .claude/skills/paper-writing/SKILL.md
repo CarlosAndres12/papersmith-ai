@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, or validate a citation's verdict and placement before writing a block. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate. Offline except `resolve`, which sits behind a config role that can be emptied."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, or judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write. Offline except `resolve`, which sits behind a config role that can be emptied."
 ---
 
 # Paper Writing
@@ -13,20 +13,22 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Twelve verbs, wired into one front door (`scripts/paper_cli.py`):
+Thirteen verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
-decisions — `the-paper-carries-its-own-decisions`), and `resolve`,
+decisions — `the-paper-carries-its-own-decisions`), `resolve`,
 `bib build`, `validate` (citation resolution, a sourced bibliography, and
-the verdict/placement gate — `no-claim-without-a-source-that-holds-it`). To the
-substitution engine, block ids stay opaque strings — shape only
-(`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
-exist, what each requires, and where in the document they belong, entirely
-over in `sections/*.md`. `declare`/`plan` are what records the
-operator-supplied declarations and fact resolutions those requirements
-name, and reports where the paper stands against all of it in one
-read-only call — see "The paper's own decisions" below.
+the verdict/placement gate — `no-claim-without-a-source-that-holds-it`), and
+`write` (evidence-bound drafting, contract audit and the style-leak proof —
+`the-writer-may-assert-only-what-it-was-given`). To the substitution
+engine, block ids stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no
+meaning. The contract reader is what says which ids exist, what each
+requires, and where in the document they belong, entirely over in
+`sections/*.md`. `declare`/`plan` are what records the operator-supplied
+declarations and fact resolutions those requirements name, and reports
+where the paper stands against all of it in one read-only call — see "The
+paper's own decisions" below.
 
 **This CLI is no longer offline end to end.** `resolve` is the one path
 that reaches the network — keyless, stdlib `urllib` only, against OpenAlex,
@@ -361,6 +363,70 @@ evidence, never a value, and never calls `declare` itself.
 and the target implementation repository are readable; an agent asked to
 observe an unreadable source cannot distinguish "not yet true" from "cannot
 be checked."
+
+## The writer may assert only what it was given: `write`
+
+Three channels feed one block's draft: **contract** (the block's own prose,
+verbatim), **evidence** (the block's evidence set — resolved, cached
+records, never invented), and **style** (whole equivalent blocks from
+`style-reference`-classed `guidance/` folders — empty is valid, meaning
+"no style channel at all"). Two audits check the result before it ever
+reaches `main.tex`: **evidence-bound drafting**, which reconciles a binding
+map against the emitted LaTeX so an unbound assertion is *detected*, never
+merely instructed against; and **contract audit**, which evaluates the
+contract's own `## Disqualifiers` bullets verbatim against the draft. `write`
+is the judge that sequences both — **it never drafts and never audits
+anything itself.**
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write \
+    --section materials-and-methods --block mm-proposal \
+    --draft draft.json --audit audit.json --evidence evidence.json
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--transcript <path>]` | Reconciles an already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion | `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED` |
+
+### The shuttle procedure — this CLI never invokes an agent
+
+No module under `scripts/` imports `subprocess`, `os.system`, `os.popen`,
+`os.exec*`, or `multiprocessing` (an AST scan asserts it, with exactly one
+named, currently-unused exception reserved for a sibling skill's own
+`latexmk` integration — see `tests/test_paper_writing.py`,
+`NoSubprocessScanTests`). `write` cannot run unattended, by construction:
+
+1. The orchestrating agent (you) assembles the four redactor inputs and
+   delegates to the `redactor` agent, which returns
+   `{"latex": ..., "bindings": [...]}`. Write that JSON to a file.
+2. The orchestrating agent also delegates to the `contract-auditor` agent
+   and writes its JSON verdict envelope to a second file.
+3. Run `write --draft <path> --audit <path>`. On `"status": "written"` the
+   block is done. On `"status": "audit-fired"`, hand the returned `fired`
+   bullets and spans back to the redactor as explicit feedback and re-draft
+   **exactly once** — a third submission under the same contract/evidence/
+   mode refuses `AUDIT_EXHAUSTED`.
+
+**Measure this before delegating (redactor/contract-auditor):** confirm the
+contract's own `sections/*.md` file and its evidence set are both already
+readable; an agent asked to draft or audit against a source it cannot read
+cannot distinguish "nothing to cite" from "cannot be checked."
+
+### `mode`: how a block is licensed to argue
+
+`sections/*.md` headers may now declare a `mode` — `transposition` or
+`argument` — at section level (the default) or block level (overriding
+it), transcribed from the contract's own prose exactly like an `after`
+edge (`{"value": ..., "source": {"file", "quote"}}`). A header declaring
+neither is schema-valid — none of the ten shipped contracts carry `mode`
+yet — but `write` refuses `MODE_ABSENT` rather than assuming one for any
+block it resolves to `None`.
+
+`transposition` admits only `fact`/`structural`/`resolution`-class
+evidence bindings — a block reporting an existing result. `argument`
+additionally admits `discovery`-class evidence — a block making a claim
+about the field. Binding a `discovery`-class record under `transposition`
+refuses `MODE_VIOLATION`.
 
 ## Refusal roster
 

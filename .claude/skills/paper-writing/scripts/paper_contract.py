@@ -35,27 +35,41 @@ from impl_refusals import Refused  # noqa: E402
 _FENCE_LINE = b"---"
 
 _TOP_LEVEL_REQUIRED = ("section", "position", "blocks")
-_TOP_LEVEL_OPTIONAL = ("after",)
+#: `mode` widened in `the-writer-may-assert-only-what-it-was-given`
+#: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
+#: the section-level drafting-mode default, optional, overridden per block.
+_TOP_LEVEL_OPTIONAL = ("after", "mode")
 _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED + _TOP_LEVEL_OPTIONAL
 
 _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
-_BLOCK_OPTIONAL = ("optional", "after")
+#: `mode` widened the same way at block level — a block's own `mode`
+#: overrides the section-level default when present (`resolve_mode` below).
+_BLOCK_OPTIONAL = ("optional", "after", "mode")
 _BLOCK_ALLOWED = _BLOCK_REQUIRED + _BLOCK_OPTIONAL
 
 _AFTER_REQUIRED = ("target", "source")
 _SOURCE_REQUIRED = ("file", "quote")
+#: Same shape as an `after` entry's own `source` — `{value, source}`, where
+#: `source` is `{file, quote}` (`section-contract` spec, `Requirement:
+#: Closed Mode Vocabulary And Transcription`). Reuses `_validate_source`
+#: below rather than a second copy of the same three checks.
+_MODE_REQUIRED = ("value", "source")
 
 
 @dataclass(frozen=True)
 class ContractHeader:
     """One parsed header. `blocks` is a list of validated dicts, each
     carrying exactly `id`, `requires_facts`, `requires_declarations`,
-    `citations`, `optional`, `after` — defaults filled in, nothing extra."""
+    `citations`, `optional`, `after`, `mode` — defaults filled in, nothing
+    extra. `mode` is the section-level default (`None` when the header
+    declares none); a block's own `mode` entry, also `None` when absent,
+    wins over it (`resolve_mode` below)."""
 
     section: str
     position: int
     after: list
     blocks: list
+    mode: dict | None = None
 
 
 def _split_front_matter(data: bytes) -> tuple[str, bytes]:
@@ -90,6 +104,27 @@ def _split_front_matter(data: bytes) -> tuple[str, bytes]:
     return json_text, body
 
 
+def _validate_source(source, owner: str) -> dict:
+    """The `{file, quote}` shape an `after` entry's own `source` carries,
+    and — since `the-writer-may-assert-only-what-it-was-given` — a `mode`
+    declaration's `source` too (`section-contract` spec, `Requirement:
+    Closed Mode Vocabulary And Transcription`: "the same shape
+    `_validate_after_list` already enforces for `after` edges"). Factored
+    out here so one validator serves both rather than two copies drifting
+    (`design.md`, Decision D4)."""
+    if not isinstance(source, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'source' must be an object")
+    missing_source = [key for key in _SOURCE_REQUIRED if key not in source]
+    if missing_source:
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'source' missing {missing_source[0]!r}")
+    unknown_source = [key for key in source if key not in _SOURCE_REQUIRED]
+    if unknown_source:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'source' carries unknown key {unknown_source[0]!r}"
+        )
+    return source
+
+
 def _validate_after_list(value, owner: str) -> list:
     if not isinstance(value, list):
         raise Refused("MALFORMED_HEADER", f"{owner}: 'after' must be a list")
@@ -102,18 +137,31 @@ def _validate_after_list(value, owner: str) -> list:
         unknown = [key for key in entry if key not in _AFTER_REQUIRED]
         if unknown:
             raise Refused("MALFORMED_HEADER", f"{owner}: 'after' entry carries unknown key {unknown[0]!r}")
-        source = entry["source"]
-        if not isinstance(source, dict):
-            raise Refused("MALFORMED_HEADER", f"{owner}: 'source' must be an object")
-        missing_source = [key for key in _SOURCE_REQUIRED if key not in source]
-        if missing_source:
-            raise Refused("MALFORMED_HEADER", f"{owner}: 'source' missing {missing_source[0]!r}")
-        unknown_source = [key for key in source if key not in _SOURCE_REQUIRED]
-        if unknown_source:
-            raise Refused(
-                "MALFORMED_HEADER", f"{owner}: 'source' carries unknown key {unknown_source[0]!r}"
-            )
+        _validate_source(entry["source"], owner)
     return value
+
+
+def _validate_mode_object(raw, owner: str) -> dict:
+    """`mode` MUST be `{value, source}` — `value` one of
+    `paper_vocabulary.MODES`, `source` the same `{file, quote}` shape
+    `_validate_source` already enforces for `after` edges. Refuses
+    `UNKNOWN_MODE` (via `paper_vocabulary.validate_mode`) for a `value`
+    outside the pair (`section-contract` spec, `Requirement: Closed Mode
+    Vocabulary And Transcription`)."""
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'mode' must be an object")
+    missing = [key for key in _MODE_REQUIRED if key not in raw]
+    if missing:
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'mode' missing {missing[0]!r}")
+    unknown = [key for key in raw if key not in _MODE_REQUIRED]
+    if unknown:
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'mode' carries unknown key {unknown[0]!r}")
+    value = raw["value"]
+    if not isinstance(value, str):
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'mode.value' must be a string")
+    paper_vocabulary.validate_mode(value)
+    source = _validate_source(raw["source"], f"{owner}.mode")
+    return {"value": value, "source": dict(source)}
 
 
 def _parse_block(raw, section: str) -> dict:
@@ -155,6 +203,18 @@ def _parse_block(raw, section: str) -> dict:
 
     block_after = _validate_after_list(raw.get("after", []), f"{section}.{block_id}")
 
+    # `raw.get("mode") is not None` rather than `"mode" in raw`: this
+    # function's own OWN output round-trips through re-serialization in
+    # `paper_graph.py`'s corpus assembly and this suite's own fixtures
+    # (`header.blocks` already carries a `"mode": None` key for every block
+    # that declared none), so an explicit JSON `null` MUST mean the same
+    # thing as the key being absent -- never a `MALFORMED_HEADER` a
+    # round-trip would otherwise manufacture out of this parser's own
+    # output shape.
+    block_mode = None
+    if raw.get("mode") is not None:
+        block_mode = _validate_mode_object(raw["mode"], f"{section}.{block_id}")
+
     return {
         "id": block_id,
         "requires_facts": list(facts),
@@ -162,6 +222,7 @@ def _parse_block(raw, section: str) -> dict:
         "citations": citations,
         "optional": optional,
         "after": block_after,
+        "mode": block_mode,
     }
 
 
@@ -196,7 +257,27 @@ def parse_header(header) -> ContractHeader:
     after = _validate_after_list(header.get("after", []), section)
     blocks = [_parse_block(raw, section) for raw in blocks_raw]
 
-    return ContractHeader(section=section, position=position, after=after, blocks=blocks)
+    section_mode = None
+    if header.get("mode") is not None:
+        section_mode = _validate_mode_object(header["mode"], section)
+
+    return ContractHeader(
+        section=section, position=position, after=after, blocks=blocks, mode=section_mode
+    )
+
+
+def resolve_mode(header: ContractHeader, block: dict) -> dict | None:
+    """A block's own `mode` wins; the section-level `mode` is the default;
+    `None` when neither declares one (`section-contract` spec, `Requirement:
+    Front Matter Schema`, scenarios "A block inherits the section-level
+    mode" / "A block's own mode overrides the section-level default";
+    `Requirement: Headers Written Before mode Existed` for the `None` case —
+    `write`'s own readiness stage is what refuses on `None`, never this
+    reader)."""
+    block_mode = block.get("mode")
+    if block_mode is not None:
+        return block_mode
+    return header.mode
 
 
 def parse(data: bytes) -> tuple[ContractHeader, bytes]:

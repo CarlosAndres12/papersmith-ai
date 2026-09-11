@@ -6,19 +6,24 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires twelve verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires thirteen verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
 (from `the-contract-is-data-not-code`); `declare`, `plan` (from
-`the-paper-carries-its-own-decisions`, Slices B and C2); and `resolve`,
+`the-paper-carries-its-own-decisions`, Slices B and C2); `resolve`,
 `bib build`, `validate` (from `no-claim-without-a-source-that-holds-it`,
 WU1/WU2/WU3 — `resolve` is the one path that makes this CLI not offline end
 to end, keyless and behind a role `papersmith.yaml` can empty; `bib build`
 rebuilds `refs.bib` whole from cached resolved metadata only; `validate` is
 the single gate deciding verdict, placement and the bounded search-round
-budget before any block reaches disk). Left extensible on purpose; nothing
-here assumes it is the last verb this file will ever grow.
+budget before any block reaches disk); and `write` (from `the-writer-may-
+assert-only-what-it-was-given` — a judge, never an invoker: it reconciles an
+already-shuttled redactor draft and contract-auditor account against one
+block's real contract, evidence set and mode, and either substitutes the
+block or reports why not, with exactly one bounded re-draft). Left
+extensible on purpose; nothing here assumes it is the last verb this file
+will ever grow.
 """
 from __future__ import annotations
 
@@ -43,6 +48,9 @@ import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, 
 import paper_resolve  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the urllib resolution client
 import paper_bib  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU2: refs.bib from cached metadata
 import paper_validate  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU3: verdicts, placement, the bounded loop
+import paper_bindings  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: binding map reconciliation/resolution/typing/mode
+import paper_audit  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: verbatim Disqualifiers reconciliation
+import paper_write  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: the write pipeline and its attempt ledger
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -176,6 +184,27 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- validate's own mode selection (this file; the same shape as
     # SUBSTITUTE_MODE_REQUIRED/DECLARE_MODE_REQUIRED) --------------------
     "VALIDATE_VERDICT_REQUIRED": INVOCATION_DEFECT,
+    # --- mode widening (paper_vocabulary.py/paper_contract.py; the-writer-
+    # may-assert-only-what-it-was-given, section-contract delta) ----------
+    "UNKNOWN_MODE": WORK_STATE,
+    # --- the binding map: reconciliation, resolution, structural typing,
+    # mode admissibility (paper_bindings.py; WU1) -------------------------
+    "UNBOUND_SENTENCE": WORK_STATE,
+    "BINDING_ORPHANED": WORK_STATE,
+    "EVIDENCE_ID_UNKNOWN": WORK_STATE,
+    "FACT_NOT_LICENSED": WORK_STATE,
+    "STRUCTURAL_CARRIES_CLAIM": WORK_STATE,
+    "MODE_VIOLATION": WORK_STATE,
+    # --- the contract audit: verbatim Disqualifiers, verdict reconciliation
+    # (paper_audit.py; WU1) ------------------------------------------------
+    "DISQUALIFIERS_ABSENT": WORK_STATE,
+    "VERDICT_MISSING": WORK_STATE,
+    "VERDICT_BULLET_UNKNOWN": WORK_STATE,
+    # --- the write pipeline: readiness/gate and exhaustion (paper_write.py;
+    # WU1) ------------------------------------------------------------------
+    "MODE_ABSENT": WORK_STATE,
+    "EVIDENCE_SET_REQUIRED": WORK_STATE,
+    "AUDIT_EXHAUSTED": WORK_STATE,
 }
 
 
@@ -480,6 +509,64 @@ def cmd_plan(args: argparse.Namespace) -> dict:
     return compute_plan(paper_dir, guidance_dir=guidance_dir, sections_dir=sections_dir)
 
 
+def _resolve_repo_path(raw: str) -> Path:
+    """Resolves a caller-supplied `--draft`/`--audit`/`--transcript` operand
+    against the real repository root, reusing `paper_scaffold.FORGE_ROOT`
+    containment and its `PAPER_OUTSIDE_REPOSITORY` refusal (`design.md`,
+    Threat Matrix: Path containment) — never a second, freshly-invented code
+    for the same condition."""
+    root = paper_scaffold.FORGE_ROOT.resolve()
+    target = Path(raw).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise Refused(
+            "PAPER_OUTSIDE_REPOSITORY", f"{target} does not resolve inside the repository root {root}"
+        )
+    return target
+
+
+def cmd_write(args: argparse.Namespace) -> dict:
+    """`write`: reconciles an already-shuttled redactor draft and
+    contract-auditor account against one block's real contract, evidence
+    set and mode, and either substitutes the block or reports why not
+    (`writing-orchestration` spec). Never drafts, never audits, never
+    spawns anything (`design.md`, Decision D2) — `--draft`/`--audit` are
+    JSON envelopes an agent already produced; `--transcript`, when given,
+    is only containment-checked and recorded, never parsed for judgment.
+    """
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    draft_path = _resolve_repo_path(args.draft)
+    audit_path = _resolve_repo_path(args.audit)
+    if args.transcript:
+        _resolve_repo_path(args.transcript)
+
+    draft = json.loads(draft_path.read_text(encoding="utf-8"))
+    audit_account = json.loads(audit_path.read_text(encoding="utf-8"))
+
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    section_path = sections_dir / f"{args.section}.md"
+    header, body = paper_contract.parse(section_path.read_bytes())
+    block = next(b for b in header.blocks if b["id"] == args.block)
+    mode_obj = paper_contract.resolve_mode(header, block)
+    mode = mode_obj["value"] if mode_obj is not None else None
+
+    evidence_set = ()
+    if args.evidence:
+        evidence_set = tuple(json.loads(Path(args.evidence).read_text(encoding="utf-8")))
+
+    contract = paper_write.BlockContract(
+        block_id=args.block,
+        contract_prose=body.decode("utf-8"),
+        contract_source=str(section_path),
+        citations_regime=block["citations"],
+        mode=mode,
+        requires_facts=tuple(block["requires_facts"]),
+        evidence_set=evidence_set,
+    )
+    return paper_write.write_block(paper_dir, contract, draft, audit_account)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -652,12 +739,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="override sections/ location; must resolve inside the repository root",
     )
 
+    p_write = sub.add_parser(
+        "write",
+        help="judge an already-drafted, already-audited block: reconcile, then substitute or report why not",
+    )
+    p_write.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_write.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_write.add_argument("--section", required=True, help="the sections/<id>.md stem this block belongs to")
+    p_write.add_argument("--block", required=True, help="block id to write")
+    p_write.add_argument(
+        "--draft", required=True,
+        help="path to the redactor's JSON envelope: {latex, bindings}; must resolve inside the repository root",
+    )
+    p_write.add_argument(
+        "--audit", required=True,
+        help="path to the contract-auditor's JSON envelope: {verdicts}; must resolve inside the repository root",
+    )
+    p_write.add_argument(
+        "--evidence", default=None,
+        help="path to a JSON array of {id, regime, ...} evidence records this block may bind against",
+    )
+    p_write.add_argument(
+        "--transcript", default=None,
+        help="path to a recorded agent transcript; containment-checked, never parsed for judgment",
+    )
+
     return parser
 
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve", "bib", "validate",
+    "resolve", "bib", "validate", "write",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -672,6 +790,7 @@ _COMMANDS = {
     "resolve": cmd_resolve,
     "bib": cmd_bib,
     "validate": cmd_validate,
+    "write": cmd_write,
 }
 
 
