@@ -45,11 +45,11 @@ Chain strategy: pending
 ## Phase 3: Harness Scaffolding (no production code)
 
 - [ ] 3.1 Create `tests/seal/__init__.py`.
-- [ ] 3.2 Create `tests/seal/corpus.py`: `build(root) -> Roots`; fixtures A (provenance+findings+PRODUCT_DIRS tree), B (A minus `Data/`), P (marker-owned `seal-1/2.md`, hand-authored `draft-1.md`/`draft-01.md` tie), `plan.json`; `git init` with pinned identity/`GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`; `CORPUS_FINGERPRINT_SOURCE`.
+- [ ] 3.2 Create `tests/seal/corpus.py`: `build(root) -> Roots`; fixtures A (provenance+findings+PRODUCT_DIRS tree, declared family `seal-1.md`), B (A minus `Data/`, same declared family — this is the load-bearing F5 instrument, see design.md D3/D8, keep it), T (case 14 only: `__benchmark__` undeclared, module provenance declares family `draft-1.md`, falling back exactly like the existing precedent `test_a_directory_nobody_manages_behaves_exactly_as_it_did` — `verify`'s discovery/tied fields derive solely from the target's own declared revision, never from `--revision`, so case 14 cannot share fixture A's family), P (marker-owned `seal-1/2.md`, hand-authored `draft-1.md`/`draft-01.md` tie), `plan.json` template (target path injected per-case by the harness, not static — see `<PLAN>` placeholder, task 3.6); `git init` with pinned identity/`GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE`; `CORPUS_FINGERPRINT_SOURCE`.
 - [ ] 3.3 Create `tests/seal/normalize.py`: N1 `iso8601_timestamps`, N2 `absolute_roots`, N3 `cli_invocation` (interpreter token ONLY — `shlex.quote(sys.executable or "python3")` → `<PYTHON>`; NOT the whole `CLI_INVOCATION` value, so `str(CLI_PATH)` survives into N2 as `<FORGE>/.../implementation_cli.py`), N5 `git_shas`; `NORMALIZERS = (N3, N2, N1, N5)`, order pinned (N3 before N2 — the venv interpreter itself resolves under `FORGE_ROOT`, so N2 would mangle N3's match if it ran first). **Design correction, applied before capture**: the original N3 erased the whole `CLI_INVOCATION` including the launcher path, which would have hidden Cut 1's `CLI_PATH`-misresolution failure mode; narrowed per design.md D4 update.
 - [ ] 3.4 Create `tests/seal/cases.json`: 29 cases per design D3 table, all 20 `COMMANDS`; `<TARGET>`/`<PROPOSALS>` placeholders; `--session` literals restricted to `{"seal-s1","seal-s2"}`.
 - [ ] 3.5 Build constructed-env allow-list: `PATH`, `HOME`, `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, `LC_ALL=C.UTF-8`, `TZ=UTC`, `NO_COLOR=1`, `COLUMNS=80`, `GIT_CONFIG_GLOBAL`/`SYSTEM=/dev/null`, `IMPLEMENTATION_PROPOSALS` only when case says.
-- [ ] 3.6 Create `tests/seal_capture.py`: argv = `shlex.split(impl.CLI_INVOCATION) + case_argv`, `shell=False`, `timeout=120`, per-case `copytree` scratch; run each case twice, refuse-and-write-nothing + unified diff on disagreement.
+- [ ] 3.6 Create `tests/seal_capture.py`: argv = `shlex.split(impl.CLI_INVOCATION) + case_argv`, `shell=False`, `timeout=120`, per-case `copytree` scratch; run each case twice, refuse-and-write-nothing + unified diff on disagreement. Third placeholder `<PLAN>` beside `<TARGET>`/`<PROPOSALS>` (apply/materialize cases only): harness writes a small `plan.json` sibling to (never inside) the case's copied git target, with `"target"` injected as that case's own resolved scratch path and the other four `build_plan()` fields at their fixed (empty) values — never a statically committed plan.json, since the exact-string `target` match in `_materialize_plan_gate`/`cmd_apply` would only ever match one specific tmpdir.
 
 ## Phase 4: Threat-Matrix RED Tests (before capture runs live)
 
@@ -76,7 +76,7 @@ Chain strategy: pending
 ## Phase 7: Comparison Suite, Coverage, Membership
 
 - [ ] 7.1 `tests/test_implementation_seal.py`: run each of 29 cases once, normalize, compare to `digests.json`.
-- [ ] 7.2 Coverage tests (over captured *output*, not fixture): `test_provenance_reaches_the_output`, `test_findings_reach_the_output` (all 3 of inline/deferred/settled + `introduces`), `test_data_absence_is_visible` (case 12 vs 13), `test_both_revision_families_and_a_tie_are_exercised`, `test_every_f3_site_is_sealed_in_both_env_states` (exact set `{admit,position,gate,offer,close}×{E0,E1}`).
+- [ ] 7.2 Coverage tests (over captured *output*, not fixture): `test_provenance_reaches_the_output`, `test_findings_reach_the_output` (all 3 of inline/deferred/settled + `introduces`), `test_corpus_provably_exercises_data_present_and_absent` (construction-level: fixture A's `Seal/Data/` exists, fixture B's does not — replaces the falsified `test_data_absence_is_visible`, per coordinator decision and design.md D3's correction), `test_both_revision_families_and_a_tie_are_exercised`, `test_every_f3_site_is_sealed_in_both_env_states` (exact set `{admit,position,gate,offer,close}×{E0,E1}`).
 - [ ] 7.3 Membership tests: `test_every_case_is_either_sealed_or_declared_unsealed`, `test_the_unsealed_set_is_exactly_its_declared_membership` (`EXPECTED_UNSEALED = frozenset()`), `test_the_case_roster_covers_the_command_roster_exactly`, `test_every_unsealed_entry_states_a_reason`.
 - [ ] 7.4 `test_corpus_fingerprint_matches`: `sha256(corpus.py)` vs stored; trim a case → red.
 - [ ] 7.5 **Seal mutation proof**: flip one byte of one stored golden stdout → comparison goes red; demonstrate, paste, then revert the mutation.
@@ -91,7 +91,8 @@ Chain strategy: pending
 - [ ] 8.3 RED→GREEN: `test_the_data_category_is_read_from_the_tuple` (`PRODUCT_DATA == "Data"`, `is PRODUCT_DIRS[1]`, not literal in `expected_dirs` source).
 - [ ] 8.4 RED→GREEN: pinned-literal `expected_dirs(with_data=True/False)` outputs (not derived from `PRODUCT_DIRS`).
 - [ ] 8.5 Re-run comparison suite (7.1) against the **existing** `digests.json` (no recapture): cases 3, 4, 12, 13 must be byte-identical; paste. Any other case moving is a hard failure — F5 is not applied correctly.
-- [ ] 8.6 Write `f5-zero-delta.md`: commit sha before/after F5, pasted comparison output both sides.
+- [ ] 8.5b **The mutation that matters** (coordinator decision, design.md D8 instrument 4): temporarily set `PRODUCT_DATA = PRODUCT_DIRS[2]`; re-run the comparison; assert case 13's digest MOVES and case 12's does not (fixture A is structurally blind to `PRODUCT_DATA` — the `or with_data` short-circuit — so only case 13 can see it); paste before/after digests. Revert; re-assert zero delta (8.5).
+- [ ] 8.6 Write `f5-zero-delta.md`: commit sha before/after F5, pasted comparison output both sides, plus 8.5b's reach/revert pair.
 
 ## Phase 9: Non-Interference Proof (structural, per operator's constraint)
 
@@ -112,13 +113,16 @@ Chain strategy: pending
   1. **Closed inline** (design-only correction, no coverage change): N3's CLI_PATH
      blindness, per the coordinator's own directed fix — see design.md D2/D4, applied
      before any capture ran. Recorded in apply-progress.
-  2. **STOPPED, reported, not closed** (changes corpus coverage): the `Data/` present/
-     absent coverage cell (spec.md's Corpus Coverage requirement; design.md D3's case-13
-     row; `test_data_absence_is_visible`) is unsatisfiable as designed — `verify`'s output
-     is proven byte-identical between a `Data/`-present and `Data/`-absent fixture,
-     confirming measurement finding B4 reaches the WHOLE payload, not one field. See the
-     BLOCKED note inline in design.md D3. Apply stopped here rather than choosing a
-     resolution unilaterally; Phases 3 (corpus/cases.json build-out) through 10 did not
-     start writing production artifacts pending this decision — case 14's fixture-family
-     tension (see apply-progress) was also found and would need to be resolved in the same
-     pass, since both bear on how many distinct fixture states `corpus.py` must build.
+  2. **STOPPED, reported — RESOLVED by coordinator decision, 2026-09-11.** The `Data/`
+     present/absent coverage cell: apply's byte-equality measurement was confirmed correct
+     (`verify`'s output IS identical between the two fixtures today), but the conclusion
+     was wrong — case 13 is not there to show a missing `Data/` today, it is the only case
+     where a BOTCHED F5 becomes visible at all, because `expected_dirs`'s `or with_data`
+     short-circuit makes fixture A structurally blind to `PRODUCT_DATA`'s value. **Both
+     fixtures stay.** `test_data_absence_is_visible`'s false claim is replaced, not
+     deleted, by `test_corpus_provably_exercises_data_present_and_absent` (7.2) plus a new
+     F5-phase mutation proof (8.5b) that sets `PRODUCT_DATA` to a wrong `PRODUCT_DIRS`
+     member and requires case 13's digest to move. See design.md D3 (corrected claim with
+     its refutation beside it) and D8 instrument 4. Case 14's fixture-family tension is
+     closed inline per the coordinator's direction (task 3.2): its own fixture variant,
+     not shared with fixture A's declared family.

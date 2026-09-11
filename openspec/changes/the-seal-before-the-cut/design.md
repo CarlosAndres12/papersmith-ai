@@ -139,30 +139,53 @@ inspected for shape can be satisfied by an empty file; an output is not.
 - `test_findings_reach_the_output`: case 8 has **all three** of `inline`, `deferred`,
   `settled` non-empty (which requires `remedy_block`, `remedy_equations` and an adopted
   `adoption` to be live), and ≥1 item with non-empty `introduces`.
-- `test_data_absence_is_visible`: case 12 and case 13 digests differ, and case 13's output
-  names a missing `Data` directory.
+- `test_case_13_is_the_instrument_that_would_catch_a_botched_f5`: **replaces the original
+  `test_data_absence_is_visible`, whose claim was measured FALSE during apply, 2026-09-11,
+  before any capture ran** — record kept rather than deleted, per this repo's own
+  discipline that a corrected claim is worth more beside its refutation than a clean one.
 
-  **BLOCKED — measured false during apply, 2026-09-11, before any capture ran.** `rg
-  'PRODUCT_DIRS\[1\]|"Data"'` over the whole 17,100-line CLI returns exactly THREE hits:
-  the tuple definition (111), `expected_dirs`'s own self-fulfilling filter (2502, the
-  exact line F5 touches), and the one `with_data = (target / name / "Data").is_dir()`
-  computation (14249) `cmd_verify` uses to build that same filter's argument. **No other
-  command, and no other field of `verify`'s own output, reads `Data` at all.** Built
-  fixture A (`Data/` present) and fixture B (`Data/` absent), otherwise byte-identical,
-  and ran `verify` against both: `json.loads(a.stdout) == json.loads(b.stdout)` is
-  **`True`** — the two payloads are completely identical, not merely `missingDirs`. This
-  is measurement finding B4 in the flesh ("`verify.structure.missingDirs` can never
-  contain a `Data/`" — confirmed exactly, and shown to reach the ENTIRE payload, not one
-  field), and B4/F4 (`plan` threading `--revision`, the fix that would make `with_data`
-  non-self-fulfilling) are explicitly Out of Scope in proposal.md. As specified, this test
-  cannot pass against the unmodified CLI, and the corpus cannot make it pass by
-  construction alone. Needs a decision: relax this test to a corpus-construction check
-  (fixture B's `Data/` is provably absent on disk, independent of any captured output —
-  satisfies spec.md's literal "provably exercise ... reached by at least one case"
-  wording) instead of a captured-output claim, choose a different command for this
-  coverage cell if one exists (none was found), or accept case 13 as a case that is
-  captured and sealed like any other but does not itself prove `Data`-absence is
-  observable — because today it is not. Apply did not choose among these; design must.
+  **The original claim, and why it is false.** "case 12 and case 13 digests differ, and
+  case 13's output names a missing `Data` directory" — measured: build fixture A (`Data/`
+  present) and fixture B (`Data/` absent), otherwise byte-identical, run `verify` against
+  both. `json.loads(a.stdout) == json.loads(b.stdout)` is **`True`** — the two payloads
+  are completely identical, not merely `missingDirs`. `rg 'PRODUCT_DIRS\[1\]|"Data"'` over
+  the whole 17,100-line CLI returns exactly three hits: the tuple definition (111),
+  `expected_dirs`'s own self-fulfilling filter (2502), and the one
+  `with_data = (target / name / "Data").is_dir()` computation (14249) that feeds it — no
+  other command or field reads `Data` at all. This is measurement finding B4, confirmed to
+  reach the *entire* `verify` payload today, and B4/F4 (threading `--revision` through
+  `plan`, which would make `with_data` non-self-fulfilling) is explicitly Out of Scope.
+
+  **What case 13 actually proves, instead.** It is not there to show a missing `Data/`
+  *today* — it is the only case in the corpus where a botched F5 becomes visible at all.
+  `expected_dirs`'s filter is `d != PRODUCT_DATA or with_data`: when `with_data` is
+  `True` (fixture A), that `or` makes the condition trivially true for every `d`,
+  regardless of what `PRODUCT_DATA` is bound to — fixture A's `expected_dirs` output is
+  **invariant to a wrong `PRODUCT_DATA`**. Only when `with_data` is `False` (fixture B)
+  does `PRODUCT_DATA`'s value actually decide which one directory is excluded from the
+  expected list, and excluding the wrong one leaves the genuinely-absent `Data/` IN the
+  expected list, moving `missingDirs`. Measured with `PRODUCT_DIRS[2]` ("Results")
+  substituted for the correct `PRODUCT_DIRS[1]` ("Data"):
+
+  ```
+  with_data=False   (fixture B, Data/ ABSENT)
+    correct PRODUCT_DATA: ['M/Notebooks', 'M/Results', 'M/Models']
+    botched PRODUCT_DATA: ['M/Notebooks', 'M/Data',    'M/Models']
+    DIFFER: True            <- case 13 sees it
+
+  with_data=True    (fixture A, Data/ PRESENT)
+    correct PRODUCT_DATA: ['M/Notebooks', 'M/Data', 'M/Results', 'M/Models']
+    botched PRODUCT_DATA: ['M/Notebooks', 'M/Data', 'M/Results', 'M/Models']
+    DIFFER: False            <- fixture A is blind to it
+  ```
+
+  So **keep both fixtures**; dropping case 13 would leave F5 an edit no instrument in this
+  change could check, the precise opposite of its stated purpose as "the seal's first live
+  customer" (D8). The corrected test asserts what is actually true today —
+  `test_corpus_provably_exercises_data_present_and_absent` (a construction-level check:
+  fixture A's `Seal/Data/` exists on disk, fixture B's does not — satisfying spec.md's
+  literal "provably exercise ... reached by at least one case" wording) — and D8 carries
+  the mutation that proves case 13's instrument value: see below.
 - `test_both_revision_families_and_a_tie_are_exercised`: case 12 reports
   `markerOwned: true`; case 14 reports a non-empty `tied`.
 - `test_every_f3_site_is_sealed_in_both_env_states`: exact set equality over
@@ -335,7 +358,7 @@ and in `expected_dirs` (currently line 2502):
     dirs = [f"{name}/{d}" for d in PRODUCT_DIRS if d != PRODUCT_DATA or with_data]
 ```
 
-**How the zero is asserted — four independent instruments, not one green suite:**
+**How the zero is asserted — five independent instruments, not one green suite:**
 
 1. **Identity, at the constant**: `test_the_data_category_is_read_from_the_tuple` asserts
    `impl.PRODUCT_DATA == "Data"` and `impl.PRODUCT_DATA is impl.PRODUCT_DIRS[1]`, and
@@ -349,10 +372,22 @@ and in `expected_dirs` (currently line 2502):
 3. **The seal itself**: cases 4 and 13 (fixture `B`, `Data/` absent) and 3 and 12
    (fixture `A`, present) run the comparison after F5 and must reproduce the pre-F5
    digests **unchanged**. This is the F5 zero-delta claim.
-4. **Recorded, not inferred**: `openspec/changes/the-seal-before-the-cut/f5-zero-delta.md`
+4. **The mutation that matters — pick the lock a weaker one would survive.** Zero-delta
+   alone only proves this refactor is an identity; it says nothing about whether the seal
+   could have caught it if it were NOT one. Per the D3 correction above, fixture A (`with_data=True`)
+   is structurally blind to `PRODUCT_DATA`'s value — the `or with_data` short-circuit makes
+   every case run against fixture A invariant to it — so only case 13 (fixture `B`,
+   `with_data=False`) can see a wrong index move. `test_a_wrong_product_data_moves_case_13`
+   temporarily binds `PRODUCT_DATA = PRODUCT_DIRS[2]` (`"Results"`, or any non-`Data`
+   member), re-runs the comparison, and asserts **case 13's digest moves** while (as a
+   guard against the mutation accidentally reaching further than intended) case 12's does
+   not. Then reverts and re-asserts zero delta. Without this, F5's own coverage cell could
+   be dropped from the corpus and nothing in this change would notice.
+5. **Recorded, not inferred**: `openspec/changes/the-seal-before-the-cut/f5-zero-delta.md`
    carries the commit sha before F5, the sha after, and the pasted comparison-test output
-   from both. `git diff --stat` is not evidence here — the goldens are newly added files,
-   and for untracked or newly-added paths a stat proves nothing.
+   from both, plus instrument 4's reach/revert pair. `git diff --stat` is not evidence
+   here — the goldens are newly added files, and for untracked or newly-added paths a stat
+   proves nothing.
 
 ## Data Flow
 
