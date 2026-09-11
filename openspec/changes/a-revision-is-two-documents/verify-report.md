@@ -188,3 +188,113 @@ Generated-golden exclusion (`tests/pair/digests.json`, 12 lines) does not materi
 The central question this verify session was asked to spend its effort on — *would a token minted before this change still validate after it* — is answered **yes, unconditionally**, proven by live execution including a real forced mutation that reddened the guard and a byte-identical revert. Every other measured claim in Phase 15's self-report reproduced exactly under independent re-execution: 595/595, `Ran 2906`/`OK (skipped=6)`, 28/28 byte-identical seal digests captured live, sister directories untouched, RED-first git-verifiable, no AI attribution, zero trivial assertions.
 
 The FAIL verdict rests entirely on one finding, orthogonal to the central question: this change's own explicit, repeatedly-stated acceptance bar — *a branch no reachable configuration takes cannot be mutation-proven, and an unprovable branch is the same defect one level up* — was met for Slice A and not for Slice B. The infrastructure Slice A built specifically to meet that bar (the two-document fixture profile and its pair corpus) was never extended into Slice B, so roughly 20 of Slice B's 24 new runtime branches ship with their two-document direction completely unexercised. This is not a guess about what might be wrong; it is a direct, named absence of coverage against this project's own spec-level MUST.
+
+---
+
+## RE-VERIFY (Cut 3, corrective apply, commit `cf50678` on top of `c2a86c9`) — amendment, prior FAIL preserved above
+
+```yaml
+schema: gentle-ai.verify-result/v1
+evidence_revision: sha256:6018619a9fadc9ee9ab709d4f23d10e0f59b1bec
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0 (original CRITICAL substantially closed; 2 new WARNING-level residual gaps identified in the same site class, by execution)
+requirements: 13/14 (RED-First requirement's literal git-isolation scenario structurally inapplicable to a coverage-only phase; substituted, not satisfied as literally worded)
+scenarios: 28/30 (2 scenarios under "A Finding May Name Either Or Both Documents" remain unverified through the real caller-construction path, though verified at the pure-function level)
+test_command: .venv/bin/python -m unittest discover -s tests
+test_exit_code: 0
+test_output_hash: sha256(tests/seal/digests.json)=011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75 (unchanged, live-captured twice)
+build_command: npm test
+build_exit_code: 0
+```
+
+### Preflight
+
+`ps aux | rg "unittest discover"` found a live foreign process at the start of this session (PID 70601) and again mid-session (PID 92542). Both resolved via `lsof -p <pid> | rg cwd` to `/Users/diego/.herdr/worktrees/papersmith-ai/paper-writing` — a different worktree, not this one. No concurrency conflict on this repo. No toy-target residue found (`git status --short --ignored=matching implementations/` showed only a live, git-ignored `_e2e_poll_first_piloted_8036/` scratch dir belonging to the in-progress suite run itself, not leftover from a killed process).
+
+### Grep classification, re-verified independently
+
+`grep -n 'len(DOCUMENTS) > 1' .claude/skills/_core/implementation/engine/implementation_engine.py` → **30** matches. Line numbers `514, 4029, 4564, 7875, 13708, 14177` read as docstring/comment prose on direct inspection (backtick-quoted phrases inside triple-quoted docstrings, one `#` comment) — **6**, matching the correction's claim exactly. The remaining **24** line numbers, after removing those six, match tasks.md 16.5's own listed 24 line numbers **exactly**, position for position. The 30/6/24 split is confirmed, independently, not re-read from the correction's own report.
+
+### New test classes: run in isolation
+
+`.venv/bin/python -m unittest tests.test_implementation_pair -v` → **10 tests, all pass, 2.2s** (`AuthorizationBindingKeysPresenceBranchTests` ×2, `TwoDocumentPositionWriteTests` ×1, `TwoDocumentLifecycleTests` ×1, plus the 6 pre-existing Slice A tests, unchanged). `git status --short` clean after the run.
+
+### Mutation proof — five gates, independent of the correction's own named mutation (`_extra_document_revisions`)
+
+Each mutated, run, observed, reverted with `git checkout --`, and confirmed byte-identical (`git status --short` empty, marker `grep -c` zero) before moving to the next:
+
+| Line | Site (design.md class) | Mutation | Result |
+|---|---|---|---|
+| 518 | C1, `position_state`'s `multi` flag | `multi = len(DOCUMENTS) > 1` → `multi = False` | **Reddened** — `TwoDocumentLifecycleTests`: `AssertionError: 'current' is not an instance of <class 'dict'>` |
+| 10836 | C2, `cmd_position`'s header-write gate | `if len(DOCUMENTS) > 1:` → `if False:` | **Reddened** — 2 tests failed (`TwoDocumentLifecycleTests`: `'documents=' not found`; `TwoDocumentPositionWriteTests`: `None != [{...}]`) |
+| 7847 | C3, `cmd_admit`'s admissibility write | `if len(DOCUMENTS) > 1 else {}` → `if False else {}` | **Reddened** — `TwoDocumentLifecycleTests`: `'documents' not found in {...}` |
+| 15099 | C8, `cmd_verify`'s `fidelityByDocument` fold | `if len(DOCUMENTS) > 1 else {}` → `if False else {}` | **Reddened** — `TwoDocumentLifecycleTests`: `KeyError: 'fidelityByDocument'` |
+| **7797** | **C7, `cmd_admit`'s `sources_by_document` construction, feeding `finding_impact`** | `if len(DOCUMENTS) > 1:` → `if False:` | **Did NOT redden.** `tests.test_implementation_pair` (all 10 tests): OK. The full pre-existing `test_proposal_implementation.py` (**1477 tests**, includes `FindingsDocumentRoutingTests`, the file's own direct unit tests of `finding_impact`): **OK (skipped=2)**. Nothing anywhere in the suite noticed. |
+
+4 of 5 independently chosen gates are genuinely reached **and** asserted — real, execution-verified proof, not a repeat of the correction's own claim. The fifth (**7797**) is reached (a real subprocess genuinely executes it — confirmed by reading the mutated-off run's own captured `admit` output during the 7847 mutation run, which showed `"impact": {"class": {"proposal": "local"}, ...}` computed and present, unchecked) but **its output is never asserted by any test, live or unit, anywhere in the suite**. Code inspection shows an identical pattern at **line 14839** (`verify_sources_by_document`, feeding `remedy_compatibility` inside `cmd_verify`) — same site class (C7), same construction-then-drop shape; `rg -n "compatibility" tests/test_implementation_pair.py` returns nothing. Not independently mutated (budget), but structurally the same defect, by inspection.
+
+**Instruction 2's answer, by execution**: the correction's claim "all 24 real code gates are now reached and asserted against" (commit `cf50678` message) is accurate for **22 of 24**. For the remaining **2** (both C7, both feeding `finding_impact`/`remedy_compatibility`'s per-document `class`/compatibility mapping — spec's own "representation only, never a verdict" capability), *reached* is true and *asserted* is false, proven by mutation surviving the entire suite undetected.
+
+### Instruction 1 verdict: is the original CRITICAL closed?
+
+**Yes, for the authorization- and ledger-critical paths (C1–C5); no, not completely, for two representation-only C7 sites — and that residual gap is new information this session found, not carried over from the prior FAIL.**
+
+- C4 (authorization binding growth) and C5 (ledger `documentRevisions` at 8 sites) — the paths that can actually corrupt a minted token or a ledger record — are **fully reached and asserted**, both by the correction's own `TwoDocumentLifecycleTests` (a real minted token, consumed by a real `gate` call, with `documentRevisions` asserted against both the JSON return and the raw `position.jsonl` ledger line) and by my own independent mutations at C1/C2/C3/C8 above.
+- C7's two caller-construction sites (7797, 14839) are the only spot where "reached" and "asserted" diverge, and they feed a capability the spec itself scopes as **representation only** (`implementation-document-binding` spec: *"MUST NOT compute, print, or return a single word describing what a finding against both documents means"*) — lower stakes than the ledger/authorization paths, but the spec's own two scenarios under that requirement ("a finding against one document maps alone" / "a finding against both documents carries both classes, uninterpreted") are **not** proven through a real two-document profile's own caller construction, only through a hand-built unit-level call (`test_finding_impact_becomes_per_document_when_sources_given`, pre-existing, not new to this correction).
+
+### Instruction 3 verdict: RED-first's absence, judged
+
+Phase 16 lands as **one** `test(...)` commit, no implementation commit, with no RED phase in the git-verifiable sense the spec's own scenario describes (*"a work unit's test(...) commit, checked out alone... fails, and the following implementation commit turns it green"*). This is **structurally inapplicable** here, not skipped: the implementation these tests exercise already shipped in Slice B: checking out `cf50678` alone would find the tests **green immediately**, since nothing changed under them. There is no prior "RED" state for git isolation to demonstrate.
+
+The correction substitutes a different, execution-based proof (task 16.4: force `_extra_document_revisions` to contribute nothing, watch two classes redden, revert byte-identically) to establish the new tests are not vacuous. **This substitution is sound in principle** — a runtime mutation sweep proves non-vacuousness at least as strongly as git-commit RED isolation does, for coverage-only work where no behavior changes. But the spec's "RED-First Test Commits Are Individually Verifiable" requirement, as literally worded, names no carve-out for coverage-only phases, so this remains a **literal, minor deviation** from a stated MUST — worth a one-line spec amendment naming the exception explicitly (mirroring how `implementation-cli-seal`'s Non-Interference requirement was itself corrected mid-cut to match measured reality), not a defect in the work performed.
+
+### Instruction 4 verdict: the pair-corpus/golden-mechanism argument, judged
+
+**Technically true, over-applied as a blanket excuse.** Reading `tests/seal/harness.py:run_case` directly confirms it: one `subprocess.run` call per case, against a **fresh** scratch target, one digest. It cannot represent a stateful sequence (mint a token in `offer`, consume it in `gate`, read accumulated ledger state in `close`/`admit`/`verify`) — the correction's reason for adding zero cases to `tests/pair/cases.json`/`digests.json` is **sound for the genuinely stateful branches** (C4's live-token binding, C5's cross-call ledger accumulation, the install→unchanged pair).
+
+It is **not fully sound as a justification for adding zero cases across the board.** Some of the 24 gates are single-command-representable — e.g., C1's `probe`-only read (line 518, mutation-proven above) needs no state at all, and C2's absent-branch read (line 10771) fires against an empty target with no prior write. Either could plausibly have been captured as a byte-exact golden the same way most of the existing 28-case corpus already is.
+
+More importantly: **the spec already names the exact escape valve for this situation**, and this codebase already implements it elsewhere. `implementation-cli-seal`'s own scenario reads: *"each pair-shaped case has a digest and exit status, **or is in an explicit unsealed set with a reason**"* — and `tests/seal/unsealed.json` (with its own three-test suite in `test_implementation_seal.py`: `test_every_case_is_either_sealed_or_declared_unsealed`, `test_the_unsealed_set_is_exactly_its_declared_membership`, `test_every_unsealed_entry_states_a_reason`) is that exact sanctioned mechanism, already used for `propose`'s one known non-deterministic case. `tests/pair/` has **no equivalent file** (`ls tests/pair/` → `__init__.py cases.json corpus.py digests.json`, nothing named `unsealed`). The correction explained its reasoning in prose (docstrings, commit message) instead of formalizing it the way this exact codebase already knows how to.
+
+**Verdict on item 4: the argument is directionally correct but was not run through the mechanism the spec itself prescribes for this exact circumstance.** This is a real gap, not a phantom one — but it is a paperwork/formalization gap (add a `tests/pair/unsealed.json`, listing the genuinely-stateful branches with their reasons, and mutation-prove or golden-capture the handful of single-command-representable ones this report just showed are feasible), not a coverage gap — the actual gates ARE reached, by real two-document data, as instruction 1 confirmed.
+
+### Re-confirmations, live
+
+- **Seal digest**: `sha256(tests/seal/digests.json)` = `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75` — captured **twice**: once statically before the full suite ran, once again after a **from-scratch, live, full `discover -s tests` run** (not replayed). Both identical, both match the required value. `git diff --exit-code -- tests/seal/` → exit 0, both times.
+- **Pair goldens**: `git diff --stat cf50678~1 cf50678 -- tests/pair/` → empty. Untouched, confirmed.
+- **`npm test`**: `tests 595 / pass 595 / fail 0 / skipped 0`, exit 0. Exact.
+- **Python full suite**: `Ran 2910 tests in 504.481s` / `OK (skipped=6)`, exit 0. `skipped=6` unmoved from the pre-correction baseline (`Ran 2906`/`skipped=6`); `Ran` grew by exactly 4 — the 4 genuinely new test methods across the 3 new classes (`AuthorizationBindingKeysPresenceBranchTests` ×2, `TwoDocumentPositionWriteTests` ×1, `TwoDocumentLifecycleTests` ×1); the other 6 methods in the correction's diff belong to Slice A's pre-existing classes in the same file, already counted. Arithmetic reconciles exactly.
+- **Sister directories**: `git diff --stat -- .claude/skills/proposal-deliberation .claude/skills/_core/deliberation` → empty. Untouched.
+- **Central question, re-confirmed by static inspection** (no need to re-run the prior session's live mutation — nothing in its dependency chain moved): `_AUTHORIZATION_BINDING_KEYS` is still the literal 8-tuple `("jobName", "commit", "entrypoint", "units", "rung", "revisionSha256", "positionStatus", "proposalDigest")`, read directly at `implementation_engine.py:12859-12862`. `git diff --stat d02496a..HEAD -- tests/test_implementation_domain_lock.py` → **empty across the entire Cut 3 change**, not just the correction (`3b2f3c4`, the file's last touching commit, is a confirmed ancestor of Slice A's own start `f5d2258`). A token minted before this change still validates after it — unmoved.
+
+### Size — measured, not estimated
+
+| | Insertions+deletions (code only, excl. `openspec/`) | vs. 1,400-line budget |
+|---|---|---|
+| Prior FAIL total (Slice A + B) | 1,895 | +35% |
+| This correction (`cf50678`, test-only, 1 file) | +512 | — |
+| **New combined total** | **2,407** (2,302 ins + 105 del, 19 files) | **+71.9%** |
+
+The overrun grew from +35% to +71.9% of the session's cached budget. Still not a blocker on its own (same reasoning as the prior report — stacked-PR delivery already executed), but now a materially larger single-session overage than what the first verify flagged, and worth surfacing again rather than silently absorbing.
+
+### SUGGESTION, carried forward
+
+Not addressed. `rg -n "prediction 5|narrowed"  openspec/changes/a-revision-is-two-documents/tasks.md` → no hits. Still open, still low-priority: a one-line note at Phase 16's own close, naming that this corrective phase closes the *reachability* half of the original gap but leaves a *representation-only assertion* half (this session's own new finding) would have been exactly the kind of self-flagging the original SUGGESTION asked for. Recommend folding both into one note if this change gets a Phase 17.
+
+### Issues Found (this re-verify session)
+
+**CRITICAL** (0, down from 1): The original finding — ~20 of 24 gates completely unreached by any two-document configuration — is closed. All 24 are now reached by real two-document subprocess data, confirmed independently (grep classification, 5 independent mutations, cross-checked against the correction's own listed line numbers).
+
+**WARNING** (3, up from 1):
+1. **(Carried, worsened) Size**: combined total now 2,407 lines against the 1,400-line budget, +71.9% (was +35%). Not blocking; same stacked-PR mitigation as before.
+2. **(New) Two C7 gates reached but unasserted**: lines 7797 and 14839 (`finding_impact`/`remedy_compatibility`'s caller-side `sources_by_document`/`verify_sources_by_document` construction inside `cmd_admit`/`cmd_verify`) execute under a real two-document subprocess but their output is never checked by any test — confirmed for 7797 by mutation surviving the entire 1477+10-test suite undetected; 14839 confirmed identical by code+test-file inspection. **Proposed resolution**: add two assertions to the existing `TwoDocumentLifecycleTests.test_the_full_lifecycle_reaches_every_named_gate` — one on `admit`'s written `record["findings"]["pair-lifecycle-finding"]["impact"]["class"]` (already computed as `{"proposal": "local"}`, observed directly during this session's own mutation run), one on `verify`'s returned `compatibility`/equivalent field. No new test infrastructure needed; both sites are already reached by the existing lifecycle flow.
+3. **(New) Pair corpus's "unsealed" escape valve was not used**: the spec's own named mechanism for "a branch that cannot be captured as a byte-exact golden" (`tests/seal/unsealed.json`'s pattern) was not replicated for `tests/pair/`, despite the correction's own valid architectural argument for *why* several branches cannot be sealed that way. **Proposed resolution**: add `tests/pair/unsealed.json` naming the genuinely-stateful branches (C4/C5's live-token mint-and-consume, the install→unchanged sequence) with reasons, mirroring `tests/seal/unsealed.json`'s own three-test enforcement suite; separately evaluate whether the single-command-representable branches (C1's bare `probe` read, C2's absent-branch read) can be added as actual new golden cases rather than exempted.
+
+**SUGGESTION** (1, unchanged): carried forward, unaddressed — see above.
+
+### Verdict
+
+**PASS WITH WARNINGS.**
+
+The CRITICAL this re-verify was launched to judge is substantially closed: all 24 real runtime `len(DOCUMENTS) > 1` gates are now reached by genuine two-document subprocess data (independently re-derived, not re-read from the correction's own report), and — for the authorization- and ledger-critical site classes (C1–C5, C8) — genuinely asserted, proven by 4 of 5 independently chosen mutations reddening exactly the right tests and reverting byte-identically. The fifth mutation (line 7797) surfaced a real, execution-proven residual: 2 of 24 gates, both in the same representation-only site class (C7), are reached without being asserted anywhere in the suite — new information this session found by doing exactly what the launch brief asked ("a test that runs is not a test that asserts"), not a re-statement of the original finding. Combined with a formalization gap around the pair corpus's own "unsealed" mechanism and a materially worsened size overage, this is not a clean close — but it is a real, substantial narrowing of the original CRITICAL (from ~20/24 completely unreached to 2/24 reached-but-unasserted, confined to a non-authoritative capability), and none of today's findings touch the ledger, authorization, or position-header mechanisms the original CRITICAL was most worried about. Both new WARNINGs have small, precisely-scoped, cheap fixes named above.
