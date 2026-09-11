@@ -26,6 +26,8 @@ import paper_vocabulary  # noqa: E402
 import paper_contract  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
+import paper_region  # noqa: E402,F401 -- registered for the roster derivation
+import paper_guidance  # noqa: E402,F401 -- ahead of its own verb wiring (Slice B/C2)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -50,8 +52,13 @@ WORK_STATE = "work-state"
 #: this file merely documents — every entry is a code some command really
 #: raises, directly or through a module this file imports
 #: (`paper_block.py`, `paper_scaffold.py`, `paper_vocabulary.py`,
-#: `paper_contract.py`, `paper_graph.py`; `paper_readiness.py` raises none
-#: of its own).
+#: `paper_contract.py`, `paper_graph.py`, `paper_region.py`,
+#: `paper_guidance.py`; `paper_readiness.py` raises none of its own).
+#: `paper_region.py` and `paper_guidance.py` are imported ahead of their own
+#: verb wiring (`the-paper-carries-its-own-decisions`, Slice A) -- their
+#: refusals are reachable the moment the import lands, so they are
+#: classified here immediately rather than left dangling until `declare`/
+#: `plan` exist.
 REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- scaffold ------------------------------------------------------
     "PAPER_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
@@ -91,6 +98,17 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- corpus assembly and order (paper_graph.py) -----------------------
     "ID_COLLISION": WORK_STATE,
     "ORDER_CYCLE": WORK_STATE,
+    # --- region grammar (paper_region.py) -- twins of Phase 1's marker
+    # codes, reachable ahead of their own verb wiring because paper_cli.py
+    # imports paper_region.py at module level (Slice A, `the-paper-carries-
+    # its-own-decisions`) -----------------------------------------------
+    "REGION_MALFORMED": WORK_STATE,
+    "REGION_DUPLICATED": WORK_STATE,
+    "REGION_UNPAIRED": WORK_STATE,
+    # --- guidance registry (paper_guidance.py) -- same reason -----------
+    "GUIDANCE_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
+    "UNKNOWN_GUIDANCE_CLASS": WORK_STATE,
+    "MALFORMED_GUIDANCE_MARKER": WORK_STATE,
 }
 
 
