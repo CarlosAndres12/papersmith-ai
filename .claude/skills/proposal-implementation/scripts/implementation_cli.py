@@ -119,6 +119,12 @@ PRODUCT_DIRS = ("Notebooks", "Data", "Results", "Models")
 #: day a layout changes.
 PRODUCT_NOTEBOOKS = PRODUCT_DIRS[0]
 
+#: The product category a repository's data lives under, named off `PRODUCT_DIRS`
+#: rather than spelled a second time, for the reason `PRODUCT_NOTEBOOKS` above
+#: states: a second literal beside the tuple is how the two come to disagree the
+#: day a layout changes.
+PRODUCT_DATA = PRODUCT_DIRS[1]
+
 #: Where a tracked `.py` may live. Anything else is a stray module.
 #:
 #: `tools/` is here for the same reason the benchmark is a sibling package, and
@@ -2499,7 +2505,7 @@ def prior_work_state(target: Path, package: str) -> dict:
 # --------------------------------------------------------------------------
 
 def expected_dirs(name: str, with_data: bool) -> list[str]:
-    dirs = [f"{name}/{d}" for d in PRODUCT_DIRS if d != "Data" or with_data]
+    dirs = [f"{name}/{d}" for d in PRODUCT_DIRS if d != PRODUCT_DATA or with_data]
     dirs += [f"src/{package_name(name)}", "tests"]
     return dirs
 

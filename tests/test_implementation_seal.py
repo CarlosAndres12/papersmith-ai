@@ -20,6 +20,7 @@ elsewhere.
 """
 
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -576,6 +577,83 @@ class CoverageTests(unittest.TestCase):
         for case in cases:
             if case["command"] in f3_commands:
                 self.assertIn(case["id"], sealed_ids, case["id"])
+
+
+class F5IdentityTests(unittest.TestCase):
+    """F5 — `PRODUCT_DATA = PRODUCT_DIRS[1]` replacing the bare `"Data"`
+    literal in `expected_dirs`. Applied AFTER capture (design.md's own
+    ordering discipline: F5 must land after digests exist, or its zero-delta
+    claim is unfalsifiable). Zero seal delta required (design.md D8): five
+    independent instruments, not one green suite."""
+
+    def test_the_data_category_is_read_from_the_tuple(self):
+        """The exact shape of the existing precedent
+        `test_the_notebook_category_is_read_from_the_forge_not_written_here`."""
+        self.assertEqual(impl.PRODUCT_DATA, "Data")
+        self.assertIs(impl.PRODUCT_DATA, impl.PRODUCT_DIRS[1])
+        source = inspect.getsource(impl.expected_dirs)
+        self.assertNotIn(f'"{impl.PRODUCT_DATA}"', source)
+
+    def test_expected_dirs_with_data_true_pinned(self):
+        """Pinned literal, never derived from `PRODUCT_DIRS` — a derived
+        expectation moves with the code and would prove nothing."""
+        self.assertEqual(
+            impl.expected_dirs("Seal", with_data=True),
+            ["Seal/Notebooks", "Seal/Data", "Seal/Results", "Seal/Models",
+             "src/Seal", "tests"])
+
+    def test_expected_dirs_with_data_false_pinned(self):
+        self.assertEqual(
+            impl.expected_dirs("Seal", with_data=False),
+            ["Seal/Notebooks", "Seal/Results", "Seal/Models",
+             "src/Seal", "tests"])
+
+    def test_the_seal_reproduces_pre_f5_digests_unchanged(self):
+        """Instrument 3 (design.md D8): cases 3 (`plan-a`), 4 (`plan-b`), 12
+        (`verify-a`), 13 (`verify-b`) run the comparison AFTER F5 and must
+        reproduce the pre-F5 digests unchanged — checked against the
+        EXISTING `digests.json`, never by recapture. This is the F5
+        zero-delta claim."""
+        digests = _load_digests()
+        results = _captured_results()
+        for case_id in ("plan-a", "plan-b", "verify-a", "verify-b"):
+            with self.subTest(case=case_id):
+                self.assertEqual(seal_harness.digest_result(results[case_id]),
+                                 digests[case_id], case_id)
+
+    def test_a_wrong_product_data_would_move_case_13_but_not_case_12(self):
+        """Instrument 4, the mutation that matters (design.md D8, coordinator
+        decision 2026-09-11): zero-delta alone only proves this refactor is
+        an identity; it says nothing about whether the seal COULD have
+        caught it if it were not one. `expected_dirs`'s `or with_data`
+        short-circuit makes fixture A (case 12, `with_data=True`)
+        structurally BLIND to `PRODUCT_DATA`'s value — only fixture B (case
+        13, `with_data=False`) can see a wrong index move. In-process,
+        never touching the file a subprocess would read (a permanent test
+        cannot safely mutate `implementation_cli.py` on disk); the ONE-TIME
+        subprocess-level demonstration — proving this reaches an actual
+        captured digest, not merely the pure function — is recorded in
+        `f5-zero-delta.md` instead, exactly the way F3's RED→GREEN mutation
+        proof was demonstrated and reverted rather than left as a permanent
+        file-mutating test."""
+        original = impl.PRODUCT_DATA
+        try:
+            correct_with_data_false = impl.expected_dirs("Seal", with_data=False)
+            correct_with_data_true = impl.expected_dirs("Seal", with_data=True)
+            impl.PRODUCT_DATA = impl.PRODUCT_DIRS[2]  # "Results" -- wrong, on purpose
+            wrong_with_data_false = impl.expected_dirs("Seal", with_data=False)
+            wrong_with_data_true = impl.expected_dirs("Seal", with_data=True)
+        finally:
+            impl.PRODUCT_DATA = original
+
+        self.assertNotEqual(correct_with_data_false, wrong_with_data_false,
+                            "case 13 (Data/ absent): a wrong PRODUCT_DATA must "
+                            "move the expected-dirs list, and so missingDirs, "
+                            "and so the sealed digest")
+        self.assertEqual(correct_with_data_true, wrong_with_data_true,
+                         "case 12 (Data/ present): fixture A is structurally "
+                         "blind to PRODUCT_DATA -- the `or with_data` "
+                         "short-circuit makes every branch true regardless")
 
 
 if __name__ == "__main__":

@@ -91,7 +91,17 @@ Chain strategy: pending
   the mechanism the spec itself provides for exactly this case ("MUST be
   recorded in an explicit unsealed set with a reason, not stopping the
   change"). 28 of 29 cases sealed.
-- [x] 6.2 Confirm ordering: `f3-message-delta.md` commit (1.3) predates the digests commit; paste `git log --oneline` evidence. (filled in after the Unit 2 commit lands, below)
+- [x] 6.2 Confirm ordering: `f3-message-delta.md` commit (1.3) predates the digests commit; paste `git log --oneline` evidence.
+
+  ```
+  14d97e9 feat(the-seal-before-the-cut): the stdout characterization seal, captured   <- digests.json lands here
+  e30906a docs(the-seal-before-the-cut): correct the Data/ coverage claim per coordinator decision
+  7f9ee48 docs(the-seal-before-the-cut): N3 CLI_PATH-blindness fix, and a blocked finding on Data/ coverage
+  b0913a5 fix(proposal-implementation): F3 -- name the read directory, not a spelled one
+  598735f docs(the-seal-before-the-cut): declare F3's five-site message delta before applying it   <- f3-message-delta.md, alone
+  ```
+
+  `598735f` (delta doc alone) is a direct ancestor of `14d97e9` (digests.json), four commits apart, none of which touch `f3-message-delta.md` again. Ordering holds.
 
 ## Phase 7: Comparison Suite, Coverage, Membership
 
@@ -106,13 +116,13 @@ Chain strategy: pending
 
 ## Phase 8: Apply F5 (after capture only)
 
-- [ ] 8.1 Add `PRODUCT_DATA = PRODUCT_DIRS[1]` beside `PRODUCT_NOTEBOOKS`, with the D8 comment.
-- [ ] 8.2 Edit `expected_dirs`: `d != PRODUCT_DATA or with_data`.
-- [ ] 8.3 RED→GREEN: `test_the_data_category_is_read_from_the_tuple` (`PRODUCT_DATA == "Data"`, `is PRODUCT_DIRS[1]`, not literal in `expected_dirs` source).
-- [ ] 8.4 RED→GREEN: pinned-literal `expected_dirs(with_data=True/False)` outputs (not derived from `PRODUCT_DIRS`).
-- [ ] 8.5 Re-run comparison suite (7.1) against the **existing** `digests.json` (no recapture): cases 3, 4, 12, 13 must be byte-identical; paste. Any other case moving is a hard failure — F5 is not applied correctly.
-- [ ] 8.5b **The mutation that matters** (coordinator decision, design.md D8 instrument 4): temporarily set `PRODUCT_DATA = PRODUCT_DIRS[2]`; re-run the comparison; assert case 13's digest MOVES and case 12's does not (fixture A is structurally blind to `PRODUCT_DATA` — the `or with_data` short-circuit — so only case 13 can see it); paste before/after digests. Revert; re-assert zero delta (8.5).
-- [ ] 8.6 Write `f5-zero-delta.md`: commit sha before/after F5, pasted comparison output both sides, plus 8.5b's reach/revert pair.
+- [x] 8.1 Add `PRODUCT_DATA = PRODUCT_DIRS[1]` beside `PRODUCT_NOTEBOOKS`, with the D8 comment.
+- [x] 8.2 Edit `expected_dirs`: `d != PRODUCT_DATA or with_data`.
+- [x] 8.3 RED→GREEN: `test_the_data_category_is_read_from_the_tuple` (`PRODUCT_DATA == "Data"`, `is PRODUCT_DIRS[1]`, not literal in `expected_dirs` source). Mutation-proven: reverted to bare `"Data"` literal → red (`'"Data"' unexpectedly found`); restored → green.
+- [x] 8.4 RED→GREEN: pinned-literal `expected_dirs(with_data=True/False)` outputs (not derived from `PRODUCT_DIRS`).
+- [x] 8.5 Re-run comparison suite (7.1) against the **existing** `digests.json` (no recapture): cases 3, 4, 12, 13 must be byte-identical; paste. Any other case moving is a hard failure — F5 is not applied correctly. `test_the_seal_reproduces_pre_f5_digests_unchanged` (4 cases) + `SealComparisonTests` (all 28 sealed cases) both green — zero delta confirmed, nothing else moved either.
+- [x] 8.5b **The mutation that matters** (coordinator decision, design.md D8 instrument 4): temporarily set `PRODUCT_DATA = PRODUCT_DIRS[2]`; re-run the comparison; assert case 13's digest MOVES and case 12's does not (fixture A is structurally blind to `PRODUCT_DATA` — the `or with_data` short-circuit — so only case 13 can see it); paste before/after digests. Revert; re-assert zero delta (8.5). **Done at the real subprocess level** (file edited, real capture, reverted — never committed mutated): case 12 unchanged (19088 bytes, same sha256); case 13 moved (19088→19111 bytes, different sha256). Pasted in full in `f5-zero-delta.md`. A permanent, safe in-process version of the same property lives in `F5IdentityTests.test_a_wrong_product_data_would_move_case_13_but_not_case_12`.
+- [x] 8.6 Write `f5-zero-delta.md`: commit sha before/after F5, pasted comparison output both sides, plus 8.5b's reach/revert pair.
 
 ## Phase 9: Non-Interference Proof (structural, per operator's constraint)
 
