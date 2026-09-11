@@ -155,9 +155,9 @@ PRODUCT_DATA = PRODUCT_DIRS[1]
 #: `tools/` is here for the same reason the benchmark is a sibling package, and
 #: the argument has the same shape: a script that launches or operates a run has
 #: nowhere else to go. It cannot live in the method's package — it implements no
-#: equation, so it could only sit there by declaring a `__provenance__` it has no
+#: claim, so it could only sit there by declaring a `__provenance__` it has no
 #: right to, and a falsified stamp empties the one check that keeps the code tied
-#: to the mathematics. It cannot live in the benchmark's package — that one trains
+#: to what it claims. It cannot live in the benchmark's package — that one trains
 #: and measures, and operating a service is neither. And it cannot stay untracked,
 #: because then the configuration of a run that costs hours lives on one disk and
 #: no later session can reproduce how it was launched.
@@ -2786,18 +2786,18 @@ def benchmark_reach(target: Path, package: str, bench_package: str) -> set[str]:
     return reached
 
 
-def unreached_mathematics(modules: list[dict], declaration: dict,
-                          reached: set[str]) -> list[dict]:
+def unreached_modules(modules: list[dict], declaration: dict,
+                      reached: set[str]) -> list[dict]:
     """Modules carrying sections the arms declare, that the harness never calls.
 
     This is the join nothing else in the flow crosses. `verify` reads the method's
     provenance and the bench's declaration as two separate documents, and both can be
-    impeccable while an arm reimplements the equation instead of calling it: the module
+    impeccable while an arm reimplements the claim instead of calling it: the module
     still declares its sections, the arm still declares the same ones, and the two
     never meet. That is not hypothetical — it is how an arm ran a whole campaign
     computing a simplified form of a term it declared, with every check reporting clean.
 
-    It stays silent about mathematics no arm claims. A method may legitimately carry
+    It stays silent about content no arm claims. A method may legitimately carry
     more than a given comparison exercises, and a check that demanded every module be
     called would fire on that and teach the reader to skip it.
     """
@@ -2821,7 +2821,7 @@ def unreached_mathematics(modules: list[dict], declaration: dict,
             "module": module["module"],
             "sections": module.get("sections", []),
             # What the arm claims to exercise and does not, named at the resolution
-            # the reader can act on: the equation, not the section it lives in.
+            # the reader can act on: the claim, not the section it lives in.
             CLAIM_KEY: module.get(CLAIM_KEY, []),
             "declaredBy": declared_by,
         })
@@ -2861,7 +2861,7 @@ def undeclared_arms_note(target: Path, name: str, declaration: dict,
     `distribution.note`'s own shape and placement (see `cmd_verify`, where a
     missing `DIMENSIONS` literal is named so an empty `unpartitioned` is not
     read as evidence the split is complete), applied to the other side of the
-    same silence. `unreached_mathematics`'s docstring calls itself "the join
+    same silence. `unreached_modules`'s docstring calls itself "the join
     nothing else in the flow crosses"; an empty `arms` switches that join off
     entirely, and until this existed nothing said so.
 
@@ -2908,7 +2908,7 @@ def benchmark_unfaithfulness(target: Path, name: str) -> list[dict]:
         modules.append({"module": str(file.relative_to(target)),
                         "sections": prov.get("sections", []),
                         CLAIM_KEY: prov.get(CLAIM_KEY, [])})
-    return unreached_mathematics(
+    return unreached_modules(
         modules, declaration, benchmark_reach(target, package, bench_package))
 
 
@@ -3279,7 +3279,7 @@ def wiring_proposal(target: Path, name: str, baselines: list[str]) -> dict:
     This is a proposal, never a decision. The harness knows how to train and measure;
     it cannot know what makes *this* method trainable — which modules carry the terms,
     where a backbone enters, what the classifier head predicts over. That is the
-    user's mathematics, so it is read, drafted, and handed back to be completed.
+    user's own content, so it is read, drafted, and handed back to be completed.
 
     Every module already declares what it implements in `__provenance__`, so the draft
     is assembled from the repository rather than guessed, and nothing here needs to
@@ -3344,7 +3344,7 @@ def cmd_probe(args) -> dict:
 
     Order matters and is reported as `nextStep`. A comparison needs something to
     compare against, so that is asked first: without a baseline the backend is nobody's
-    business — numpy is where the mathematics is proved and may be exactly where this
+    business — numpy is where the content is proved and may be exactly where this
     proposal belongs. With a baseline, an implementation computing with numpy cannot be
     trained at all, so the conversion is settled before the comparison is discussed;
     proposing a benchmark first would ask the user to approve a run that cannot happen.
@@ -3354,12 +3354,12 @@ def cmd_probe(args) -> dict:
 
     A benchmark declaration that names nothing yet comes first, ahead of everything
     else here, because every other check on this list reads that same declaration.
-    An arm that never calls its own mathematics is read from `arms`; a record a
+    An arm that never calls its own claims is read from `arms`; a record a
     search should have written is read from `search`; a report in drift is read
     from `report`. None of them can tell a repository that has not started
     declaring from one that declared and got it wrong, and answering any of them
     before this one would tell the reader to fix a report, or a fork, that nobody
-    has written the first word about yet. An arm computing mathematics it does not
+    has written the first word about yet. An arm computing content it does not
     declare comes next, because correcting it changes what the arm computes — which
     changes what any later step would find — so anything read before that
     correction is read from a configuration about to change under it. A submission
@@ -3381,7 +3381,7 @@ def cmd_probe(args) -> dict:
     state = probe_state(target, name, args.revision)
 
     # Nothing to compare against is checked first, and on purpose. numpy is a stage,
-    # not a defect: it is where the mathematics is proved, with no optimizer to mask a
+    # not a defect: it is where the content is proved, with no optimizer to mask a
     # wrong formula, and for a proposal nobody is going to train it can be the last
     # stage. The conversion exists to make a comparison possible — asking for it when
     # there is nothing to compare would demand work with no purpose and read as though
@@ -3416,7 +3416,7 @@ def cmd_probe(args) -> dict:
     # state, and it takes the whole ladder ahead of everything built on top of
     # a declaration.
     #
-    # An arm that never calls the mathematics it declares comes next, because it
+    # An arm that never calls the content it declares comes next, because it
     # is the only defect here that makes the run itself meaningless: every
     # number would come from an arm that was not computing what the table says
     # it computed, and no amount of repetitions fixes that.
@@ -3611,7 +3611,7 @@ def cmd_probe(args) -> dict:
 
     # The roster decides, never a literal. This line read `if next_step ==
     # "benchmark"`, and `wiring-first` is assigned by an override twenty lines
-    # above it -- so at the one answer that names an arm declaring mathematics
+    # above it -- so at the one answer that names an arm declaring content
     # it never calls, the draft of how each module becomes trainable came back
     # `None` and whoever was driving the CLI composed the wiring plan in prose.
     # `benchmark` keeps it (it is the raw material the run offer is built from,
@@ -4571,7 +4571,7 @@ def latest_revision(like: str | None) -> str | None:
     return revision_discovery(like)["revision"]
 
 
-# How a paper labels an equation, and the only place this skill decides it.
+# How a paper labels a locus, and the only place this skill decides it.
 # A tag is whatever the author put between the braces: `3.1`, `A.2`, `B.10`.
 # Every reader — `admit`, this compatibility audit, `compose` and `handoff` —
 # reads it through this one pattern. Two of them used to carry a digits-only
@@ -4584,7 +4584,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
     """Is each remedy expressible inside the proposal as it stands?
 
     A correction that is sound in isolation is still half a remedy if it cites
-    an equation that does not exist, leans on notation the document never
+    a locus that does not exist, leans on notation the document never
     defines, or quietly introduces symbols of its own. Those are not defects to
     be validated away by a sweep — they are decisions that belong to the
     deliberation, and the skill must not report them as settled.
@@ -4600,7 +4600,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
                 NOTATION_KEYS["unknown"]: [], "undefinedNotation": [], "introducesNotation": []}
 
     tags = set(TAG_RE.findall(source))
-    unknown_equations: list[str] = []
+    unknown_loci: list[str] = []
     undefined_notation: list[str] = []
     introduces: list[str] = []
 
@@ -4608,7 +4608,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
         for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
             missing = [e for e in finding.get(field, []) if e not in tags]
             if missing:
-                unknown_equations.append(f"{finding['id']}.{field}: {missing}")
+                unknown_loci.append(f"{finding['id']}.{field}: {missing}")
         absent = [s for s in finding.get("uses", []) if s not in source]
         if absent:
             undefined_notation.append(f"{finding['id']}: {absent}")
@@ -4617,21 +4617,21 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
         if finding.get("introduces"):
             introduces.append(f"{finding['id']}: {finding['introduces']}")
 
-    if unknown_equations or undefined_notation:
+    if unknown_loci or undefined_notation:
         status = "incompatible"
     elif introduces:
         status = "needs-deliberation"
     else:
         status = "ok"
-    return {"status": status, NOTATION_KEYS["unknown"]: unknown_equations,
+    return {"status": status, NOTATION_KEYS["unknown"]: unknown_loci,
             "undefinedNotation": undefined_notation, "introducesNotation": introduces}
 
 
 def remedies_without_control(tests_dir: Path, package: str) -> list[str]:
-    """Remedy tests that never exercise the formulation they are correcting.
+    """Remedy tests that never exercise the implementation they are correcting.
 
     A remedy test measures a proposed replacement. If it never also exercises
-    the declared formulation, nothing in it can distinguish a real improvement
+    the declared implementation, nothing in it can distinguish a real improvement
     from a measurement that would pass whatever it was handed — and a check
     incapable of going red reads exactly like a check that went green.
 
@@ -4713,7 +4713,7 @@ KIT_SEAL = SKILL_ROOT / "assets" / "kit" / "nb" / "report_digest.py"
 
 
 #: What the benchmark package declares instead of `__provenance__`. It implements no
-#: equation, so provenance would be a lie; but without any declaration nobody can
+#: claim, so provenance would be a lie; but without any declaration nobody can
 #: answer the question a new revision immediately raises — does this change oblige the
 #: bench to change?
 BENCHMARK_DECLARATION = "__benchmark__"
@@ -5933,7 +5933,7 @@ def resolve_benchmark_declaration(target: Path, name: str) -> dict:
     """The one place every reader gets `__benchmark__` from.
 
     Six call sites once read this contract each their own way. Two of them —
-    `unreached_mathematics`'s caller and `verify`'s `benchmark` block —
+    `unreached_modules`'s caller and `verify`'s `benchmark` block —
     checked both `__init__.py` and `config.py`; the other four checked
     `__init__.py` alone. A declaration written in `config.py` only then
     passed for two readers and read as absent for the rest — a split
@@ -7285,20 +7285,20 @@ def finding_impact(finding: dict, source: str) -> dict:
     """How far into the proposal a remedy would reach.
 
     Three measurements, all read from the document rather than judged: how many
-    equations the remedy rewrites, how much notation it adds, and how often the
-    rest of the text cites those equations. A change that touches one equation
+    loci the remedy rewrites, how much notation it adds, and how often the
+    rest of the text cites those loci. A change that touches one locus
     nobody else refers to, adding nothing, is local. Anything else carries
     implications the deliberation has to weigh with time, not inline.
     """
-    equations = finding.get(REMEDY_LOCUS_KEY, [])
+    remedy_loci = finding.get(REMEDY_LOCUS_KEY, [])
     citations = 0
     for match in CITATION_RE.finditer(source):
         number = match.group(1) or match.group(2) or match.group(3)
-        if number in equations:
+        if number in remedy_loci:
             citations += 1
     introduces = len(finding.get("introduces", []))
-    local = len(equations) <= 1 and introduces == 0 and citations <= 1
-    return {NOTATION_KEYS["locus"]: len(equations), "introducesNotation": introduces,
+    local = len(remedy_loci) <= 1 and introduces == 0 and citations <= 1
+    return {NOTATION_KEYS["locus"]: len(remedy_loci), "introducesNotation": introduces,
             "citedElsewhere": citations, "class": "local" if local else "structural"}
 
 
@@ -7308,7 +7308,7 @@ def adoption_state(finding: dict, source: str) -> dict:
     Inference is textual, so it is built to fail toward `open`. The reliable
     signal is the disappearance of what the remedy replaces — a literal that is
     in the document today. If that text is gone but nothing recognizable took
-    its place, the equation changed in a way this cannot read, and it says so
+    its place, the locus changed in a way this cannot read, and it says so
     instead of claiming adoption.
     """
     markers = finding.get("adoption") or {}
@@ -7344,7 +7344,7 @@ def migration_state(target: Path, findings: list[dict], source: str | None,
     """What an adopted remedy still owes.
 
     Once the deliberation publishes a remedy, it stops being a proposal: it is
-    the formulation. Leaving it in the remedy suite would keep reporting a
+    the implementation. Leaving it in the remedy suite would keep reporting a
     defect the document no longer has, and would leave its claim outside the
     contract every other claim of the proposal is held to.
 
@@ -7386,7 +7386,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
 
     A local remedy travels as an agenda item to settle inline. A structural one
     does not: it goes back as a prompt for a session of its own, because a
-    change that adds notation or rewrites an equation the rest of the document
+    change that adds notation or rewrites a locus the rest of the document
     leans on deserves unhurried deliberation, not a decision taken while
     finishing something else.
     """
@@ -7413,11 +7413,11 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
         elif (impact["class"] == "local" and finding.get("remedy_block")
                 and finding.get(REMEDY_LOCUS_KEY)):
             # Local and written out: hand the deliberation a request it can act
-            # on. The locus travels as the equation's own tag rather than as a
-            # quote of the text being corrected — a bare fragment like a symbol
-            # and its value occurs in prose as readily as in the equation, and
-            # the resolver then lands on a neighbour. The tag is the document's
-            # label for that equation, so it names the one the finding rewrites.
+            # on. The locus travels as its own tag rather than as a quote of
+            # the text being corrected — a bare fragment like a symbol and its
+            # value occurs in prose as readily as in the locus, and the
+            # resolver then lands on a neighbour. The tag is the document's
+            # label for that locus, so it names the one the finding rewrites.
             #
             # The corrected text is not attached here. It has to be substituted
             # into whatever entry the resolver returns, which only the caller
@@ -7439,7 +7439,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             # resolving it: translating it here would be a behavioural delta
             # the seal must refuse.
             if impact["class"] == "local" and not finding.get(REMEDY_LOCUS_KEY):
-                # Local by measurement only because it names no equation at all.
+                # Local by measurement only because it names no locus at all.
                 # There is no locus to resolve in the document, so there is
                 # nothing the deliberation could be asked to replace.
                 reason = (
@@ -7505,12 +7505,12 @@ def cmd_compose(args: argparse.Namespace) -> dict:
     """Rewrite one resolved entry so a finding's remedy takes its place.
 
     The deliberation replaces a whole entry, and an entry is usually more than
-    the equation at issue. Composing the new text therefore means substituting
+    the locus at issue. Composing the new text therefore means substituting
     inside it, never handing back the bare block: doing that would delete every
     neighbouring line the entry happens to carry.
 
-    The equation's own `\\tag{n}` is the identity used to find it. That is the
-    document's label for it, so the substitution lands on the equation the
+    The locus's own `\\tag{n}` is the identity used to find it. That is the
+    document's label for it, so the substitution lands on the locus the
     finding names rather than on whatever happens to look similar.
     """
     target = resolve_target(args.target)
@@ -7533,14 +7533,16 @@ def cmd_compose(args: argparse.Namespace) -> dict:
     tags = TAG_RE.findall(block)
     if len(set(tags)) != 1:
         raise Refused("AMBIGUOUS_REMEDY_TAG",
-                      f"remedy_block must carry exactly one equation tag, found {tags}.")
+                      f"remedy_block must carry exactly one {SUBJECT_SINGULAR} tag, "
+                      f"found {tags}.")
     tag = tags[0]
 
     matches = [m for m in DISPLAY_BLOCK_RE.finditer(entry) if tag in TAG_RE.findall(m.group(0))]
     if len(matches) != 1:
         raise Refused("TAG_NOT_UNIQUE_IN_ENTRY",
-                      f"equation ({tag}) appears in {len(matches)} display blocks of the "
-                      "resolved entry; the locus is not the one the remedy corrects.")
+                      f"{SUBJECT_SINGULAR} ({tag}) appears in {len(matches)} display "
+                      "blocks of the resolved entry; the locus is not the one the "
+                      "remedy corrects.")
 
     composed = entry[:matches[0].start()] + block + entry[matches[0].end():]
     if composed == entry:
@@ -7553,14 +7555,14 @@ def cmd_compose(args: argparse.Namespace) -> dict:
                       f"The composed text still carries {absent!r}, which the remedy "
                       "declares it removes.")
 
-    return {"command": "compose", "finding": args.finding, "equation": tag,
+    return {"command": "compose", "finding": args.finding, SUBJECT_SINGULAR: tag,
             "replacementText": composed}
 
 
 def cmd_admit(args: argparse.Namespace) -> dict:
     """Rule on each remedy's admissibility, before anything is measured.
 
-    Efficacy is the second question. Measuring a remedy that cites an equation
+    Efficacy is the second question. Measuring a remedy that cites a locus
     the revision lacks, or leans on notation it never defines, produces numbers
     that look like evidence for something that should never have reached the
     bench — and the rigour of the sweep ends up lending it credibility.
@@ -9366,7 +9368,7 @@ WALK_ORDER = ("notWalked", "unfinished", "walked")
 #: what blocks, and rejoins -- rather than improvising forward, which is what an
 #: agent does when a blocker detaches it from the purpose.
 #:
-#: **It is not the agreements and does not replace them.** What the mathematics
+#: **It is not the agreements and does not replace them.** What the content
 #: says lives in the managed revision; what was settled about this repository
 #: lives in its `AGREED.md`. This says only what the skill is FOR, which is the
 #: one thing neither of those states and no artefact implies.
@@ -14338,7 +14340,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     stale = [m["module"] for m in modules if m["stale"]]
 
     # What actually changed, rather than "the revision string is different".
-    # Marking every module stale because one equation moved tells the reader there is
+    # Marking every module stale because one locus moved tells the reader there is
     # work to do and nothing about where, which is the part they have to find anyway.
     target_source = revision_source(revision) if revision else None
     drift_detail = []
@@ -14353,13 +14355,13 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "changedSections": moved,
             # A module whose own sections are untouched is bound to an older revision
             # and implements nothing that moved: re-binding it is bookkeeping, not
-            # mathematics, and saying so is what keeps the two apart.
+            # new content, and saying so is what keeps the two apart.
             "touchedSections": touched,
             "reason": "sections it declares have changed" if touched
                       else "bound to an older revision, but none of its sections moved",
         })
 
-    # The bench declares no provenance — it implements no equation — but it does
+    # The bench declares no provenance — it implements no claim — but it does
     # declare which revision it was built against and which sections each arm
     # exercises, so a changed section can name the arms it reaches.
     bench_package = f"{package_name(name)}_Benchmark"
@@ -14385,7 +14387,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
                                key=lambda n: (len(n), n))
                    for arm, spec in arms.items()
                    if isinstance(spec, dict) and set(spec.get("sections", [])) & set(moved)}
-        unreached = unreached_mathematics(
+        unreached = unreached_modules(
             modules, declaration,
             benchmark_reach(target, package_name(name), bench_package))
         stale_revision = bool(revision) and built_against != revision
@@ -14407,7 +14409,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "note": undeclared_arms_note(target, name, declaration, modules),
         }
 
-    # The audit bridge: a defect in the mathematics is only reported when its
+    # The audit bridge: a defect in the content is only reported when its
     # evidence AND the validation of its proposed correction both exist.
     findings = read_findings(target)
     without_evidence = sorted(f["id"] for f in findings if f"test_finding_{f['id']}" not in tests)
@@ -14503,7 +14505,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         fidelity_status = "unknown"
     elif stale or missing_provenance or untested or unreached:
         # A bench built against an older revision does not drift fidelity — that is a
-        # state, and the flow surfaces it as one. An arm claiming mathematics it never
+        # state, and the flow surfaces it as one. An arm claiming content it never
         # calls is a defect, and a defect that stays inside `benchmark` while the
         # headline reads `ok` is the silence this check exists to break.
         fidelity_status = "drift"
@@ -15139,7 +15141,7 @@ def _stage_objects(target: Path, name: str, seed: str) -> dict:
     (`{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`, `{{EXPECTATION}}`, ...) sitting
     inside Python identifiers that only step 9's own authoring can answer —
     no CLI flag supplies them, and none should, since answering them IS the
-    mathematics step 9 exists to write (confirmed:
+    content step 9 exists to write (confirmed:
     `MaterializeWritesStageOneTests` already establishes these three do not
     survive `ast.parse` after only `{{PKG}}`/`{{SEED}}` are substituted).
     Applying scaffold's `ast.parse` gate here would make this stage refuse

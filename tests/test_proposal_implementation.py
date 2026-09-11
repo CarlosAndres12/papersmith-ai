@@ -3847,7 +3847,7 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
 class ResolverCrossReaderAgreementTests(unittest.TestCase):
     """A declaration living only in `config.py` must not be a split verdict.
 
-    Before the resolver, `unreached_mathematics`'s caller and `verify`'s
+    Before the resolver, `unreached_modules`'s caller and `verify`'s
     `benchmark` block saw a `config.py`-only declaration while
     `report_contract`, `search_state` and `distribution_state` did not — the
     same declaration, four different answers. This walks `cmd_verify` end to
@@ -4778,7 +4778,7 @@ def _module(revision, sections, equations, imports=""):
 class UndeclaredArmsTests(unittest.TestCase):
     """An empty `arms` switches off the join nothing else in the flow crosses.
 
-    `unreached_mathematics`'s own docstring says it: "This is the join nothing
+    `unreached_modules`'s own docstring says it: "This is the join nothing
     else in the flow crosses." It reads `declaration["arms"]` to build the map
     from section to claiming arm, so with `arms: {}` the map is empty, every
     module's `declaredBy` comes back empty, and the answer is `[]` -- whatever
