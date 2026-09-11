@@ -13447,6 +13447,12 @@ def cmd_gate(args: argparse.Namespace) -> dict:
 
     recorded_at = _now_iso8601()
     elected = list(args.elected or [])
+    # Cut 3 (`a-revision-is-two-documents`, C5): computed once, reused
+    # across the event and the return below -- never two calls that could
+    # drift. `[]` under one document, so both `**` spreads below
+    # contribute nothing there.
+    extra_documents = (
+        _extra_document_revisions(args.revision) if len(DOCUMENTS) > 1 else [])
     event = {
         "kind": "gate", "jobName": args.job, "worker": worker,
         "commit": commit, "revision": args.revision,
@@ -13457,6 +13463,7 @@ def cmd_gate(args: argparse.Namespace) -> dict:
         # nobody in this change -- `remote_cli`'s own fold selects on
         # `kind == "gate"` and ignores unknown fields.
         "elected": elected,
+        **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
     }
     impl_position.append_event(ledger_path, event)
     # Single-use, appended alongside the `gate` event it authorizes -- never
@@ -13477,6 +13484,7 @@ def cmd_gate(args: argparse.Namespace) -> dict:
         "units": units, "justification": justification,
         "session": args.session, "readiness": True, "recordedAt": recorded_at,
         "elected": elected,
+        **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
     }
 
 
@@ -13876,10 +13884,15 @@ def cmd_offer(args: argparse.Namespace) -> dict:
     # This event exists only as a record of what was asked, by which
     # session, against which revision, and what was published at that
     # moment; the next `offer` call never consults it.
+    # Cut 3 (`a-revision-is-two-documents`, C5): computed once, reused
+    # across the event and the return below.
+    extra_documents = (
+        _extra_document_revisions(args.revision) if len(DOCUMENTS) > 1 else [])
     impl_position.append_event(ledger_path, {
         "kind": "offer", "answer": answer, "revision": args.revision,
         "revisionSha256": revision_sha256,
         "actions": actions, "session": args.session, "at": recorded_at,
+        **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
     })
 
     return {
@@ -13887,6 +13900,7 @@ def cmd_offer(args: argparse.Namespace) -> dict:
         "status": "recorded", "answer": answer, "revision": args.revision,
         "revisionSha256": revision_sha256,
         "actions": actions, "session": args.session, "recordedAt": recorded_at,
+        **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
     }
 
 
@@ -14058,11 +14072,23 @@ def cmd_close(args: argparse.Namespace) -> dict:
     position_digest = hashlib.sha256(
         json.dumps(after["sequence"], sort_keys=True).encode("utf-8")).hexdigest()
     events = impl_position.read_events(product / ".implementation" / "position.jsonl")
+    # Cut 3 (`a-revision-is-two-documents`, C5): computed once, reused
+    # across every site below. `[]` under one document -- the SAME empty
+    # value `documentRevisions` would carry there, so a prior-close event
+    # that never had the key at all (`e.get(...)` reading `None`) still
+    # fails to equal `[]` and would wrongly refuse to match... except the
+    # comparison below is gated by `len(DOCUMENTS) > 1` entirely, so this
+    # branch is never even reached under one document: the ORIGINAL
+    # three-key comparison runs unchanged, byte-identical.
+    extra_documents = (
+        _extra_document_revisions(args.revision) if len(DOCUMENTS) > 1 else [])
     prior_close = next(
         (e for e in reversed(events)
          if e.get("kind") == "close" and e.get("session") == args.session
          and e.get("revisionSha256") == revision_sha256
-         and e.get("positionDigest") == position_digest),
+         and e.get("positionDigest") == position_digest
+         and (len(DOCUMENTS) <= 1
+              or e.get("documentRevisions") == extra_documents)),
         None)
     if prior_close is not None:
         # A second close over the identical, unmoved position closes
@@ -14072,6 +14098,7 @@ def cmd_close(args: argparse.Namespace) -> dict:
             "command": "close", "status": "not_open", "session": args.session,
             "revision": args.revision, "revisionSha256": revision_sha256,
             "position": after, "recordedAt": prior_close["at"],
+            **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
         }
 
     recorded_at = _now_iso8601()
@@ -14079,12 +14106,14 @@ def cmd_close(args: argparse.Namespace) -> dict:
         product / ".implementation" / "position.jsonl",
         {"kind": "close", "session": args.session, "revision": args.revision,
          "revisionSha256": revision_sha256, "positionDigest": position_digest,
-         "at": recorded_at})
+         "at": recorded_at,
+         **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {})})
 
     return {
         "command": "close", "status": "closed", "session": args.session,
         "revision": args.revision, "revisionSha256": revision_sha256,
         "position": after, "recordedAt": recorded_at,
+        **({"documentRevisions": extra_documents} if len(DOCUMENTS) > 1 else {}),
     }
 
 

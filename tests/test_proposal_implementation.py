@@ -21165,12 +21165,19 @@ class GateCommandTests(unittest.TestCase):
         # (the presented `--authorization` value is consumed, never echoed
         # back as if `gate` had just invented it).
         self.assertNotIn("token", "".join(result.keys()).lower())
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- the real success path the 29-case seal corpus
+        # cannot reach on its own (`gate-e0`/`gate-e1` both refuse on a
+        # dummy authorization token before minting anything), so this is
+        # where the byte-identity guarantee is actually provable.
+        self.assertNotIn("documentRevisions", result)
 
         ledger = box / "Method" / ".implementation" / "position.jsonl"
         events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
         gate_event = next(e for e in events if e["kind"] == "gate")
         self.assertEqual(gate_event["jobName"], "job1")
         self.assertEqual(gate_event["justification"], "Rehearsal passed at the pinned commit.")
+        self.assertNotIn("documentRevisions", gate_event)
         # Single-use: consumption is a SEPARATE appended event, never a
         # mutation of the `authorization` event it spends.
         self.assertEqual(events[-1]["kind"], "authorization-consumed")
@@ -23546,6 +23553,10 @@ class OfferCommandTests(unittest.TestCase):
                                   "witness": {"kind": "rehearsal", "operand": "job1"}}])
 
         result = impl.cmd_offer(self._offer_args(box, answer="yes", units=["u2", "u1"]))
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- byte-identity, proven directly against this real
+        # `offer` call's own return dict.
+        self.assertNotIn("documentRevisions", result)
         launch = next(a for a in result["actions"] if a["id"] == "launch")
         self.assertEqual(launch["binding"]["units"], ["u2", "u1"])
         self.assertNotIn("--worker", launch["command"])
@@ -23873,13 +23884,20 @@ class CloseCommandTests(unittest.TestCase):
                              "--revision", self.PROPOSAL_REVISION, "--session", "s1",
                              proposals=proposals)
         self.assertEqual(first.returncode, 0, first.stdout)
-        self.assertEqual(json.loads(first.stdout)["status"], "closed")
+        first_result = json.loads(first.stdout)
+        self.assertEqual(first_result["status"], "closed")
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- proven against both branches this test already
+        # reaches (a fresh close AND a repeat, `not_open`, close).
+        self.assertNotIn("documentRevisions", first_result)
 
         second = self.run_cli("close", "--target", str(box), "--name", "Method",
                               "--revision", self.PROPOSAL_REVISION, "--session", "s1",
                               proposals=proposals)
         self.assertEqual(second.returncode, 0, second.stdout)
-        self.assertEqual(json.loads(second.stdout)["status"], "not_open")
+        second_result = json.loads(second.stdout)
+        self.assertEqual(second_result["status"], "not_open")
+        self.assertNotIn("documentRevisions", second_result)
 
         ledger = box / "Method" / ".implementation" / "position.jsonl"
         events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
