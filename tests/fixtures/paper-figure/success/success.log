@@ -1,6 +1,5 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.3.22)  11 SEP 2026 07:29
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.3.22)  11 SEP 2026 10:08
 entering extended mode
- restricted \write18 enabled.
  file:line:error style messages enabled.
  %&-line parsing enabled.
 **success.tex
@@ -12,9 +11,11 @@ Document Class: standalone 2025/02/22 v1.5a Class to compile TeX sub-files stan
 dalone
 (/usr/local/texlive/2026/texmf-dist/tex/latex/tools/shellesc.sty
 Package: shellesc 2023/07/08 v1.0d unified shell escape interface for LaTeX
-Package shellesc Info: Restricted shell escape enabled on input line 77.
-)
-(/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/ifluatex.sty
+
+
+Package shellesc Warning: Shell escape disabled on input line 73.
+
+) (/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/ifluatex.sty
 Package: ifluatex 2019/10/25 v1.5 ifluatex legacy package. Use iftex instead.
 
 (/usr/local/texlive/2026/texmf-dist/tex/generic/iftex/iftex.sty
@@ -437,7 +438,7 @@ L3 programming layer <2026-01-19>
 Here is how much of TeX's memory you used:
  12398 strings out of 467525
  259932 string characters out of 5418982
- 633303 words of memory out of 5000000
+ 633181 words of memory out of 5000000
  41114 multiletter control sequences out of 15000+600000
  627721 words of font info for 40 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191

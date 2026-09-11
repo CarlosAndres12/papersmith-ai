@@ -230,6 +230,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "DIAGRAM_PLOTS_DATA": WORK_STATE,
     "MALFORMED_FIGURE_OBLIGATION": WORK_STATE,
     "COMPONENT_MISMATCH": WORK_STATE,
+    # `components_from`'s Components Check is derived, never operator-
+    # supplied (corrective amendment, `_resolve_expected_components`) -----
+    "COMPONENTS_FACT_UNRESOLVED": WORK_STATE,
+    "COMPONENTS_FACT_NOT_A_LIST": WORK_STATE,
     "MANIFEST_SOURCE_MISMATCH": WORK_STATE,
     "EXCLUDED_COMPONENT": WORK_STATE,
     "SHARED_COMPONENT": WORK_STATE,
@@ -644,14 +648,63 @@ def cmd_render(args: argparse.Namespace) -> dict:
     return result
 
 
+def _resolve_expected_components(paper_dir: Path, fact_id: str) -> list:
+    """Derives the Components Check's expected list from `components_from`'s
+    named fact's own declared resolution — never an operator-supplied CLI
+    flag (corrective amendment, `a-diagram-that-compiles-or-says-why`'s own
+    verify FAIL: `--expected-components` let a wrong list be supplied for a
+    block whose diagram was never that one fact's own list, silently
+    inverting the check; removed rather than left reachable). Reads through
+    `paper_declarations.read_fact` — the SAME `declarations` region
+    `declare --fact` writes.
+
+    Refuses `COMPONENTS_FACT_UNRESOLVED` (work-state) when the fact was
+    never declared, or was reopened and not yet redeclared.  Refuses
+    `COMPONENTS_FACT_NOT_A_LIST` (work-state) when its resolution does not
+    parse as a JSON array of strings — the declared resolution for a fact
+    a `figure:` object names via `components_from` MUST be exactly that
+    array, in the order the diagram must show it when `ordered: true`.
+    """
+    resolution = paper_declarations.read_fact(paper_dir, fact_id)
+    if resolution is None:
+        raise Refused(
+            "COMPONENTS_FACT_UNRESOLVED",
+            f"figure.components_from names {fact_id!r}, which has not been declared — "
+            f"run `declare --fact {fact_id} --value '[\"...\"]'` first",
+        )
+    try:
+        parsed = json.loads(resolution)
+    except json.JSONDecodeError as exc:
+        raise Refused(
+            "COMPONENTS_FACT_NOT_A_LIST",
+            f"{fact_id!r}'s declared resolution is not valid JSON: {exc}",
+        )
+    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+        raise Refused(
+            "COMPONENTS_FACT_NOT_A_LIST",
+            f"{fact_id!r}'s declared resolution must be a JSON array of strings, got {parsed!r}",
+        )
+    return parsed
+
+
 def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     """Optional, real caller of `paper_obligation.py`'s checks — run only
     when `--section`/`--block` are given alongside `render`
     (`diagram-obligation` spec: obligations are read off the contract's own
-    `figure:` declaration, never known). `--expected-components` supplies
-    the named `components_from` fact's resolved, ordered list explicitly —
-    this CLI never infers a list out of a free-text `declare --fact`
-    resolution, which records prose, not a schema.
+    `figure:` declaration, never known).
+
+    The Components Check runs ONLY when the block's `figure.components_from`
+    names a fact — `_parse_figure` made this subkey optional precisely
+    because it is a claim that one fact's own value IS the diagram's full
+    expected component list, and that claim only holds when the diagram
+    truly is one fact's own list by contract (section 01: the methods
+    diagram's components are the contribution list). For a block whose
+    diagram is a composite crossing over several categories of content
+    (section 02's closing diagram: data, methods, axes, metrics,
+    qualitative instruments, the repetition unit), no single fact is that
+    list — such a block declares NO `components_from` at all, and no
+    Components Check runs for it; `check_excluded`/`check_caption`/
+    `check_mandatory`/separation still do.
 
     Also checks separation against every SIBLING `<other_id>.diagram.json`
     already under `paper/Figures/` — the cross-diagram intersection
@@ -670,9 +723,10 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     paths = paper_figure.figure_paths(paper_dir, args.figure_id)
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     manifest_components = manifest.get("components", [])
-    expected = json.loads(args.expected_components) if args.expected_components else []
 
-    paper_obligation.check_components(figure, manifest_components, expected)
+    if figure["components_from"] is not None:
+        expected = _resolve_expected_components(paper_dir, figure["components_from"])
+        paper_obligation.check_components(figure, manifest_components, expected)
     paper_obligation.check_excluded(figure, manifest_components)
     paper_obligation.check_caption(
         figure, manifest_components, manifest.get("encodings", []), manifest.get("caption", ""),
@@ -950,10 +1004,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_render.add_argument(
         "--block", default=None, help="the block id whose figure: obligation to check after compiling",
-    )
-    p_render.add_argument(
-        "--expected-components", default=None,
-        help="JSON array: components_from's resolved, ordered list, for the components check",
     )
     p_render.add_argument(
         "--sections", default=None,

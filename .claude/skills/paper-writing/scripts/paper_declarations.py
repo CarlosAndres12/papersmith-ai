@@ -23,6 +23,7 @@ Public surface:
         partition, not a guideline`)
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=...)    -> dict
+    read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
@@ -212,6 +213,33 @@ def set_fact(
         paper_dir, kind="fact", id_=fact_id, value_field="resolution", value=resolution,
         clock=clock,
     )
+
+
+def read_fact(paper_dir: Path, fact_id: str) -> str | None:
+    """Read-only: the currently FIXED resolution string for `fact_id`, or
+    `None` when it was never declared, or was reopened and not yet
+    redeclared (`entry["fixed"]` false). Reuses the exact same private
+    readers `set_fact`/`reopen` already call (`_read_declarations`,
+    `_verify_not_hand_edited`, `_body_or_default`, `_find_record`) — the
+    "existing declaration-record reader" every other reader of this region
+    already goes through, never a second implementation of the same read.
+
+    Added for `a-diagram-that-compiles-or-says-why`'s corrective amendment:
+    `paper_cli._check_obligations` calls this to derive a Components
+    Check's expected list from `components_from`'s named fact, rather than
+    from an operator-supplied CLI flag. Raises no `Refused` of its own
+    beyond `paper_vocabulary.validate_fact`'s `UNKNOWN_FACT` and
+    `_verify_not_hand_edited`'s `DECLARATIONS_HAND_EDITED` — both already
+    reachable through this module's other callers.
+    """
+    paper_vocabulary.validate_fact(fact_id)
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    entry = _find_record(body, "fact", fact_id)
+    if entry is None or not entry.get("fixed"):
+        return None
+    return entry["resolution"]
 
 
 def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> dict:

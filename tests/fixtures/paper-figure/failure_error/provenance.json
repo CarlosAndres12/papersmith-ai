@@ -2,7 +2,7 @@
   "distribution": "TeX Live 2026",
   "pdftexBanner": "This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.3.22)",
   "latexmkVersion": "Latexmk, John Collins, 9 March 2026. Version 4.88",
-  "capturedAt": "2026-09-11T07:30:00Z",
+  "capturedAt": "2026-09-11T10:08:00Z",
   "argv": [
     "latexmk",
     "-norc",
@@ -13,5 +13,6 @@
     "-outdir=out",
     "failure_error.tex"
   ],
-  "os": "Darwin 25.5.0"
+  "os": "Darwin 25.5.0",
+  "sandboxEnv": {"openin_any": "p", "openout_any": "p", "shell_escape": "f"}
 }

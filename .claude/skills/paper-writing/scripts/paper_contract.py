@@ -51,16 +51,33 @@ _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
 _BLOCK_OPTIONAL = ("optional", "after", "mode", "figure")
 _BLOCK_ALLOWED = _BLOCK_REQUIRED + _BLOCK_OPTIONAL
 
-#: A `figure` object's own six subkeys — all required, nothing else
+#: A `figure` object's own six subkeys. Five are required, nothing else
 #: admitted (`diagram-obligation` spec, `Requirement: Obligations Read From
 #: Contract Front Matter`; `section-contract` spec, `Requirement: Front
 #: Matter Schema`). `caption_decodes` is deliberately a boolean, not a list
 #: of encodings — WHICH encodings exist is a property of the diagram itself
 #: and lives in `<id>.diagram.json`, never duplicated into the contract.
+#:
+#: `components_from` is OPTIONAL (corrective amendment, `a-diagram-that-
+#: compiles-or-says-why`'s own verify FAIL, CRITICAL finding): it names the
+#: one fact whose value IS the diagram's full expected component list, and
+#: that equality only holds when the diagram truly is one fact's own list
+#: by contract (section 01: the methods diagram is the contribution list).
+#: A block whose diagram is a composite crossing over several categories of
+#: content, none of which alone is the full list (section 02's closing
+#: diagram), declares no `components_from` at all — the Components Check
+#: then does not run for that block, honestly, rather than being wired to
+#: one fact's partial value and silently inverting (measured directly: a
+#: prose-compliant diagram refused, a degenerate one passed). Same
+#: `raw.get(...) is not None` round-trip convention `mode` already uses
+#: below, so a re-serialized header's explicit `null` means the same as the
+#: key being absent.
 _FIGURE_REQUIRED = (
-    "components_from", "ordered", "excludes",
+    "ordered", "excludes",
     "caption_enumerates", "caption_decodes", "mandatory",
 )
+_FIGURE_OPTIONAL = ("components_from",)
+_FIGURE_ALLOWED = _FIGURE_REQUIRED + _FIGURE_OPTIONAL
 
 _AFTER_REQUIRED = ("target", "source")
 _SOURCE_REQUIRED = ("file", "quote")
@@ -183,27 +200,32 @@ def _parse_figure(raw, owner: str) -> dict:
     """`diagram-obligation` spec, `Requirement: Obligations Read From
     Contract Front Matter`; `section-contract` spec, `Requirement: Front
     Matter Schema`. Refuses `MALFORMED_FIGURE_OBLIGATION` naming the
-    missing or unknown key, or a wrong-typed value. `components_from` is
-    validated through `paper_vocabulary.validate_fact` — an invented fact
-    refuses `UNKNOWN_FACT`, reused verbatim rather than a second vocabulary
-    (design.md, "Refusal codes and their classification")."""
+    missing or unknown key, or a wrong-typed value. `components_from`,
+    when present, is validated through `paper_vocabulary.validate_fact` —
+    an invented fact refuses `UNKNOWN_FACT`, reused verbatim rather than a
+    second vocabulary (design.md, "Refusal codes and their classification").
+    Absent (or explicit JSON `null`, matching `mode`'s own round-trip
+    convention), it resolves to `None` and admits no Components Check for
+    that block — see `_FIGURE_REQUIRED`'s own comment for why this is
+    optional rather than the original six-required schema."""
     if not isinstance(raw, dict):
         raise Refused("MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' must be an object")
     missing = [key for key in _FIGURE_REQUIRED if key not in raw]
     if missing:
         raise Refused("MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' missing {missing[0]!r}")
-    unknown = [key for key in raw if key not in _FIGURE_REQUIRED]
+    unknown = [key for key in raw if key not in _FIGURE_ALLOWED]
     if unknown:
         raise Refused(
             "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure' carries unknown key {unknown[0]!r}"
         )
 
-    components_from = raw["components_from"]
-    if not isinstance(components_from, str):
-        raise Refused(
-            "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure.components_from' must be a string"
-        )
-    paper_vocabulary.validate_fact(components_from)
+    components_from = raw.get("components_from")
+    if components_from is not None:
+        if not isinstance(components_from, str):
+            raise Refused(
+                "MALFORMED_FIGURE_OBLIGATION", f"{owner}: 'figure.components_from' must be a string"
+            )
+        paper_vocabulary.validate_fact(components_from)
 
     for bool_key in ("ordered", "caption_enumerates", "caption_decodes", "mandatory"):
         if not isinstance(raw[bool_key], bool):

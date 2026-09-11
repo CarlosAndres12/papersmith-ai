@@ -487,6 +487,52 @@ class ObligationTests(unittest.TestCase):
         self.assertFalse(block["figure"]["mandatory"])
 
 
+class Section02ComponentsCheckOmittedTests(unittest.TestCase):
+    """`diagram-obligation` spec, `Requirement: Components Check` —
+    corrective fix for `a-diagram-that-compiles-or-says-why`'s own verify
+    FAIL (CRITICAL: `es-assessment`'s `components_from: "dataset"` wired
+    the mechanical Components Check to one fact's raw value even though the
+    section's own closing diagram is a composite crossing (data, methods,
+    axes, metrics, qualitative instruments, the repetition unit —
+    `sections/02-experimental-setup.md`, "The closing diagram") that no
+    single fact's value can equal — measured directly by the verifier: a
+    prose-compliant diagram was refused `COMPONENT_MISMATCH`, a degenerate
+    dataset-only one passed).
+
+    The fix removes `components_from` from `es-assessment`'s real, on-disk
+    `figure:` declaration entirely (`_FIGURE_OPTIONAL`,
+    `paper_contract.py`) rather than trying to make one fact's value stand
+    in for a crossing it cannot represent — so there is no longer a
+    possible verdict to invert for this block. See `CLIWiringTests.
+    test_real_section_02_es_assessment_no_longer_inverts_the_components_
+    check` for the full-CLI reproduction against both the prose-compliant
+    and degenerate manifests the verifier used, the way the verifier
+    measured it."""
+
+    def _es_assessment_figure(self) -> dict:
+        header, _body = paper_contract.parse((SECTIONS_DIR / "02-experimental-setup.md").read_bytes())
+        block = next(b for b in header.blocks if b["id"] == "es-assessment")
+        return block["figure"]
+
+    def test_the_real_es_assessment_contract_declares_no_components_from(self) -> None:
+        figure = self._es_assessment_figure()
+        self.assertIsNone(figure["components_from"])
+
+    def test_excludes_and_mandatory_still_apply_without_a_components_check(self) -> None:
+        """Confirms the fix is scoped: omitting `components_from` disables
+        ONLY the Components Check, not every obligation on this mandatory
+        block."""
+        figure = self._es_assessment_figure()
+        with self.assertRaises(Refused) as ctx:
+            paper_obligation.check_excluded(
+                figure, ["Dataset A", "internal component of the proposal"],
+            )
+        self.assertEqual(ctx.exception.code, "EXCLUDED_COMPONENT")
+        with self.assertRaises(Refused) as ctx:
+            paper_obligation.check_mandatory(figure, False, "es-assessment")
+        self.assertEqual(ctx.exception.code, "MANDATORY_DIAGRAM_ABSENT")
+
+
 class PlacementVerbTests(unittest.TestCase):
     """Tasks.md 4.1 — `place`: compiles nothing, requires provenance."""
 
@@ -610,7 +656,36 @@ class CLIWiringTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["attemptsUsed"], 1)
 
+    def _demo_sections_dir(self, name: str, *, components_from: str = "contributions") -> Path:
+        sections_dir = self.test_root / name
+        sections_dir.mkdir()
+        figure = {
+            "ordered": True, "excludes": [],
+            "caption_enumerates": True, "caption_decodes": False, "mandatory": True,
+        }
+        if components_from is not None:
+            figure["components_from"] = components_from
+        (sections_dir / "demo.md").write_bytes(
+            b"---\n" + json.dumps({
+                "section": "demo", "position": 1,
+                "blocks": [{
+                    "id": "b1", "requires_facts": ["contributions", "dataset"],
+                    "requires_declarations": [], "citations": "none",
+                    "figure": figure,
+                }],
+            }).encode("utf-8") + b"\n---\nDemo prose.\n",
+        )
+        return sections_dir
+
+    def _declare_fact(self, fact_id: str, value: list) -> None:
+        proc = self._run(
+            "declare", "--paper", str(self.paper_dir), "--fact", fact_id, "--value", json.dumps(value),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
     def test_render_with_section_and_block_runs_obligation_checks(self) -> None:
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        self._declare_fact("contributions", ["encoder", "decoder"])
         (self.paper_dir / "Figures" / "diagO.tex").write_text(
             "% node: encoder\n% node: decoder\n", encoding="utf-8",
         )
@@ -621,27 +696,12 @@ class CLIWiringTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        sections_dir = self.test_root / "sections"
-        sections_dir.mkdir()
-        (sections_dir / "demo.md").write_bytes(
-            b"---\n" + json.dumps({
-                "section": "demo", "position": 1,
-                "blocks": [{
-                    "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
-                    "citations": "none",
-                    "figure": {
-                        "components_from": "contributions", "ordered": True, "excludes": [],
-                        "caption_enumerates": True, "caption_decodes": False, "mandatory": True,
-                    },
-                }],
-            }).encode("utf-8") + b"\n---\nDemo prose.\n",
-        )
+        sections_dir = self._demo_sections_dir("sections")
         record_path = Path(self._tmp.name) / "record.jsonl"
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO",
             "--latexmk-path", str(self.bin_dir),
             "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
-            "--expected-components", json.dumps(["encoder", "decoder"]),
             env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -649,37 +709,169 @@ class CLIWiringTests(unittest.TestCase):
         self.assertEqual(payload["obligations"], {"checked": True})
 
     def test_render_with_section_and_block_mismatched_components_refuses(self) -> None:
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        self._declare_fact("contributions", ["encoder", "decoder"])
         (self.paper_dir / "Figures" / "diagO2.tex").write_text("% node: encoder\n", encoding="utf-8")
         (self.paper_dir / "Figures" / "diagO2.diagram.json").write_text(
             json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
             encoding="utf-8",
         )
-        sections_dir = self.test_root / "sections2"
-        sections_dir.mkdir()
-        (sections_dir / "demo.md").write_bytes(
-            b"---\n" + json.dumps({
-                "section": "demo", "position": 1,
-                "blocks": [{
-                    "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
-                    "citations": "none",
-                    "figure": {
-                        "components_from": "contributions", "ordered": True, "excludes": [],
-                        "caption_enumerates": True, "caption_decodes": False, "mandatory": True,
-                    },
-                }],
-            }).encode("utf-8") + b"\n---\nDemo prose.\n",
-        )
+        sections_dir = self._demo_sections_dir("sections2")
         record_path = Path(self._tmp.name) / "record2.jsonl"
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO2",
             "--latexmk-path", str(self.bin_dir),
             "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
-            "--expected-components", json.dumps(["encoder", "decoder"]),
             env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
         )
         self.assertEqual(proc.returncode, 2, proc.stdout)
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["code"], "COMPONENT_MISMATCH")
+
+    def test_an_undeclared_components_from_fact_refuses_components_fact_unresolved(self) -> None:
+        """The Components Check is derived, never operator-supplied
+        (corrective amendment): a block naming a fact nobody has declared
+        yet refuses by name rather than silently defaulting to an empty
+        expected list."""
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        (self.paper_dir / "Figures" / "diagO3.tex").write_text("% node: encoder\n", encoding="utf-8")
+        (self.paper_dir / "Figures" / "diagO3.diagram.json").write_text(
+            json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
+            encoding="utf-8",
+        )
+        sections_dir = self._demo_sections_dir("sections3")
+        record_path = Path(self._tmp.name) / "record3.jsonl"
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO3",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "COMPONENTS_FACT_UNRESOLVED")
+
+    def test_a_non_json_list_fact_resolution_refuses_components_fact_not_a_list(self) -> None:
+        """The declared resolution for a fact a `figure:` object names via
+        `components_from` MUST be a JSON array of strings — free prose
+        (the field's own ordinary shape for every other fact) refuses by
+        name instead of being silently treated as an empty or one-item
+        list."""
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        proc = self._run(
+            "declare", "--paper", str(self.paper_dir), "--fact", "contributions",
+            "--value", "this paper contributes three things",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        (self.paper_dir / "Figures" / "diagO4.tex").write_text("% node: encoder\n", encoding="utf-8")
+        (self.paper_dir / "Figures" / "diagO4.diagram.json").write_text(
+            json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
+            encoding="utf-8",
+        )
+        sections_dir = self._demo_sections_dir("sections4")
+        record_path = Path(self._tmp.name) / "record4.jsonl"
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO4",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "COMPONENTS_FACT_NOT_A_LIST")
+
+    def test_editing_components_from_in_the_header_changes_the_verdict(self) -> None:
+        """Proves `components_from` is load-bearing, the way the brief
+        demands: mutate the NAMED FACT in the contract header (not the
+        declared value) and show a previously-passing diagram now refuses.
+        Same manifest, same declared facts throughout -- only the header's
+        own `components_from` string changes, from `contributions`
+        (declared to match the manifest) to `dataset` (declared NOT to
+        match it)."""
+        self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        self._declare_fact("contributions", ["encoder", "decoder"])
+        self._declare_fact("dataset", ["Dataset A", "Dataset B"])
+        (self.paper_dir / "Figures" / "diagO5.tex").write_text(
+            "% node: encoder\n% node: decoder\n", encoding="utf-8",
+        )
+        (self.paper_dir / "Figures" / "diagO5.diagram.json").write_text(
+            json.dumps({
+                "components": ["encoder", "decoder"], "encodings": [],
+                "caption": "Figure 1. encoder, decoder.",
+            }),
+            encoding="utf-8",
+        )
+
+        sections_a = self._demo_sections_dir("sections5a", components_from="contributions")
+        record_a = Path(self._tmp.name) / "record5a.jsonl"
+        proc_a = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO5",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_a),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_a)},
+        )
+        self.assertEqual(proc_a.returncode, 0, proc_a.stdout + proc_a.stderr)
+        self.assertEqual(json.loads(proc_a.stdout)["obligations"], {"checked": True})
+
+        sections_b = self._demo_sections_dir("sections5b", components_from="dataset")
+        record_b = Path(self._tmp.name) / "record5b.jsonl"
+        proc_b = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO5",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_b),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_b)},
+        )
+        self.assertEqual(proc_b.returncode, 2, proc_b.stdout)
+        self.assertEqual(json.loads(proc_b.stdout)["code"], "COMPONENT_MISMATCH")
+
+    def test_real_section_02_es_assessment_no_longer_inverts_the_components_check(self) -> None:
+        """Reproduces the verifier's own CRITICAL finding the way it
+        measured it: drives `render --section 02-experimental-setup
+        --block es-assessment` (the REAL, on-disk contract, real
+        `sections/` corpus) against BOTH a prose-compliant crossing
+        manifest and the verifier's degenerate dataset-only one. Before
+        the fix, the prose-compliant one was refused `COMPONENT_MISMATCH`
+        and the degenerate one passed -- exactly backwards. After the fix,
+        neither manifest can trigger `COMPONENT_MISMATCH`: `es-assessment`
+        declares no `components_from` at all, so no Components Check runs
+        for either."""
+        # `% node: <label>` (`paper_figure._NODE_MARKER_RE`) captures a
+        # single non-whitespace token per node -- single-token labels here,
+        # one per category the section's own closing-diagram prose names.
+        prose_compliant = [
+            "DatasetA", "DatasetB", "BaselineMethod", "ProposedMethod",
+            "BackboneSize", "F1PerCrossing", "TSNEAttribution",
+            "FiveFoldCVMeanStd",
+        ]
+        degenerate = ["DatasetA", "DatasetB"]
+        for name, components in (("prose", prose_compliant), ("degenerate", degenerate)):
+            with self.subTest(manifest=name):
+                # A fresh, isolated paper_dir per iteration: the two
+                # manifests deliberately share labels (both are about the
+                # same datasets), which would otherwise collide as
+                # `SHARED_COMPONENT` against a SIBLING diagram already on
+                # disk -- a real, correct check unrelated to this proof.
+                iter_paper_dir = self.test_root / f"paper-es-{name}"
+                (iter_paper_dir / "Figures").mkdir(parents=True)
+                fig_id = f"diagES-{name}"
+                (iter_paper_dir / "Figures" / f"{fig_id}.tex").write_text(
+                    "\n".join(f"% node: {c}" for c in components) + "\n", encoding="utf-8",
+                )
+                caption = "Figure. " + ", ".join(components) + "."
+                (iter_paper_dir / "Figures" / f"{fig_id}.diagram.json").write_text(
+                    json.dumps({"components": components, "encodings": [], "caption": caption}),
+                    encoding="utf-8",
+                )
+                record_path = Path(self._tmp.name) / f"record-es-{name}.jsonl"
+                proc = self._run(
+                    "render", "--paper", str(iter_paper_dir), "--figure-id", fig_id,
+                    "--latexmk-path", str(self.bin_dir),
+                    "--section", "02-experimental-setup", "--block", "es-assessment",
+                    "--sections", str(SECTIONS_DIR),
+                    env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+                )
+                self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertEqual(json.loads(proc.stdout)["obligations"], {"checked": True})
 
 
 class DiagramMutationProofTests(unittest.TestCase):

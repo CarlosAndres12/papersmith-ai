@@ -20,7 +20,6 @@
       "requires_declarations": [],
       "citations": "resolution",
       "figure": {
-        "components_from": "dataset",
         "ordered": false,
         "excludes": ["internal component of the proposal"],
         "caption_enumerates": true,

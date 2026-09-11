@@ -948,8 +948,10 @@ class ModeWideningTests(unittest.TestCase):
 
 class ContractHeaderTests(unittest.TestCase):
     """`a-diagram-that-compiles-or-says-why`, `section-contract` spec
-    delta: `figure` joins `_BLOCK_OPTIONAL`, all six subkeys required
-    (tasks.md 3.1/3.2/3.6)."""
+    delta: `figure` joins `_BLOCK_OPTIONAL`, five subkeys required and
+    `components_from` optional (tasks.md 3.1/3.2/3.6; `components_from`
+    widened to optional by this change's own corrective amendment —
+    verify FAIL, CRITICAL finding on `es-assessment`)."""
 
     _FIGURE = {
         "components_from": "contributions", "ordered": True,
@@ -1005,6 +1007,25 @@ class ContractHeaderTests(unittest.TestCase):
             paper_contract.parse_header(self._header(figure=broken))
         self.assertEqual(ctx.exception.code, "MALFORMED_FIGURE_OBLIGATION")
 
+    def test_a_figure_object_without_components_from_parses(self) -> None:
+        """Corrective amendment: `components_from` is optional — a block
+        whose diagram is a composite crossing over several categories of
+        content, none of which alone is the full expected list (section
+        02's closing diagram), declares no `components_from` at all rather
+        than being wired to one fact's partial value."""
+        without_components_from = {k: v for k, v in self._FIGURE.items() if k != "components_from"}
+        header = paper_contract.parse_header(self._header(figure=without_components_from))
+        self.assertIsNone(header.blocks[0]["figure"]["components_from"])
+
+    def test_an_explicit_null_components_from_also_resolves_to_none(self) -> None:
+        """Same `raw.get(...) is not None` round-trip convention `mode`
+        already uses: this parser's own output re-serializes with an
+        explicit `"components_from": null`, and re-parsing that MUST mean
+        the same thing as the key being absent."""
+        with_null = dict(self._FIGURE, components_from=None)
+        header = paper_contract.parse_header(self._header(figure=with_null))
+        self.assertIsNone(header.blocks[0]["figure"]["components_from"])
+
 
 class FigureObligationTranscriptionTests(unittest.TestCase):
     """design.md, `Open Questions`: "a test asserts each `excludes` entry and
@@ -1033,14 +1054,82 @@ class FigureObligationTranscriptionTests(unittest.TestCase):
             figure = block["figure"]
             self.assertIsNotNone(figure, f"{filename}: {block_id} declares no figure")
             prose = self._normalize(body.decode("utf-8"))
-            self.assertIn(
-                self._normalize(figure["components_from"]), prose,
-                f"{filename}: components_from {figure['components_from']!r} not found in prose",
-            )
+            if figure["components_from"] is not None:
+                self.assertIn(
+                    self._normalize(figure["components_from"]), prose,
+                    f"{filename}: components_from {figure['components_from']!r} not found in prose",
+                )
             for excluded in figure["excludes"]:
                 self.assertIn(
                     self._normalize(excluded), prose,
                     f"{filename}: excludes entry {excluded!r} not found in prose",
+                )
+
+    #: Fixing the CLASS, not just the instance (`a-diagram-that-compiles-
+    #: or-says-why`, corrective verify FAIL): a transcription lock that
+    #: only checks a word's presence in prose licenses any value that
+    #: happens to share that word — measured directly: `components_from:
+    #: "dataset"` passed the substring check above while inverting
+    #: `paper_obligation.check_components` for `es-assessment` (a
+    #: prose-compliant diagram refused, a degenerate one passed). Every
+    #: block that declares `figure:` MUST ALSO be named here against either
+    #: an EXECUTED realism proof living in `tests/test_paper_figure.py`
+    #: (`"proof:<TestClass>.<test_method>"`, resolved against that file's
+    #: own AST below so a stale reference fails loudly, not silently) or an
+    #: explicit, human-readable exemption reason (`"exempt:<reason>"`) for
+    #: a block whose obligation is conditional and never mechanically
+    #: checked at all (section 05's table-or-diagram choice; and now
+    #: `es-assessment`, whose composite crossing means it correctly
+    #: declares no `components_from` at all — see the corrective fix
+    #: below).
+    _COMPONENTS_REALISM_PROOF = {
+        "mm-proposal": "proof:ObligationTests.test_matching_ordered_components_pass",
+        "es-assessment": (
+            "exempt:components_from removed entirely (corrective fix, verify FAIL CRITICAL): "
+            "the closing diagram is a composite crossing over six categories of content that no "
+            "single fact's value can equal, so no Components Check is wired to it at all -- there "
+            "is no longer a possible verdict to invert. See test_paper_figure.py, "
+            "Section02ComponentsCheckOmittedTests and CLIWiringTests."
+            "test_real_section_02_es_assessment_no_longer_inverts_the_components_check"
+        ),
+        "rw-synthesis-artefact": (
+            "exempt:mandatory=false, and a table choice leaves no <id>.tex — no component check "
+            "is ever reachable for this block (design.md, 'The 05 conditional, expressed in data "
+            "rather than a new key'; ObligationTests."
+            "test_a_table_choice_for_block_05_carries_no_diagram_obligation)"
+        ),
+    }
+
+    def test_every_figure_declaring_block_names_a_realism_proof_or_an_exemption(self) -> None:
+        figure_test_source = (FORGE_ROOT / "tests" / "test_paper_figure.py").read_text(encoding="utf-8")
+        tree = ast.parse(figure_test_source)
+        methods_by_class: dict[str, set] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                methods_by_class[node.name] = {
+                    child.name for child in node.body if isinstance(child, ast.FunctionDef)
+                }
+
+        for filename, block_id in self._HOLDERS.items():
+            self.assertIn(
+                block_id, self._COMPONENTS_REALISM_PROOF,
+                f"{filename}: {block_id} declares figure: but names no realism proof or exemption",
+            )
+            entry = self._COMPONENTS_REALISM_PROOF[block_id]
+            if entry.startswith("proof:"):
+                class_name, _, method_name = entry[len("proof:"):].partition(".")
+                self.assertIn(
+                    class_name, methods_by_class,
+                    f"{block_id}: proof names class {class_name!r}, absent from test_paper_figure.py",
+                )
+                self.assertIn(
+                    method_name, methods_by_class[class_name],
+                    f"{block_id}: proof names {class_name}.{method_name}, no such test method",
+                )
+            else:
+                self.assertTrue(
+                    entry.startswith("exempt:") and len(entry) > len("exempt:"),
+                    f"{block_id}: exemption entry must state a non-empty reason: {entry!r}",
                 )
 
 
@@ -2931,8 +3020,14 @@ class RefusalRosterTests(unittest.TestCase):
         `ModuleCompletenessTests` rather than chosen: that test holds every
         on-disk script to being imported by `paper_cli.py` the moment it
         exists, so the import could not wait for Work Unit 3 the way
-        tasks.md's own 3.7 originally phrased it."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 94)
+        tasks.md's own 3.7 originally phrased it. Moved from 94 to 96 in
+        `a-diagram-that-compiles-or-says-why`'s own corrective amendment
+        (verify FAIL, CRITICAL): `_resolve_expected_components`, a new
+        helper inside `paper_cli.py` itself, raises `COMPONENTS_FACT_
+        UNRESOLVED` and `COMPONENTS_FACT_NOT_A_LIST` -- reachable the
+        moment `_check_obligations` calls it, no new module import needed
+        since both live in the already-scanned `paper_cli.py`."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 96)
 
 
 if __name__ == "__main__":

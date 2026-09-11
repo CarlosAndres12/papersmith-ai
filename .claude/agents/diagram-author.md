@@ -14,9 +14,10 @@ there and is not repeated here.
 ## Your stretch, and its two ends
 
 You begin **after** the block's diagram obligation is already readable — a
-`figure:` declaration sits in the contract's own front matter, naming the
-fact whose list your diagram's components must equal, what it excludes, and
-whether the caption enumerates/decodes. You end **before** the operator
+`figure:` declaration sits in the contract's own front matter, naming what
+it excludes and whether the caption enumerates/decodes, and, when the
+diagram truly is one fact's own list by contract, which fact
+(`components_from`) your diagram's components must equal. You end **before** the operator
 decides what to do with a spent budget or an unrecoverable refusal: a
 successful compile (`render` reports `"verdict": "success"`), or
 `REPAIR_BUDGET_SPENT`/`LATEX_PACKAGE_ABSENT`/`LATEX_TOOLCHAIN_ABSENT`,
@@ -63,13 +64,43 @@ your manifest declares that the source never marks with `% node:`, or a
 marked node the manifest never declared. Fix whichever side is wrong before
 calling `render` again — this refusal is pre-compile and spends no budget.
 
+## Running the obligation checks: `--section`/`--block`
+
+`render` runs the full obligation suite — components (only when the block
+declares `components_from`), excludes, caption, mandatory, and separation
+against every sibling `<other_id>.diagram.json` already on disk — when you
+pass `--section <sections-stem> --block <id>` alongside `--figure-id`. Run
+it after a successful compile, before you report a diagram as done; a
+mechanical check you never invoked proves nothing, no matter how carefully
+you eyeballed the manifest.
+
+The Components Check's expected list is never something you pass — it is
+DERIVED from `components_from`'s named fact's own declared resolution
+(`declare --fact <id> --value '["a", "b"]'`, a JSON array of the labels the
+diagram must show, in order when `ordered: true`). **Declare that fact
+BEFORE calling `render --section/--block`** for a block that names one, or
+the check refuses `COMPONENTS_FACT_UNRESOLVED`. For a block whose diagram
+IS one fact's own list by contract (section 01: the methods diagram's
+components are the contribution list), this is exactly the `contributions`
+fact. For a block whose diagram is a composite crossing over several
+categories of content (section 02: which data enter, against which
+methods, over which axes, which metric per crossing, where qualitative
+instruments attach, the repetition unit), the contract declares NO
+`components_from` at all — no single fact is that list — and the
+Components Check simply does not run for it; verify the crossing against
+the block's own prose yourself, since no mechanical check does it for you
+there.
+
 ## Measure before you assert
 
 Never claim a diagram "matches the contract" without having read the
-`figure:` declaration's own `components_from` fact and compared it, in the
-same reply, against the labels you actually wrote into the manifest. A
-claimed match nobody checked sounds like a passed check and gets acted on
-like one.
+`figure:` declaration in full — `components_from` (when declared),
+`excludes`, `caption_enumerates`, `caption_decodes`, `mandatory` — and run
+the obligation checks above against the labels you actually wrote into the
+manifest. A claimed match nobody checked sounds like a passed check and
+gets acted on like one; a mechanical check that refuses
+`COMPONENTS_FACT_UNRESOLVED` because you forgot to declare the fact first
+is not the same as a check that ran and passed.
 
 ## What you return
 

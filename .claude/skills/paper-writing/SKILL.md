@@ -486,6 +486,8 @@ existing `substitute` verb's `\includegraphics`; no TikZ byte ever enters
 | Verb | What it does | Refuses |
 | --- | --- | --- |
 | `render --figure-id <id> [--paper <dir>]` | Compiles `<id>.tex` standalone via exactly one `latexmk` call, cross-checks the manifest both directions, and scans stop A before ever spawning the compiler | `DIAGRAM_SOURCE_ABSENT`, `MANIFEST_SOURCE_MISMATCH`, `DIAGRAM_PLOTS_DATA`, `LATEX_TOOLCHAIN_ABSENT`, `LATEX_LOG_ABSENT`, `LATEX_OUTCOME_UNEXPLAINED`, `LATEX_PACKAGE_ABSENT`, `REPAIR_BUDGET_SPENT` |
+| `render --figure-id <id> --section <stem> --block <id> [--sections <dir>] [--paper <dir>]` | The same compile, and then the full obligation suite (components — only when the block declares `components_from`, excludes, caption, mandatory, cross-diagram separation) against the block's own `figure:` declaration | adds `MALFORMED_FIGURE_OBLIGATION`, `COMPONENT_MISMATCH`, `COMPONENTS_FACT_UNRESOLVED`, `COMPONENTS_FACT_NOT_A_LIST`, `EXCLUDED_COMPONENT`, `SHARED_COMPONENT`, `CAPTION_INCOMPLETE`, `MANDATORY_DIAGRAM_ABSENT` |
+| `render --figure-id <id> --acknowledge-reset [--paper <dir>]` | The explicit operator acknowledgement that clears a spent ledger — compiles nothing, never combined with a compile in the same call | (none beyond `render`'s own) |
 | `place --figure-id <id> --pdf <path> --provenance <path> [--paper <dir>]` | Places an already-measured figure's PDF — compiles nothing, requires a provenance record naming the run that produced it | `DIAGRAM_SOURCE_ABSENT` (reused: the named artifact this call needs is absent) |
 
 **A repairable failure is an ordinary outcome, not a refusal.** `render`
@@ -519,14 +521,31 @@ measured figure is `place`, entirely outside the compile path: no
 `latexmk` call, no ledger, no stop-A scan.
 
 **Obligations are read, never known.** A block's `figure:` declaration
-(`components_from`, `ordered`, `excludes`, `caption_enumerates`,
-`caption_decodes`, `mandatory` — all six required, `paper_contract.py`'s
-`_parse_figure`) names the fact whose ordered list the diagram's
-components must equal; `paper_obligation.py`'s pure functions
-(`check_components`, `check_excluded`, `check_shared_components`,
-`check_caption`, `check_mandatory`) check it against a manifest, never
-against a hardcoded section or block id. Deleting a `figure:` key removes
-the obligation with zero code changed. A block whose contract states the
+(`ordered`, `excludes`, `caption_enumerates`, `caption_decodes`,
+`mandatory` — all five required; `components_from` OPTIONAL,
+`paper_contract.py`'s `_parse_figure`) is read entirely off the contract;
+`paper_obligation.py`'s pure functions (`check_components`,
+`check_excluded`, `check_shared_components`, `check_caption`,
+`check_mandatory`) check it against a manifest, never against a hardcoded
+section or block id. When `components_from` names a fact, the Components
+Check's expected list is DERIVED — never operator-supplied — from that
+fact's own declared resolution (`declare --fact <id> --value
+'["a", "b"]'`, read back through `paper_declarations.read_fact`), refusing
+`COMPONENTS_FACT_UNRESOLVED` when the fact was never declared and
+`COMPONENTS_FACT_NOT_A_LIST` when its resolution does not parse as a JSON
+array of strings. `components_from`'s named fact must equal the FULL
+expected list by contract — section 01's methods diagram IS the
+contribution list, so `components_from: contributions` alone suffices. A
+block whose diagram is a composite crossing over several categories of
+content, none of which alone is the full list (section 02's closing
+diagram: data, methods, axes, metrics, qualitative instruments, the
+repetition unit), declares NO `components_from` at all — the Components
+Check simply does not run for it, honestly, rather than being wired to one
+fact's partial value and silently inverting (measured directly by
+`a-diagram-that-compiles-or-says-why`'s own corrective verify: the prior
+`components_from: dataset` reading refused a prose-compliant diagram and
+passed a degenerate one). Deleting a `figure:` key removes the whole
+obligation with zero code changed. A block whose contract states the
 synthesis artefact may be a diagram **or** a table (section 05's block 5)
 carries no diagram obligation at all when the operator's choice leaves no
 `<id>.tex` — a legal table triggers nothing.
@@ -538,10 +557,12 @@ unrecoverable refusal for the operator to resolve — it never clears a spent
 ledger itself.
 
 **Measure this before delegating (diagram-author):** confirm the block's
-`figure:` declaration is already readable (`contract --file <path>`) and
-its `components_from` fact is already resolved (`plan`); an agent asked to
-draft a diagram against an obligation it cannot read cannot distinguish
-"no components yet" from "cannot be checked."
+`figure:` declaration is already readable (`contract --file <path>`) and,
+when it declares a `components_from` fact, that fact is already declared
+as a JSON array of strings (`plan` reports it fixed; `declare --fact <id>
+--value '["a", "b"]'` if not) — an agent asked to draft a diagram against
+an obligation it cannot read cannot distinguish "no components yet" from
+"cannot be checked."
 
 ## The couplings hold, or they do not: `verify`
 
