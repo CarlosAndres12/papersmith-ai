@@ -4503,6 +4503,21 @@ def _extra_document_revisions(revision: str | None) -> list[dict]:
     return entries
 
 
+def _admissibility_extra_documents(revision: str | None) -> list[dict]:
+    """`{label, revision, revisionSha256}` for every document beyond
+    document 0, for `cmd_admit`'s own additive `documents` key (Cut 3,
+    D5). Reuses `_extra_document_revisions`'s per-index resolution --
+    never a second copy of that arithmetic -- renaming its `sha256` field
+    to `revisionSha256` to match `admissibility.json`'s own established
+    key spelling for document 0 (`record["revisionSha256"]`, unchanged).
+    Answers `[]` under one document, always -- byte-identical, structurally,
+    since `cmd_admit`'s own `**` spread contributes nothing to iterate.
+    """
+    return [{"label": entry["label"], "revision": entry["revision"],
+             "revisionSha256": entry["sha256"]}
+            for entry in _extra_document_revisions(revision)]
+
+
 def is_managed_artifact(path: Path) -> bool:
     """Whether a file carries the publisher's marker as its very first bytes.
 
@@ -7664,6 +7679,14 @@ def cmd_admit(args: argparse.Namespace) -> dict:
         "revision": args.revision,
         "revisionSha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "findings": verdicts,
+        # Additive (Cut 3, `a-revision-is-two-documents`, D5): the scalar
+        # keys above keep naming document 0, byte-identical under one
+        # document (`_admissibility_extra_documents` answers `[]` and the
+        # `**` spread contributes nothing). A `**` spread, never a ninth --
+        # sorry, fourth -- named key, for the identical reason the
+        # authorization binding's own literals stay static under `ast`.
+        **({"documents": _admissibility_extra_documents(args.revision)}
+           if len(DOCUMENTS) > 1 else {}),
     }
     path = target / "tests" / "admissibility.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -7684,7 +7707,21 @@ def cmd_admit(args: argparse.Namespace) -> dict:
 
 
 def admissibility_record(target: Path, revision: str | None) -> dict:
-    """The verdict on file, and whether it still applies to the bound revision."""
+    """The verdict on file, and whether it still applies to the bound
+    revision(s).
+
+    Dual-shape read (Cut 3, `a-revision-is-two-documents`, D5). The scalar
+    keys (`revision`, `revisionSha256`) rule document 0 exactly as before
+    this cut -- a file carrying no `documents` key at all still reads and
+    still rules, byte-identically, since nothing below this comment changed
+    what those two lines do. Under `len(DOCUMENTS) > 1`, an additive
+    `documents` list -- written BESIDE the scalar keys, never replacing
+    them (D5) -- is ALSO checked; any document beyond the first going stale
+    folds into the same `"stale"` status the scalar check already reports,
+    never a new status value. A record carrying no scalar keys at all (a
+    hypothetical documents-only shape nothing this cut's own `cmd_admit`
+    ever produces) falls back to reading `documents` alone.
+    """
     path = target / "tests" / "admissibility.json"
     if not path.exists():
         return {"status": "missing", "detail": "no ruling; no remedy may be measured"}
@@ -7692,15 +7729,37 @@ def admissibility_record(target: Path, revision: str | None) -> dict:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return {"status": "unreadable", "detail": "the ruling cannot be parsed"}
-    source = revision_source(revision)
-    if source is not None:
-        current = hashlib.sha256(source.encode("utf-8")).hexdigest()
-        if record.get("revisionSha256") != current:
-            return {"status": "stale",
-                    "detail": f"ruled against {record.get('revision')}, "
-                              f"whose bytes no longer match"}
-    return {"status": "present", "revision": record.get("revision"),
-            "findings": record.get("findings", {})}
+    if "revisionSha256" in record:
+        source = revision_source(revision)
+        if source is not None:
+            current = hashlib.sha256(source.encode("utf-8")).hexdigest()
+            if record.get("revisionSha256") != current:
+                return {"status": "stale",
+                        "detail": f"ruled against {record.get('revision')}, "
+                                  f"whose bytes no longer match"}
+        if len(DOCUMENTS) > 1:
+            extra = record.get("documents")
+            if isinstance(extra, list):
+                for index, entry in enumerate(extra, start=1):
+                    extra_source = revision_source(revision, index)
+                    if extra_source is None:
+                        continue
+                    extra_current = hashlib.sha256(
+                        extra_source.encode("utf-8")).hexdigest()
+                    if entry.get("revisionSha256") != extra_current:
+                        return {
+                            "status": "stale",
+                            "detail": f"ruled against "
+                                      f"{entry.get('revision')} for "
+                                      f"{entry.get('label')}, whose bytes "
+                                      "no longer match"}
+        return {"status": "present", "revision": record.get("revision"),
+                "findings": record.get("findings", {})}
+    documents = record.get("documents")
+    if isinstance(documents, list) and documents:
+        return {"status": "present", "revision": revision,
+                "findings": record.get("findings", {})}
+    return {"status": "missing", "detail": "no ruling; no remedy may be measured"}
 
 
 def _load_remote_execution_ledger():
