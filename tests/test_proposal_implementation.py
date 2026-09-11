@@ -7039,6 +7039,78 @@ class VerifyAgreementWitnessTests(unittest.TestCase):
         self.assertEqual(agreements["witness"]["summary"], "1 of 2 witnessed")
 
 
+class FindingsDocumentRoutingTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 13, design.md D6/C7):
+    `well_formed`'s `document` requirement, `finding_impact`'s per-document
+    `class` mapping, and `remedy_compatibility`'s per-document notation
+    routing. All three are gated on the CALLER's own explicit argument --
+    `require_document`/`sources_by_document` -- never a module-level
+    document count read internally, so each stays directly testable
+    regardless of how many documents any particular process has loaded.
+    """
+
+    def test_valid_document_field_accepts_label_or_list_rejects_empty(self):
+        self.assertTrue(impl._valid_document_field("math"))
+        self.assertTrue(impl._valid_document_field(["math", "exp"]))
+        self.assertFalse(impl._valid_document_field(""))
+        self.assertFalse(impl._valid_document_field([]))
+        self.assertFalse(impl._valid_document_field(None))
+        self.assertFalse(impl._valid_document_field([""]))
+
+    def test_well_formed_demands_document_only_when_required(self):
+        findings = [{"id": "f1"}]
+        # Unchanged: not required by default, passes exactly as it always has.
+        self.assertEqual(impl.well_formed(findings), findings)
+        with self.assertRaises(impl.Refused) as ctx:
+            impl.well_formed(findings, require_document=True)
+        self.assertEqual(ctx.exception.code, "MALFORMED_FINDINGS")
+        self.assertIn("document", ctx.exception.detail)
+
+        named = [{"id": "f1", "document": "math"}]
+        self.assertEqual(impl.well_formed(named, require_document=True), named)
+
+    def test_finding_impact_stays_scalar_without_sources_by_document(self):
+        finding = {"id": "f1", impl.REMEDY_LOCUS_KEY: ["3.1"]}
+        result = impl.finding_impact(finding, "no citation here")
+        self.assertIsInstance(result["class"], str)
+
+    def test_finding_impact_becomes_per_document_when_sources_given(self):
+        finding = {"id": "f1", impl.REMEDY_LOCUS_KEY: ["3.1", "3.2"],
+                   "document": ["math", "exp"]}
+        sources = {"math": "structural here", "exp": "plain"}
+        result = impl.finding_impact(finding, sources["math"], sources)
+        self.assertIsInstance(result["class"], dict)
+        self.assertEqual(set(result["class"]), {"math", "exp"})
+        # Two remedy loci (> 1), so both documents grade "structural"
+        # regardless of citation count -- the scalar fields
+        # (locus/introducesNotation) are unaffected by the reshape.
+        self.assertEqual(result["class"]["math"], "structural")
+        self.assertEqual(result[impl.NOTATION_KEYS["locus"]], 2)
+
+    def test_remedy_compatibility_routes_a_findings_uses_to_its_own_document(self):
+        """A finding naming document `exp` and citing notation that exists
+        ONLY in `exp`'s own text must not be reported incompatible for not
+        finding it in document 0's text."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "r1.md").write_text("nothing here", encoding="utf-8")
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(root)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = previous
+        self.addCleanup(restore)
+
+        findings = [{"id": "f1", "uses": ["E[x]"], "document": "exp"}]
+        sources = {"math": "nothing here", "exp": "E[x] appears here"}
+        result = impl.remedy_compatibility(findings, "r1.md", sources)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["undefinedNotation"], [])
+
+
 class EquationTagRecognitionTests(unittest.TestCase):
     """One `\\tag{...}` reader, because three of them disagreed.
 
