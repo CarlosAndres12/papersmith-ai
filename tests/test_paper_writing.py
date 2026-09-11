@@ -2120,6 +2120,309 @@ class CitationTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "pass")
 
 
+class GapTests(unittest.TestCase):
+    """Coupling 3 (`coupling-verification` spec, `Requirement: Coupling 3
+    — The Gap Is Assisted`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_is_unconditionally_unmeasured_with_clean_mechanical_subchecks(self) -> None:
+        result = paper_verify.check_gap(self.evidence)
+
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertEqual(result["unmeasured_reason"], "ASSISTED_READING_REQUIRED")
+        mechanical = result["evidence"]["mechanical"]
+        self.assertTrue(mechanical["both_closings_present"])
+        self.assertTrue(mechanical["fronts_equal"])
+        self.assertTrue(mechanical["front_counts_equal"])
+        self.assertEqual(result["evidence"]["depth_reading"], "unmeasured")
+
+    def test_both_full_texts_and_front_lists_are_published(self) -> None:
+        result = paper_verify.check_gap(self.evidence)
+
+        self.assertEqual(
+            result["evidence"]["closings"]["intro-gap"], "nobody has studied the combination.",
+        )
+        self.assertEqual(result["evidence"]["fronts"]["intro-gap"], ["first study", "second study"])
+
+    def test_a_missing_closing_is_a_mechanical_fact_never_a_gate(self) -> None:
+        no_closing = b"\\item first study\n\\item second study\n"
+        mutated = dataclasses.replace(
+            self.evidence,
+            block_bodies={**self.evidence.block_bodies, "intro-gap": no_closing},
+        )
+
+        result = paper_verify.check_gap(mutated)
+
+        # Still unconditionally unmeasured -- a mechanical failure never
+        # promotes or demotes the top-level verdict.
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertFalse(result["evidence"]["mechanical"]["both_closings_present"])
+
+    def test_unequal_front_counts_report_mechanical_fail_still_unmeasured(self) -> None:
+        three_items = (
+            b"\\item first study\n\\item second study\n\\item third study\n"
+            b"Closing: nobody has studied the combination.\n"
+        )
+        mutated = dataclasses.replace(
+            self.evidence,
+            block_bodies={**self.evidence.block_bodies, "related-work-gap": three_items},
+        )
+
+        result = paper_verify.check_gap(mutated)
+
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertFalse(result["evidence"]["mechanical"]["front_counts_equal"])
+        self.assertFalse(result["evidence"]["mechanical"]["fronts_equal"])
+
+
+class ArtefactsTests(unittest.TestCase):
+    """Coupling 4 (`coupling-verification` spec, `Requirement: Coupling 4
+    — Diagram Cell Disjointness`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_holds(self) -> None:
+        result = paper_verify.check_artefacts(self.evidence)
+        self.assertEqual(result["verdict"], "pass")
+
+    def test_mutation_4a_undeclared_results_cell_fails(self) -> None:
+        record = _coupling_record()
+        record["artefacts"]["results_artefacts"] = ["cell-alpha", "cell-nowhere"]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_artefacts(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("cell-nowhere", result["evidence"]["undeclared_results"])
+
+    def test_mutation_4b_a_contribution_added_to_setup_cells_fails_on_intersection(self) -> None:
+        record = _coupling_record()
+        record["artefacts"]["setup_cells"] = ["cell-alpha", "cell-beta", "Adaptive Caching"]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_artefacts(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("Adaptive Caching", result["evidence"]["shared_with_methods"])
+
+    def test_artefacts_inherits_contribution_lists_own_unmeasured_status(self) -> None:
+        record = _coupling_record()
+        del record["blocks"]["abstract-contrib"]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_artefacts(mutated)
+
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertEqual(result["unmeasured_reason"], "BLOCK_NOT_DECLARED")
+
+
+class FutureWorkTests(unittest.TestCase):
+    """Coupling 5 (`coupling-verification` spec, `Requirement: Coupling 5
+    — Future Work ⊆ Limitations`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_holds_and_publishes_out_of_reach_subparts(self) -> None:
+        result = paper_verify.check_future_work(self.evidence)
+
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["evidence"]["relevance"], "out-of-reach")
+        self.assertEqual(result["evidence"]["specificity"], "out-of-reach")
+
+    def test_mutation_5_a_direction_answering_no_declared_limitation_fails_totality(self) -> None:
+        record = _coupling_record()
+        record["future_work"]["directions"] = [
+            {"id": "extend-retry", "limitation": "lim-nowhere", "cite_key": "future2027"},
+        ]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_future_work(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("extend-retry", result["evidence"]["unanswered"])
+
+    def test_a_direction_whose_cite_key_never_occurs_in_the_block_fails(self) -> None:
+        record = _coupling_record()
+        record["future_work"]["directions"] = [
+            {"id": "extend-retry", "limitation": "lim-overhead", "cite_key": "nevercited2029"},
+        ]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_future_work(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("extend-retry", result["evidence"]["missing_cite"])
+
+
+class ContractCurrencyTests(unittest.TestCase):
+    """Check B (`contract-currency` spec)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+
+    def test_unmutated_fixture_holds_with_provenance_present(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        result = paper_verify.check_contract_currency(evidence)
+
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["classification"], "out-of-reach today")
+
+    def test_mutation_7_absent_provenance_region_reports_unmeasured_never_zero_stale(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir, provenance_blocks=())
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        result = paper_verify.check_contract_currency(evidence)
+
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertEqual(result["unmeasured_reason"], "CONTRACT_RECORD_ABSENT")
+        # Run continues -- every OTHER check still reports a real verdict.
+        report = paper_verify.run(evidence)
+        by_check = {entry["check"]: entry for entry in report["checks"]}
+        self.assertEqual(by_check["contribution-list"]["verdict"], "pass")
+
+    def test_one_byte_edit_to_the_shared_contract_file_flags_both_recorded_blocks_stale(self) -> None:
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        contract_path = self.sections_dir / "02-methods.md"
+        contract_path.write_text(contract_path.read_text(encoding="utf-8") + "\nOne more line.\n", encoding="utf-8")
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        result = paper_verify.check_contract_currency(evidence)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertEqual(
+            sorted(result["evidence"]["stale_blocks"]),
+            sorted(_COUPLING_PROVENANCE_BLOCKS),
+        )
+
+
+class CouplingVerifyCLITests(unittest.TestCase):
+    """`verify` wired into `paper_cli.py` (`block-substitution` spec,
+    `Requirement: verify Verb Is Registered And Read-Only`). Real
+    subprocess calls against the real `paper_cli.py` resolve `--paper`/
+    `--sections` against the REAL repository root
+    (`paper_scaffold.FORGE_ROOT`), so -- the same convention
+    `ScaffoldTests.test_cli_scaffold_verb_runs_and_emits_json` already
+    established -- this fixture lives under the already-gitignored
+    `implementations/` tree, never an arbitrary tempdir outside it."""
+
+    def setUp(self) -> None:
+        test_root = FORGE_ROOT / "implementations" / f".paper-writing-verify-cli-test-{os.getpid()}"
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        self.paper_dir = test_root / "paper"
+        self.sections_dir = test_root / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+
+    def test_a_full_run_leaves_main_tex_untouched_and_exits_zero(self) -> None:
+        before = (self.paper_dir / "main.tex").read_bytes()
+
+        proc = subprocess.run(
+            [
+                sys.executable, str(CLI), "verify",
+                "--paper", str(self.paper_dir), "--sections", str(self.sections_dir),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), before)
+        by_check = {entry["check"]: entry for entry in payload["checks"]}
+        self.assertEqual(by_check["contribution-list"]["verdict"], "pass")
+        self.assertEqual(by_check["gap"]["verdict"], "unmeasured")
+
+    def test_a_refusal_path_also_writes_nothing_and_exits_two(self) -> None:
+        (self.paper_dir / "couplings.json").unlink()
+        before = (self.paper_dir / "main.tex").read_bytes()
+
+        proc = subprocess.run(
+            [
+                sys.executable, str(CLI), "verify",
+                "--paper", str(self.paper_dir), "--sections", str(self.sections_dir),
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "refused")
+        self.assertEqual(payload["code"], "DECLARATION_RECORD_ABSENT")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), before)
+
+    def test_mutation_9_the_roster_walk_reaches_paper_verify_by_source_not_import(self) -> None:
+        """M9 (design.md; tasks.md 3.9) proves the roster walk reaches
+        `paper_verify.py` -- this skill's THIRD imported module, beyond
+        `paper_coupling_evidence.py` -- without M9, widening the walk to a
+        new module is an untested claim.
+
+        `_run_against_mutant` (used for M8, above) cannot prove this: it
+        loads the mutant through `sys.modules`, but
+        `reachable_paper_refusal_codes()` never imports the modules it
+        scans -- it reads each one's own bytes directly from
+        `SKILL_SCRIPTS / f"{name}.py"` (`paper_cli_imported_modules()`,
+        `tests/test_paper_writing.py`), a fixed real path a `sys.modules`
+        substitution cannot redirect. So this is proven by hand, on the
+        real file, the same way `ModuleCompletenessTests`'s own docstring
+        already documents for its own precedent case: a throwaway
+        `Refused` was inserted into `paper_verify.py`, `RefusalRosterTests
+        .test_every_reachable_refusal_is_classified` was run and observed
+        to fail naming the new code, the insertion was removed, and the
+        suite was confirmed green again -- verified during this change's
+        own implementation, not re-run automatically on every CI pass
+        (planting it permanently would corrupt this skill's own roster for
+        every other suite scanning `scripts/*.py`, `ModuleCompletenessTests`'
+        own reasoning, reused verbatim here).
+
+        This test instead asserts the STATIC precondition M9 depends on:
+        `paper_verify.py` is a member of the whole-module scan set at all,
+        so a `Refused` added anywhere in it is picked up by construction.
+        """
+        self.assertIn(SKILL_SCRIPTS / "paper_verify.py", paper_cli_imported_modules())
+
+
+class CouplingFixtureLeakTests(unittest.TestCase):
+    """The forge leak guard, extended to this capability's own fixture
+    tree -- `shipped_documents()` never reaches `tests/`, so nothing else
+    in this suite scans it (design.md, `What Breaks`: "the fixture tree...
+    must carry no target vocabulary")."""
+
+    def test_the_fixture_bodies_and_record_carry_no_forge_vocabulary(self) -> None:
+        sys.path.insert(0, str(FORGE_ROOT / "tests"))
+        import forge_vocabulary  # noqa: E402
+
+        texts = [json.dumps(_COUPLING_SECTIONS)] + [
+            body.decode("utf-8") for body in _COUPLING_BODIES.values()
+        ] + [json.dumps(_coupling_record())]
+        leaking = {name: forge_vocabulary.leaks_in(text) for name, text in
+                   zip(list(_COUPLING_BODIES) + ["sections", "record"], texts)
+                   if forge_vocabulary.leaks_in(text)}
+        self.assertEqual(leaking, {})
+
+
 class ZZLiveAgentGuardTests(unittest.TestCase):
     """`writing-orchestration` spec, `Requirement: No Live Agent Invocation
     In Tests`. Named `ZZ...` so it sorts alphabetically last among this

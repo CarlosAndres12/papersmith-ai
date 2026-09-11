@@ -56,8 +56,8 @@ import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-g
 import paper_latex  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the sole subprocess seam (latexmk), invocation, log parse, verdict; for the roster derivation
 import paper_figure  # noqa: E402 -- a-diagram-that-compiles-or-says-why: source/manifest layout, stop A, the compile pipeline, the repair-budget ledger; `render`/`place` verbs
 import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: components/separation/caption/mandatory checks over the contract's `figure:` declaration; imported ahead of any verb calling it directly (the same shape `paper_region.py`/`paper_guidance.py` already established) so its refusals are reachable the moment the import lands
-import paper_coupling_evidence  # noqa: E402,F401 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module); imported ahead of `verify`'s own wiring, the same shape `paper_region.py`/`paper_obligation.py` already established
-import paper_verify  # noqa: E402,F401 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`); imported ahead of `verify`'s own wiring too
+import paper_coupling_evidence  # noqa: E402 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module)
+import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -691,6 +691,21 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     return {"checked": True}
 
 
+def cmd_verify(args: argparse.Namespace) -> dict:
+    """`verify`: a pure, read-only report over the five cross-section
+    couplings, citation integrity, and contract currency
+    (`coupling-verification`/`citation-integrity`/`contract-currency`
+    specs). Never writes a byte, under any input, including a refusal
+    (`block-substitution` spec, `Requirement: verify Verb Is Registered
+    And Read-Only`) -- `paper_coupling_evidence.gather` performs every
+    disk read this needs; `paper_verify.run` is pure over the result.
+    """
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    evidence = paper_coupling_evidence.gather(paper_dir, sections_dir)
+    return paper_verify.run(evidence)
+
+
 def cmd_place(args: argparse.Namespace) -> dict:
     """`place`: places an already-measured figure's PDF — compiles nothing,
     requires provenance naming the run (`authored-diagram` spec,
@@ -945,6 +960,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="override sections/ location; must resolve inside the repository root",
     )
 
+    p_verify = sub.add_parser(
+        "verify",
+        help="read-only report over the couplings, citation integrity and contract currency",
+    )
+    p_verify.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_verify.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+
     p_place = sub.add_parser(
         "place", help="place an already-measured figure's PDF; compiles nothing, needs provenance",
     )
@@ -964,7 +992,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve", "bib", "validate", "write", "render", "place",
+    "resolve", "bib", "validate", "write", "render", "place", "verify",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -982,6 +1010,7 @@ _COMMANDS = {
     "write": cmd_write,
     "render": cmd_render,
     "place": cmd_place,
+    "verify": cmd_verify,
 }
 
 

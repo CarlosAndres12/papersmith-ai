@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, or compile a standalone diagram and prove it against the contract's own figure: obligation. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write, render, place. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write, render, place, verify. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -13,7 +13,7 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Fifteen verbs, wired into one front door (`scripts/paper_cli.py`):
+Sixteen verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
@@ -21,16 +21,18 @@ decisions — `the-paper-carries-its-own-decisions`), `resolve`,
 `bib build`, `validate` (citation resolution, a sourced bibliography, and
 the verdict/placement gate — `no-claim-without-a-source-that-holds-it`),
 `write` (evidence-bound drafting, contract audit and the style-leak proof —
-`the-writer-may-assert-only-what-it-was-given`), and `render`/`place` (a
+`the-writer-may-assert-only-what-it-was-given`), `render`/`place` (a
 diagram that compiles or says why, the repair-budget ledger, and the
-data-figure boundary — `a-diagram-that-compiles-or-says-why`). To the
-substitution engine, block ids stay opaque strings — shape only
-(`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
-exist, what each requires, and where in the document they belong, entirely
-over in `sections/*.md`. `declare`/`plan` are what records the
-operator-supplied declarations and fact resolutions those requirements
-name, and reports where the paper stands against all of it in one
-read-only call — see "The paper's own decisions" below.
+data-figure boundary — `a-diagram-that-compiles-or-says-why`), and `verify`
+(read-only coupling verification, citation integrity and contract currency —
+`the-couplings-hold-or-they-do-not`). To the substitution engine, block ids
+stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
+contract reader is what says which ids exist, what each requires, and where
+in the document they belong, entirely over in `sections/*.md`.
+`declare`/`plan` are what records the operator-supplied declarations and
+fact resolutions those requirements name, and reports where the paper
+stands against all of it in one read-only call — see "The paper's own
+decisions" below.
 
 **This CLI is no longer offline end to end.** `resolve` is the one path
 that reaches the network — keyless, stdlib `urllib` only, against OpenAlex,
@@ -540,6 +542,77 @@ ledger itself.
 its `components_from` fact is already resolved (`plan`); an agent asked to
 draft a diagram against an obligation it cannot read cannot distinguish
 "no components yet" from "cannot be checked."
+
+## The couplings hold, or they do not: `verify`
+
+Ten contracts state obligations that span two sections. A finished
+`paper/main.tex` can satisfy every section alone and still be incoherent
+across them — `verify` is a read-only report over seven checks: five
+cross-section couplings, citation integrity, and contract currency. It
+never writes a byte, under any input, including every refusal path, and it
+never repairs anything it finds — `skill-audit`'s own shape, reused here.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py verify
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `verify [--sections <dir>]` | Read-only report: `contribution-list`, `chain`, `gap`, `artefacts`, `future-work`, `citations`, `contract-currency` | `DECLARATION_RECORD_ABSENT` |
+
+**Three values, never two.** Every check's own `verdict` is `pass`, `fail`
+or `unmeasured` — `unmeasured` is never folded into `pass`. Two new modules
+carry this: `paper_coupling_evidence.py` (every disk read `verify`
+performs — named to avoid colliding with `paper_evidence.py`, the
+claim<->source evidence module `no-claim-without-a-source-that-holds-it`
+already ships) and `paper_verify.py` (the seven pure checks and the report
+they assemble; an AST lock and an executed before/after content manifest
+both hold it, and `paper_coupling_evidence.py`, to writing nothing).
+
+**`verify` reads its own declaration record, `paper/couplings.json` —
+read-only, untracked like `main.tex` itself, and written by nobody this
+skill ships today.** An entirely absent or empty record refuses
+`DECLARATION_RECORD_ABSENT` for the whole run: nothing is known about any
+coupling, so per-check `unmeasured` across the board would bury the fact
+that nothing was checked at all. One block missing its own entry inside an
+otherwise-present record is narrower — `unmeasured`, reason
+`BLOCK_NOT_DECLARED`, for the couplings that depend on that block only; the
+run still proceeds and every other check still reports a real verdict.
+Which blocks a check reads is itself derived, never hardcoded or
+record-declared: the set is every block whose contract `requires_facts`
+names the relevant fact, read through `paper_contract.parse` over
+`sections/*.md` headers. An unreadable or headerless corpus reports
+`unmeasured`, reason `SECTION_CONTRACTS_UNREADABLE`; a fact no block
+requires reports `unmeasured`, reason `NO_BLOCK_REQUIRES_FACT` — never zero
+comparisons reported as agreement.
+
+**Contract currency reads the `provenance` region `the-paper-carries-its-
+own-decisions` already writes at `substitute --contract` time — `verify`
+never writes it.** An absent or empty region reports check `contract-
+currency` alone `unmeasured`, reason `CONTRACT_RECORD_ABSENT`, and the run
+still exits `0`: every other check still reports. Editing one block's
+guidance changes the whole-file contract hash and flags every block of
+that section stale, not only the edited one — inherited from that region's
+own accepted over-reporting tradeoff, never narrowed here.
+
+**Coupling 3 (the gap) can never read `pass`.** Its own vocabulary is the
+single value `unmeasured`, reason `ASSISTED_READING_REQUIRED` — `verify`
+never guesses and never gates on "the same thing at different depths."
+What it publishes instead: both blocks' closing sentences verbatim with
+byte offsets, both front lists with counts, and three mechanical
+sub-results (both closings present, fronts equal, front counts equal) as
+named booleans — evidence a human can act on without making the reading
+themselves.
+
+### Decision Gates (verify)
+
+| Situation | Action |
+| --- | --- |
+| `verify` refuses `DECLARATION_RECORD_ABSENT` | `paper/couplings.json` is missing or empty — nothing has been declared yet; declare the couplings before running `verify` again |
+| A check reports `unmeasured`, reason `BLOCK_NOT_DECLARED` | Only the block(s) that check depends on have no entry in the record; every other check still ran |
+| A check reports `unmeasured`, reason `SECTION_CONTRACTS_UNREADABLE` | The `sections/` corpus itself could not be read — `contract`/`order` first, then re-run `verify` |
+| Coupling `gap` reports `unmeasured` | This is unconditional, not a defect — read the published closings and front lists yourself; `verify` never closes this one |
+| `contract-currency` reports `unmeasured`, reason `CONTRACT_RECORD_ABSENT` | No block was ever written with `--contract`; every other check still reports |
 
 ## Refusal roster
 
