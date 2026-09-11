@@ -7146,6 +7146,64 @@ class EquationTagRecognitionTests(unittest.TestCase):
             result["inadmissible"])
 
 
+class AdmissibilityDualShapeReadTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 8, design.md D5, C3):
+    `admissibility_record`'s dual-shape read.
+
+    `tests/fixtures/admissibility/scalar.json` is a COMMITTED, pre-Cut-3
+    three-key `admissibility.json` (`revision`, `revisionSha256`,
+    `findings`) -- exactly the shape `cmd_admit` wrote before this class
+    landed. Its `revisionSha256` was computed offline against the sibling
+    committed fixture `tests/fixtures/admissibility/r1.md`; both travel
+    together. A fixture this change itself generates could never prove
+    backward compatibility (design.md D5's own reasoning), so this one
+    predates the change entirely.
+    """
+
+    FIXTURE_DIR = FORGE / "tests" / "fixtures" / "admissibility"
+
+    def _box_with_scalar_fixture(self) -> Path:
+        box = FORGE / "implementations" / f"_admissibility_dual_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "tests" / "admissibility.json").write_text(
+            (self.FIXTURE_DIR / "scalar.json").read_text(encoding="utf-8"),
+            encoding="utf-8")
+        return box
+
+    def _proposals_root(self) -> Path:
+        """Points `IMPLEMENTATION_PROPOSALS` directly at the fixture
+        directory itself -- `r1.md` already lives there, committed, so no
+        second copy of its bytes is needed to make it readable as a
+        revision."""
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(self.FIXTURE_DIR)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = previous
+
+        self.addCleanup(restore)
+
+    def test_a_scalar_shape_admissibility_file_still_reads(self):
+        self._proposals_root()
+        box = self._box_with_scalar_fixture()
+        result = impl.admissibility_record(box, "r1.md")
+        self.assertEqual(result["status"], "present")
+        self.assertEqual(result["revision"], "r1.md")
+        self.assertIn("f1", result["findings"])
+
+    def test_extra_document_entries_are_empty_under_one_document(self):
+        """The write-side helper `cmd_admit` will route through (D5): under
+        THIS process's own one-document profile, it must answer an empty
+        list, never a KeyError or a phantom entry for a document that was
+        never declared. Exercises a symbol that does not exist before
+        Phase 8's implementation lands -- AttributeError, genuinely red."""
+        self.assertEqual(impl._admissibility_extra_documents("r1.md"), [])
+
+
 class SearchDeclarationShapeTests(unittest.TestCase):
     """The `search` declaration had no shape table, and the published example
     was a scalar every consumer iterated as a mapping.
