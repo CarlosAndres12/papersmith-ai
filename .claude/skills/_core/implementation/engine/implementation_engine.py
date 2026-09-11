@@ -465,8 +465,25 @@ def sequence_block_detail(position: dict, advances: int) -> str:
         for entry in bloqueantes)
 
 
+def _bound_to(revision: str | None, source: str | None,
+              block_sha256: str | None) -> str:
+    """`current`/`stale`/`unknown` for ONE document -- the exact comparison
+    `position_state` has always made for document 0 (Cut 3,
+    `a-revision-is-two-documents`, C1), extracted so the identical
+    arithmetic serves every declared document under two or more, never a
+    second copy drifting beside it. Neither `revision` nor `source`
+    resolved (the common `probe` without `--revision` shape) answers
+    `unknown` rather than guessing at a hash nobody could compute.
+    """
+    if not revision or not source:
+        return "unknown"
+    current_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
+    return "current" if block_sha256 == current_sha else "stale"
+
+
 def position_state(target: Path, name: str, evidence: dict,
-                   revision: str | None, source: str | None) -> dict:
+                   revision: str | None, source: str | None,
+                   extra_sources: list[str | None] | None = None) -> dict:
     """The execution sequence's current state, read from `<Name>/AGREED.md`.
 
     Every mark reported here is derived, never read as an asserted claim —
@@ -487,10 +504,23 @@ def position_state(target: Path, name: str, evidence: dict,
     `parse_items` raise `Refused` for that, the same class `MALFORMED_FINDINGS`
     already is for `read_findings` (line 2151), and `main()`'s existing
     `except Refused` turns it into exit 2 for every command that reads one.
+
+    `extra_sources` (Cut 3, `a-revision-is-two-documents`, C1): document
+    1's, 2's, ... own already-resolved text, parallel to `source` (which
+    stays document 0's, unchanged) -- `extra_sources[i]` is document
+    `i + 1`'s text. Additive, default `None`, so every existing caller
+    keeps calling this function exactly as it always has. `boundTo`
+    becomes a `{label: current|stale|unknown}` mapping across every
+    declared document only under `len(DOCUMENTS) > 1`; under one it stays
+    the bare string it has always been, whether or not this parameter is
+    supplied.
     """
+    multi = len(DOCUMENTS) > 1
     empty = {
         "status": "absent", "holder": None, "revision": None,
-        "revisionSha256": None, "boundTo": "unknown",
+        "revisionSha256": None,
+        "boundTo": ({entry["label"]: "unknown" for entry in DOCUMENTS}
+                    if multi else "unknown"),
         "sequence": [], "disagreements": [], "unmeasured": [],
         # Every item whose box is ticked and whose witness nothing measured
         # -- an assertion, not a reading. Its own list beside `disagreements`
@@ -604,13 +634,30 @@ def position_state(target: Path, name: str, evidence: dict,
     # is bound to. Neither `revision` nor `source` resolved this invocation
     # (probe without `--revision`, most commonly) reports `unknown` rather
     # than guessing at a hash nobody could compute.
-    if not revision or not source:
-        bound_to = "unknown"
+    if multi:
+        # Cut 3 (D2/C1): a mapping across every declared document, keyed by
+        # label. Document 0 reads `block["revisionSha256"]`, exactly as the
+        # scalar branch below does; documents beyond it read their own entry
+        # from the header's OWN additive `documents` list (`block.get(
+        # "documents")`, written by C2) -- there is nothing else on disk for
+        # this I/O-free function to compare against.
+        header_documents = {entry.get("label"): entry
+                            for entry in (block.get("documents") or [])}
+        bound_to = {DOCUMENTS[0]["label"]: _bound_to(revision, source, block["revisionSha256"])}
+        for index in range(1, len(DOCUMENTS)):
+            label = DOCUMENTS[index]["label"]
+            extra_source = (extra_sources[index - 1]
+                            if extra_sources and index - 1 < len(extra_sources)
+                            else None)
+            entry = header_documents.get(label)
+            entry_sha = entry.get("revisionSha256") if entry else None
+            bound_to[label] = _bound_to(revision, extra_source, entry_sha)
     else:
-        current_sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
-        bound_to = "current" if block["revisionSha256"] == current_sha else "stale"
+        bound_to = _bound_to(revision, source, block["revisionSha256"])
 
-    if bound_to == "stale":
+    stale = (bound_to == "stale" if isinstance(bound_to, str)
+             else any(value == "stale" for value in bound_to.values()))
+    if stale:
         status = "stale"
     elif any(item["mark"] == " " for item in items) or disagreements:
         status = "open"
