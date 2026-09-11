@@ -693,5 +693,62 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
             "documents.directory was read instead")
 
 
+class IndexedDocumentsLeafRefusalTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 1, tasks.md 1.1): `documents`
+    becomes a list, validated per index (design.md D4) -- a missing or
+    malformed leaf is named by its exact indexed path (`documents[1].directory`),
+    never the bare field name. At this commit the resolver has not yet
+    changed: `documents` is still validated as a single top-level mapping
+    (`_REQUIRED_PRESENCE`'s `("documents", "label")` pair, `_REQUIRED_ABSOLUTE_ONLY`'s
+    `("documents", "directory")` pair), so every case below is expected to
+    stay RED until Phase 2 lands the per-entry walk."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-documents-list-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _two_document_profile(self, tmp_dir: Path) -> dict:
+        full = _cut2_profile(tmp_dir)
+        full["documents"] = [
+            {"directory": tmp_dir / "documents-0", "label": "label-0"},
+            {"directory": tmp_dir / "documents-1", "label": "label-1"},
+        ]
+        return full
+
+    def test_a_second_documents_missing_directory_refuses_by_indexed_name(self):
+        tmp_dir = self._tmp_dir()
+        full = self._two_document_profile(tmp_dir)
+        del full["documents"][1]["directory"]
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[1].directory", message)
+
+    def test_the_first_documents_missing_label_refuses_by_indexed_name(self):
+        tmp_dir = self._tmp_dir()
+        full = self._two_document_profile(tmp_dir)
+        del full["documents"][0]["label"]
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[0].label", message)
+
+    def test_an_empty_documents_list_refuses_incomplete_naming_index_zero(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        full["documents"] = []
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[0]", message)
+
+
 if __name__ == "__main__":
     unittest.main()
