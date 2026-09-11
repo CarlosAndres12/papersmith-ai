@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, or read what sections/*.md declares about itself (ids, requirements, writing order). Stdlib-only, keyless, offline, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), or record/reopen a declaration or fact resolution and see the paper's overall plan. Stdlib-only, keyless, offline, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan."
 ---
 
 # Paper Writing
@@ -13,13 +13,18 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Seven verbs, wired into one front door (`scripts/paper_cli.py`):
+Nine verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
-and `contract`, `readiness`, `order` (the section contract reader —
-`the-contract-is-data-not-code`). To the substitution engine, block ids
-stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
-contract reader is what now says which ids exist, what each requires, and
-where in the document they belong, entirely over in `sections/*.md`.
+`contract`, `readiness`, `order` (the section contract reader —
+`the-contract-is-data-not-code`), and `declare`, `plan` (the paper's own
+decisions — `the-paper-carries-its-own-decisions`). To the substitution
+engine, block ids stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no
+meaning. The contract reader is what says which ids exist, what each
+requires, and where in the document they belong, entirely over in
+`sections/*.md`. `declare`/`plan` are what records the operator-supplied
+declarations and fact resolutions those requirements name, and reports
+where the paper stands against all of it in one read-only call — see
+"The paper's own decisions" below.
 
 **Not shipped yet, on purpose.** Deriving a writing order and substituting a
 block by id are two capabilities that exist side by side and are not yet
@@ -103,11 +108,16 @@ commit history could recover a bad write — none exists.
 human's on-disk text from being silently overwritten, which is a different
 property from "the write stayed inside its own region."
 
-**Declared gap.** The marker digest covers block bodies only. A hand edit to
-prose between blocks is invisible to every layer above — `status` cannot
-see it and neither can the byte-identity invariant, since both compare
-against the pre-image read in the same call and carry that edit forward
-silently. That prose belongs to the human; this engine never claims it.
+**Declared gap, narrowed.** The marker digest covers block bodies and, as of
+`the-paper-carries-its-own-decisions`, the `declarations`/`provenance`
+region bodies too — a hand edit to either region's own bytes refuses
+(`DECLARATIONS_HAND_EDITED` / `PROVENANCE_HAND_EDITED`) rather than passing
+silently. What remains outside every digest is ordinary prose: text that is
+neither inside a block nor inside a region. A hand edit there is still
+invisible to every layer above — `status` cannot see it and neither can the
+byte-identity invariant, since both compare against the pre-image read in
+the same call and carry that edit forward silently. That prose belongs to
+the human; this engine never claims it.
 
 ## Binary I/O only
 
@@ -179,6 +189,78 @@ later capability, not this one.
 | `order` refuses `ORDER_CYCLE` | Two or more blocks' `after` edges disagree about who comes first; the refusal names every block in the cycle — fix one of the transcribed sentences, it is never resolved by re-running |
 | `readiness` reports a block `blocked` with an empty `missing_facts` | The block is waiting on a declaration only (an operator-supplied input like `repository-url`), not on any measurement |
 | A header refuses `UNKNOWN_FACT` / `UNKNOWN_DECLARATION` / `UNKNOWN_CITATIONS_REGIME` | The file declares a value outside the closed vocabulary — fix the header, the vocabularies are not extended by editing the reader |
+
+## The paper's own decisions: declarations and provenance
+
+Two more regions live in `main.tex` alongside its blocks, holding JSON
+bodies rather than prose — `declarations` and `provenance`. Neither is
+readable by Phase 1's block scanner: both markers share the `%% paper-writing
+<kind>` lead-in but never the literal token `block` in slot 3, so
+`MARKER_PREFIX`'s own `startswith` check skips them (proven in
+`tests/test_paper_decisions.py::DisjointGrammarTests`).
+
+`declare` records two kinds of value: a `declaration` (one of the six
+operator-input ids — `author-roles`, `grant-title`, `grant-code`,
+`repository-url`, `keyword-bounds`, `classification-line`) or a `fact`
+resolution (one of the ten fact ids). Recording either fixes it immediately
+— a further `declare` on the same id refuses `DECLARATION_FIXED` until
+`--reopen <id>` clears exactly that entry.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py declare \
+    --declaration repository-url --value https://example.org/repo
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py declare \
+    --reopen repository-url
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `declare (--declaration <id> \| --fact <id> \| --reopen <id>) [--value <v>]` | Records a declaration or fact resolution, or clears one id's fixed state | `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`, `DECLARE_VALUE_REQUIRED`, `UNKNOWN_DECLARATION`, `UNKNOWN_FACT`, `DECLARATION_FIXED`, `DECLARATIONS_HAND_EDITED` |
+
+`substitute` also accepts an optional `--contract <path>`: it changes no
+byte of what gets written to the block, only records — in the `provenance`
+region — the contract file's sha256 digest as read at that exact moment and
+the declarations region's current generation. A block substituted without
+`--contract` is reported `unprovenanced`, never assumed current.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py substitute \
+    --block intro --body body.tex --contract sections/introduction.md
+```
+
+`plan` reads all three concerns — guidance classification, declaration/fact
+fill state, and provenance state (`current`, `drifted`, `unprovenanced`) —
+in one call, and writes nothing anywhere:
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py plan
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `plan [--guidance <dir>]` | Read-only aggregation: guidance classes, declaration/fact fill state, per-block provenance state | `PAPER_ABSENT`, `TEX_UNDECODABLE`, marker/region grammar codes, `GUIDANCE_OUTSIDE_REPOSITORY`, `UNKNOWN_GUIDANCE_CLASS`, `MALFORMED_GUIDANCE_MARKER` (no new codes of its own) |
+
+**`guidance/` classifies as `style-reference` or `evidence`, from a
+per-folder marker only — never a folder's name.** A folder with no
+`.paper-writing.json` reports `unclassified`, including every folder on a
+fresh clone; that is designed behavior, not a fault.
+
+**No `--adopt` exists for either region.** A hand-edited `declarations` or
+`provenance` region refuses (`DECLARATIONS_HAND_EDITED` /
+`PROVENANCE_HAND_EDITED`) and writes nothing — unlike a block body, a
+region is a decision the machine reads back as authority, and adopting a
+hand edit would launder an unreviewed change into "what was decided."
+
+**Observing before declaring: the `insumos-observer` agent.** For the five
+facts an outside observer can check against evidence (`formulation`,
+`dataset`, `experimental-design`, `implementation`, `results`), this skill
+delegates to the `insumos-observer` agent — it reports satisfaction and
+evidence, never a value, and never calls `declare` itself.
+
+**Measure this before delegating:** confirm `proposals/`, `experiments/`
+and the target implementation repository are readable; an agent asked to
+observe an unreadable source cannot distinguish "not yet true" from "cannot
+be checked."
 
 ## Refusal roster
 

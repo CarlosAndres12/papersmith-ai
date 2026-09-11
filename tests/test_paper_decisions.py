@@ -28,12 +28,15 @@ import paper_vocabulary  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_provenance  # noqa: E402
+import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "tests"))
 from paper_mutation import _run_against_mutant  # noqa: E402
+
+AGENTS_DIR = FORGE_ROOT / ".claude" / "agents"
 
 
 def _assert_guard_failed_under_mutation(case: unittest.TestCase, proc) -> None:
@@ -644,6 +647,140 @@ class ProvenanceMutationTests(unittest.TestCase):
             source_path=SKILL_SCRIPTS / "paper_provenance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
+
+
+class ObservationReportTests(unittest.TestCase):
+    """`design.md`, `A fact the agent may observe is a partition, not a
+    guideline` — the schema `insumos-observer`'s report is checked against."""
+
+    def test_an_id_outside_the_observable_facts_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.validate_observation_report(
+                {"contributions": {"satisfied": True, "evidence": [["x", "y"]]}}
+            )
+        self.assertEqual(ctx.exception.code, "NOT_AN_OBSERVABLE_FACT")
+        self.assertIn("contributions", ctx.exception.detail)
+
+    def test_implementation_and_results_sharing_one_evidence_path_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.validate_observation_report({
+                "implementation": {"satisfied": True, "evidence": [["repo/code.py", "q1"]]},
+                "results": {"satisfied": True, "evidence": [["repo/code.py", "q2"]]},
+            })
+        self.assertEqual(ctx.exception.code, "EVIDENCE_CONFLATED")
+
+    def test_distinct_evidence_paths_are_accepted(self) -> None:
+        paper_declarations.validate_observation_report({
+            "implementation": {"satisfied": True, "evidence": [["repo/code.py", "q1"]]},
+            "results": {"satisfied": True, "evidence": [["repo/results.json", "q2"]]},
+            "formulation": {"satisfied": False, "evidence": []},
+        })  # raises nothing
+
+
+class ObservationReportMutationTests(unittest.TestCase):
+    """Mutation 7 (design.md): accepting one evidence path for both facts
+    breaks the conflation guard."""
+
+    def test_mutation_7_accepting_one_shared_path_breaks_the_conflation_guard(self) -> None:
+        proc = _run_against_mutant(
+            "overlap = implementation_paths & results_paths",
+            "overlap = set()",
+            "tests.test_paper_decisions.ObservationReportTests"
+            ".test_implementation_and_results_sharing_one_evidence_path_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class PlanTests(unittest.TestCase):
+    """`specs/contract-provenance/spec.md`, `Requirement: plan Aggregates
+    Registry, Declarations, and Provenance`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.guidance_dir = self.forge_root / "guidance"
+        self.contract_path = Path(self._tmp.name) / "sections" / "intro.md"
+        self.contract_path.parent.mkdir(parents=True, exist_ok=True)
+        self.contract_path.write_bytes(b"contract v1\n")
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_plan_aggregates_all_three_concerns_and_writes_nothing(self) -> None:
+        classified = self.guidance_dir / "classified-folder"
+        classified.mkdir(parents=True)
+        (classified / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+        (self.guidance_dir / "unclassified-folder").mkdir(parents=True)
+
+        paper_declarations.set_declaration(
+            self.paper_dir, "author-roles", "Alice", clock=self._clock,
+        )
+
+        paper_block.open_block(self.paper_dir, "current", at_end=True)
+        paper_block.substitute(
+            self.paper_dir, "current", new_body=b"x\n", contract=self.contract_path,
+            clock=self._clock,
+        )
+        paper_block.open_block(self.paper_dir, "bare", at_end=True)
+        paper_block.substitute(self.paper_dir, "bare", new_body=b"y\n")
+
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        before = tex_path.read_bytes()
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(
+            report["guidance"],
+            {"classified-folder": "evidence", "unclassified-folder": "unclassified"},
+        )
+        recorded = next(
+            r for r in report["declarations"]["records"] if r["id"] == "author-roles"
+        )
+        self.assertEqual(recorded["value"], "Alice")
+        provenance_by_block = {p["block"]: p["state"] for p in report["provenance"]}
+        self.assertEqual(provenance_by_block, {"current": "current", "bare": "unprovenanced"})
+
+        self.assertEqual(tex_path.read_bytes(), before, "plan must never write")
+
+    def test_plan_reports_drift_after_a_contract_edit(self) -> None:
+        paper_block.open_block(self.paper_dir, "results", at_end=True)
+        paper_block.substitute(
+            self.paper_dir, "results", new_body=b"x\n", contract=self.contract_path,
+            clock=self._clock,
+        )
+        self.contract_path.write_bytes(b"contract v2\n")
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        provenance_by_block = {p["block"]: p["state"] for p in report["provenance"]}
+        self.assertEqual(provenance_by_block["results"], "drifted")
+
+
+class InsumosObserverThreatMatrixTests(unittest.TestCase):
+    """Threat matrix (design.md): process integration. `insumos-observer`'s
+    frontmatter `tools` contains none of Write, Edit, Bash — the capability
+    layer that survives non-compliance even if its own body were ever
+    edited to suggest otherwise."""
+
+    def test_frontmatter_tools_contains_none_of_write_edit_bash(self) -> None:
+        path = AGENTS_DIR / "insumos-observer.md"
+        text = path.read_text(encoding="utf-8")
+        header = text.split("---\n", 2)[1]
+        tools_line = next(line for line in header.splitlines() if line.startswith("tools:"))
+        tools = {tool.strip() for tool in tools_line.split(":", 1)[1].split(",")}
+        self.assertTrue(tools, "insumos-observer.md declares no tools at all")
+        self.assertTrue(
+            tools.isdisjoint({"Write", "Edit", "Bash"}),
+            f"insumos-observer.md grants {tools & {'Write', 'Edit', 'Bash'}}, "
+            "which lets it write a record or invoke declare directly",
+        )
 
 
 if __name__ == "__main__":

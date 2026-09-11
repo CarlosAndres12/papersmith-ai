@@ -6,15 +6,15 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires eight verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires nine verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
-(from `the-contract-is-data-not-code`); and `declare` (from
-`the-paper-carries-its-own-decisions`, Slice B — appended afterwards, its
-entries disjoint from both prior changes' own, so any landing order
-merges). Left extensible on purpose; nothing here assumes it is the last
-verb this file will ever grow.
+(from `the-contract-is-data-not-code`); and `declare`, `plan` (from
+`the-paper-carries-its-own-decisions`, Slices B and C2 — appended
+afterwards, their entries disjoint from both prior changes' own, so any
+landing order merges). Left extensible on purpose; nothing here assumes it
+is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -31,9 +31,10 @@ import paper_contract  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
 import paper_region  # noqa: E402,F401 -- registered for the roster derivation
-import paper_guidance  # noqa: E402,F401 -- ahead of its own verb wiring (Slice C2)
+import paper_guidance  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substitute's own --contract wiring calls paper_block, which calls this module in turn
+import paper_objective  # noqa: E402,F401 -- this skill's own declared north (tests/test_agents.py); raises no Refused of its own
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -133,6 +134,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # write itself is paper_provenance.py) -------------------------------
     "CONTRACT_UNREADABLE": WORK_STATE,
     "PROVENANCE_HAND_EDITED": WORK_STATE,
+    # --- observation report validation (paper_declarations.py; consumed by
+    # a human reading `insumos-observer`'s report, never called from a
+    # cmd_* root here, but reachable through the whole-module scan the
+    # roster derivation already performs on every imported module) ------
+    "NOT_AN_OBSERVABLE_FACT": INVOCATION_DEFECT,
+    "EVIDENCE_CONFLATED": INVOCATION_DEFECT,
 }
 
 
@@ -245,6 +252,63 @@ def cmd_declare(args: argparse.Namespace) -> dict:
     return paper_declarations.set_fact(paper_dir, args.fact, args.value)
 
 
+def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
+    """The pure aggregation `plan` reports: every `guidance/` folder's
+    class or `unclassified`; the whole `declarations` region body (fill
+    and fixed state, per record); and every written block's provenance
+    state — `current`, `drifted`, or `unprovenanced` (design.md, `plan
+    Aggregates Registry, Declarations, and Provenance`).
+
+    Never writes — `read_registry`, `read_region` and `status` are all
+    read-only, and `drift` only compares digests. Takes `paper_dir` and
+    `guidance_dir` directly (not `--paper`/`--guidance` strings) so a test
+    can inject both without going through argparse's own resolution, the
+    same separation `paper_readiness.compute_readiness` already keeps from
+    its own `cmd_readiness` wrapper.
+    """
+    guidance_report = paper_guidance.read_registry(guidance_dir)
+
+    tex_path = paper_block.resolve_main_tex(paper_dir)
+    main_tex_bytes = tex_path.read_bytes()
+
+    declarations_record = paper_region.read_region(main_tex_bytes, "declarations")
+    declarations_body = (
+        declarations_record["body"] if declarations_record is not None
+        else {"generation": 0, "records": []}
+    )
+
+    provenance_record = paper_region.read_region(main_tex_bytes, "provenance")
+    provenance_entries = (
+        provenance_record["body"]["records"] if provenance_record is not None else []
+    )
+
+    status = paper_block.status(main_tex_bytes)
+    provenance_report = []
+    for block in status["blocks"]:
+        block_id = block["id"]
+        entry = next((e for e in provenance_entries if e["block"] == block_id), None)
+        if entry is None:
+            provenance_report.append({"block": block_id, "state": "unprovenanced"})
+            continue
+        drifted = paper_provenance.drift(main_tex_bytes, block_id, Path(entry["contract"]))
+        provenance_report.append({
+            "block": block_id,
+            "state": "drifted" if drifted else "current",
+        })
+
+    return {
+        "guidance": guidance_report,
+        "declarations": declarations_body,
+        "provenance": provenance_report,
+    }
+
+
+def cmd_plan(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    return compute_plan(paper_dir, guidance_dir=guidance_dir)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -336,10 +400,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="the value (--declaration) or resolution (--fact) to record",
     )
 
+    p_plan = sub.add_parser(
+        "plan", help="read-only: guidance classes, declaration/fact fill state, provenance state",
+    )
+    p_plan.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_plan.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+
     return parser
 
 
-COMMANDS = ("scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare")
+COMMANDS = (
+    "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
+)
 _COMMANDS = {
     "scaffold": cmd_scaffold,
     "status": cmd_status,
@@ -349,6 +427,7 @@ _COMMANDS = {
     "readiness": cmd_readiness,
     "order": cmd_order,
     "declare": cmd_declare,
+    "plan": cmd_plan,
 }
 
 

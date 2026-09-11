@@ -1038,8 +1038,16 @@ class RefusalRosterTests(unittest.TestCase):
         to 43 in Slice C1, which adds `CONTRACT_UNREADABLE` (raised
         directly inside `paper_block.substitute`, already-imported) and
         `PROVENANCE_HAND_EDITED` (from the newly-imported
-        `paper_provenance.py`)."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 43)
+        `paper_provenance.py`). Moved from 43 to 45 in Slice C2, which adds
+        `NOT_AN_OBSERVABLE_FACT` and `EVIDENCE_CONFLATED` from
+        `paper_declarations.validate_observation_report` -- reachable
+        through the whole-module scan even though no `cmd_*` root calls it
+        directly, the same shape that already applies to every other
+        module-level refusal here. `plan`'s own wiring adds no new code:
+        every refusal `compute_plan`/`cmd_plan` can raise was already
+        classified by an earlier slice. `paper_objective.py` raises none of
+        its own, matching `paper_readiness.py`'s own precedent."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 45)
 
 
 if __name__ == "__main__":

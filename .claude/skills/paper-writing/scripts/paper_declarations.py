@@ -25,12 +25,8 @@ Public surface:
     set_fact(paper_dir, id, resolution, *, clock=...)    -> dict
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
-
-`validate_observation_report` (`NOT_AN_OBSERVABLE_FACT`, `EVIDENCE_CONFLATED`)
-lands in Slice C2 (tasks.md, 4.2-4.4), not here — this module stays scoped
-to exactly what Slice B's suite exercises, so `paper_cli.py`'s roster
-derivation never sees those two codes reachable before `plan` actually
-wires them.
+    validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
+                                                     EVIDENCE_CONFLATED)
 """
 from __future__ import annotations
 
@@ -259,3 +255,42 @@ def affected_blocks(corpus, target_id: str) -> set:
         for qualified_id, block in corpus.blocks.items()
         if target_id in block.requires_facts or target_id in block.requires_declarations
     }
+
+
+def validate_observation_report(report: dict) -> None:
+    """Validates an `insumos-observer` fact-satisfaction report:
+    `{fact_id: {"satisfied": bool, "evidence": [[path, quote], ...]}}`.
+
+    Refuses `NOT_AN_OBSERVABLE_FACT` (invocation-defect) for any key
+    outside `OBSERVABLE_FACTS` — detectable even if the agent invents an
+    id, since it was never handed the other five. Refuses
+    `EVIDENCE_CONFLATED` (invocation-defect) when `implementation` and
+    `results` are both satisfied by evidence citing the exact same file
+    path: a source file can prove code exists, never that it ran, so
+    requiring distinct evidence is what makes the conflation visible
+    rather than merely asked-against (design.md, `A fact the agent may
+    observe is a partition, not a guideline`).
+    """
+    for fact_id in report:
+        if fact_id not in OBSERVABLE_FACTS:
+            raise Refused(
+                "NOT_AN_OBSERVABLE_FACT",
+                f"{fact_id!r} is not one of the observable facts {OBSERVABLE_FACTS}",
+            )
+
+    def _paths(fact_id: str) -> set:
+        entry = report.get(fact_id) or {}
+        if not entry.get("satisfied"):
+            return set()
+        return {path for path, _quote in entry.get("evidence", [])}
+
+    implementation_paths = _paths("implementation")
+    results_paths = _paths("results")
+    overlap = implementation_paths & results_paths
+    if overlap:
+        raise Refused(
+            "EVIDENCE_CONFLATED",
+            f"'implementation' and 'results' are both satisfied by the same "
+            f"evidence path(s) {sorted(overlap)}; a source file can prove code "
+            "exists, never that it ran",
+        )
