@@ -33,9 +33,17 @@ import unittest
 from pathlib import Path
 
 FORGE = Path(__file__).resolve().parents[1]
+#: The published launcher (meaning 1/3) -- unchanged path.
 CLI = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
-sys.path.insert(0, str(CLI.parent))
-import implementation_cli as impl  # noqa: E402  (path set above)
+#: The engine source (meaning 2) -- `impl` below resolves here, never to
+#: the launcher, which exposes none of the engine's attributes (design.md
+#: D1).
+ENGINE = FORGE / ".claude/skills/_core/implementation/engine/implementation_engine.py"
+os.environ.setdefault(
+    "IMPLEMENTATION_DOMAIN_PROFILE",
+    str(FORGE / ".claude/skills/proposal-implementation/impl_profile.py"))
+sys.path.insert(0, str(ENGINE.parent))
+import implementation_engine as impl  # noqa: E402  (path set above)
 
 TESTS_DIR = Path(__file__).resolve().parent
 SEAL_DIR = TESTS_DIR / "seal"
@@ -94,7 +102,7 @@ class F3AnchorTests(unittest.TestCase):
     """
 
     def test_no_refusal_names_a_directory_the_code_never_read(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertEqual(source.count("FORGE_ROOT / 'proposals'"), 0)
         self.assertEqual(source.count("{proposals_root()}"), 5)
 
@@ -433,6 +441,33 @@ class NormalizerMutationTests(unittest.TestCase):
                           seal_normalize.n2_absolute_roots,
                           seal_normalize.n1_iso8601_timestamps,
                           seal_normalize.n5_git_shas))
+
+
+class SealEntryPointTests(unittest.TestCase):
+    """Design.md D6 amendment to `Seal Capture Scope`: the sealed invocation
+    TARGET must be the per-skill published launcher, never the shared
+    engine -- pinned separately from `test_the_sealed_cli_path_names_the_
+    launcher` above, which pins the BYTES the seal digested. This pins the
+    FILE the harness ran. The two cannot diverge today because `harness.py`
+    derives argv from the same `CLI_INVOCATION`, and that is exactly why
+    the requirement pins both: the divergence becomes available the moment
+    `harness.py`'s import route is edited, which this change does."""
+
+    #: A pinned literal suffix -- never derived from `CLI`/`ENGINE` above,
+    #: so a mutation that re-points both this test's OWN constants and the
+    #: production code together in lockstep still cannot pass vacuously.
+    LAUNCHER_SUFFIX = ("/.claude/skills/proposal-implementation/scripts/"
+                       "implementation_cli.py")
+    ENGINE_SUFFIX = ("/.claude/skills/_core/implementation/engine/"
+                     "implementation_engine.py")
+
+    def test_the_seal_invokes_the_published_launcher(self):
+        tokens = shlex.split(impl.CLI_INVOCATION)
+        invoked = Path(tokens[1])
+        self.assertEqual(invoked, CLI)
+        self.assertNotEqual(invoked, ENGINE)
+        self.assertTrue(str(invoked).endswith(self.LAUNCHER_SUFFIX), invoked)
+        self.assertFalse(str(invoked).endswith(self.ENGINE_SUFFIX), invoked)
 
 
 class SealComparisonTests(unittest.TestCase):

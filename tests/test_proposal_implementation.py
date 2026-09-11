@@ -28,12 +28,24 @@ import unittest.mock
 from pathlib import Path
 
 FORGE = Path(__file__).resolve().parents[1]
+#: The published launcher (meaning 1: what a reader runs, what
+#: `CLI_INVOCATION` names) and, unchanged, the skill root's own anchor
+#: (meaning 3: `CLI.parent.parent`, below) -- this path never moved.
 CLI = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
-sys.path.insert(0, str(CLI.parent))
-import implementation_cli as impl  # noqa: E402  (path set above)
-# `implementation_cli`'s own import of `impl_layout` etc. already put
-# `_core/implementation` on `sys.path`; this reaches the same module the CLI
-# reads its position grammar through, never a second copy.
+#: The engine source (meaning 2: what source-reading guards parse, and what
+#: `impl` resolves to below) -- separate from `CLI` since the launcher
+#: deliberately exposes none of the engine's own attributes (design.md D1,
+#: `tests/test_implementation_profile.py
+#: ::LauncherExposesNoEngineAttributeTests`).
+ENGINE = FORGE / ".claude/skills/_core/implementation/engine/implementation_engine.py"
+os.environ.setdefault(
+    "IMPLEMENTATION_DOMAIN_PROFILE",
+    str(FORGE / ".claude/skills/proposal-implementation/impl_profile.py"))
+sys.path.insert(0, str(ENGINE.parent))
+import implementation_engine as impl  # noqa: E402  (path set above)
+# `implementation_engine`'s own import of `impl_layout` etc. already put
+# `_core/implementation` on `sys.path`; this reaches the same module the
+# engine reads its position grammar through, never a second copy.
 import impl_availability  # noqa: E402
 import impl_position  # noqa: E402
 import impl_steps  # noqa: E402
@@ -2327,7 +2339,7 @@ class CouplingSurfacingTests(unittest.TestCase):
         Found by mutation: removing `+ sequence_block_detail(...)` from the
         refusal cost nothing until this existed.
         """
-        arbol = ast.parse(CLI.read_text(encoding="utf-8"))
+        arbol = ast.parse(ENGINE.read_text(encoding="utf-8"))
         sitios = [
             nodo for nodo in ast.walk(arbol)
             if isinstance(nodo, ast.Call)
@@ -2831,7 +2843,7 @@ class AgreementWitnessThreeStateTests(unittest.TestCase):
         returns disagree on their key set -- the same uniform-key-set
         doctrine `position_state`'s own docstring states for itself.
         """
-        keys = returned_keys(CLI, "agreements_state")
+        keys = returned_keys(ENGINE, "agreements_state")
         self.assertIn("witness", keys)
         self.assertIn("note", keys)
 
@@ -8582,7 +8594,7 @@ class KitAssetRegisterTests(unittest.TestCase):
     def test_the_forge_side_register_is_explicit_and_earns_its_place(self):
         """Named, and provably used by the forge. A category nobody has to
         justify becomes the place unregistered files go to be forgotten."""
-        lines = CLI.read_text(encoding="utf-8").splitlines()
+        lines = ENGINE.read_text(encoding="utf-8").splitlines()
         for asset, reason in self.FORGE_SIDE.items():
             self.assertTrue((SKILL_ROOT / asset).is_file(), asset)
             self.assertTrue(reason.strip(), asset)
@@ -10130,7 +10142,7 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
         would make the harness a production path whatever any document said.
         """
         harness = self.harness()
-        engine_source = CLI.read_text(encoding="utf-8")
+        engine_source = ENGINE.read_text(encoding="utf-8")
 
         self.assertNotIn(
             harness.stem, self.import_roots(engine_source),
@@ -10147,7 +10159,7 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
             f"script gets shelled without being imported: {mentions}")
 
         self.assertIn(
-            CLI.stem, self.import_roots(harness.read_text(encoding="utf-8")),
+            ENGINE.stem, self.import_roots(harness.read_text(encoding="utf-8")),
             f"{harness.name} no longer imports the engine, so the one-way "
             "dependency this asserts the direction of is not there to assert")
 
@@ -11312,11 +11324,11 @@ class MaterializeDegradedGuaranteeTests(unittest.TestCase):
         self.assertIn(self.MARKER_B, text)
 
     def test_argparse_help_states_the_degraded_guarantee(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn("Degrades the guarantee", source)
 
     def test_the_adopted_json_output_states_the_degraded_guarantee(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn(self.MARKER_B, source)
 
 
@@ -12287,7 +12299,7 @@ class VerifyStatusRosterTests(unittest.TestCase):
     IDENTITY_KEYS = frozenset({"command", "target", "name"})
 
     def reported_statuses(self):
-        return sorted(set(returned_keys(CLI, "cmd_verify")) - self.IDENTITY_KEYS)
+        return sorted(set(returned_keys(ENGINE, "cmd_verify")) - self.IDENTITY_KEYS)
 
     def status_rows(self):
         tables = markdown_table_rows(
@@ -12387,7 +12399,7 @@ class VerifyStatusRosterTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
         copy = scratch / "renamed_cli.py"
         copy.write_text(
-            CLI.read_text(encoding="utf-8").replace(
+            ENGINE.read_text(encoding="utf-8").replace(
                 '        "lfs": lfs_state(target),',
                 '        "largeFiles": lfs_state(target),'),
             encoding="utf-8")
@@ -12440,7 +12452,7 @@ class ProbeReportedFactsRosterTests(unittest.TestCase):
     IDENTITY_KEYS = frozenset({"status", "target", "name", "kind"})
 
     def reported_facts(self):
-        return sorted(set(returned_keys(CLI, "cmd_probe")) - self.IDENTITY_KEYS)
+        return sorted(set(returned_keys(ENGINE, "cmd_probe")) - self.IDENTITY_KEYS)
 
     def fact_rows(self):
         tables = markdown_table_rows(
@@ -12477,7 +12489,7 @@ class ProbeReportedFactsRosterTests(unittest.TestCase):
         so the row has a sub-table, and the sub-table is derived from the
         function that computes the second half.
         """
-        derived = sorted(returned_keys(CLI, "remote_execution_jobs_state"))
+        derived = sorted(returned_keys(ENGINE, "remote_execution_jobs_state"))
         documented = sorted(row[0].strip("`") for row in self.job_fact_rows())
         self.assertEqual(
             sorted(set(derived) - set(documented)), [],
@@ -13662,7 +13674,7 @@ class WorkedInvocationRosterTests(unittest.TestCase):
             USAGE_MD.read_text(encoding="utf-8"))))
 
     def dispatched_commands(self):
-        return dict_literal_keys(CLI, "COMMANDS")
+        return dict_literal_keys(ENGINE, "COMMANDS")
 
     def test_every_command_the_cli_dispatches_has_a_worked_invocation(self):
         dispatched = self.dispatched_commands()
@@ -14096,7 +14108,7 @@ class ShardRefusalCrossJoinTests(unittest.TestCase):
         """Red by construction: the `none`, `absent` and `undeclared` branches
         return `shardsDisagree` and omit `shardsArrived`, so which keys a
         caller gets depends on which branch answered."""
-        self.assertIn("shardsArrived", returned_keys(CLI, "distribution_state"))
+        self.assertIn("shardsArrived", returned_keys(ENGINE, "distribution_state"))
 
     DECLARATION = (
         "__benchmark__ = {\n"
@@ -18041,12 +18053,19 @@ class CrashCaptureTests(unittest.TestCase):
         """Reachability, constructed: `COMMANDS["step"]` is monkeypatched to
         raise a plain `RuntimeError` -- an exception `except Refused` never
         catches. The raise itself happens inside a stdlib `unittest.mock`
-        frame, never inside `implementation_cli.py`, which is exactly the
+        frame, never inside the engine's own file, which is exactly the
         "deepest frame is stdlib" hazard the design names: the recorded
         file must be `main()`'s own frame (the LAST forge frame still on
         the traceback), and its digest must be the file's CURRENT bytes,
         computed through the identical `current_file_digest` the ladder
         check re-derives against.
+
+        Post-move (Cut 1): `main()` executes from the ENGINE's own file
+        (`_core/implementation/engine/implementation_engine.py`), which is
+        still under `FORGE_ROOT/.claude/skills` and so still qualifies as
+        the "last forge frame" -- the recorded file and digest name the
+        engine, never the launcher, which never appears on this traceback
+        at all (in-process `impl.main(...)` never runs the launcher).
         """
         box = self._box()
         boom = unittest.mock.Mock(side_effect=RuntimeError("boom"))
@@ -18060,10 +18079,10 @@ class CrashCaptureTests(unittest.TestCase):
         self.assertEqual(len(defects), 1)
         self.assertEqual(defects[0]["command"], "step")
         self.assertEqual(defects[0]["session"], "s1")
-        self.assertTrue(defects[0]["file"].endswith("implementation_cli.py"),
+        self.assertTrue(defects[0]["file"].endswith("implementation_engine.py"),
                         defects[0]["file"])
         self.assertEqual(defects[0]["fileSha256"],
-                         impl_position.current_file_digest(CLI))
+                         impl_position.current_file_digest(ENGINE))
 
     def test_the_original_exception_type_and_message_propagate_unchanged(self):
         box = self._box()
@@ -20619,7 +20638,7 @@ class AgreementWitnessSingleWritePathTests(unittest.TestCase):
     """
 
     def call_site_functions(self, name: str) -> set[str]:
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         enclosing: dict[int, str] = {}
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -20657,7 +20676,7 @@ class AgreementWitnessSingleWritePathTests(unittest.TestCase):
         scratch = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
         mutated = scratch / "mutated_cli.py"
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         injected = source.replace(
             "def cmd_discuss(args: argparse.Namespace) -> dict:",
             "def cmd_discuss(args: argparse.Namespace) -> dict:\n"
@@ -21240,13 +21259,13 @@ class AuthorizationBindingKeysStructuralTests(unittest.TestCase):
     def test_all_three_binding_key_spellings_agree(self):
         tuple_keys = set(impl._AUTHORIZATION_BINDING_KEYS)
 
-        binding_return_keys = set(returned_keys(CLI, "_authorization_binding"))
+        binding_return_keys = set(returned_keys(ENGINE, "_authorization_binding"))
         self.assertEqual(
             tuple_keys, binding_return_keys,
             "_authorization_binding's own return must name exactly the "
             "keys _AUTHORIZATION_BINDING_KEYS declares")
 
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         cmd_gate = next(
             node for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "cmd_gate")
@@ -22751,7 +22770,7 @@ class OfferCommandTests(unittest.TestCase):
     # --- ACTION_IDS: pinned three ways ---------------------------------
 
     def test_action_ids_constant_covers_every_id_literal_in_the_source_and_at_runtime(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         literal_ids = set(re.findall(r'"id":\s*"([a-z-]+)"', source))
         self.assertEqual(literal_ids, set(impl.ACTION_IDS))
 
@@ -22808,7 +22827,7 @@ class OfferCommandTests(unittest.TestCase):
         independently-written check either one could disagree with, and
         never a call that moved to some third place unnoticed.
         """
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn("import impl_availability", source)
         sites = self._availability_call_sites(source)
         self.assertEqual(
@@ -22824,7 +22843,7 @@ class OfferCommandTests(unittest.TestCase):
         checks first -- never a fourth, hand-written branch reimplementing
         the same four questions.
         """
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         sites = self._availability_call_sites(source)
         self.assertEqual(
             sites["position_honest"], {"cmd_close"},
@@ -24653,7 +24672,7 @@ class StepCommandTests(unittest.TestCase):
         """Design mechanism 2, corrected: every `gate` consumer still
         selects on the exact string "gate", and this ledger line remains
         invisible to `remote_cli.py` and to `impl_position.py` entirely.
-        `implementation_cli.py` now carries exactly ONE selection of that
+        The engine now carries exactly ONE selection of that
         ledger kind, and it lives in `_ledger_step_events`. The original,
         blanket "nowhere" was correct only until a witness kind that reads
         this ledger's own events was ever added; a later revision pinned it
@@ -24676,7 +24695,7 @@ class StepCommandTests(unittest.TestCase):
         position_source = Path(impl_position.__file__).read_text(encoding="utf-8")
         self.assertIsNone(pattern.search(position_source))
 
-        impl_source = (CLI.parent / "implementation_cli.py").read_text(encoding="utf-8")
+        impl_source = ENGINE.read_text(encoding="utf-8")
         hits = list(pattern.finditer(impl_source))
         self.assertEqual(
             len(hits), 1,
@@ -24793,7 +24812,7 @@ class CmdStepDigestTests(unittest.TestCase):
         self.assertEqual(events[-1]["suiteDigest"], impl.suite_digest(box))
 
     def test_the_returned_response_dict_never_gains_suite_digest(self):
-        self.assertNotIn("suiteDigest", returned_keys(CLI, "cmd_step"))
+        self.assertNotIn("suiteDigest", returned_keys(ENGINE, "cmd_step"))
 
 
 class StepVerdictsTests(unittest.TestCase):
@@ -25568,7 +25587,7 @@ class UndeclaredOptionalDeclarationTests(unittest.TestCase):
         key nested under `search`/`distribution` ships invisible to
         `VerifyStatusRosterTests` -- the identical defect this test exists
         to keep from recurring."""
-        self.assertIn("undeclaredOptional", returned_keys(CLI, "cmd_verify"))
+        self.assertIn("undeclaredOptional", returned_keys(ENGINE, "cmd_verify"))
 
 
 class UndeclaredBlockingDeclarationTests(unittest.TestCase):
@@ -25888,8 +25907,8 @@ class UndeclaredBlockingDeclarationTests(unittest.TestCase):
         function's own return, so a key nested anywhere ships invisible to
         `VerifyStatusRosterTests` -- the identical constraint that decided
         `undeclaredOptional`'s own placement."""
-        self.assertIn("undeclaredBlocking", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredBlocking", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredBlocking", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredBlocking", returned_keys(ENGINE, "cmd_probe"))
 
     def test_both_documents_tell_a_reader_the_key_exists(self):
         """A status that reached the JSON is worth nothing to a reader never
@@ -25909,12 +25928,12 @@ class UndeclaredBlockingDeclarationTests(unittest.TestCase):
         time a witness kind changes what it reads. The set is derived from
         the sequence, so the function that derives it must read the rosters
         generically and name no field of either one."""
-        source = ast.parse(CLI.read_text(encoding="utf-8"))
+        source = ast.parse(ENGINE.read_text(encoding="utf-8"))
         derived = next(node for node in ast.walk(source)
                        if isinstance(node, ast.FunctionDef)
                        and node.name == "blocking_undeclared_state")
         body = ast.get_source_segment(
-            CLI.read_text(encoding="utf-8"), derived)
+            ENGINE.read_text(encoding="utf-8"), derived)
         body = body[body.index('"""', body.index('"""') + 3) + 3:]
         for field in (*impl.SEARCH_OPTIONAL, *impl.DISTRIBUTION_OPTIONAL):
             self.assertNotIn(f'"{field}"', body, field)
@@ -26080,7 +26099,7 @@ class ShardlessRungDiagnosisTests(unittest.TestCase):
         that cannot be checked at all" -- would be asserting a mark the
         refusal does not check. Same defect as the two the roster already
         carries, and it would have been introduced by this change."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         opener = source.index("def cmd_gate(")
         body = source[source.index('"POSITION_SHARDS_UNDECLARED",', opener):]
         message = body[:body.index('")')]
@@ -26342,8 +26361,8 @@ class UnreachableLadderTests(unittest.TestCase):
         """`undeclaredLadder`'s own placement decision, for the identical two
         reasons: top-level or `VerifyStatusRosterTests` never sees it, and out
         of `probe` because it names no work about to be run."""
-        self.assertIn("unreachableLadder", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("unreachableLadder", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("unreachableLadder", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("unreachableLadder", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_usage_reference_tells_a_reader_how_to_read_it(self):
         usage = USAGE_MD.read_text(encoding="utf-8")
@@ -26528,8 +26547,8 @@ class UndeclaredLadderTests(unittest.TestCase):
         retires on every single call. If `nextStep` ever grew a rung-aware
         answer, this is the test to overturn.
         """
-        self.assertIn("undeclaredLadder", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredLadder", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredLadder", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredLadder", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_usage_reference_tells_a_reader_how_to_read_it(self):
         """Same doctrine as `undeclaredOptional`'s own documentation test: a
@@ -27218,7 +27237,7 @@ class UnbackedPositionExitPublicationTests(unittest.TestCase):
         ones."""
         # `returned_keys` raises unless every dict return agrees, so reading it
         # at all is the branch-agreement half; the membership below is the key.
-        self.assertIn("resolve", returned_keys(CLI, "cmd_position"))
+        self.assertIn("resolve", returned_keys(ENGINE, "cmd_position"))
 
     def test_an_absent_block_answers_the_key_rather_than_omitting_it(self):
         proposals = self._proposals()
@@ -27993,7 +28012,7 @@ def unreadable_refusal_sites() -> set[tuple[str, str]]:
     is asserted rather than tolerated.
     """
     sites = set()
-    for source in (CLI, *sorted(CORE_IMPLEMENTATION.glob("*.py"))):
+    for source in (ENGINE, *sorted(CORE_IMPLEMENTATION.glob("*.py"))):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         sites |= {(source.name, owner)
                   for owner, code in _refusal_sites(tree, "<module>")
@@ -28005,7 +28024,7 @@ def reachable_refusal_codes() -> set[str]:
     """Every refusal code a gating command can raise, derived from source.
 
     The lock the roster is actually held to, and the replacement for a union of
-    `raised_refusal_codes(CLI, "cmd_*")` -- which stops at the `cmd_*` body and
+    `raised_refusal_codes(ENGINE, "cmd_*")` -- which stops at the `cmd_*` body and
     therefore could not see `DIRTY_WORKTREE`, `FORGE_DEFECT_OPEN`, the whole
     `GATE_AUTHORIZATION_*` family or any of the position grammar's own parse
     refusals. Forty-two codes were invisible to it while every one of them
@@ -28047,7 +28066,7 @@ def reachable_refusal_codes() -> set[str]:
     site inside the CLI would widen to codes already classified and prove
     little -- which is exactly what `unreadable_refusal_sites` is for.
     """
-    tree = ast.parse(CLI.read_text(encoding="utf-8"))
+    tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
     definitions = {node.name: node for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     roots = [f"cmd_{command}" for command in impl.GATING_COMMANDS]
@@ -28091,7 +28110,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
 
     The second incident, and why "reach" replaced "raise". The roster that
     closed the first one was populated from a union of
-    `raised_refusal_codes(CLI, "cmd_*")`, which stops at the `cmd_*` body. One
+    `raised_refusal_codes(ENGINE, "cmd_*")`, which stops at the `cmd_*` body. One
     `step` call then refused twice in one session: `STEP_SEQUENCE_NOT_REACHED`,
     raised in `cmd_step` and classified, with its `resolve`; and
     `DIRTY_WORKTREE`, raised in `impl_guards` one file over, with nothing.
@@ -28122,7 +28141,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         """
         codes = set()
         for command in impl.GATING_COMMANDS:
-            codes |= raised_refusal_codes(CLI, f"cmd_{command}")
+            codes |= raised_refusal_codes(ENGINE, f"cmd_{command}")
         return codes
 
     def test_every_refusal_reachable_from_a_gating_command_is_classified(self):
@@ -28130,7 +28149,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         NOT built from.
 
         The defect on record. `GATING_REFUSALS` was populated from a union of
-        `raised_refusal_codes(CLI, "cmd_*")`, which walks one function body and
+        `raised_refusal_codes(ENGINE, "cmd_*")`, which walks one function body and
         stops at its own file, and the blind spot was documented and then
         populated from anyway. A live session ran the declared flow and got two
         refusals from the same `step` call's neighbourhood:
@@ -28187,7 +28206,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         unresolvable-reason lookup. A third goes red here."""
         self.assertEqual(
             unreadable_refusal_sites(),
-            {("implementation_cli.py", "cmd_name"),
+            {("implementation_engine.py", "cmd_name"),
              ("impl_steps.py", "_verdict_result")})
 
     def test_the_derivation_finds_the_measured_one_hundred_and_twelve(self):
@@ -29454,7 +29473,7 @@ class UnfinishableFlowTests(unittest.TestCase):
         proof is that `cmd_step` still raises the identical code.
         """
         self.assertIn("STEP_SEQUENCE_NOT_REACHED",
-                      raised_refusal_codes(CLI, "cmd_step"))
+                      raised_refusal_codes(ENGINE, "cmd_step"))
 
     # --- end to end, through `verify` itself --------------------------------
 
@@ -30393,7 +30412,7 @@ class MisnamedProductDirGuardTests(unittest.TestCase):
         produce -- so the derived set is also checked against the nine verbs
         the skill documents as writing.
         """
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         commands = [node for node in tree.body
                     if isinstance(node, ast.FunctionDef)
                     and node.name.startswith("cmd_")]
@@ -30534,7 +30553,7 @@ class StepMeasuredLastRunTests(unittest.TestCase):
         the ledger already held, so `__steps__` gains nothing a repository
         built from zero would have to be made to ship. A future
         `expectedMinutes` read anywhere in the engine goes red here."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         for invented in ("expectedMinutes", "expectedSeconds", "budgetMinutes"):
             for quoted in (f'"{invented}"', f"'{invented}'"):
                 with self.subTest(key=quoted):
@@ -31011,8 +31030,8 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         undocumented -- the constraint every sibling key in `cmd_verify`
         carries. Absent from `probe` for the identical reason the others are:
         it names no work about to be run, only a declaration to make."""
-        self.assertIn("undeclaredStepNotebooks", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredStepNotebooks", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredStepNotebooks", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredStepNotebooks", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_report_never_gates_verify(self):
         """Reported, never demanded: a repository may legitimately compute in
@@ -31512,8 +31531,10 @@ class KitDemandsEveryStepKeyTests(unittest.TestCase):
     the roster fails this until the kit's own example names it.
     """
 
-    KIT = (Path(impl.__file__).resolve().parent.parent
-           / "assets" / "kit" / "src_benchmark" / "__init__.py")
+    #: The skill's own asset (meaning 3), never derived from `impl.__file__`
+    #: -- `impl` is the ENGINE module post-move (design.md D1), and the
+    #: engine's own file location is no longer under this skill at all.
+    KIT = SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py"
 
     def test_the_kit_example_names_every_key_the_skill_reads(self) -> None:
         example = self.KIT.read_text(encoding="utf-8")
@@ -31741,6 +31762,10 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
                         "the published interpreter does not exist")
         self.assertEqual(Path(tokens[1]), CLI)
         self.assertTrue(Path(tokens[1]).is_absolute(), tokens[1])
+        # R2/D4's guard: the equality above alone would still pass against a
+        # `CLI_PATH` someone re-pointed at the engine (a constant that moved
+        # WITH the mutation). This names the thing that must never happen.
+        self.assertNotEqual(Path(tokens[1]), ENGINE)
 
     def test_the_script_is_not_executable_so_the_interpreter_is_load_bearing(self):
         """The fact that decides the design rather than an aesthetic
@@ -31756,7 +31781,7 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
         """Derived, not listed. Three command strings were hardcoded beside
         the two builders, and a fourth added later would ship the old,
         unrunnable shape with nothing noticing."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertNotIn('"implementation_cli.py', source)
         self.assertNotIn("'implementation_cli.py", source)
 
@@ -31808,3 +31833,56 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
         self.assertTrue(ran.stdout.strip().startswith("{"),
                         f"the published exit printed no JSON: {ran.stdout!r} "
                         f"{ran.stderr!r}")
+
+
+class SkillRootValueTests(unittest.TestCase):
+    """R1 (design.md D2): `SKILL_ROOT` resolves to the skill directory --
+    pinned as a literal, never derived from the moved engine's own
+    location. `SKILL_ROOT` breaks the instant the engine moves, and breaks
+    SILENTLY (19 reader lines resolve under the wrong root); this pin is
+    what makes a wrong `kit.root` observable instead."""
+
+    def test_skill_root_names_the_skill_not_the_engines_own_parent(self):
+        self.assertEqual(
+            impl.SKILL_ROOT,
+            FORGE / ".claude" / "skills" / "proposal-implementation")
+        self.assertNotEqual(impl.SKILL_ROOT, ENGINE.parent)
+
+    def test_a_wrong_skill_root_silently_breaks_every_kit_source_lookup(self):
+        """Measured at apply (R1, task 6.1): re-deriving `SKILL_ROOT` from
+        the engine's own `__file__` (a real, reverted edit to the moved
+        engine, run through the real seal comparison suite -- never a
+        monkeypatch, since that mutation's effect is on a real subprocess)
+        moved exactly ONE of the 28 sealed cases to a nonzero exit:
+        `materialize`. Every kit-source-reading case (`verify-a`,
+        `verify-b`, ...) was unaffected -- those fixtures' target files
+        already do not byte-match the kit's own templates, so `kitSource`
+        already reports `None` under the CORRECT root too. Design.md's own
+        prediction that the `kitSource` carriers would also move does not
+        hold for this corpus; recorded here rather than silently repeated.
+
+        This is the permanent, safe, in-process guard for WHY `materialize`
+        breaks: with a wrong `SKILL_ROOT`, every kit-source lookup silently
+        resolves to a path that does not exist, rather than refusing
+        loudly -- the exact silent failure mode R1 names.
+        """
+        name = "Method"
+        with unittest.mock.patch.object(impl, "SKILL_ROOT", ENGINE.parent):
+            for destination in impl.object_destinations(name):
+                source = impl.object_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)
+            for destination in impl.harness_destinations(name):
+                source = impl.harness_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)
+            for destination in impl.scaffold_destinations(name):
+                # `KIT_SEAL` is one of the 19 `SKILL_ROOT` reader lines, but
+                # bound once at IMPORT time as a module-level constant, so
+                # patching `impl.SKILL_ROOT` after import does not move it
+                # -- a fact about ITS OWN reach, not about this guard.
+                if destination.endswith(impl.KIT_SEAL.name):
+                    continue
+                source = impl.scaffold_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)

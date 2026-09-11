@@ -23,10 +23,22 @@ import tempfile
 from pathlib import Path
 
 _FORGE = Path(__file__).resolve().parents[2]
-_CLI_SCRIPTS = _FORGE / ".claude" / "skills" / "proposal-implementation" / "scripts"
-if str(_CLI_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_CLI_SCRIPTS))
-import implementation_cli as impl  # noqa: E402  (path set above)
+#: The engine source (meaning 2): `impl.CLI_INVOCATION`/`impl.FORGE_ROOT`
+#: below are engine attributes the launcher deliberately does not carry
+#: (design.md D1), so this harness reaches the engine directly -- never
+#: the launcher, which is what `impl.CLI_INVOCATION` itself names as the
+#: invoked path (meaning 1), read back out of the engine's own profile-
+#: derived `CLI_PATH`. Import route only; argv still derives from
+#: `impl.CLI_INVOCATION`, unedited.
+_ENGINE_DIR = (_FORGE / ".claude" / "skills" / "_core" / "implementation"
+              / "engine")
+os.environ.setdefault(
+    "IMPLEMENTATION_DOMAIN_PROFILE",
+    str(_FORGE / ".claude" / "skills" / "proposal-implementation"
+       / "impl_profile.py"))
+if str(_ENGINE_DIR) not in sys.path:
+    sys.path.insert(0, str(_ENGINE_DIR))
+import implementation_engine as impl  # noqa: E402  (path set above)
 
 from . import corpus as seal_corpus
 from . import normalize as seal_normalize

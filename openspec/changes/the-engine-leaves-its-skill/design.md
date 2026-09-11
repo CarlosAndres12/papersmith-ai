@@ -123,7 +123,27 @@ verified, lines 38–46 are comment) and re-assign it beside `CLI_PATH`, immedia
 
 **The engine diff is five lines**: one deletion, one reshaped `sys.path` line, one added
 `from impl_domain_profile import PROFILE  # noqa: E402` in the core import block, two
-assignments. 17,095 lines verbatim.
+assignments. 17,095 lines verbatim, before the operator ruling below.
+
+**Amended (2026-09-11, operator ruling on task 7.5's non-interference finding).** Apply's
+Phase 7 non-interference run surfaced a regression `tests/test_agents.py`'s cross-skill north
+lock: it discovers a skill's declared north (`OBJECTIVE_FLOW`) by walking THAT SKILL'S OWN
+directory tree for a literal module-level assignment, and after the move `OBJECTIVE_FLOW`
+physically left `proposal-implementation/`'s tree entirely, landing with the engine under
+`_core/`. Three closures existed and apply correctly stopped rather than pick one unilaterally
+(extending an out-of-scope test file's discovery mechanism; declaring the skill northless,
+which is false; re-exposing an engine attribute through the launcher, which breaks D1's own
+tested guarantee). The operator ruled a fourth: `objective` becomes the Cut-1 field set's third
+member, moved into the profile exactly as `kit.root`/`cli.path` were. **Measured, against the
+operator's own 17,039 estimate**: a line-level diff of the final engine against the original
+17,106-line file counts 61 original lines touched (not 67), leaving **17,045 lines verbatim**,
+not 17,039 — the discrepancy is the comment text apply wrote being a few lines longer than a
+minimal edit would be, not a different set of lines moved. Recorded as measured rather than the
+estimate repeated. Not 17,095 either way — this is a better description of what Cut 1 should
+have been from the start, not a scope creep: the precedent already exists on the deliberation
+side (`2026-09-09-a-north-a-second-domain-can-hold`), where
+`_core/deliberation/engine/domain-profile.ts` hardcodes no domain's `objective` and each skill's
+own `profile.ts` declares its own. See D3's amended field-set table.
 
 **R1's seal instrument is a claim to measure, not to assert.** A surviving mutation has two
 explanations — a weak test or a wrong claim about the property — so apply **measures first**:
@@ -142,21 +162,25 @@ validation, path values validated, named refusal codes.
 # .claude/skills/proposal-implementation/impl_profile.py
 from pathlib import Path
 _SKILL = Path(__file__).resolve().parent
+OBJECTIVE_FLOW = { ... }  # moved verbatim from the engine, 56 lines
 PROFILE = {
     "kit": {"root": _SKILL},
     "cli": {"path": _SKILL / "scripts" / "implementation_cli.py"},
+    "objective": OBJECTIVE_FLOW,
 }
 ```
 
 The reach that broke when the engine moved is gone; what remains is a reach **inside one
 skill directory that moves as a unit**.
 
-**The Cut-1 field set, and why each field earns its place by being read.**
+**The Cut-1 field set (amended 2026-09-11, operator ruling on task 7.5), and why each field
+earns its place by being read.**
 
 | Field | Read by | Earns it |
 |---|---|---|
 | `kit.root` | the engine's `SKILL_ROOT`, 19 reader lines | **Non-optional.** `SKILL_ROOT` breaks the instant the engine moves, and breaks silently. The engine gets no fallback |
 | `cli.path` | `CLI_PATH` → `CLI_INVOCATION` → 4 message builders | Cut 1's single silent failure mode. Also makes the mutation surface **one line in a 25-line file** instead of an edit inside 17,100 lines |
+| `objective` | the engine's `OBJECTIVE_FLOW`, stamped into every refusal (`impl_domain_profile.py`'s own docstring cites the exact site) | Read **twice from outside the engine**: by the engine's own refusal payload, and by `tests/test_agents.py`'s cross-skill north lock, which walks THIS SKILL'S OWN directory tree — never the engine's — for a literal `OBJECTIVE_FLOW` assignment. That is also why it must physically live here: a second skill on this same engine needs its OWN north without editing the shared file, exactly the reason `kit.root`/`cli.path` are profile-derived |
 
 **Nothing else.** A profile field nothing reads cannot be mutation-proven, and an unprovable
 field is the shape of a false guard.
@@ -165,7 +189,8 @@ field is the shape of a false guard.
 |---|---|
 | `names` (the TS `names` list) | Its TS justification is that a **lock reads it**. Operator ruling 3 puts the Python lock at Cut 2, "because with no domain words yet moved it would pass vacuously". Worse than vacuous: at Cut 1 the engine still carries the 167 domain lines, so an honest `names` makes the lock **red today**, and a green one requires declaring a dishonest list. Deferred to Cut 2, with the reason recorded here rather than left as a silent omission |
 | `cli_invocation` (B1's spelling) | The profile supplies the **path**; the engine composes `sys.executable` + `shlex.quote` itself, exactly as `artifact-naming.ts` composes from `artifact.directory`. A field named `cli_invocation` would promise a composed value the profile does not supply |
-| `documents`, `provenance`, `document_reader`, `findings`, `vocabulary`, `objective` | Out of scope; no Cut-1 reader |
+| `documents`, `provenance`, `document_reader`, `findings`, `vocabulary` | Out of scope; no Cut-1 reader |
+| ~~`objective`~~ | **No longer rejected** — see the field-set table above. Originally excluded by the exact rule ("a profile field nothing here reads cannot be mutation-proven") that flipped once `test_agents.py`'s cross-skill discovery started reading it too |
 
 **Refusal codes** — six, each mutation-proven:
 
@@ -175,7 +200,7 @@ field is the shape of a false guard.
 | `…_NOT_ABSOLUTE` | relative — a child process's cwd is not the engine's to assume (the TS file's own measured reason) |
 | `…_UNREADABLE` | file absent, `spec_from_file_location` returns `None`, or exec raises |
 | `…_INVALID` | module exports no `PROFILE`, or it is not a mapping |
-| `…_INCOMPLETE` | missing key, **named nested**: `kit.root`, not `kit`. The `artifact: {}` lesson — a top-level check passes vacuously |
+| `…_INCOMPLETE` | missing key, **named nested**: `kit.root`, not `kit` (and, amended, `objective.stages` not `objective`, `objective.stages: []` not silently accepted). The `artifact: {}` lesson — a top-level check passes vacuously |
 | `…_UNSAFE_PATH` | `kit.root` / `cli.path` not absolute, or not present on disk |
 
 `…_UNSAFE_PATH` is where this design diverges from the TS on purpose. `SAFE_ARTIFACT_SEGMENT`
@@ -341,16 +366,18 @@ IMPLEMENTATION_DOMAIN_PROFILE ──(setdefault, launcher)──→ impl_profile
 
 | File | Action | Description |
 |---|---|---|
-| `.claude/skills/_core/implementation/engine/implementation_engine.py` | Create (`git mv`) | the moved engine; five lines reshaped, 17,095 verbatim |
+| `.claude/skills/_core/implementation/engine/implementation_engine.py` | Create (`git mv`) | the moved engine; 17,045 verbatim, measured (amended 2026-09-11: `OBJECTIVE_FLOW`'s 56-line literal also crossed the seam, replaced by `OBJECTIVE_FLOW = PROFILE["objective"]`) |
 | `.claude/skills/proposal-implementation/scripts/implementation_cli.py` | Replace | the ~22-line launcher, unchanged path, mode 644 |
-| `.claude/skills/_core/implementation/impl_domain_profile.py` | Create | fail-closed resolver, six named refusals |
-| `.claude/skills/proposal-implementation/impl_profile.py` | Create | `kit.root`, `cli.path` |
-| `tests/test_implementation_profile.py` | Create | resolver refusals, override semantics, launcher pins |
-| `tests/test_proposal_implementation.py` | Modify | M2 re-points; `reachable_refusal_codes()` source list; D5 |
+| `.claude/skills/_core/implementation/impl_domain_profile.py` | Create | fail-closed resolver, six named refusals; amended to validate `objective`'s own required leaves and non-empty `stages` |
+| `.claude/skills/proposal-implementation/impl_profile.py` | Create | `kit.root`, `cli.path`, amended: `objective` (the 56-line `OBJECTIVE_FLOW`, moved verbatim) |
+| `.claude/skills/proposal-implementation/scripts/materialize.py` | Modify (finding, task 4.1) | its own `from implementation_cli import ...` re-pointed to the engine, mirroring the launcher's profile mechanism — not enumerated in the original File Changes table |
+| `tests/test_implementation_profile.py` | Create | resolver refusals, override semantics, launcher pins; amended with `ObjectiveProfileFieldTests` |
+| `tests/test_proposal_implementation.py` | Modify | M2 re-points; `reachable_refusal_codes()` source list; D5; `SkillRootValueTests` (R1 guard) |
 | `tests/test_implementation_core.py` | Modify | `CLI_SCRIPT` → engine (meaning 2); `_cli_module()` |
-| `tests/test_implementation_seal.py` | Modify | import route; D6 entry-point pin |
+| `tests/test_implementation_seal.py` | Modify | import route; D6 entry-point pin (`SealEntryPointTests`) |
 | `tests/seal/harness.py` | Modify | import route only; argv source untouched |
 | `tests/seal/{cases,digests,unsealed}.json`, `corpus.py`, `normalize.py` | **Unchanged** | `git diff --exit-code` must exit 0 |
+| `tests/test_agents.py` | **Unchanged** | zero edits — proof that relocating `objective` into the profile restores its cross-skill discovery without touching the discovery mechanism itself |
 
 ## Testing Strategy
 
@@ -436,8 +463,20 @@ indivisible.
       `engine/` subdirectory (M1).
 - [x] **Not anticipated by the proposal**: "the CLI path" is three facts after the move, not
       one. A blanket re-point in either direction is a defect (M2).
-- [ ] R1's seal instrument: which case digests a wrong `kit.root` actually moves is
+- [x] R1's seal instrument: which case digests a wrong `kit.root` actually moves is
       **measured at apply**, not predicted here. If the answer is none, that is recorded.
+      **Measured** (task 6.1, apply, 2026-09-11): exactly ONE of the 28 sealed cases moved —
+      `materialize` (exit 1, empty stdout, under a real file mutation re-deriving
+      `SKILL_ROOT` from the engine's own `__file__`). The `kitSource` carriers this section
+      predicted as additional expected movers (`verify-a`, `verify-b`, and similar) did
+      **not** move: those fixtures' target files already do not byte-match the kit's own
+      templates, so `kitSource` already reports `null` under the CORRECT root too, making
+      them structurally blind to a wrong root for this corpus. Guards (a) the resolver's
+      `UNSAFE_PATH`/absent/relative refusals, (b) the `SKILL_ROOT` value pin, and (c) a
+      permanent in-process guard reproducing the silent kit-source-lookup failure (never a
+      permanent real-file-mutating test — the real-file demonstration is one-time, mirroring
+      the F5 zero-delta precedent) are what defends R1's silent failure mode; the seal itself
+      defends only the one case measured above.
 
 ## Citations Checked
 

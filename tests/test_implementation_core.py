@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,12 @@ import impl_references  # noqa: E402
 import impl_refusals  # noqa: E402
 
 CLI_SCRIPT = REPOSITORY_ROOT / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
+#: The engine source (meaning 2, design.md M2): what `CoreNamesNoDomainTests`
+#: reads for `PRODUCT_DIRS`/`SOURCE_ROOTS` -- the launcher above exposes
+#: none of the engine's attributes (design.md D1), so this lock must load
+#: the engine directly, never the launcher it used to be the same file as.
+ENGINE_SCRIPT = (REPOSITORY_ROOT
+                 / ".claude/skills/_core/implementation/engine/implementation_engine.py")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -213,7 +220,11 @@ class CoreNamesNoDomainTests(unittest.TestCase):
 
     @staticmethod
     def _cli_module():
-        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", CLI_SCRIPT)
+        os.environ.setdefault(
+            "IMPLEMENTATION_DOMAIN_PROFILE",
+            str(REPOSITORY_ROOT
+               / ".claude/skills/proposal-implementation/impl_profile.py"))
+        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", ENGINE_SCRIPT)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
