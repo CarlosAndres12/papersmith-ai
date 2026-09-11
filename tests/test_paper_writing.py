@@ -1443,6 +1443,77 @@ class ModeAdmissibilityTests(unittest.TestCase):
         paper_bindings.check_mode_admissibility(bindings, "transposition", evidence_by_id)
         paper_bindings.check_mode_admissibility(bindings, "argument", evidence_by_id)
 
+    def test_both_modes_admit_none_regime_evidence(self) -> None:
+        # `none` (no external source at all) is strictly more restrictive
+        # than `resolution`, so a mode admitting `resolution` must admit
+        # `none` too -- a block declaring `citations: "none"` inherits that
+        # same regime on its own evidence records.
+        bindings = [paper_bindings.Binding(sentence="s", kind="evidence", ref="N1")]
+        evidence_by_id = {"N1": {"id": "N1", "regime": "none"}}
+        paper_bindings.check_mode_admissibility(bindings, "transposition", evidence_by_id)
+        paper_bindings.check_mode_admissibility(bindings, "argument", evidence_by_id)
+
+
+class CorpusModeCitationsAdmissibilityTests(unittest.TestCase):
+    """Derived guard over the real `sections/*.md` corpus, not a
+    hand-listed set of block ids or a golden count standing in for
+    enforcement: an evidence record's `regime` is inherited from its own
+    block's `citations` field (`paper_cli._resolve_regime` ->
+    `paper_validate.read_citations_regime`, fallback `"none"`), so every
+    block whose contract declares a `citations` regime its own resolved
+    `mode` does not admit would produce evidence its own section refuses
+    at `write` time. Both sides of the comparison -- which blocks exist,
+    each one's resolved mode, each one's declared citations regime -- are
+    derived by parsing the corpus itself in this same test, never asserted
+    or hand-listed."""
+
+    def _violations(self) -> list[tuple[str, str, str, str]]:
+        violations: list[tuple[str, str, str, str]] = []
+        for path in sorted(SECTIONS_DIR.glob("*.md")):
+            header, _body = paper_contract.parse(path.read_bytes())
+            for block in header.blocks:
+                mode_obj = paper_contract.resolve_mode(header, block)
+                if mode_obj is None:
+                    # No mode resolves for this block -- out of scope for
+                    # this guard; `write`'s own readiness stage refuses
+                    # `MODE_ABSENT` for it, a separate concern.
+                    continue
+                mode = mode_obj["value"]
+                citations = block["citations"]
+                admitted = paper_bindings._MODE_ADMITTED_EVIDENCE_REGIMES[mode]
+                if citations not in admitted:
+                    violations.append((path.name, block["id"], mode, citations))
+        return violations
+
+    def test_every_block_own_resolved_mode_admits_its_own_citations_regime(self) -> None:
+        violations = self._violations()
+        self.assertEqual(
+            violations, [],
+            f"block(s) whose resolved mode refuses their own declared citations "
+            f"regime (section file, block id, mode, citations): {violations}",
+        )
+
+    def test_m4_dropping_none_from_transposition_fails_the_corpus_guard(self) -> None:
+        # Load-bearing proof, executed rather than asserted: revert
+        # `transposition`'s admitted set to the shipped defect (`none`
+        # removed) in a real subprocess against a real mutant module, and
+        # confirm the corpus guard above genuinely goes red naming real
+        # blocks -- not merely that some test somewhere would notice.
+        proc = _run_against_mutant(
+            '"transposition": frozenset({"none", "resolution"}),',
+            '"transposition": frozenset({"resolution"}),',
+            "tests.test_paper_writing.CorpusModeCitationsAdmissibilityTests"
+            ".test_every_block_own_resolved_mode_admits_its_own_citations_regime",
+            source_path=SKILL_SCRIPTS / "paper_bindings.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+        # The failure names real corpus blocks, not an empty or generic
+        # message -- proving the guard fires on the actual violation shape.
+        self.assertIn("08-abstract.md", output, output)
+        self.assertIn("transposition", output, output)
+
 
 _SAMPLE_DISQUALIFIER = "A symbol used without being declared."
 

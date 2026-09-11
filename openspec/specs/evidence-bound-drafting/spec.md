@@ -106,9 +106,17 @@ rather than by instruction.
 ### Requirement: Mode-Admissible Bindings
 
 A block whose `mode` is `transposition` MUST admit only `fact`, `structural`,
-and `resolution`-class evidence bindings. A block whose `mode` is `argument`
-MUST additionally admit `discovery`-class evidence bindings. Any binding
-outside its mode's admitted set MUST refuse `MODE_VIOLATION`.
+`resolution`-class, and `none`-class evidence bindings. A block whose `mode`
+is `argument` MUST additionally admit `discovery`-class evidence bindings.
+Any binding outside its mode's admitted set MUST refuse `MODE_VIOLATION`.
+
+`none`-class evidence is admitted by every mode: a `none` regime means no
+external source at all, which is strictly more restrictive than `resolution`,
+so a mode admitting `resolution` MUST admit `none` by the same necessity. An
+evidence record's `regime` is inherited from its own block's `citations`
+field, so a block declaring `citations: "none"` produces `none`-class
+evidence on itself — a mode that refused `none` would refuse the very blocks
+that declare no citation source at all.
 
 #### Scenario: A transposition block rejects a discovery binding
 
@@ -121,5 +129,18 @@ outside its mode's admitted set MUST refuse `MODE_VIOLATION`.
 
 - GIVEN an `argument`-mode block binding the same `discovery`-class record
   `D1`
+- WHEN mode admissibility is checked
+- THEN no refusal is raised
+
+#### Scenario: A transposition block admits a none-regime binding
+
+- GIVEN a `transposition`-mode block binding `evidence:N1`, a `none`-class
+  record
+- WHEN mode admissibility is checked
+- THEN no refusal is raised
+
+#### Scenario: An argument block admits the same none-regime binding
+
+- GIVEN an `argument`-mode block binding the same `none`-class record `N1`
 - WHEN mode admissibility is checked
 - THEN no refusal is raised

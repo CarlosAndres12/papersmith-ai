@@ -218,9 +218,17 @@ def type_structural(bindings: list[Binding], contract_prose: str) -> None:
 #: `evidence-bound-drafting` spec, `Requirement: Mode-Admissible Bindings`.
 #: `transposition` admits only `fact`/`structural`/`resolution`-class
 #: evidence; `argument` additionally admits `discovery`-class evidence.
+#: `none` (no external source at all) is strictly more restrictive than
+#: `resolution` and belongs in every mode's admitted set for that reason:
+#: an evidence record's `regime` is inherited from its own block's
+#: `citations` field (`paper_cli._resolve_regime` ->
+#: `paper_validate.read_citations_regime`, fallback `"none"`), so a mode
+#: that refuses `none` would refuse the very blocks that declare no
+#: citation source at all -- measured against the real corpus in
+#: `tests/test_paper_writing.py::CorpusModeCitationsAdmissibilityTests`.
 _MODE_ADMITTED_EVIDENCE_REGIMES: dict = {
-    "transposition": frozenset({"resolution"}),
-    "argument": frozenset({"resolution", "discovery"}),
+    "transposition": frozenset({"none", "resolution"}),
+    "argument": frozenset({"none", "resolution", "discovery"}),
 }
 
 
