@@ -174,6 +174,26 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
             "verdicts": audit_result["verdicts"],
         }
 
+    if contract.style_set:
+        # Local import, not module-level: `paper_write.py` is a Work Unit 1
+        # file and must stay importable (and `write_block` callable with an
+        # empty style set, the only value WU1 itself ever populates) even
+        # when `paper_leak.py` is absent -- WU2's own rollback boundary
+        # ("Unit 1 stands alone with an empty style channel"). Only a
+        # non-empty `style_set` -- which only the WU2-wired CLI path
+        # (`cmd_write`'s `--style`) ever produces -- reaches this branch.
+        # `design.md`'s own Data Flow: "paper_leak.tripwire (styled only)
+        # -> paper_write ledger" runs here, after contract-audit clears and
+        # before `substitute`, independent of the A/B/S register/overlap
+        # proof (`paper_leak.register_distance_holds`/
+        # `relative_overlap_holds`), which is a Unit-level proof of the
+        # mechanism itself (`design.md`, Testing Strategy table), not a
+        # per-write runtime check -- the same role `_run_against_mutant`
+        # plays for the byte-identity guards, exercised by
+        # `StyleLeakDetectionTests`, never by a real `write` call.
+        import paper_leak  # noqa: PLC0415
+        paper_leak.check_tripwire(draft["latex"], contract.style_set)
+
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {"status": "written", "block": contract.block_id, "verdicts": audit_result["verdicts"], **result}
 

@@ -1197,7 +1197,7 @@ class ContractAuditTests(unittest.TestCase):
 
 def _write_contract(
     *, block_id="mm-proposal", citations_regime="resolution", mode="transposition",
-    requires_facts=(), evidence_set=(), disqualifiers=(_SAMPLE_DISQUALIFIER,),
+    requires_facts=(), evidence_set=(), style_set=(), disqualifiers=(_SAMPLE_DISQUALIFIER,),
 ) -> "paper_write.BlockContract":
     return paper_write.BlockContract(
         block_id=block_id,
@@ -1207,6 +1207,7 @@ def _write_contract(
         mode=mode,
         requires_facts=tuple(requires_facts),
         evidence_set=tuple(evidence_set),
+        style_set=tuple(style_set),
     )
 
 
@@ -1240,6 +1241,48 @@ class WritingPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "written")
         final = (self.paper_dir / "main.tex").read_bytes()
         self.assertIn(b"This paragraph closes the section.", final)
+
+    def test_a_styled_draft_lifting_the_sample_refuses_style_overlap(self) -> None:
+        """`design.md`'s own Data Flow: `paper_leak.tripwire (styled only)
+        -> paper_write ledger` runs inside the real pipeline, not only in a
+        standalone proof harness -- `write_block` itself refuses when a
+        styled draft shares eight or more normalized tokens with a
+        recorded sample, and `main.tex` never changes."""
+        sample = {
+            "reference": "paperA",
+            "span": "The quick brown fox jumps over the lazy dog again today.",
+        }
+        contract = _write_contract(citations_regime="none", evidence_set=(), style_set=(sample,))
+        lifted_draft = {
+            "latex": (
+                "This closes the section. "
+                "The quick brown fox jumps over the lazy dog again today."
+            ),
+            "bindings": [
+                {"sentence": "This closes the section.", "binding": "structural"},
+                {
+                    "sentence": "The quick brown fox jumps over the lazy dog again today.",
+                    "binding": "structural",
+                },
+            ],
+        }
+        pre = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, lifted_draft, _CLEAN_AUDIT)
+
+        self.assertEqual(ctx.exception.code, "STYLE_OVERLAP")
+        self.assertIn("paperA", ctx.exception.detail)
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_styled_draft_with_no_lifted_run_still_writes(self) -> None:
+        sample = {
+            "reference": "paperA",
+            "span": "one two three four five six seven eight nine ten",
+        }
+        contract = _write_contract(citations_regime="none", evidence_set=(), style_set=(sample,))
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
 
     def test_no_mode_resolved_refuses_mode_absent(self) -> None:
         contract = _write_contract(citations_regime="none", mode=None)

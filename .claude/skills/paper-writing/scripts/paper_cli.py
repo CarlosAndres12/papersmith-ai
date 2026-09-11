@@ -538,6 +538,12 @@ def cmd_write(args: argparse.Namespace) -> dict:
     spawns anything (`design.md`, Decision D2) — `--draft`/`--audit` are
     JSON envelopes an agent already produced; `--transcript`, when given,
     is only containment-checked and recorded, never parsed for judgment.
+    `--style`, when given, is the style-sampler's JSON account; it is
+    residency-verified and recorded as `R` here, then the eight-token
+    tripwire (`paper_leak.check_tripwire`) runs against the styled draft
+    inside `write_block` before `substitute`, never only importable and
+    unreachable (`style-leak-detection` spec, `Requirement: The
+    Eight-Token Tripwire`).
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     draft_path = _resolve_repo_path(args.draft)
@@ -559,6 +565,13 @@ def cmd_write(args: argparse.Namespace) -> dict:
     if args.evidence:
         evidence_set = tuple(json.loads(Path(args.evidence).read_text(encoding="utf-8")))
 
+    style_set = ()
+    if args.style:
+        proposals = json.loads(Path(args.style).read_text(encoding="utf-8"))
+        guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+        recorded, _no_equivalent = paper_style.resolve_style_set(guidance_dir, proposals)
+        style_set = tuple(recorded)
+
     contract = paper_write.BlockContract(
         block_id=args.block,
         contract_prose=body.decode("utf-8"),
@@ -567,6 +580,7 @@ def cmd_write(args: argparse.Namespace) -> dict:
         mode=mode,
         requires_facts=tuple(block["requires_facts"]),
         evidence_set=evidence_set,
+        style_set=style_set,
     )
     return paper_write.write_block(paper_dir, contract, draft, audit_account)
 
@@ -768,6 +782,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_write.add_argument(
         "--evidence", default=None,
         help="path to a JSON array of {id, regime, ...} evidence records this block may bind against",
+    )
+    p_write.add_argument(
+        "--style", default=None,
+        help="path to a JSON array of the style-sampler's {reference, source_md, span} proposals; "
+             "residency-verified and recorded as R before the tripwire runs against the styled draft",
+    )
+    p_write.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
     )
     p_write.add_argument(
         "--transcript", default=None,
