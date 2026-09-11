@@ -1963,6 +1963,163 @@ class ReadOnlyTests(unittest.TestCase):
         self.assertIn("MUTANT_IMPORTED_OK", proc.stdout)
 
 
+class CouplingOneTests(unittest.TestCase):
+    """Coupling 1 (`coupling-verification` spec, `Requirement: Coupling 1
+    — Contribution List Identity`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_holds(self) -> None:
+        result = paper_verify.check_contribution_list(self.evidence)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["evidence"]["mismatched_blocks"], [])
+        self.assertEqual(result["evidence"]["absent_from_bytes"], [])
+
+    def test_mutation_1_reordered_names_in_one_block_fails(self) -> None:
+        reordered = (
+            b"In brief: Async Prefetch, Adaptive Caching, and Bounded Retry "
+            b"together cut overhead.\n"
+        )
+        mutated = dataclasses.replace(
+            self.evidence,
+            block_bodies={**self.evidence.block_bodies, "abstract-contrib": reordered},
+        )
+
+        result = paper_verify.check_contribution_list(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("abstract-contrib", result["evidence"]["mismatched_blocks"])
+
+    def test_declared_name_absent_from_block_bytes_fails_distinctly(self) -> None:
+        missing_name = b"In brief: Adaptive Caching and Async Prefetch cut overhead.\n"
+        mutated = dataclasses.replace(
+            self.evidence,
+            block_bodies={**self.evidence.block_bodies, "abstract-contrib": missing_name},
+        )
+
+        result = paper_verify.check_contribution_list(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        # The evidence payload names this as an absent-name finding
+        # distinctly from a plain order mismatch, even though a block
+        # missing a name can never equal the full declared order either
+        # (spec, `Requirement: Declared-Name Literal Presence Limit`):
+        # both reasons are reported, neither one hides the other.
+        self.assertIn(
+            {"block": "abstract-contrib", "name": "Bounded Retry"},
+            result["evidence"]["absent_from_bytes"],
+        )
+
+    def test_an_undeclared_block_reports_unmeasured_not_pass(self) -> None:
+        record = _coupling_record()
+        del record["blocks"]["abstract-contrib"]
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_contribution_list(mutated)
+
+        self.assertEqual(result["verdict"], "unmeasured")
+        self.assertEqual(result["unmeasured_reason"], "BLOCK_NOT_DECLARED")
+
+
+class CouplingTwoTests(unittest.TestCase):
+    """Coupling 2 (`coupling-verification` spec, `Requirement: Coupling 2
+    — Chain Word Identity`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_holds(self) -> None:
+        result = paper_verify.check_chain(self.evidence)
+        self.assertEqual(result["verdict"], "pass")
+
+    def test_mutation_2_synonym_at_one_link_fails(self) -> None:
+        # "Elastic Backoff" is not a substring of "Bounded Retry" -- a
+        # synonym, never a paraphrase that would still pass a substring
+        # check by accident.
+        synonym_body = (
+            b"Problem: Bounded Retry addresses cascading failures under load.\n"
+            b"Contribution: Elastic Backoff limits retries safely.\n"
+            b"Property: Bounded Retry is measured by retry count.\n"
+            b"Instrument: Bounded Retry is captured by the profiler.\n"
+            b"Evidence: Bounded Retry reduces failures after deployment.\n"
+        )
+        mutated = dataclasses.replace(
+            self.evidence,
+            block_bodies={**self.evidence.block_bodies, "methods-chain": synonym_body},
+        )
+
+        result = paper_verify.check_chain(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertFalse(result["evidence"]["links"][0]["roles_present"]["contribution"])
+
+    def test_closure_against_an_undeclared_word_fails(self) -> None:
+        record = _coupling_record()
+        record["chain"] = {"links": [{"word": "Not A Contribution"}]}
+        mutated = dataclasses.replace(self.evidence, record=record)
+
+        result = paper_verify.check_chain(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertFalse(result["evidence"]["links"][0]["closure"])
+
+
+class CitationTests(unittest.TestCase):
+    """Check A (`citation-integrity` spec)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        self.evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+    def test_unmutated_fixture_holds_with_no_dangling_or_orphan(self) -> None:
+        result = paper_verify.check_citations(self.evidence)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertEqual(result["evidence"]["dangling"], [])
+        self.assertEqual(result["evidence"]["orphans"], [])
+
+    def test_mutation_3a_dangling_cite_fails_naming_it(self) -> None:
+        mutated = dataclasses.replace(
+            self.evidence,
+            main_tex_bytes=self.evidence.main_tex_bytes + b"\\cite{ghost}\n",
+        )
+
+        result = paper_verify.check_citations(mutated)
+
+        self.assertEqual(result["verdict"], "fail")
+        self.assertIn("ghost", result["evidence"]["dangling"])
+        # M3a alone must not move the orphan-entry direction.
+        self.assertEqual(result["evidence"]["orphans"], [])
+
+    def test_mutation_3b_orphan_entry_is_listed_not_failing(self) -> None:
+        mutated = dataclasses.replace(
+            self.evidence,
+            refs_bib_bytes=self.evidence.refs_bib_bytes
+            + b"@article{orphan2028,\n  title={Nobody Cites This},\n  year={2028}\n}\n",
+        )
+
+        result = paper_verify.check_citations(mutated)
+
+        # M3b alone must not move the dangling-cite direction.
+        self.assertEqual(result["evidence"]["dangling"], [])
+        self.assertIn("orphan2028", result["evidence"]["orphans"])
+        self.assertEqual(result["verdict"], "pass")
+
+
 class ZZLiveAgentGuardTests(unittest.TestCase):
     """`writing-orchestration` spec, `Requirement: No Live Agent Invocation
     In Tests`. Named `ZZ...` so it sorts alphabetically last among this
