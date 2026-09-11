@@ -54,6 +54,15 @@ ALLOWED_ENV_KEYS = frozenset({
     "PATH", "HOME", "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "LC_ALL",
     "TZ", "NO_COLOR", "COLUMNS", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM",
     "IMPLEMENTATION_PROPOSALS",
+    # Cut 3 (`a-revision-is-two-documents`, design.md M5): the bare
+    # `IMPLEMENTATION_PROPOSALS` keeps overriding document 0 only -- one
+    # variable cannot name two roots. A second document's directory is
+    # overridden by this key instead, allow-listed here so a later class
+    # (or this corpus's own pair cases) can pass it without tripping
+    # `build_env`'s own allow-list assert. No generic `_0` alias exists for
+    # the bare variable (M5): that would be a second spelling for a
+    # variable every existing fixture already uses.
+    "IMPLEMENTATION_PROPOSALS_1",
 })
 
 #: Real shell-injection primitives, never characters legitimate case content
