@@ -1056,8 +1056,14 @@ class RefusalRosterTests(unittest.TestCase):
         `RESOLVER_UNREACHABLE`, `IDENTIFIER_UNRESOLVED`) -- 1 + 2 + 6 = 9
         new codes. Moved from 54 to 57 in WU2, which wires `bib build`:
         `paper_bib.py` adds `ENTRY_UNSOURCED`, `CITE_WITHOUT_ENTRY`,
-        `ENTRY_WITHOUT_CITE`."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 57)
+        `ENTRY_WITHOUT_CITE`. Moved from 57 to 65 in WU3, which wires
+        `validate`: `paper_validate.py` adds `EVIDENCE_EXHAUSTED`,
+        `CITATION_MULTI_CLAIM_SENTENCE`, `CITATION_NOUN_PHRASE`,
+        `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`,
+        `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT`, plus
+        `cmd_validate`'s own `VALIDATE_VERDICT_REQUIRED` in this file -- 7 + 1
+        = 8 new codes."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 65)
 
 
 if __name__ == "__main__":

@@ -58,18 +58,18 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: Work Unit 3 — Citation Validation and Placement
 
-- [ ] 4.1 RED: build a record set containing `insufficient`/`does-not-hold`; assert `satisfied` excludes both — mutation m2 (widen the set to include `insufficient`) must turn this red via `_run_against_mutant` (citation-validation Req 1; design Decision 5).
-- [ ] 4.2 GREEN: `paper_validate.py` — `satisfied = {r.claim for r in records if r.verdict == HOLDS}`, no per-verdict branch.
-- [ ] 4.3 RED: mutation m3 — `Verdict.holds` accepting `span=None` must turn the spanless-verdict test red (citation-validation Req 2).
-- [ ] 4.4 RED: plant a false citation — a claim paired with a source that does not support it executes to `does-not-hold`, AND the opposite pole (a genuinely-holding citation) executes to `holds` in the same run.
-- [ ] 4.5 RED then GREEN: 3-round bounded loop; on round-3 exhaustion raise `EVIDENCE_EXHAUSTED` naming every unsupported claim verbatim, and assert `paper_block.substitute` is never called (citation-validation Req 3).
-- [ ] 4.6 GREEN: placement dispatch table on `citations` regime — `discovery` end-of-sentence + noun-phrase prohibition, `resolution` anywhere including a noun phrase, `none` refuses any citation; no section/block id in code (citation-placement Req 1-3).
-- [ ] 4.7 Test: the same mid-sentence citation position fails under `discovery` and passes under `resolution`, attached to its object, in one fixture pair (citation-placement Req 1 scenario).
-- [ ] 4.8 Test: a `sections/*.md` fixture with no front matter refuses `CONTRACT_HEADER_ABSENT`, never a defaulted regime.
-- [ ] 4.9 Wire `validate` verb into `paper_cli.py`; extend `REFUSAL_CLASSIFICATION`.
-- [ ] 4.10 Test: final roster pass across all five new/modified modules — nothing reachable unclassified, nothing classified unreachable.
+- [x] 4.1 RED: build a record set containing `insufficient`/`does-not-hold`; assert `satisfied` excludes both — mutation m2 (widen the set to include `insufficient`) must turn this red via `_run_against_mutant` (citation-validation Req 1; design Decision 5).
+- [x] 4.2 GREEN: `paper_validate.py` — `satisfied = {r.claim for r in records if r.verdict == HOLDS}`, no per-verdict branch.
+- [x] 4.3 RED: mutation m3 — `Verdict.holds` accepting `span=None` must turn the spanless-verdict test red (citation-validation Req 2). (Target reused: WU1's own `test_holds_with_none_span_refuses`, since `Verdict` lives in `paper_evidence.py` from WU1 — the mutation table spans both test files, not one per work unit.)
+- [x] 4.4 RED: plant a false citation — a claim paired with a source that does not support it executes to `does-not-hold`, AND the opposite pole (a genuinely-holding citation) executes to `holds` in the same run.
+- [x] 4.5 RED then GREEN: 3-round bounded loop; on round-3 exhaustion raise `EVIDENCE_EXHAUSTED` naming every unsupported claim verbatim, and assert `paper_block.substitute` is never called (citation-validation Req 3).
+- [x] 4.6 GREEN: placement dispatch table on `citations` regime — `discovery` end-of-sentence + noun-phrase prohibition, `resolution` anywhere including a noun phrase, `none` refuses any citation; no section/block id in code (citation-placement Req 1-3).
+- [x] 4.7 Test: the same mid-sentence citation position fails under `discovery` and passes under `resolution`, attached to its object, in one fixture pair (citation-placement Req 1 scenario).
+- [x] 4.8 Test: a `sections/*.md` fixture with no front matter refuses `CONTRACT_HEADER_ABSENT`, never a defaulted regime. (The real shipped `sections/*.md` now carry headers from a sibling change landing since design.md was written — this task builds its own unheadered fixture rather than asserting anything about the real tree's current state.)
+- [x] 4.9 Wire `validate` verb into `paper_cli.py`; extend `REFUSAL_CLASSIFICATION`.
+- [x] 4.10 Test: final roster pass across all five new/modified modules — nothing reachable unclassified, nothing classified unreachable (`RefusalRosterTests`, measured count 57 → 65).
 
 ## Phase 5: Cleanup
 
-- [ ] 5.1 Update `SKILL.md`'s refusal-roster paragraph and verb table for `bib build` / `validate`.
-- [ ] 5.2 Run `_shared/tools/check_citations.py` against this tasks artifact before handing off to `sdd-apply`.
+- [x] 5.1 Update `SKILL.md`'s refusal-roster paragraph and verb table for `bib build` / `validate`.
+- [x] 5.2 Run `_shared/tools/check_citations.py` against this tasks artifact (deferred from drafting per design.md's own note: "this executor has no shell tool"; run here during `sdd-apply`). One flagged citation: `SKILL.md` read as an attempted `class:` symbol lookup and reported "no such class defined" — a false positive (`SKILL.md` is a backticked filename, not a class), not a broken citation. No other citation in `tasks.md` failed to resolve.

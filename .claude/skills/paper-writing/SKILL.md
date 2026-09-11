@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, or rebuild refs.bib from cached resolved metadata. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build. Offline except `resolve`, which sits behind a config role that can be emptied."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, or validate a citation's verdict and placement before writing a block. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate. Offline except `resolve`, which sits behind a config role that can be emptied."
 ---
 
 # Paper Writing
@@ -13,13 +13,13 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Eleven verbs, wired into one front door (`scripts/paper_cli.py`):
+Twelve verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
 decisions — `the-paper-carries-its-own-decisions`), and `resolve`,
-`bib build` (citation resolution and a sourced bibliography —
-`no-claim-without-a-source-that-holds-it`). To the
+`bib build`, `validate` (citation resolution, a sourced bibliography, and
+the verdict/placement gate — `no-claim-without-a-source-that-holds-it`). To the
 substitution engine, block ids stay opaque strings — shape only
 (`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
 exist, what each requires, and where in the document they belong, entirely
@@ -316,6 +316,36 @@ cached resolved metadata — never appended, never hand-typed:
 A hand-typed entry (no `resolver`/`metadata_digest` provenance) refuses
 `ENTRY_UNSOURCED` before a single byte of `refs.bib` is rewritten — checked
 entirely offline, since the provenance is either cached already or it is not.
+
+`validate` is the single gate: submit one judged verdict for one claim
+(the agent's own reading of a located span decides `holds` vs
+`does-not-hold`; omitting `--quote`/`--source-md` records `insufficient`),
+then check the block's round-bounded satisfaction, and write only when
+every claim the block has evidence for holds:
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py validate \
+    --block intro.claim --claim "the dataset holds 12000 labeled examples" \
+    --quote "holds 12,000 labeled examples" --source-md guidance/06-introduction/paper1.md \
+    --verdict holds --cite-key smith2024 --body body.tex
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `validate --block <id> [--claim ... --quote ... --source-md ... --verdict holds\|does-not-hold] [--body <path\|->] [--sentence <json>]` | Optionally records one evidence submission, then reports `pending`/`satisfied`/`written`, or refuses on exhaustion | `SPAN_NOT_IN_SOURCE`, `VALIDATE_VERDICT_REQUIRED`, `EVIDENCE_EXHAUSTED`, `CITATION_MULTI_CLAIM_SENTENCE`, `CITATION_NOUN_PHRASE`, `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`, `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT` |
+
+**Three search rounds per block, then exhaustion.** `insufficient` fails a
+claim exactly as `does-not-hold` does — never a soft `holds`. On the third
+round with claims still unsupported, `validate` refuses
+`EVIDENCE_EXHAUSTED` naming every unsupported claim, and
+`paper_block.substitute` is never reached: the write sits strictly inside
+the all-satisfied branch.
+
+**Placement dispatches on regime, never one universal rule.** Under
+`discovery`, a citation must close the sentence it supports and a
+noun-phrase citation is prohibited; under `resolution`, a citation attaches
+to the object it credits wherever that sits, and a noun-phrase citation is
+exactly what that asks for; under `none`, no citation is allowed at all.
 
 **Observing before declaring: the `insumos-observer` agent.** For the five
 facts an outside observer can check against evidence (`formulation`,

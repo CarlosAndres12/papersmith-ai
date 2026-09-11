@@ -6,17 +6,19 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires eleven verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires twelve verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
 (from `the-contract-is-data-not-code`); `declare`, `plan` (from
 `the-paper-carries-its-own-decisions`, Slices B and C2); and `resolve`,
-`bib build` (from `no-claim-without-a-source-that-holds-it`, WU1/WU2 —
-`resolve` is the one path that makes this CLI not offline end to end,
-keyless and behind a role `papersmith.yaml` can empty; `bib build` rebuilds
-`refs.bib` whole from cached resolved metadata only). Left extensible on
-purpose; nothing here assumes it is the last verb this file will ever grow.
+`bib build`, `validate` (from `no-claim-without-a-source-that-holds-it`,
+WU1/WU2/WU3 — `resolve` is the one path that makes this CLI not offline end
+to end, keyless and behind a role `papersmith.yaml` can empty; `bib build`
+rebuilds `refs.bib` whole from cached resolved metadata only; `validate` is
+the single gate deciding verdict, placement and the bounded search-round
+budget before any block reaches disk). Left extensible on purpose; nothing
+here assumes it is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -40,6 +42,7 @@ import paper_objective  # noqa: E402,F401 -- this skill's own declared north (te
 import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the claim<->source record
 import paper_resolve  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the urllib resolution client
 import paper_bib  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU2: refs.bib from cached metadata
+import paper_validate  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU3: verdicts, placement, the bounded loop
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -162,6 +165,17 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "ENTRY_UNSOURCED": WORK_STATE,
     "CITE_WITHOUT_ENTRY": WORK_STATE,
     "ENTRY_WITHOUT_CITE": WORK_STATE,
+    # --- the validator and the bounded loop (paper_validate.py; WU3) -----
+    "EVIDENCE_EXHAUSTED": WORK_STATE,
+    "CITATION_MULTI_CLAIM_SENTENCE": WORK_STATE,
+    "CITATION_NOUN_PHRASE": WORK_STATE,
+    "CITATION_NOT_AT_SENTENCE_END": WORK_STATE,
+    "CITATION_DETACHED_FROM_OBJECT": WORK_STATE,
+    "CITATION_UNDER_NONE_REGIME": WORK_STATE,
+    "CONTRACT_HEADER_ABSENT": WORK_STATE,
+    # --- validate's own mode selection (this file; the same shape as
+    # SUBSTITUTE_MODE_REQUIRED/DECLARE_MODE_REQUIRED) --------------------
+    "VALIDATE_VERDICT_REQUIRED": INVOCATION_DEFECT,
 }
 
 
@@ -293,6 +307,63 @@ def cmd_bib(args: argparse.Namespace) -> dict:
         tex_path.read_bytes(), (paper_dir / "refs.bib").read_bytes(),
     )
     return {**result, "reciprocal": reciprocal}
+
+
+def _round_for_new_record(existing_records: list[dict]) -> int:
+    return max((record.get("round", 0) for record in existing_records), default=0) + 1
+
+
+def _build_evidence_record(args: argparse.Namespace, round_number: int) -> paper_evidence.EvidenceRecord:
+    if args.quote and args.source_md:
+        span = paper_evidence.EvidenceSpan.locate(Path(args.source_md), args.quote)
+        if args.verdict == "holds":
+            verdict = paper_evidence.Verdict.holds(span)
+        elif args.verdict == "does-not-hold":
+            verdict = paper_evidence.Verdict.does_not_hold(span)
+        else:
+            raise Refused(
+                "VALIDATE_VERDICT_REQUIRED",
+                "a located --quote/--source-md requires --verdict holds|does-not-hold",
+            )
+    else:
+        verdict = paper_evidence.Verdict.insufficient(args.reason or "no --quote/--source-md given")
+    return paper_evidence.EvidenceRecord.from_verdict(
+        block_id=args.block, regime=args.regime or "none", claim=args.claim,
+        cite_key=args.cite_key or "", identifier=args.identifier or "",
+        resolver=args.resolver or "", metadata_digest=args.metadata_digest or "",
+        verdict=verdict, round=round_number,
+    )
+
+
+def cmd_validate(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+
+    if args.sentence:
+        sentence_obj = json.loads(Path(args.sentence).read_text(encoding="utf-8"))
+        citations = tuple(
+            paper_validate.Citation(
+                text=entry["text"], position=entry["position"],
+                attached_to_object=bool(entry.get("attached_to_object", False)),
+                is_noun_phrase=bool(entry.get("is_noun_phrase", False)),
+            )
+            for entry in sentence_obj.get("citations", [])
+        )
+        sentence = paper_validate.Sentence(text=sentence_obj["text"], citations=citations)
+        paper_validate.validate_placement(args.regime or sentence_obj.get("regime"), sentence)
+
+    if args.claim:
+        existing = paper_evidence.read_records(paper_dir, args.block)
+        round_number = args.round if args.round is not None else _round_for_new_record(existing)
+        record = _build_evidence_record(args, round_number)
+        guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+        paper_evidence.append_record(paper_dir, record, guidance_dir=guidance_dir)
+
+    records = paper_evidence.read_records(paper_dir, args.block)
+    claims = sorted({record["claim"] for record in records})
+    body = None
+    if args.body is not None:
+        body = sys.stdin.buffer.read() if args.body == "-" else Path(args.body).read_bytes()
+    return paper_validate.finalize_block(paper_dir, args.block, claims, records, body)
 
 
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
@@ -512,6 +583,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="override paper/ location; must resolve inside the repository root",
     )
 
+    p_validate = sub.add_parser(
+        "validate",
+        help="the single gate: submit one judged verdict, check round-bounded satisfaction, write on success",
+    )
+    p_validate.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_validate.add_argument("--block", required=True, help="block id this evidence/write targets")
+    p_validate.add_argument("--claim", default=None, help="claim text this call submits evidence for")
+    p_validate.add_argument("--quote", default=None, help="the verbatim quote to locate in --source-md")
+    p_validate.add_argument("--source-md", default=None, help="the ingested .md the quote is located in")
+    p_validate.add_argument(
+        "--verdict", default=None, choices=("holds", "does-not-hold"),
+        help="the agent's own judgment for a located --quote; omit --quote/--source-md for insufficient",
+    )
+    p_validate.add_argument("--reason", default=None, help="why the record is insufficient")
+    p_validate.add_argument("--cite-key", default=None, help="the \\cite{} key this record supports")
+    p_validate.add_argument("--identifier", default=None, help="the resolved DOI/arXiv id")
+    p_validate.add_argument("--resolver", default=None, help="which connector resolved --identifier")
+    p_validate.add_argument("--metadata-digest", default=None, help="the cached resolution's own digest")
+    p_validate.add_argument("--regime", default=None, choices=paper_vocabulary.CITATIONS_REGIMES)
+    p_validate.add_argument("--round", type=int, default=None, help="override the auto-derived round number")
+    p_validate.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_validate.add_argument("--body", default=None, help="path to the candidate body, or - for stdin")
+    p_validate.add_argument(
+        "--sentence", default=None,
+        help="path to a JSON {text, regime, citations:[...]} object; checked before any evidence step",
+    )
+
     p_plan = sub.add_parser(
         "plan", help="read-only: guidance classes, declaration/fact fill state, provenance state",
     )
@@ -533,7 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve", "bib",
+    "resolve", "bib", "validate",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -547,6 +651,7 @@ _COMMANDS = {
     "plan": cmd_plan,
     "resolve": cmd_resolve,
     "bib": cmd_bib,
+    "validate": cmd_validate,
 }
 
 
