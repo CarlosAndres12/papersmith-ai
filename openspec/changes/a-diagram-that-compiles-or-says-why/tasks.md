@@ -135,3 +135,43 @@ load-bearing rather than closing it.
       (`section-contract`, `diagram-obligation`) updated to describe the derived-from-declaration
       mechanism and the optional `components_from` schema, replacing every `--expected-components`
       reference.
+
+## Phase 7: Second corrective — closing the re-verify's three WARNINGs
+
+The re-verify of `653e0cf` (Engram `sdd/a-diagram-that-compiles-or-says-why/verify-report`)
+returned PASS WITH WARNINGS — 0 CRITICAL, archivable — but named three real gaps, all one family:
+"an obligation satisfied by nothing." Commit `9ad7d43`.
+
+- [x] 7.1 (W2, pre-existing) `check_mandatory` only ever checked PDF existence — every other
+      obligation check is satisfied vacuously by an empty manifest, so a `mandatory: true` block
+      with a zero-component manifest passed everything. Reproduced first against the real
+      `es-assessment` contract via a real `render` CLI call
+      (`CLIWiringTests.test_real_section_02_es_assessment_mandatory_but_empty_manifest_refuses`),
+      then fixed: `check_mandatory` now takes a required `manifest_components` argument and also
+      refuses `MANDATORY_DIAGRAM_ABSENT` when it is empty on a mandatory block. Pure-function
+      coverage added directly to `ObligationTests`.
+- [x] 7.2 (W3, opened by `653e0cf`) Optionality reopened the same defect by silent omission —
+      stripping `components_from` from a real header let a wrong manifest pass with no
+      distinguishing signal, and the existing anti-drift test
+      (`FigureObligationTranscriptionTests.test_every_figure_declaring_block_names_a_realism_proof_
+      or_an_exemption`) never actually re-read the real header, and its own holder set (`_HOLDERS`)
+      was a hand-typed three-id dict. Fixed: the holder set is now derived
+      (`_derive_figure_holders`, parses every real `sections/*.md` header); a new test
+      (`test_every_proof_classified_block_currently_carries_the_derivation_it_claims`) fails when a
+      `"proof:"`-classified block's real header stops declaring `components_from`. Proven
+      load-bearing by `ComponentsFromDerivationGuardTests`
+      (`tests/test_paper_figure.py`): mutates a COPY of the real `sections/01-materials-and-
+      methods.md`, confirms the guard function raises, confirms the tracked file itself is
+      untouched.
+- [x] 7.3 (W4, half-closed) The derived-surface test tying `SKILL.md`/`diagram-author.md`'s
+      documented `render` flags to the real `argparse` surface was lost in the revert of the dead
+      attempt (Phase 6). Restored as `RenderDocSurfaceTests`: the real flag set is read from
+      `build_parser()` itself (never named by hand); `SKILL.md` is checked against every
+      non-test-only flag; `diagram-author.md` is checked against the flags whose own argparse help
+      text names the obligation checks (`--section`/`--block`, derived from that help text); and
+      `--expected-components` is locked out of the real surface.
+
+Full suite after this batch: `npm test` 559/559; `.venv/bin/python -m unittest discover -s tests
+-p 'test_*.py'` → 3225 tests, OK (skipped=6), exit 0 — a genuinely clean combined run this time,
+since the concurrent sibling's `mode`-widening work has since landed on the branch.
+`npm run typecheck` exit 0, no output.
