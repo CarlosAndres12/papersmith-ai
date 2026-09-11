@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,6 +22,7 @@ from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parent.parent
 SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
+CLI = SKILL_SCRIPTS / "paper_cli.py"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_block  # noqa: E402
 import paper_region  # noqa: E402
@@ -780,6 +784,118 @@ class InsumosObserverThreatMatrixTests(unittest.TestCase):
             tools.isdisjoint({"Write", "Edit", "Bash"}),
             f"insumos-observer.md grants {tools & {'Write', 'Edit', 'Bash'}}, "
             "which lets it write a record or invoke declare directly",
+        )
+
+
+class ReopenInvalidatesProvenanceEndToEndTests(unittest.TestCase):
+    """`specs/paper-declarations/spec.md`, `Requirement: Reopening
+    Invalidates Exactly the Blocks That Named It` — driven through the real
+    CLI end to end (`subprocess`, real `main.tex` on disk), the same shape
+    the verify FAIL's own manual reproduction used to disprove this
+    requirement.
+
+    This is deliberately NOT a test against `paper_declarations.affected_blocks`
+    or `paper_cli.compute_plan` called directly with a synthetic corpus —
+    that is exactly the shape
+    (`DeclarationsTests.test_reopen_narrows_to_exactly_the_naming_blocks`)
+    that shipped green while the actual `declare --reopen` -> `plan` chain
+    gave zero signal, because nothing outside that one test ever called
+    `affected_blocks`. This test drives `scaffold` -> `declare` -> `open`
+    -> `substitute --contract` -> `plan` -> `declare --reopen` -> `plan`
+    as five real subprocess invocations of `paper_cli.py` and asserts the
+    block's reported state changes from `current` to `drifted`.
+    """
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-cli-reopen-test-{os.getpid()}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+        header = json.dumps({
+            "section": "reopen-e2e",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "needs-repo-url",
+                    "requires_facts": [],
+                    "requires_declarations": ["repository-url"],
+                    "citations": "none",
+                }
+            ],
+        })
+        self.contract_path = self.sections_dir / "reopen-e2e.md"
+        self.contract_path.write_text(
+            f"---\n{header}\n---\n\nProse body, never read for meaning.\n",
+            encoding="utf-8",
+        )
+
+    def _run(self, *args: str):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+        return proc.returncode, json.loads(proc.stdout), proc.stderr
+
+    def _plan_state_for(self, block_id: str) -> str:
+        code, payload, stderr = self._run(
+            "plan", "--paper", str(self.paper_dir), "--sections", str(self.sections_dir),
+        )
+        self.assertEqual(code, 0, stderr or payload)
+        provenance_by_block = {p["block"]: p["state"] for p in payload["provenance"]}
+        return provenance_by_block[block_id]
+
+    def test_reopen_then_plan_stops_reporting_current(self) -> None:
+        block_id = "reopen-e2e.needs-repo-url"
+
+        code, payload, stderr = self._run("scaffold", "--paper", str(self.paper_dir))
+        self.assertEqual(code, 0, stderr or payload)
+
+        code, payload, stderr = self._run(
+            "declare", "--paper", str(self.paper_dir),
+            "--declaration", "repository-url", "--value", "https://example.org/repo",
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        code, payload, stderr = self._run(
+            "open", "--paper", str(self.paper_dir),
+            "--block", block_id, "--at-end",
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        body_path = self.test_root / "body.tex"
+        body_path.write_text("some prose\n", encoding="utf-8")
+        code, payload, stderr = self._run(
+            "substitute", "--paper", str(self.paper_dir),
+            "--block", block_id, "--body", str(body_path),
+            "--contract", str(self.contract_path),
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        self.assertEqual(
+            self._plan_state_for(block_id), "current",
+            "sanity check before reopening: a freshly provenanced block "
+            "against an unchanged contract must report current",
+        )
+
+        code, payload, stderr = self._run(
+            "declare", "--paper", str(self.paper_dir), "--reopen", "repository-url",
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        self.assertEqual(
+            self._plan_state_for(block_id), "drifted",
+            "reopening 'repository-url' -- a declaration this exact block's "
+            "own contract names in requires_declarations -- must stop plan "
+            "from reporting the block current. This is the end-to-end "
+            "chain the verify FAIL's manual reproduction ran to prove "
+            "affected_blocks() had no real caller; a synthetic-corpus unit "
+            "test on that helper alone is not sufficient evidence this "
+            "requirement holds.",
         )
 
 

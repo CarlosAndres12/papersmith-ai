@@ -238,7 +238,20 @@ in one call, and writes nothing anywhere:
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `plan [--guidance <dir>]` | Read-only aggregation: guidance classes, declaration/fact fill state, per-block provenance state | `PAPER_ABSENT`, `TEX_UNDECODABLE`, marker/region grammar codes, `GUIDANCE_OUTSIDE_REPOSITORY`, `UNKNOWN_GUIDANCE_CLASS`, `MALFORMED_GUIDANCE_MARKER` (no new codes of its own) |
+| `plan [--guidance <dir>] [--sections <dir>]` | Read-only aggregation: guidance classes, declaration/fact fill state, per-block provenance state | `PAPER_ABSENT`, `TEX_UNDECODABLE`, marker/region grammar codes, `GUIDANCE_OUTSIDE_REPOSITORY`, `UNKNOWN_GUIDANCE_CLASS`, `MALFORMED_GUIDANCE_MARKER`, `SECTIONS_OUTSIDE_REPOSITORY`, `MALFORMED_HEADER`, `ID_COLLISION` (no new codes of its own) |
+
+**Reopening a fact or declaration invalidates the blocks that named it.**
+`plan` reads the `sections/` corpus (`--sections` overrides it, same shape
+as the other three corpus-reading verbs) to derive, per block, whether any
+fact or declaration its own contract names was declared or reopened after
+that block's own provenance was written — `declare`/`--reopen` both bump
+a record's own generation counter; a block whose recorded generation is
+now behind is reported `drifted`, the same state name a contract-byte edit
+already used. No new state, no new field on-disk carries a literal "stale"
+flag — this is a derived read-time property, recomputed on every `plan`
+call from `paper_declarations.affected_blocks` (the reopen-scan function)
+and the generation each record was last touched at, never from write
+order.
 
 **`guidance/` classifies as `style-reference` or `evidence`, from a
 per-folder marker only — never a folder's name.** A folder with no

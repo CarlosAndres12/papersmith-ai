@@ -164,13 +164,17 @@ def _set_record(
             f"{id_!r} is already fixed at {value_field}={existing.get(value_field)!r}; "
             "use --reopen to clear it first",
         )
+    new_generation = body.get("generation", 0) + 1
     new_records = [
         entry for entry in body["records"] if not (entry["kind"] == kind and entry["id"] == id_)
     ]
     new_records.append(
-        {"kind": kind, "id": id_, value_field: value, "fixed": True, "recorded": clock()}
+        {
+            "kind": kind, "id": id_, value_field: value, "fixed": True, "recorded": clock(),
+            "generation": new_generation,
+        }
     )
-    new_body = {"generation": body.get("generation", 0) + 1, "records": new_records}
+    new_body = {"generation": new_generation, "records": new_records}
     _write_declarations(paper_dir, pre, record, new_body)
     return {"id": id_, "kind": kind, value_field: value, "generation": new_body["generation"]}
 
@@ -231,13 +235,15 @@ def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> di
     tex_path, pre, record = _read_declarations(paper_dir)
     _verify_not_hand_edited(record)
     body = _body_or_default(record)
+    new_generation = body.get("generation", 0) + 1
     new_records = []
     for entry in body["records"]:
         if entry["kind"] == kind and entry["id"] == id_:
             entry = dict(entry)
             entry["fixed"] = False
+            entry["generation"] = new_generation
         new_records.append(entry)
-    new_body = {"generation": body.get("generation", 0) + 1, "records": new_records}
+    new_body = {"generation": new_generation, "records": new_records}
     _write_declarations(paper_dir, pre, record, new_body)
     return {"id": id_, "kind": kind, "generation": new_body["generation"]}
 

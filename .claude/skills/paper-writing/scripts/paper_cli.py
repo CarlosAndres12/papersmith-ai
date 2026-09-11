@@ -252,7 +252,7 @@ def cmd_declare(args: argparse.Namespace) -> dict:
     return paper_declarations.set_fact(paper_dir, args.fact, args.value)
 
 
-def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
+def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
     """The pure aggregation `plan` reports: every `guidance/` folder's
     class or `unclassified`; the whole `declarations` region body (fill
     and fixed state, per record); and every written block's provenance
@@ -265,6 +265,26 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
     can inject both without going through argparse's own resolution, the
     same separation `paper_readiness.compute_readiness` already keeps from
     its own `cmd_readiness` wrapper.
+
+    `sections_dir` (corrective batch, `the-paper-carries-its-own-decisions`
+    verify FAIL, CRITICAL): reopening a fact/declaration a written block
+    depends on used to leave `plan` reporting that block `current` forever
+    — `paper_declarations.affected_blocks`, the pure function the spec's
+    own "Reopening Invalidates Exactly the Blocks That Named It"
+    requirement names as the reopen scan, had exactly one caller in the
+    whole repository: its own isolated test. Optional and defaulted to
+    `None` so the two pre-existing `PlanTests` that never built a section
+    corpus keep passing unchanged; every real invocation (`cmd_plan` below)
+    always resolves and passes one. When given, a block is ALSO reported
+    `drifted` (never a new state name — `plan`'s three-state vocabulary is
+    unchanged) when `affected_blocks(corpus, id)` names it for some
+    declarations-region record whose own `generation` — bumped by both
+    `declare` and `--reopen` — is newer than the generation this block's
+    provenance was written against. This is a strict superset of "reopened
+    since": a reopen-then-redeclare with a new value also invalidates a
+    dependent block's provenance, correctly, since the block was written
+    against a value that no longer holds; `plan` never rewrites `main.tex`
+    or either region under any of this, unchanged from before.
     """
     guidance_report = paper_guidance.read_registry(guidance_dir)
 
@@ -282,6 +302,25 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
         provenance_record["body"]["records"] if provenance_record is not None else []
     )
 
+    # The generation, per block id, above which that block's own recorded
+    # provenance generation is stale -- 0 (never stale) unless some record
+    # this block's contract names was touched at a strictly later
+    # generation. Computed once, up front, from every declarations record
+    # in one pass over `affected_blocks`, rather than re-deriving the
+    # corpus per block below.
+    stale_since_generation: dict[str, int] = {}
+    if sections_dir is not None:
+        corpus = paper_graph.assemble_corpus(sections_dir)
+        for declaration_entry in declarations_body["records"]:
+            record_generation = declaration_entry.get("generation", 0)
+            if record_generation <= 0:
+                continue
+            for affected_id in paper_declarations.affected_blocks(
+                corpus, declaration_entry["id"]
+            ):
+                if record_generation > stale_since_generation.get(affected_id, 0):
+                    stale_since_generation[affected_id] = record_generation
+
     status = paper_block.status(main_tex_bytes)
     provenance_report = []
     for block in status["blocks"]:
@@ -290,10 +329,11 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
         if entry is None:
             provenance_report.append({"block": block_id, "state": "unprovenanced"})
             continue
-        drifted = paper_provenance.drift(main_tex_bytes, block_id, Path(entry["contract"]))
+        digest_drifted = paper_provenance.drift(main_tex_bytes, block_id, Path(entry["contract"]))
+        generation_drifted = stale_since_generation.get(block_id, 0) > entry.get("generation", 0)
         provenance_report.append({
             "block": block_id,
-            "state": "drifted" if drifted else "current",
+            "state": "drifted" if (digest_drifted or generation_drifted) else "current",
         })
 
     return {
@@ -306,7 +346,8 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path) -> dict:
 def cmd_plan(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
-    return compute_plan(paper_dir, guidance_dir=guidance_dir)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    return compute_plan(paper_dir, guidance_dir=guidance_dir, sections_dir=sections_dir)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -410,6 +451,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument(
         "--guidance", default=None,
         help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_plan.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
     )
 
     return parser
