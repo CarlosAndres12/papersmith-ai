@@ -203,18 +203,23 @@ PROFILE = {
             "mathematics", "matemática", "formulation",
         ],
     },
-    "documents": {
-        # SINGLE-ENTRY SHAPE ONLY -- `documents` becoming a list is Cut 3's
-        # job, not this one's (design.md's Interfaces/Contracts block).
-        # `proposals_root()` -> `revision_source`, `revision_discovery`, and
-        # the 5 hardcoded-path refusals. Required, absolute, existence NOT
-        # required (M3) -- validated by its own resolver tier, never
-        # `_REQUIRED_NESTED`'s exists()-walk.
-        "directory": _FORGE_ROOT / "proposals",
-        # Those same 5 refusals' prose, and `ARMS_UNDECLARED_CONSEQUENCE`.
-        # Deliberately NOT a member of `vocabulary.names` (design.md D6): this
-        # exact word collides with 78 of 152 campaign-proposal hits elsewhere
-        # in the engine and is governed by its own three-layer exclusion test.
-        "label": "proposal",
-    },
+    # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a
+    # LIST. This skill declares exactly ONE entry, so every byte the engine
+    # emits from it -- `DOCUMENTS_DIRECTORY`, `DOCUMENTS_LABEL`, both derived
+    # from `DOCUMENTS[0]` -- is unchanged from Cut 1/2's scalar shape.
+    "documents": [
+        {
+            # `proposals_root()` -> `revision_source`, `revision_discovery`,
+            # and the 5 hardcoded-path refusals. Required, absolute,
+            # existence NOT required (M3) -- validated by its own resolver
+            # tier, per entry, never `_REQUIRED_NESTED`'s exists()-walk.
+            "directory": _FORGE_ROOT / "proposals",
+            # Those same 5 refusals' prose, and
+            # `ARMS_UNDECLARED_CONSEQUENCE`. Deliberately NOT a member of
+            # `vocabulary.names` (design.md D6): this exact word collides
+            # with 78 of 152 campaign-proposal hits elsewhere in the engine
+            # and is governed by its own three-layer exclusion test.
+            "label": "proposal",
+        },
+    ],
 }

@@ -23,6 +23,7 @@ import copy
 import importlib.util
 import itertools
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -70,8 +71,8 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'artifact_noun': 'formulation', "
         "'names': ['equation', 'equations', 'ecuación', 'ecuaciones', "
         "'mathematics', 'matemática', 'formulation']}, "
-        f"'documents': {{'directory': Path({str(documents_dir)!r}), "
-        "'label': 'proposal'}")
+        f"'documents': [{{'directory': Path({str(documents_dir)!r}), "
+        "'label': 'proposal'}]")
 
 
 _counter = itertools.count()
@@ -472,8 +473,13 @@ _CUT2_LEAVES: tuple[str, ...] = (
     "vocabulary.subject_collective_es",
     "vocabulary.artifact_noun",
     "vocabulary.names",
-    "documents.directory",
-    "documents.label",
+    # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a
+    # LIST, validated per index -- the single declared document's own leaves
+    # are named `documents[0].directory`/`documents[0].label`, never the bare
+    # `documents.directory`/`documents.label` this tuple carried through
+    # Cut 2. `_without_leaf` below special-cases this indexed shape.
+    "documents[0].directory",
+    "documents[0].label",
 )
 
 #: `vocabulary.names` is declared at S13 (design.md D7), not S2 -- so a
@@ -521,10 +527,13 @@ def _cut2_profile(tmp_dir: Path, *, with_names: bool = True) -> dict:
             "subject_collective_es": "matemática",
             "artifact_noun": "formulation",
         },
-        "documents": {
-            "directory": tmp_dir / "proposals",
-            "label": "proposal",
-        },
+        # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is
+        # a LIST. One entry here, so every derived byte
+        # (`DOCUMENTS_DIRECTORY`/`DOCUMENTS_LABEL`) is unchanged from Cut 2's
+        # scalar shape.
+        "documents": [
+            {"directory": tmp_dir / "proposals", "label": "proposal"},
+        ],
     }
     if with_names:
         profile["vocabulary"]["names"] = [
@@ -550,8 +559,21 @@ def _to_profile_source(value) -> str:
     return repr(value)
 
 
+_INDEXED_LEAF_RE = re.compile(r"^documents\[(\d+)\]\.(directory|label)$")
+
+
 def _without_leaf(profile: dict, dotted: str) -> dict:
+    """Removes one dotted leaf from a deep copy of `profile`. Cut 3
+    (design.md D4): `documents[N].directory`/`documents[N].label` name an
+    entry INSIDE the `documents` list, never a top-level dict key -- handled
+    as its own branch rather than `dotted.split(".", 1)`, which would look
+    for a literal `documents[0]` section key that does not exist."""
     clone = copy.deepcopy(profile)
+    indexed = _INDEXED_LEAF_RE.match(dotted)
+    if indexed:
+        index, key = int(indexed.group(1)), indexed.group(2)
+        del clone["documents"][index][key]
+        return clone
     section, key = dotted.split(".", 1)
     del clone[section][key]
     return clone
@@ -605,16 +627,16 @@ class DomainFieldLeafRefusalTests(unittest.TestCase):
         self.assertEqual(
             module.PROFILE["findings"]["remedy_locus_key"], "remedy_equations")
         self.assertEqual(module.PROFILE["vocabulary"]["artifact_noun"], "formulation")
-        self.assertEqual(module.PROFILE["documents"]["label"], "proposal")
+        self.assertEqual(module.PROFILE["documents"][0]["label"], "proposal")
 
 
 class DocumentsDirectoryOwnTierTests(unittest.TestCase):
-    """M3 (design.md): `documents.directory` cannot join `_REQUIRED_NESTED`
+    """M3 (design.md): `documents[N].directory` cannot join `_REQUIRED_NESTED`
     -- that tuple's `..._UNSAFE_PATH` walk requires `.exists()`, and a
-    non-existent `documents.directory` (a clone with no `proposals/` yet)
+    non-existent `documents[0].directory` (a clone with no `proposals/` yet)
     must import fine. Threat-matrix RED test (Path traversal via profile,
-    tasks.md 2.3): relative refuses `UNSAFE_PATH`; non-existent absolute
-    imports fine."""
+    tasks.md 2.3): relative refuses `UNSAFE_PATH`, naming the indexed leaf
+    (Cut 3, design.md D4); non-existent absolute imports fine."""
 
     def _tmp_dir(self) -> Path:
         tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-documents-"))
@@ -624,13 +646,13 @@ class DocumentsDirectoryOwnTierTests(unittest.TestCase):
     def test_a_relative_documents_directory_refuses_unsafe_path(self):
         tmp_dir = self._tmp_dir()
         full = _cut2_profile(tmp_dir)
-        full["documents"]["directory"] = Path("relative/proposals")
+        full["documents"][0]["directory"] = Path("relative/proposals")
         profile_file = _write_profile(tmp_dir, full)
         with self.assertRaises(RuntimeError) as ctx:
             _fresh_resolver_load(str(profile_file))
         message = str(ctx.exception)
         self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_UNSAFE_PATH", message)
-        self.assertIn("documents.directory", message)
+        self.assertIn("documents[0].directory", message)
 
     def test_a_nonexistent_absolute_documents_directory_imports_fine(self):
         """The whole point of M3: a clone with no `proposals/` yet must not
@@ -639,10 +661,10 @@ class DocumentsDirectoryOwnTierTests(unittest.TestCase):
         catch."""
         tmp_dir = self._tmp_dir()
         full = _cut2_profile(tmp_dir)
-        self.assertFalse(full["documents"]["directory"].exists())
+        self.assertFalse(full["documents"][0]["directory"].exists())
         profile_file = _write_profile(tmp_dir, full)
         module = _fresh_resolver_load(str(profile_file))
-        self.assertFalse(Path(module.PROFILE["documents"]["directory"]).exists())
+        self.assertFalse(Path(module.PROFILE["documents"][0]["directory"]).exists())
 
 
 class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
@@ -670,7 +692,7 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
             encoding="utf-8")
 
         full = _cut2_profile(fixture_dir)
-        full["documents"]["directory"] = profile_documents_dir
+        full["documents"][0]["directory"] = profile_documents_dir
         profile_file = _write_profile(fixture_dir, full)
 
         env = dict(os.environ)

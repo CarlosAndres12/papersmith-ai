@@ -103,8 +103,14 @@ LOCUS_KEY = PROFILE["findings"]["locus_key"]  # S5
 REMEDY_LOCUS_KEY = PROFILE["findings"]["remedy_locus_key"]  # S6
 NOTATION_KEYS = PROFILE["findings"]["notation_keys"]  # S7
 CITATION_PATTERN = PROFILE["findings"]["citation_pattern"]  # S8
-DOCUMENTS_DIRECTORY = PROFILE["documents"]["directory"]  # S9
-DOCUMENTS_LABEL = PROFILE["documents"]["label"]  # S9
+# Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a LIST.
+# `DOCUMENTS_DIRECTORY`/`DOCUMENTS_LABEL` keep their S9 spellings, now
+# derived from entry 0 -- unchanged value at `len(DOCUMENTS) == 1`, which is
+# what makes this a zero-delta accessor change. Nothing below these two
+# names moves in Slice A.
+DOCUMENTS = PROFILE["documents"]  # S9, Cut 3
+DOCUMENTS_DIRECTORY = DOCUMENTS[0]["directory"]  # S9
+DOCUMENTS_LABEL = DOCUMENTS[0]["label"]  # S9
 SUBJECT_SINGULAR = PROFILE["vocabulary"]["subject_singular"]  # S10.1
 SUBJECT_PLURAL = PROFILE["vocabulary"]["subject_plural"]  # S10.2
 SUBJECT_SINGULAR_ES = PROFILE["vocabulary"]["subject_singular_es"]  # S10.3

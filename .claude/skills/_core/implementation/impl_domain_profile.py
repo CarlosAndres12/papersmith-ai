@@ -81,17 +81,28 @@ _REQUIRED_PRESENCE: tuple[tuple[str, str], ...] = (
     # requirement lands here, not above, so `DomainFieldLeafRefusalTests`'s
     # `vocabulary.names` case stays red through S12 and turns green only now.
     ("vocabulary", "names"),
-    ("documents", "label"),
+    # `documents` is NOT a member of this tuple (Cut 3, design.md D4): it is
+    # a LIST, validated per entry by its own indexed walk below --
+    # `documents[N].label`, never the bare `documents.label` pair a flat
+    # tuple entry would produce.
 )
 
-#: `documents.directory` gets its OWN tier (design.md M3): required and
-#: absolute, like `_REQUIRED_NESTED`'s pairs, but existence is NOT required.
+#: `documents[N].directory` gets its OWN validation tier per index (design.md
+#: M3, extended by Cut 3's D4 to a per-entry walk): required and absolute,
+#: like `_REQUIRED_NESTED`'s pairs, but existence is NOT required.
 #: `proposals_root()`'s own readers already tolerate an absent root --
 #: `revision_discovery` returns `empty`, `revision_source` returns `None` --
 #: so putting this leaf in `_REQUIRED_NESTED` would refuse AT IMPORT on any
 #: clone with no `proposals/` yet, turning five reported absences (the
 #: seal's own `*-e0` cases) into one fatal refusal: a behavioural delta.
-_REQUIRED_ABSOLUTE_ONLY: tuple[tuple[str, str], ...] = (("documents", "directory"),)
+#: Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a
+#: LIST, not a scalar mapping. Each entry is validated independently, by its
+#: own index -- `documents[1].directory`, never the bare `documents.directory`
+#: -- so `_REQUIRED_ABSOLUTE_ONLY`'s former single-pair tuple is replaced by
+#: the per-entry walk inside `_resolve()` below. An empty `documents` list is
+#: refused `..._INCOMPLETE` naming `documents[0]`, mirroring
+#: `_STAGE_REQUIRED`'s own `stages: []` lesson: presence of the list alone
+#: does not rule out zero entries.
 
 #: `domain-profile.ts`'s own `OBJECTIVE_REQUIRED` mirrored exactly: the four
 #: top-level keys a declared north must carry.
@@ -177,11 +188,28 @@ def _resolve() -> Mapping[str, Any]:
             "no `PROFILE`, or it is not a mapping.")
 
     missing = []
-    for section, key in (
-            _REQUIRED_NESTED + _REQUIRED_PRESENCE + _REQUIRED_ABSOLUTE_ONLY):
+    for section, key in _REQUIRED_NESTED + _REQUIRED_PRESENCE:
         section_value = profile.get(section)
         if not isinstance(section_value, Mapping) or key not in section_value:
             missing.append(f"{section}.{key}")
+
+    # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a
+    # LIST, validated per entry, by its own index -- never as a flat
+    # top-level pair. An empty list is refused naming `documents[0]` alone
+    # (mirroring `stages_incomplete`'s own reasoning: presence of the list
+    # does not rule out zero entries). A non-empty list names each missing
+    # leaf by its exact indexed path, `documents[N].directory`/
+    # `documents[N].label`.
+    documents = profile.get("documents")
+    if not isinstance(documents, (list, tuple)) or len(documents) == 0:
+        missing.append("documents[0]")
+    else:
+        for index, entry in enumerate(documents):
+            entry_is_mapping = isinstance(entry, Mapping)
+            if not entry_is_mapping or "directory" not in entry:
+                missing.append(f"documents[{index}].directory")
+            if not entry_is_mapping or "label" not in entry:
+                missing.append(f"documents[{index}].label")
 
     objective = profile.get("objective")
     if not isinstance(objective, Mapping):
@@ -231,15 +259,18 @@ def _resolve() -> Mapping[str, Any]:
             f"declares an unsafe {', '.join(unsafe)} (must be absolute and "
             "exist on disk).")
 
-    # `_REQUIRED_ABSOLUTE_ONLY` (M3): its own tier, absolute required,
-    # existence NOT required -- a separate loop and a separate message,
-    # never merged into the one above, which is exactly what would refuse
-    # `documents.directory` at import on a clone with no `proposals/` yet.
+    # `documents[N].directory` (M3, extended by Cut 3's D4): its own tier,
+    # absolute required, existence NOT required -- a separate loop and a
+    # separate message, never merged into the one above, which is exactly
+    # what would refuse a still-empty `documents[N].directory` at import on
+    # a clone with no `proposals/` (or a second document's directory) yet.
+    # `documents` is guaranteed a non-empty list of complete entries here --
+    # the missing-leaf check above already raised otherwise.
     unsafe_absolute_only = []
-    for section, key in _REQUIRED_ABSOLUTE_ONLY:
-        value = Path(profile[section][key])
+    for index, entry in enumerate(documents):
+        value = Path(entry["directory"])
         if not value.is_absolute():
-            unsafe_absolute_only.append(f"{section}.{key}")
+            unsafe_absolute_only.append(f"documents[{index}].directory")
     if unsafe_absolute_only:
         raise ImplementationProfileError(
             f"IMPLEMENTATION_DOMAIN_PROFILE_UNSAFE_PATH: {configured} "
