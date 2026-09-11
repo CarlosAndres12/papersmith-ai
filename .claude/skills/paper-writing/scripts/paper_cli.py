@@ -6,10 +6,11 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires four verbs: `scaffold`, `open`, `status`, `substitute`. Left
-extensible on purpose — a sibling change (`the-contract-is-data-not-code`)
-registers into this same front door afterwards; nothing here assumes it is
-the last verb this file will ever grow.
+Wires seven verbs: `scaffold`, `open`, `status`, `substitute` (from
+`only-the-block-changes`) and `contract`, `readiness`, `order` (from
+`the-contract-is-data-not-code`, appended afterwards — the two changes'
+entries are disjoint, so either landing order merges). Left extensible on
+purpose; nothing here assumes it is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -21,6 +22,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
 import paper_scaffold  # noqa: E402
+import paper_vocabulary  # noqa: E402
+import paper_contract  # noqa: E402
+import paper_graph  # noqa: E402
+import paper_readiness  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -43,7 +48,10 @@ WORK_STATE = "work-state"
 #: (`tests/test_paper_writing.py`) in both directions: nothing reachable is
 #: unclassified, and nothing classified here is unreachable. Never a code
 #: this file merely documents — every entry is a code some command really
-#: raises, directly or through `paper_block.py` / `paper_scaffold.py`.
+#: raises, directly or through a module this file imports
+#: (`paper_block.py`, `paper_scaffold.py`, `paper_vocabulary.py`,
+#: `paper_contract.py`, `paper_graph.py`; `paper_readiness.py` raises none
+#: of its own).
 REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- scaffold ------------------------------------------------------
     "PAPER_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
@@ -71,6 +79,18 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "ADOPT_BODY_CONFLICT": INVOCATION_DEFECT,
     "SUBSTITUTION_NOT_LOCAL": WORK_STATE,
     "TEX_MOVED": WORK_STATE,
+    # --- closed vocabularies (paper_vocabulary.py) ----------------------
+    "UNKNOWN_FACT": WORK_STATE,
+    "UNKNOWN_DECLARATION": WORK_STATE,
+    "UNKNOWN_CITATIONS_REGIME": WORK_STATE,
+    # --- header schema and insertion (paper_contract.py) ------------------
+    "MALFORMED_HEADER": WORK_STATE,
+    "HEADER_PRESENT": WORK_STATE,
+    "BODY_MUTATED": WORK_STATE,
+    "SECTIONS_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
+    # --- corpus assembly and order (paper_graph.py) -----------------------
+    "ID_COLLISION": WORK_STATE,
+    "ORDER_CYCLE": WORK_STATE,
 }
 
 
@@ -119,6 +139,44 @@ def cmd_substitute(args: argparse.Namespace) -> dict:
     return paper_block.substitute(paper_dir, args.block, new_body=raw)
 
 
+def cmd_contract(args: argparse.Namespace) -> dict:
+    if args.file:
+        header, _body = paper_contract.parse(Path(args.file).read_bytes())
+        return {
+            "section": header.section,
+            "position": header.position,
+            "after": header.after,
+            "blocks": header.blocks,
+        }
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    corpus = paper_graph.assemble_corpus(sections_dir)
+    edge_set = paper_graph.collect_edges(corpus)
+    return {
+        "sections": sorted(corpus.sections),
+        "blocks": sorted(corpus.blocks),
+        "danglingEdges": sorted(set(edge_set.dangling)),
+    }
+
+
+def cmd_readiness(args: argparse.Namespace) -> dict:
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    corpus = paper_graph.assemble_corpus(sections_dir)
+    report = paper_readiness.compute_readiness(
+        corpus,
+        satisfied_facts=set(args.fact or []),
+        satisfied_declarations=set(args.declaration or []),
+    )
+    return {"blocks": report}
+
+
+def cmd_order(args: argparse.Namespace) -> dict:
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    corpus = paper_graph.assemble_corpus(sections_dir)
+    edge_set = paper_graph.collect_edges(corpus)
+    order = paper_graph.derive_order(corpus, edge_set)
+    return {"order": order, "danglingEdges": sorted(set(edge_set.dangling))}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -156,15 +214,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="accept the on-disk body as the new baseline; rewrites the digest, never the body",
     )
 
+    p_contract = sub.add_parser(
+        "contract", help="validate the section corpus, or show one file's parsed header",
+    )
+    p_contract.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_contract.add_argument(
+        "--file", default=None,
+        help="show this one file's parsed header instead of validating the whole corpus",
+    )
+
+    p_readiness = sub.add_parser(
+        "readiness", help="per-block writable/blocked given satisfied facts and declarations",
+    )
+    p_readiness.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_readiness.add_argument(
+        "--fact", action="append", default=None,
+        help="a satisfied fact id; repeatable",
+    )
+    p_readiness.add_argument(
+        "--declaration", action="append", default=None,
+        help="a satisfied declaration id; repeatable",
+    )
+
+    p_order = sub.add_parser("order", help="derive the writing order from the block graph")
+    p_order.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+
     return parser
 
 
-COMMANDS = ("scaffold", "status", "open", "substitute")
+COMMANDS = ("scaffold", "status", "open", "substitute", "contract", "readiness", "order")
 _COMMANDS = {
     "scaffold": cmd_scaffold,
     "status": cmd_status,
     "open": cmd_open,
     "substitute": cmd_substitute,
+    "contract": cmd_contract,
+    "readiness": cmd_readiness,
+    "order": cmd_order,
 }
 
 

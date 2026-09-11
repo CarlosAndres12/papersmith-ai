@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 import unittest.mock
+import uuid
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +35,12 @@ import paper_readiness  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
+
+# The forge's vocabulary floor, defined in one place beside the suites --
+# the same import shape `tests/test_skill_audit.py` and
+# `tests/test_proposal_implementation.py` already use.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge_vocabulary  # noqa: E402
 
 
 def _header_bytes(header: dict) -> bytes:
@@ -812,6 +821,161 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(entry["missing_facts"], [])
             if entry["missing_declarations"]:
                 self.assertEqual(entry["status"], "blocked")
+
+
+def _reader_source_digest() -> str:
+    """sha256 over every `.py` file the reader ships, concatenated in a
+    fixed order. Asserted equal before and after a mutation subprocess run
+    (design.md's Mutation A: "digest-asserting the reader's own source is
+    unchanged before and after") -- a mutation that patched the reader's own
+    disk copy instead of exercising it through a fixture would move this."""
+    hasher = hashlib.sha256()
+    for name in ("paper_vocabulary.py", "paper_contract.py", "paper_graph.py",
+                 "paper_readiness.py", "paper_cli.py"):
+        hasher.update((SKILL_SCRIPTS / name).read_bytes())
+    return hasher.hexdigest()
+
+
+def _section_graph_shape(corpus, section_id: str) -> tuple:
+    """The graph-shape axis `writing-readiness`'s Mutation A anti-vacuity
+    check uses: whether `section_id` carries BOTH a section-level and a
+    block-level `after`, and whether any of its `after` entries targets a
+    section or block positioned EARLIER than the holder itself. Derived
+    from the corpus, never hand-asserted."""
+    header = corpus.sections[section_id]
+    has_section_after = bool(header.after)
+    has_block_after = any(block["after"] for block in header.blocks)
+    has_both = has_section_after and has_block_after
+
+    def target_position(target_id):
+        if target_id in corpus.sections:
+            return corpus.sections[target_id].position
+        if target_id in corpus.blocks:
+            return corpus.blocks[target_id].position
+        return None
+
+    entries = list(header.after)
+    for block in header.blocks:
+        entries += block["after"]
+
+    has_earlier_target = any(
+        (pos := target_position(entry["target"])) is not None and pos < header.position
+        for entry in entries
+    )
+
+    return (has_both, has_earlier_target)
+
+
+class MutationTests(unittest.TestCase):
+    """`writing-readiness` spec: the two executed mutations that prove the
+    reader generalizes with zero code changes -- Requirement: Eleventh
+    Contract Enters With No Code Change, and Requirement: A Fact Outside
+    the Ten Refuses."""
+
+    def test_mutation_a_the_eleventh_contract_is_novel_and_reads_correctly(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+
+        used_fact_shapes = {frozenset(block.requires_facts) for block in corpus.blocks.values()}
+        used_graph_shapes = {_section_graph_shape(corpus, sid) for sid in corpus.sections}
+
+        eleventh_facts = frozenset({"skeleton", "gap"})
+        eleventh_graph_shape = (False, True)  # a block whose `after` targets an EARLIER section
+
+        self.assertNotIn(
+            eleventh_facts, used_fact_shapes,
+            "the fixture's fact combination is already shipped -- it proves round-tripping, not generality",
+        )
+        self.assertNotIn(
+            eleventh_graph_shape, used_graph_shapes,
+            "the fixture's graph shape is already shipped -- it proves round-tripping, not generality",
+        )
+
+        test_root = FORGE_ROOT / "implementations" / f".paper-contract-mutation-a-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        temp_sections = test_root / "sections"
+        temp_sections.mkdir(parents=True)
+        for path in SECTIONS_DIR.glob("*.md"):
+            (temp_sections / path.name).write_bytes(path.read_bytes())
+
+        eleventh_body = b"This appendix is written after the title is fixed, because its examples quote it.\n"
+        _write_section(
+            temp_sections, "11-supplementary-notes.md",
+            {
+                "section": "supplementary-notes", "position": 11,
+                "blocks": [_block(
+                    "only", facts=["skeleton", "gap"],
+                    after=[{
+                        "target": "title-and-keywords",
+                        "source": {
+                            "file": "sections/11-supplementary-notes.md",
+                            "quote": "This appendix is written after the title is fixed, because its examples quote it.",
+                        },
+                    }],
+                )],
+            },
+            body=eleventh_body,
+        )
+
+        pre_digest = _reader_source_digest()
+        proc = subprocess.run(
+            [sys.executable, str(SKILL_SCRIPTS / "paper_cli.py"), "readiness",
+             "--sections", str(temp_sections), "--fact", "skeleton", "--fact", "gap"],
+            capture_output=True, text=True, timeout=30,
+        )
+        post_digest = _reader_source_digest()
+
+        self.assertEqual(pre_digest, post_digest, "the reader's own source changed during the mutation run")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        entry = next(b for b in payload["blocks"] if b["block"] == "supplementary-notes.only")
+        self.assertEqual(entry["status"], "writable")
+
+    def test_mutation_b_a_fact_outside_the_vocabulary_refuses_on_execution(self) -> None:
+        test_root = FORGE_ROOT / "implementations" / f".paper-contract-mutation-b-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        sections_dir = test_root / "sections"
+        sections_dir.mkdir(parents=True)
+        _write_section(sections_dir, "01-bad.md", {
+            "section": "bad", "position": 1,
+            "blocks": [_block("only", facts=["discussion"])],
+        })
+
+        proc = subprocess.run(
+            [sys.executable, str(SKILL_SCRIPTS / "paper_cli.py"), "readiness", "--sections", str(sections_dir)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "refused")
+        self.assertEqual(payload["code"], "UNKNOWN_FACT")
+        self.assertIn("discussion", payload["detail"])
+
+
+class VocabularyLeakTests(unittest.TestCase):
+    """Forge leak guard: `FORGE_VOCABULARY_FLOOR` must never appear in any
+    file this skill ships. `transfer` sits on it and `09-title-and-
+    keywords.md`'s own prose uses it ("the work does not transfer beyond
+    it") -- that sentence lives in `sections/`, which `shipped_documents()`
+    never reaches, but nothing newly written under
+    `.claude/skills/paper-writing/` may quote it (design.md, `What
+    Breaks`)."""
+
+    def test_no_shipped_paper_writing_document_leaks_the_forge_vocabulary_floor(self) -> None:
+        skill_root = FORGE_ROOT / ".claude" / "skills" / "paper-writing"
+        documents = forge_vocabulary.shipped_documents(skill_root)
+        self.assertGreater(len(documents), 0, "no shipped documents found under paper-writing -- scan is broken")
+
+        leaking = {}
+        for document in documents:
+            text = document.read_text(encoding="utf-8")
+            if document.suffix == ".py":
+                text = forge_vocabulary.scannable_suite_text(text)
+            hits = forge_vocabulary.leaks_in(text)
+            if hits:
+                leaking[str(document.relative_to(FORGE_ROOT))] = hits
+
+        self.assertEqual(leaking, {})
 
 
 if __name__ == "__main__":

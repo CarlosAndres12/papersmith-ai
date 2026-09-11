@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, or write into a named block of paper/main.tex without touching anything else in the file. Stdlib-only, keyless, offline, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, or read what sections/*.md declares about itself (ids, requirements, writing order). Stdlib-only, keyless, offline, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order."
 ---
 
 # Paper Writing
@@ -13,18 +13,20 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Four verbs, wired into one front door (`scripts/paper_cli.py`):
-`scaffold`, `status`, `open`, `substitute`. Block ids are opaque strings
-here — shape only (`[A-Za-z0-9._-]+`), no meaning. Which ids exist, what
-each one requires, and where in the document they belong is a sibling
-change's business, not this skill's: the engine accepts any shape-valid id
-and asks nothing else about it.
+Seven verbs, wired into one front door (`scripts/paper_cli.py`):
+`scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
+and `contract`, `readiness`, `order` (the section contract reader —
+`the-contract-is-data-not-code`). To the substitution engine, block ids
+stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
+contract reader is what now says which ids exist, what each requires, and
+where in the document they belong, entirely over in `sections/*.md`.
 
-**Not shipped yet, on purpose.** This is one of nine planned build phases,
-and only the first three landed here: scaffold, the block-substitution
-engine, and this CLI wiring. Nothing about sections, an id vocabulary, or
-document assembly exists in this skill — do not invent it, and do not read
-its absence as a bug.
+**Not shipped yet, on purpose.** Deriving a writing order and substituting a
+block by id are two capabilities that exist side by side and are not yet
+wired together: `order`'s output (a sequence of `<section>.<block>` ids) is
+not fed into `open`/`substitute` automatically, and nothing here assembles
+`paper/main.tex` from `sections/` on its own. Do not invent that wiring, and
+do not read its absence as a bug — it is a later phase.
 
 ## Every read starts the same way
 
@@ -118,24 +120,81 @@ untouched.
 
 ## What "shape only" means for block ids
 
-`[A-Za-z0-9._-]+`, nothing else. This skill never validates an id against a
-list of what should exist, never derives ordering, and never opens anything
-under `sections/`. A later change may join ids with `.` or `-` and this
-engine needs zero changes; a `/`-joined id would need a one-character
-widening of the shape class here, and nothing more. What must never
-happen from this skill's own side: reasoning about what an id *means*.
-That question belongs entirely to whatever composes this engine's `open`
-and `substitute` calls.
+`[A-Za-z0-9._-]+`, nothing else. The block-substitution engine (`open`,
+`status`, `substitute`) never validates an id against a list of what should
+exist, never derives ordering, and never opens anything under `sections/`
+itself — that reasoning is entirely the contract reader's, described below,
+and the two sides only agree on the shape class, never on meaning. A later
+change may join ids with `.` or `-` and the substitution engine needs zero
+changes; a `/`-joined id would need a one-character widening of the shape
+class there, and nothing more.
+
+## Reading the section contract
+
+Three more verbs, from `the-contract-is-data-not-code`: `contract`,
+`readiness`, `order`. Each `sections/*.md` file now opens with a
+`---`-fenced JSON header — `section`, `position`, optional `after`, and a
+`blocks` list, each block declaring `id`, `requires_facts`,
+`requires_declarations`, `citations`. The prose below the header is
+unchanged; nothing here reads it for meaning.
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `contract [--file <path>]` | Validates the whole `sections/` corpus (flat id namespace, every `after` target resolved or reported dangling), or shows one file's parsed header with `--file` | `MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`, `ID_COLLISION`, `SECTIONS_OUTSIDE_REPOSITORY` |
+| `readiness [--fact <id>]... [--declaration <id>]...` | Per-block `writable`/`blocked`, naming every still-missing fact and declaration separately | adds nothing beyond `contract`'s own guards |
+| `order` | Derives the writing order from the block graph — `position`, declared block order, and every transcribed `after` edge; never the filename | adds `ORDER_CYCLE` |
+
+`--sections <dir>` overrides the default `sections/` at the repository root
+on all three, the same shape `--paper` already has.
+
+**The three closed vocabularies** a header may draw from: ten
+`requires_facts` ids (`formulation`, `contributions`, `problem-statement`,
+`gap`, `dataset`, `experimental-design`, `implementation`, `results`,
+`limitations`, `skeleton`), six `requires_declarations` ids (`author-roles`,
+`grant-title`, `grant-code`, `repository-url`, `keyword-bounds`,
+`classification-line`), and three `citations` regimes (`discovery`,
+`resolution`, `none`). A value outside any of the three refuses
+immediately — this is deliberately closed, not a convention.
+
+**The block graph is authoritative; `position` is rendering order, not
+writing order.** Two edges are transcribed in the shipped contracts' own
+headers (`abstract` after `conclusions`, `introduction`'s `block-3` after
+`related-work`), each carrying the exact sentence that states it. A third,
+`title-and-keywords` after every section between `abstract` and
+`back-matter`, is computed from `position` rather than enumerated — see
+`specs/section-contract/spec.md`'s implementation note in
+`openspec/changes/the-contract-is-data-not-code/` for why.
+
+**Nothing here writes to `paper/main.tex`.** `order`'s output is a sequence
+of block ids (`<section>.<block>`, e.g. `introduction.block-3`) — the same
+shape `open`/`substitute` accept as `--block`. Wiring the two together
+(open every block in derived order, substitute each as it's written) is a
+later capability, not this one.
+
+### Decision Gates (contract, readiness, order)
+
+| Situation | Action |
+| --- | --- |
+| `contract` reports `danglingEdges` | An `after` target names an id absent from the corpus — not a defect on its own (deleting a contract is in scope), but confirm it is intentional before trusting `order`'s result |
+| `order` refuses `ORDER_CYCLE` | Two or more blocks' `after` edges disagree about who comes first; the refusal names every block in the cycle — fix one of the transcribed sentences, it is never resolved by re-running |
+| `readiness` reports a block `blocked` with an empty `missing_facts` | The block is waiting on a declaration only (an operator-supplied input like `repository-url`), not on any measurement |
+| A header refuses `UNKNOWN_FACT` / `UNKNOWN_DECLARATION` / `UNKNOWN_CITATIONS_REGIME` | The file declares a value outside the closed vocabulary — fix the header, the vocabularies are not extended by editing the reader |
 
 ## Refusal roster
 
 Every refusal is `Refused(code, detail)`, classified invocation-defect
 (clear it by changing the invocation alone) or work-state (something on
-disk needs a human's decision first). The roster is derived from this
-skill's own three scripts by walking their source
-(`tests/test_paper_writing.py`, `reachable_paper_refusal_codes` —
-the same shape `proposal-implementation`'s own roster derivation uses) and
-held to it in both directions: nothing reachable ships unclassified, and
-nothing classified here is unreachable. Adding a `Refused` anywhere in
-`paper_cli.py`, `paper_block.py` or `paper_scaffold.py` without updating
-`paper_cli.REFUSAL_CLASSIFICATION` fails that test on its own.
+disk needs a human's decision first). The roster is derived from every
+module `paper_cli.py` itself imports, by walking their source
+(`tests/test_paper_writing.py`, `reachable_paper_refusal_codes` — the same
+shape `proposal-implementation`'s own roster derivation uses) and held to
+it in both directions: nothing reachable ships unclassified, and nothing
+classified here is unreachable. The module list is derived too
+(`paper_cli_imported_modules`), from `paper_cli.py`'s own `import`
+statements rather than a hand-listed tuple — a hand-listed tuple went stale
+silently once, the day this skill grew past its first three scripts, and
+every refusal in the two new modules shipped unrostered until a later
+change re-derived it. Adding a `Refused` anywhere in a module `paper_cli.py`
+imports, without updating `paper_cli.REFUSAL_CLASSIFICATION`, fails that
+test on its own — and so does adding a module `paper_cli.py` never imports
+but expecting its refusals to be reachable through the front door.

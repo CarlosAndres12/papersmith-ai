@@ -762,17 +762,29 @@ class CLIWiringTests(unittest.TestCase):
 PAPER_BLOCK_SOURCE = (SKILL_SCRIPTS / "paper_block.py").read_text(encoding="utf-8")
 
 
-def _run_against_mutant(anchor: str, replacement: str, dotted_test: str) -> subprocess.CompletedProcess:
-    """Copy `paper_block.py` into a fresh, uniquely named temp tree at the
-    SAME relative depth the real script lives at (so the module's own
+def _run_against_mutant(
+    anchor: str, replacement: str, dotted_test: str,
+    *, source_path: Path = SKILL_SCRIPTS / "paper_block.py",
+) -> subprocess.CompletedProcess:
+    """Copy `source_path` into a fresh, uniquely named temp tree at the SAME
+    relative depth the real script lives at (so the module's own
     `parents[2]` resolution still finds `_core/implementation`), patch its
     source with exactly one substitution, and run `dotted_test` against the
-    mutant by pre-seeding `sys.modules["paper_block"]` in a bootstrap script
-    — so the mutant is used regardless of any `sys.path` manipulation
-    `tests/test_paper_writing.py` performs on its own (it inserts the REAL
+    mutant by pre-seeding `sys.modules[<source_path's own module name>]` in
+    a bootstrap script — so the mutant is used regardless of any `sys.path`
+    manipulation the test suite performs on its own (it inserts the REAL
     scripts directory at position 0 on import, which would otherwise win a
     plain `sys.path` race and silently run every mutation against the
     original file).
+
+    `source_path` defaults to `paper_block.py` for backward compatibility
+    with this module's own M1-M3 calls; any other script in the same
+    directory works identically. Every OTHER sibling script is copied
+    unmutated alongside it, because a mutated module may import one of its
+    own siblings (`paper_graph.py` imports `paper_contract.py`, which
+    imports `paper_scaffold.py` and `paper_vocabulary.py`) and that import
+    must resolve to something real rather than crash before the mutation is
+    ever exercised.
 
     Asserts the anchor matched EXACTLY once and the bytes actually changed
     before running anything: a matched-but-unapplied substitution, or one
@@ -780,17 +792,19 @@ def _run_against_mutant(anchor: str, replacement: str, dotted_test: str) -> subp
     run — and `git diff --stat` cannot catch it either, since the mutant
     lives in a temp directory this repository never tracks.
     """
-    occurrences = PAPER_BLOCK_SOURCE.count(anchor)
+    source_text = source_path.read_text(encoding="utf-8")
+    occurrences = source_text.count(anchor)
     if occurrences != 1:
         raise AssertionError(
-            f"anchor {anchor!r} matched {occurrences} times in paper_block.py; "
+            f"anchor {anchor!r} matched {occurrences} times in {source_path.name}; "
             "expected exactly 1 for the mutation to be well-defined")
-    mutated = PAPER_BLOCK_SOURCE.replace(anchor, replacement, 1)
-    if mutated == PAPER_BLOCK_SOURCE:
+    mutated = source_text.replace(anchor, replacement, 1)
+    if mutated == source_text:
         raise AssertionError("the substitution produced no byte change")
 
+    real_module_name = source_path.stem
     tmp_root = Path(tempfile.mkdtemp(prefix="paper-writing-mutant-"))
-    module_name = f"paper_block_mutant_{uuid.uuid4().hex}"
+    module_name = f"{real_module_name}_mutant_{uuid.uuid4().hex}"
     try:
         core_dst = tmp_root / "_core" / "implementation"
         core_dst.mkdir(parents=True)
@@ -798,6 +812,10 @@ def _run_against_mutant(anchor: str, replacement: str, dotted_test: str) -> subp
 
         scripts_dst = tmp_root / "paper-writing" / "scripts"
         scripts_dst.mkdir(parents=True)
+        for sibling in SKILL_SCRIPTS.glob("*.py"):
+            if sibling.resolve() == source_path.resolve():
+                continue
+            shutil.copy2(sibling, scripts_dst / sibling.name)
         mutant_path = scripts_dst / f"{module_name}.py"
         mutant_path.write_text(mutated, encoding="utf-8")
 
@@ -810,17 +828,22 @@ def _run_against_mutant(anchor: str, replacement: str, dotted_test: str) -> subp
             "import sys\n"
             "import unittest\n"
             "\n"
+            f"sys.path.insert(0, {str(scripts_dst)!r})\n"
             f"spec = importlib.util.spec_from_file_location({module_name!r}, {str(mutant_path)!r})\n"
             "mutant = importlib.util.module_from_spec(spec)\n"
-            # Registered under its OWN name too, not only under 'paper_block':
+            # Registered under its OWN name AND under the real module name:
             # @dataclass's field-type resolution reads `sys.modules[cls.__module__]`
             # (== the unique spec name) during `exec_module` itself, and a module
             # missing from sys.modules under its own name makes exec_module crash
             # before a single line of the mutation is ever exercised -- a failure
             # mode indistinguishable from a genuine test failure by exit code
-            # alone, which is exactly why this is asserted separately below.
+            # alone, which is exactly why this is asserted separately below. The
+            # real module name is also registered so a sibling module that
+            # `import`s it (e.g. `paper_graph` importing `paper_contract`) picks
+            # up the SAME mutant object rather than re-importing the unmutated
+            # copy sitting beside it in `scripts_dst`.
             f"sys.modules[{module_name!r}] = mutant\n"
-            "sys.modules['paper_block'] = mutant\n"
+            f"sys.modules[{real_module_name!r}] = mutant\n"
             "spec.loader.exec_module(mutant)\n"
             # A marker unittest's own runner never prints, so the caller can
             # tell 'the mutant module failed to even import' (a harness
@@ -942,7 +965,8 @@ def _refusal_code_argument(node):
 def _refusal_sites(node, owner: str) -> list[tuple[str, str | None]]:
     """Every refusal constructed anywhere under `node`, as `(owner, code)` —
     the same shape `test_proposal_implementation.py` uses for its own
-    roster, scoped here to this skill's three files."""
+    roster, scoped here to `paper_cli.py` and whatever it imports
+    (`paper_cli_imported_modules()`)."""
     sites: list[tuple[str, str | None]] = []
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -975,9 +999,42 @@ def _codes_from_sites(sites, constants: set[str]) -> set[str]:
     return codes
 
 
+def paper_cli_imported_modules() -> list[Path]:
+    """Every module `paper_cli.py` imports at module level via a plain
+    `import X` (never `from X import Y`, which is how it reaches
+    `impl_refusals.Refused` and contributes no roster entry of its own by
+    design), resolved to a `.py` file inside this skill's own scripts
+    directory.
+
+    Derived from `paper_cli.py`'s own imports rather than a hand-listed
+    tuple or a directory scan. A hand-listed tuple goes stale silently the
+    moment a new script is added and wired in -- measured: this skill's own
+    `paper_contract.py` and `paper_graph.py` were added and every refusal in
+    them went unrostered with no test going red, because nothing re-derived
+    the tuple. A directory scan is the OTHER wrong shape: it would claim a
+    sibling change's own modules the moment they land beside these, which is
+    exactly the whole-directory-scan pattern `.claude/skills/_core/` is
+    forbidden from reproducing (measured elsewhere in this repository, where
+    a different skill's roster derivation does scan a whole directory and is
+    the reason nothing of this skill's may live under `_core/`). Importing
+    is the correct reachability boundary either way: a module the front door
+    never imports raises nothing a user can reach through it.
+    """
+    tree = ast.parse(CLI.read_text(encoding="utf-8"))
+    modules = []
+    for node in tree.body:
+        if not isinstance(node, ast.Import):
+            continue
+        for alias in node.names:
+            candidate = SKILL_SCRIPTS / f"{alias.name}.py"
+            if candidate.is_file():
+                modules.append(candidate)
+    return modules
+
+
 def unreadable_paper_refusal_sites() -> set[tuple[str, str]]:
     sites = set()
-    for source in (CLI, SKILL_SCRIPTS / "paper_block.py", SKILL_SCRIPTS / "paper_scaffold.py"):
+    for source in (CLI, *paper_cli_imported_modules()):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         sites |= {(source.name, owner)
                   for owner, code in _refusal_sites(tree, "<module>")
@@ -990,13 +1047,16 @@ def reachable_paper_refusal_codes() -> set[str]:
     source — never hand-listed. The same shape as
     `test_proposal_implementation.reachable_refusal_codes`: a closure from
     `paper_cli.py`'s `cmd_*` roots (following calls into helpers defined in
-    `paper_cli.py` itself), UNIONED with a whole-module scan of
-    `paper_block.py` and `paper_scaffold.py` — this skill's own helper
-    modules, playing the role `_core/implementation/*.py` plays for the
-    sibling skill. `impl_refusals.py` contributes nothing: it raises no
-    `Refused` of its own (design.md's `Own modules; import only Refused`
-    decision) — the whole point of that choice being that this skill's
-    roster and the sibling skill's roster never share an entry neither owns.
+    `paper_cli.py` itself), UNIONED with a whole-module scan of every module
+    `paper_cli.py` itself imports (`paper_cli_imported_modules()` above) —
+    this skill's own helper modules, playing the role
+    `_core/implementation/*.py` plays for the sibling skill, and widening by
+    itself the moment a verb is actually wired rather than needing a second,
+    hand-maintained tuple kept in sync with the first. `impl_refusals.py`
+    contributes nothing: it raises no `Refused` of its own (design.md's `Own
+    modules; import only Refused` decision) — the whole point of that choice
+    being that this skill's roster and the sibling skill's roster never
+    share an entry neither owns.
     """
     tree = ast.parse(CLI.read_text(encoding="utf-8"))
     definitions = {node.name: node for node in tree.body
@@ -1020,7 +1080,7 @@ def reachable_paper_refusal_codes() -> set[str]:
                      if isinstance(node, ast.Name)
                      and isinstance(node.ctx, ast.Load)
                      and node.id in definitions]
-    for source in (SKILL_SCRIPTS / "paper_block.py", SKILL_SCRIPTS / "paper_scaffold.py"):
+    for source in paper_cli_imported_modules():
         module = ast.parse(source.read_text(encoding="utf-8"))
         codes |= _codes_from_sites(_refusal_sites(module, "<module>"),
                                     _module_code_constants(module))
@@ -1031,8 +1091,8 @@ class RefusalRosterTests(unittest.TestCase):
     """Every refusal reachable from a `paper_cli.py` command is classified,
     and nothing is classified that no command can reach — the lock
     `GatingRefusalRosterTests` holds `implementation_cli.py` to, derived
-    rather than hand-listed so a new `Refused` anywhere in this skill's
-    three files goes red here until somebody classifies it."""
+    rather than hand-listed so a new `Refused` anywhere in `paper_cli.py` or
+    any module it imports goes red here until somebody classifies it."""
 
     def test_every_reachable_refusal_is_classified(self) -> None:
         missing = sorted(reachable_paper_refusal_codes() - set(paper_cli.REFUSAL_CLASSIFICATION))
@@ -1055,17 +1115,23 @@ class RefusalRosterTests(unittest.TestCase):
         self.assertEqual(bad, {})
 
     def test_the_derivation_has_no_unreadable_sites(self) -> None:
-        """No refusal in this skill's three files raises a code this walk
-        cannot read as a string literal — asserted rather than assumed, so a
-        future dynamic code site is looked at by a human instead of silently
-        widening to a module's constants."""
+        """No refusal in `paper_cli.py` or any module it imports raises a
+        code this walk cannot read as a string literal — asserted rather
+        than assumed, so a future dynamic code site is looked at by a human
+        instead of silently widening to a module's constants."""
         self.assertEqual(unreadable_paper_refusal_sites(), set())
 
     def test_the_derivation_finds_the_measured_count(self) -> None:
         """Sanity check on the derivation itself: a change that adds,
         removes or renames a refusal anywhere reachable should move this
-        number, never a typo in the walk above."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 21)
+        number, never a typo in the walk above. Moved from 21 to 30 when
+        `the-contract-is-data-not-code` appended `contract`/`readiness`/
+        `order` and `paper_cli.py` started importing `paper_vocabulary.py`,
+        `paper_contract.py` and `paper_graph.py` — 3 (`UNKNOWN_FACT`,
+        `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`) + 4
+        (`MALFORMED_HEADER`, `HEADER_PRESENT`, `BODY_MUTATED`,
+        `SECTIONS_OUTSIDE_REPOSITORY`) + 2 (`ID_COLLISION`, `ORDER_CYCLE`)."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 30)
 
 
 if __name__ == "__main__":
