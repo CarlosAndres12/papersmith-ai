@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), or record/reopen a declaration or fact resolution and see the paper's overall plan. Stdlib-only, keyless, offline, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, or resolve a citation's metadata against OpenAlex/Crossref/arXiv. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve. Offline except `resolve`, which sits behind a config role that can be emptied."
 ---
 
 # Paper Writing
@@ -13,18 +13,26 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Nine verbs, wired into one front door (`scripts/paper_cli.py`):
+Ten verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
-`the-contract-is-data-not-code`), and `declare`, `plan` (the paper's own
-decisions — `the-paper-carries-its-own-decisions`). To the substitution
-engine, block ids stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no
-meaning. The contract reader is what says which ids exist, what each
-requires, and where in the document they belong, entirely over in
-`sections/*.md`. `declare`/`plan` are what records the operator-supplied
-declarations and fact resolutions those requirements name, and reports
-where the paper stands against all of it in one read-only call — see
-"The paper's own decisions" below.
+`the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
+decisions — `the-paper-carries-its-own-decisions`), and `resolve` (citation
+metadata resolution — `no-claim-without-a-source-that-holds-it`). To the
+substitution engine, block ids stay opaque strings — shape only
+(`[A-Za-z0-9._-]+`), no meaning. The contract reader is what says which ids
+exist, what each requires, and where in the document they belong, entirely
+over in `sections/*.md`. `declare`/`plan` are what records the
+operator-supplied declarations and fact resolutions those requirements
+name, and reports where the paper stands against all of it in one
+read-only call — see "The paper's own decisions" below.
+
+**This CLI is no longer offline end to end.** `resolve` is the one path
+that reaches the network — keyless, stdlib `urllib` only, against OpenAlex,
+Crossref and arXiv, behind a `papersmith.yaml` role the operator can empty.
+Every other verb remains exactly as offline as before; `resolve` refuses by
+name (`RESOLVER_UNREACHABLE`, `DISCOVERY_UNAVAILABLE`, `RESOLVER_ROLE_EMPTY`)
+rather than silently returning an empty result.
 
 **Not shipped yet, on purpose.** Deriving a writing order and substituting a
 block by id are two capabilities that exist side by side and are not yet
@@ -263,6 +271,35 @@ fresh clone; that is designed behavior, not a fault.
 `PROVENANCE_HAND_EDITED`) and writes nothing — unlike a block body, a
 region is a decision the machine reads back as authority, and adopting a
 hand edit would launder an unreviewed change into "what was decided."
+
+## No claim without a source that holds it: `resolve`
+
+Search comes first, always — but search itself runs through the agent's own
+MCP (`discovery` role, `.mcp.json`), never through this CLI. `resolve` is the
+CLI-side half: given an identifier and a named connector, it fetches
+metadata over stdlib `urllib`, keyless, and caches the result on disk keyed
+by its own digest.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py resolve \
+    --identifier 10.1000/example --resolver openalex --role resolution
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `resolve --identifier <id> --resolver {openalex,crossref,arxiv} [--role <role>]` | Resolves one identifier's metadata through one named connector and caches it | `PAPERSMITH_CONFIG_UNREADABLE`, `UNKNOWN_ROLE`, `DISCOVERY_UNAVAILABLE`, `RESOLVER_ROLE_EMPTY`, `RESOLVER_UNREACHABLE`, `IDENTIFIER_UNRESOLVED` |
+
+**Every role can be emptied in `papersmith.yaml`.** An empty `resolution`
+role refuses `RESOLVER_ROLE_EMPTY` rather than silently resolving nothing;
+an unreachable connector refuses `RESOLVER_UNREACHABLE` with a non-zero
+exit, never a silent empty result. `contact` (a courtesy `mailto` for
+OpenAlex's polite pool) is read from `papersmith.yaml`, never hardcoded, and
+is never a secret — leaving it empty just means requests go out without it.
+
+**No verdict lives in this CLI.** Whether a source's text actually supports
+a claim is a judgment the agent makes by reading a located span
+(`EvidenceSpan.locate`, `paper_evidence.py`) — this module only ever proves
+a span is real, byte for byte; it never decides what the span means.
 
 **Observing before declaring: the `insumos-observer` agent.** For the five
 facts an outside observer can check against evidence (`formulation`,

@@ -1,0 +1,348 @@
+"""paper_evidence: the claim<->source record whose load-bearing element is a
+verbatim quoted span of an ingested `.md` -- the thing that turns a citation
+verdict from an opinion into a measurement anyone can re-check
+(`no-claim-without-a-source-that-holds-it`, `evidence-set` spec).
+
+Public surface:
+
+    EvidenceSpan.locate(md_path, quote)  -> EvidenceSpan   (raises SPAN_NOT_IN_SOURCE)
+    Verdict.holds(span, reason="")        -> Verdict
+    Verdict.does_not_hold(span, reason="") -> Verdict
+    Verdict.insufficient(reason)          -> Verdict
+    EvidenceRecord.from_verdict(...)      -> EvidenceRecord
+    append_record(paper_dir, record, ...) -> dict
+    read_records(paper_dir, block_id)     -> list[dict]
+    classify_guidance_child(path, sections_dir=...) -> "evidence"|"style"|"ambiguous"
+    write_evidence_manifest(folder, section_id, papers) -> dict
+
+No I/O toward the network anywhere in this module -- resolution and metadata
+live in `paper_resolve.py`; this module only ever reads bytes already on
+disk (`design.md`, Decision 2 and 6).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_vocabulary  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
+from impl_refusals import Refused  # noqa: E402
+
+#: The manifest a folder under `guidance/<section-id>/` carries when this
+#: capability -- and only this capability -- uses it as an evidence source
+#: (`evidence-set`, Requirement: Evidence Folders Carry a Producer-Written
+#: Manifest). Deliberately a different file from `paper_guidance.py`'s own
+#: `.paper-writing.json` style-reference/evidence marker: that registry
+#: belongs to a sibling capability this change does not touch, and design.md
+#: Decision 6 is explicit that unifying the two discriminators into one
+#: shared registry is a later change's work, not this one's.
+_EVIDENCE_MANIFEST_NAME = ".papersmith-evidence.json"
+
+#: Sentinel object only `Verdict`'s own factory methods hold a reference to.
+#: `Verdict(value="holds", span=None, reason=None)` -- a direct call bypassing
+#: `.holds()`/`.does_not_hold()`/`.insufficient()` -- carries no `_token` and
+#: is refused in `__post_init__` below. This is what makes "no public
+#: string-taking constructor exists" (design.md, Decision 2) a property the
+#: interpreter enforces rather than a convention a docstring merely asks for.
+_TOKEN = object()
+
+
+@dataclass(frozen=True)
+class EvidenceSpan:
+    """A verbatim byte span inside one ingested `.md` file, located by
+    search rather than trusted from a caller-supplied offset. Frozen and
+    buildable only through `.locate()` -- there is no constructor a caller
+    can hand a fabricated `(start, end)` pair to."""
+
+    source_md: str
+    byte_start: int
+    byte_end: int
+    file_sha256: str
+    quote: str
+
+    @staticmethod
+    def locate(md_path: Path, quote: str) -> "EvidenceSpan":
+        """Byte-searches `md_path` for `quote`, encoded as UTF-8. Refuses
+        `SPAN_NOT_IN_SOURCE` (work-state) when the quote is not literally
+        present -- a paraphrase can never become a span, which is what makes
+        a spanless `Verdict.holds`/`.does_not_hold` structurally impossible
+        (`design.md`, Decision 2; `evidence-set`, Requirement: A Spanless
+        Record Is Insufficient By Construction).
+
+        The searched bytes are exactly `md_path`'s own on-disk content --
+        nothing here ever re-serializes the claim, the quote, or any value
+        under test back into the bytes being searched, which is the
+        transcription-lock failure mode this design explicitly guards
+        against (`sdd-apply` launch context, defect 1).
+        """
+        data = md_path.read_bytes()
+        needle = quote.encode("utf-8")
+        if not needle:
+            raise Refused("SPAN_NOT_IN_SOURCE", f"{md_path}: an empty quote locates nothing")
+        idx = data.find(needle)
+        if idx == -1:
+            raise Refused(
+                "SPAN_NOT_IN_SOURCE",
+                f"{md_path}: quote not found verbatim in the ingested source",
+            )
+        digest = hashlib.sha256(data).hexdigest()
+        return EvidenceSpan(
+            source_md=str(md_path),
+            byte_start=idx,
+            byte_end=idx + len(needle),
+            file_sha256=digest,
+            quote=quote,
+        )
+
+
+@dataclass(frozen=True)
+class Verdict:
+    """`holds` | `does-not-hold` | `insufficient` -- never constructed with
+    a bare verdict string (see `_TOKEN` above). `holds`/`does_not_hold`
+    require a real, located `EvidenceSpan` positionally; `insufficient`
+    takes no span at all, because there is nothing to cite
+    (`citation-validation`, Requirement: The Verdict Is Decided Against the
+    Stored Span)."""
+
+    value: str
+    span: EvidenceSpan | None
+    reason: str | None
+    _token: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _TOKEN:
+            raise TypeError(
+                "Verdict has no public constructor; use "
+                "Verdict.holds()/.does_not_hold()/.insufficient()"
+            )
+        paper_vocabulary.validate_verdict(self.value)
+
+    @staticmethod
+    def holds(span: EvidenceSpan, reason: str = "") -> "Verdict":
+        if span is None:
+            raise Refused("VERDICT_SPAN_REQUIRED", "Verdict.holds() requires a located span")
+        return Verdict(value="holds", span=span, reason=reason or None, _token=_TOKEN)
+
+    @staticmethod
+    def does_not_hold(span: EvidenceSpan, reason: str = "") -> "Verdict":
+        if span is None:
+            raise Refused(
+                "VERDICT_SPAN_REQUIRED", "Verdict.does_not_hold() requires a located span"
+            )
+        return Verdict(value="does-not-hold", span=span, reason=reason or None, _token=_TOKEN)
+
+    @staticmethod
+    def insufficient(reason: str) -> "Verdict":
+        return Verdict(value="insufficient", span=None, reason=reason, _token=_TOKEN)
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    """One claim<->source pair (`evidence-set`, Requirement: The Claim<->
+    Source Record Shape). `locator`/`source_md`/`quote` are empty exactly
+    when `verdict == "insufficient"` -- there is no other way to reach that
+    state, since `Verdict.holds`/`.does_not_hold` cannot be built without a
+    span (see `Verdict` above)."""
+
+    block_id: str
+    regime: str
+    claim: str
+    cite_key: str
+    identifier: str
+    resolver: str
+    metadata_digest: str
+    source_md: str
+    quote: str
+    locator: dict
+    verdict: str
+    round: int
+
+    def to_json(self) -> dict:
+        return {
+            "block_id": self.block_id,
+            "regime": self.regime,
+            "claim": self.claim,
+            "cite_key": self.cite_key,
+            "identifier": self.identifier,
+            "resolver": self.resolver,
+            "metadata_digest": self.metadata_digest,
+            "source_md": self.source_md,
+            "quote": self.quote,
+            "locator": dict(self.locator),
+            "verdict": self.verdict,
+            "round": self.round,
+        }
+
+    @staticmethod
+    def from_verdict(
+        *,
+        block_id: str,
+        regime: str,
+        claim: str,
+        cite_key: str,
+        identifier: str,
+        resolver: str,
+        metadata_digest: str,
+        verdict: Verdict,
+        round: int,
+    ) -> "EvidenceRecord":
+        if verdict.span is not None:
+            source_md = verdict.span.source_md
+            quote = verdict.span.quote
+            locator = {
+                "byte_start": verdict.span.byte_start,
+                "byte_end": verdict.span.byte_end,
+                "file_sha256": verdict.span.file_sha256,
+            }
+        else:
+            source_md = ""
+            quote = ""
+            locator = {}
+        return EvidenceRecord(
+            block_id=block_id,
+            regime=regime,
+            claim=claim,
+            cite_key=cite_key,
+            identifier=identifier,
+            resolver=resolver,
+            metadata_digest=metadata_digest,
+            source_md=source_md,
+            quote=quote,
+            locator=locator,
+            verdict=verdict.value,
+            round=round,
+        )
+
+
+def _store_path(paper_dir: Path, block_id: str) -> Path:
+    return paper_dir / ".paper-writing" / "evidence" / f"{block_id}.jsonl"
+
+
+def append_record(paper_dir: Path, record: EvidenceRecord, *, guidance_dir: Path | None = None) -> dict:
+    """Appends one JSON line to `paper/.paper-writing/evidence/<block-id>.jsonl`
+    (`evidence-set`, Requirement: The Claim<->Source Record Shape). Never
+    rewrites a prior line -- an evidence record documents a search round
+    that really happened, so an existing line is a record, not a value to
+    edit (`sdd-apply` Step 4a).
+
+    When `guidance_dir` is given and this record carries a real span, also
+    marks the guidance folder the source `.md` sits under as evidence-typed
+    (`write_evidence_manifest` below) -- the producer side of `evidence-set`'s
+    manifest requirement, exercised by the same call that proves a claim has
+    a real span rather than a second, disconnected write path.
+    """
+    path = _store_path(paper_dir, record.block_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record.to_json()) + "\n")
+    result = {"path": str(path), "block": record.block_id}
+    if guidance_dir is not None and record.source_md:
+        marked = _mark_evidence_folder(Path(record.source_md), guidance_dir, record.cite_key)
+        if marked is not None:
+            result["manifest"] = marked
+    return result
+
+
+def read_records(paper_dir: Path, block_id: str) -> list[dict]:
+    """Every record written so far for `block_id`, oldest first. A block
+    with no store yet reports an empty list -- nothing has been searched,
+    which is different from having searched and found nothing."""
+    path = _store_path(paper_dir, block_id)
+    if not path.is_file():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        records.append(json.loads(line))
+    return records
+
+
+def _section_ids(sections_dir: Path) -> set[str]:
+    if not sections_dir.is_dir():
+        return set()
+    return {entry.stem for entry in sections_dir.glob("*.md")}
+
+
+def classify_guidance_child(path: Path, *, sections_dir: Path) -> str:
+    """`evidence` | `style` | `ambiguous`, from two independent
+    discriminators (`design.md`, Decision 6): the folder's own name is a
+    section id drawn from `sections/*.md` **at runtime** -- never a literal
+    list, which is what makes renaming a section id move the evidence
+    folder with zero code changed -- and the presence of this capability's
+    own `.papersmith-evidence.json` manifest, never `paper_guidance.py`'s
+    unrelated `.paper-writing.json` marker.
+
+    Both present -> `evidence`. Neither present -> `style` (an ordinary
+    style-reference folder, name and manifest both absent). Exactly one
+    present -> `ambiguous`, resolved by neither this function nor any
+    caller in this change (`evidence-set`, Requirement: Evidence Folders
+    Carry a Producer-Written Manifest -- "name-alone is guessable,
+    manifest-alone is forgeable").
+    """
+    name_is_section = path.name in _section_ids(sections_dir)
+    has_manifest = (path / _EVIDENCE_MANIFEST_NAME).is_file()
+    if name_is_section and has_manifest:
+        return "evidence"
+    if not name_is_section and not has_manifest:
+        return "style"
+    return "ambiguous"
+
+
+def write_evidence_manifest(folder: Path, *, section_id: str, papers: list[str],
+                             created_by: str = "paper-writing") -> dict:
+    """Writes/updates `folder/.papersmith-evidence.json`: `{kind, section,
+    created_by, blocks}` (`design.md`, Decision 6). Idempotent per paper
+    name -- re-marking a folder that already names a paper does not
+    duplicate it. Never called on a folder whose name is not a section id;
+    callers that want a section-scoped evidence folder resolve that
+    themselves (`_mark_evidence_folder` below is the one caller in this
+    module).
+    """
+    folder.mkdir(parents=True, exist_ok=True)
+    manifest_path = folder / _EVIDENCE_MANIFEST_NAME
+    if manifest_path.is_file():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            existing = {}
+    else:
+        existing = {}
+    blocks = list(existing.get("blocks", [])) if isinstance(existing, dict) else []
+    for paper in papers:
+        if paper not in blocks:
+            blocks.append(paper)
+    manifest = {
+        "kind": "evidence",
+        "section": section_id,
+        "created_by": created_by,
+        "blocks": blocks,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return {"path": str(manifest_path), "manifest": manifest}
+
+
+def _mark_evidence_folder(source_md: Path, guidance_dir: Path, cite_key: str) -> dict | None:
+    """Resolves `source_md`'s immediate parent folder under `guidance_dir`
+    and marks it evidence-typed. Returns `None` (never refuses) when
+    `source_md` does not sit under `guidance_dir` at all -- a fixture
+    ingested source outside `guidance/` is a legitimate test shape
+    (design.md, `evidence-set` domain-independence fixture) and marking
+    nothing is correct, not a silent failure.
+    """
+    try:
+        resolved_source = source_md.resolve()
+        resolved_guidance = guidance_dir.resolve()
+        relative = resolved_source.relative_to(resolved_guidance)
+    except ValueError:
+        return None
+    if not relative.parts:
+        return None
+    folder = resolved_guidance / relative.parts[0]
+    return write_evidence_manifest(folder, section_id=relative.parts[0], papers=[cite_key])

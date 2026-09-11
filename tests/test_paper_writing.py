@@ -1046,8 +1046,16 @@ class RefusalRosterTests(unittest.TestCase):
         module-level refusal here. `plan`'s own wiring adds no new code:
         every refusal `compute_plan`/`cmd_plan` can raise was already
         classified by an earlier slice. `paper_objective.py` raises none of
-        its own, matching `paper_readiness.py`'s own precedent."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 45)
+        its own, matching `paper_readiness.py`'s own precedent. Moved from
+        45 to 54 in WU1 of `no-claim-without-a-source-that-holds-it`, which
+        adds `UNKNOWN_VERDICT` (`paper_vocabulary.py`, already-imported
+        module) and wires `resolve` -- `paper_cli.py` starts importing
+        `paper_evidence.py` (`SPAN_NOT_IN_SOURCE`, `VERDICT_SPAN_REQUIRED`)
+        and `paper_resolve.py` (`PAPERSMITH_CONFIG_UNREADABLE`,
+        `UNKNOWN_ROLE`, `DISCOVERY_UNAVAILABLE`, `RESOLVER_ROLE_EMPTY`,
+        `RESOLVER_UNREACHABLE`, `IDENTIFIER_UNRESOLVED`) -- 1 + 2 + 6 = 9
+        new codes."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 54)
 
 
 if __name__ == "__main__":

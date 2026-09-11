@@ -19,3 +19,24 @@ paper_ingestion:
   source_base: guidance
   # Optional: extra roots outside source_base, listed explicitly.
   source_roots: []
+
+# paper-writing's connector roles (no-claim-without-a-source-that-holds-it).
+# A role names WHAT a connector is used for, never WHICH connector -- adding,
+# removing or replacing a connector is a config edit here, never a code edit
+# (literature-search, Requirement: Connector Roles Are Configuration, Never
+# Code). `discovery` runs through the agent's own MCP servers (see
+# `.mcp.json`) and is never read by the CLI; `resolution` and `full-text`
+# are read by `paper_resolve.py` over stdlib `urllib`, keyless.
+paper_writing:
+  # A courtesy contact for OpenAlex's polite pool (their own `mailto`
+  # convention) -- never a secret, never sent to any connector when left
+  # empty. Each operator fills in their own; nothing here is a shared
+  # credential.
+  contact: ""
+  roles:
+    discovery: []
+    resolution:
+      - openalex
+      - crossref
+      - arxiv
+    full-text: []

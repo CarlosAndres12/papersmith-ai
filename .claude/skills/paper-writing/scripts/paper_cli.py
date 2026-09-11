@@ -6,15 +6,16 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires nine verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires ten verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
-(from `the-contract-is-data-not-code`); and `declare`, `plan` (from
-`the-paper-carries-its-own-decisions`, Slices B and C2 — appended
-afterwards, their entries disjoint from both prior changes' own, so any
-landing order merges). Left extensible on purpose; nothing here assumes it
-is the last verb this file will ever grow.
+(from `the-contract-is-data-not-code`); `declare`, `plan` (from
+`the-paper-carries-its-own-decisions`, Slices B and C2); and `resolve`
+(from `no-claim-without-a-source-that-holds-it`, WU1 — the one path that
+makes this CLI not offline end to end, keyless and behind a role
+`papersmith.yaml` can empty). Left extensible on purpose; nothing here
+assumes it is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ import paper_guidance  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substitute's own --contract wiring calls paper_block, which calls this module in turn
 import paper_objective  # noqa: E402,F401 -- this skill's own declared north (tests/test_agents.py); raises no Refused of its own
+import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the claim<->source record
+import paper_resolve  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the urllib resolution client
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -140,6 +143,19 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # roster derivation already performs on every imported module) ------
     "NOT_AN_OBSERVABLE_FACT": INVOCATION_DEFECT,
     "EVIDENCE_CONFLATED": INVOCATION_DEFECT,
+    # --- verdict vocabulary (paper_vocabulary.py; no-claim-without-a-
+    # source-that-holds-it Phase 1) --------------------------------------
+    "UNKNOWN_VERDICT": WORK_STATE,
+    # --- the claim<->source record and its span (paper_evidence.py; WU1) -
+    "SPAN_NOT_IN_SOURCE": WORK_STATE,
+    "VERDICT_SPAN_REQUIRED": WORK_STATE,
+    # --- the urllib resolution client (paper_resolve.py; WU1) -----------
+    "PAPERSMITH_CONFIG_UNREADABLE": WORK_STATE,
+    "UNKNOWN_ROLE": INVOCATION_DEFECT,
+    "DISCOVERY_UNAVAILABLE": WORK_STATE,
+    "RESOLVER_ROLE_EMPTY": WORK_STATE,
+    "RESOLVER_UNREACHABLE": WORK_STATE,
+    "IDENTIFIER_UNRESOLVED": WORK_STATE,
 }
 
 
@@ -250,6 +266,16 @@ def cmd_declare(args: argparse.Namespace) -> dict:
     if args.declaration:
         return paper_declarations.set_declaration(paper_dir, args.declaration, args.value)
     return paper_declarations.set_fact(paper_dir, args.fact, args.value)
+
+
+def cmd_resolve(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    config = paper_resolve.load_config()
+    result = paper_resolve.resolve_identifier(
+        args.identifier, resolver=args.resolver, role=args.role, config=config,
+    )
+    paper_resolve.cache_metadata(paper_dir, result)
+    return result
 
 
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
@@ -441,6 +467,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="the value (--declaration) or resolution (--fact) to record",
     )
 
+    p_resolve = sub.add_parser(
+        "resolve",
+        help="resolve one identifier's metadata through a named connector, keyless",
+    )
+    p_resolve.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_resolve.add_argument("--identifier", required=True, help="DOI or arXiv id to resolve")
+    p_resolve.add_argument(
+        "--resolver", required=True, choices=paper_resolve.RESOLVERS,
+        help="which connector to resolve through",
+    )
+    p_resolve.add_argument(
+        "--role", default="resolution", choices=paper_resolve.ROLES,
+        help="which papersmith.yaml connector role this call is validated against",
+    )
+
     p_plan = sub.add_parser(
         "plan", help="read-only: guidance classes, declaration/fact fill state, provenance state",
     )
@@ -462,6 +506,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
+    "resolve",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -473,6 +518,7 @@ _COMMANDS = {
     "order": cmd_order,
     "declare": cmd_declare,
     "plan": cmd_plan,
+    "resolve": cmd_resolve,
 }
 
 

@@ -45,6 +45,14 @@ DECLARATIONS: tuple[str, ...] = (
 #: `specs/section-contract`, `Requirement: Closed Citations Regime`.
 CITATIONS_REGIMES: tuple[str, ...] = ("discovery", "resolution", "none")
 
+#: A citation verdict — exactly one of these three.
+#: `no-claim-without-a-source-that-holds-it`, `citation-validation` spec,
+#: `Requirement: Three Verdicts, insufficient Is Not Lenient`. `insufficient`
+#: is not a soft `holds`: it fails the citation and consumes a search-round
+#: iteration exactly as `does-not-hold` does, everywhere this vocabulary is
+#: consumed.
+VERDICTS: tuple[str, ...] = ("holds", "does-not-hold", "insufficient")
+
 
 def validate_fact(fact_id: str) -> None:
     """Refuses `UNKNOWN_FACT` (work-state) when `fact_id` is not one of the
@@ -70,4 +78,14 @@ def validate_citations(value: str) -> None:
         raise Refused(
             "UNKNOWN_CITATIONS_REGIME",
             f"{value!r} is not one of the declared citations regimes {CITATIONS_REGIMES}",
+        )
+
+
+def validate_verdict(value: str) -> None:
+    """Refuses `UNKNOWN_VERDICT` (work-state) when `value` is not one of
+    `holds`, `does-not-hold`, `insufficient`."""
+    if value not in VERDICTS:
+        raise Refused(
+            "UNKNOWN_VERDICT",
+            f"{value!r} is not one of the declared verdicts {VERDICTS}",
         )
