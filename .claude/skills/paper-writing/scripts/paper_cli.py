@@ -7,8 +7,10 @@ invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
 Wires eight verbs: `scaffold`, `open`, `status`, `substitute` (from
-`only-the-block-changes`); `contract`, `readiness`, `order` (from
-`the-contract-is-data-not-code`); and `declare` (from
+`only-the-block-changes`; `substitute` grew an optional `--contract <path>`
+in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
+without changing what bytes get written); `contract`, `readiness`, `order`
+(from `the-contract-is-data-not-code`); and `declare` (from
 `the-paper-carries-its-own-decisions`, Slice B — appended afterwards, its
 entries disjoint from both prior changes' own, so any landing order
 merges). Left extensible on purpose; nothing here assumes it is the last
@@ -31,6 +33,7 @@ import paper_readiness  # noqa: E402
 import paper_region  # noqa: E402,F401 -- registered for the roster derivation
 import paper_guidance  # noqa: E402,F401 -- ahead of its own verb wiring (Slice C2)
 import paper_declarations  # noqa: E402
+import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substitute's own --contract wiring calls paper_block, which calls this module in turn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -126,6 +129,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "DECLARE_MODE_REQUIRED": INVOCATION_DEFECT,
     "DECLARE_MODE_CONFLICT": INVOCATION_DEFECT,
     "DECLARE_VALUE_REQUIRED": INVOCATION_DEFECT,
+    # --- substitute --contract (paper_block.py's own new step; provenance
+    # write itself is paper_provenance.py) -------------------------------
+    "CONTRACT_UNREADABLE": WORK_STATE,
+    "PROVENANCE_HAND_EDITED": WORK_STATE,
 }
 
 
@@ -168,10 +175,11 @@ def cmd_substitute(args: argparse.Namespace) -> dict:
             "ADOPT_BODY_CONFLICT",
             "--body and --adopt were given together; --adopt takes no body.",
         )
+    contract = Path(args.contract) if args.contract else None
     if args.adopt:
-        return paper_block.substitute(paper_dir, args.block, adopt=True)
+        return paper_block.substitute(paper_dir, args.block, adopt=True, contract=contract)
     raw = sys.stdin.buffer.read() if args.body == "-" else Path(args.body).read_bytes()
-    return paper_block.substitute(paper_dir, args.block, new_body=raw)
+    return paper_block.substitute(paper_dir, args.block, new_body=raw, contract=contract)
 
 
 def cmd_contract(args: argparse.Namespace) -> dict:
@@ -272,6 +280,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_substitute.add_argument(
         "--adopt", action="store_true",
         help="accept the on-disk body as the new baseline; rewrites the digest, never the body",
+    )
+    p_substitute.add_argument(
+        "--contract", default=None,
+        help="record this substitution's provenance against this contract file's current digest",
     )
 
     p_contract = sub.add_parser(

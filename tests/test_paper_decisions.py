@@ -27,6 +27,7 @@ import paper_scaffold  # noqa: E402
 import paper_vocabulary  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_provenance  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -505,6 +506,142 @@ class DeclarationsMutationTests(unittest.TestCase):
             "tests.test_paper_decisions.DeclarationsTests"
             ".test_recording_a_fact_as_a_declaration_refuses_unknown_declaration",
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class ProvenanceTests(unittest.TestCase):
+    """`specs/contract-provenance/spec.md` + the `block-substitution`
+    delta (`specs/block-substitution/spec.md`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.contract_path = Path(self._tmp.name) / "sections" / "intro.md"
+        self.contract_path.parent.mkdir(parents=True, exist_ok=True)
+        self.contract_path.write_bytes(b"contract v1\n")
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def _open_and_substitute(self, block_id, body, *, contract=None):
+        paper_block.open_block(self.paper_dir, block_id, at_end=True)
+        return paper_block.substitute(
+            self.paper_dir, block_id, new_body=body, contract=contract, clock=self._clock,
+        )
+
+    def test_provenanced_write_persists_the_write_time_baseline(self) -> None:
+        self._open_and_substitute("intro", b"hello\n", contract=self.contract_path)
+
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        record = paper_provenance.read_provenance(tex_path.read_bytes())
+        entry = next(r for r in record["body"]["records"] if r["block"] == "intro")
+        expected_digest = hashlib.sha256(b"contract v1\n").hexdigest()
+        self.assertEqual(entry["contract_sha256"], expected_digest)
+        self.assertEqual(entry["generation"], 0)
+
+    def test_provenanced_and_unprovenanced_writes_produce_identical_block_bytes(self) -> None:
+        self._open_and_substitute("with-contract", b"same body\n", contract=self.contract_path)
+        self._open_and_substitute("without-contract", b"same body\n")
+
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        status = paper_block.status(tex_path.read_bytes())
+        digest_a = next(b["digest"] for b in status["blocks"] if b["id"] == "with-contract")
+        digest_b = next(b["digest"] for b in status["blocks"] if b["id"] == "without-contract")
+        self.assertEqual(digest_a, digest_b)
+
+        record = paper_provenance.read_provenance(tex_path.read_bytes())
+        provenanced_ids = {r["block"] for r in record["body"]["records"]}
+        self.assertIn("with-contract", provenanced_ids)
+        self.assertNotIn("without-contract", provenanced_ids)
+
+    def test_unreadable_contract_refuses_before_any_write(self) -> None:
+        missing = Path(self._tmp.name) / "sections" / "missing.md"
+        paper_block.open_block(self.paper_dir, "intro", at_end=True)
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(self.paper_dir, "intro", new_body=b"x\n", contract=missing)
+        self.assertEqual(ctx.exception.code, "CONTRACT_UNREADABLE")
+        self.assertEqual(
+            tex_path.read_bytes(), pre, "no block byte and no provenance record on refusal"
+        )
+
+    def test_hand_edited_block_still_refuses_even_with_contract(self) -> None:
+        self._open_and_substitute("intro", b"hello\n", contract=self.contract_path)
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        corrupted = tex_path.read_bytes().replace(b"hello", b"hellx", 1)
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(
+                self.paper_dir, "intro", new_body=b"new\n", contract=self.contract_path,
+            )
+        self.assertEqual(ctx.exception.code, "BLOCK_HAND_EDITED")
+
+    def test_a_block_written_without_contract_is_unprovenanced(self) -> None:
+        self._open_and_substitute("methods", b"body\n")
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        self.assertIsNone(
+            paper_provenance.drift(tex_path.read_bytes(), "methods", self.contract_path)
+        )
+
+    def test_drift_is_reported_on_a_single_byte_edit_and_block_is_untouched(self) -> None:
+        self._open_and_substitute("results", b"body\n", contract=self.contract_path)
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        before = tex_path.read_bytes()
+
+        self.contract_path.write_bytes(b"contract v2\n")
+
+        self.assertTrue(
+            paper_provenance.drift(tex_path.read_bytes(), "results", self.contract_path)
+        )
+        self.assertEqual(tex_path.read_bytes(), before, "drift detection must never rewrite a block")
+
+    def test_no_drift_when_the_contract_is_unchanged(self) -> None:
+        self._open_and_substitute("results", b"body\n", contract=self.contract_path)
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+
+        self.assertFalse(
+            paper_provenance.drift(tex_path.read_bytes(), "results", self.contract_path)
+        )
+
+    def test_provenance_hand_edited_refuses_and_writes_nothing(self) -> None:
+        self._open_and_substitute("intro", b"hello\n", contract=self.contract_path)
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_provenance.read_provenance(pre)
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"contract", b"contrbct", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        paper_block.open_block(self.paper_dir, "second", at_end=True)
+        with self.assertRaises(Refused) as ctx:
+            paper_block.substitute(
+                self.paper_dir, "second", new_body=b"x\n", contract=self.contract_path,
+            )
+        self.assertEqual(ctx.exception.code, "PROVENANCE_HAND_EDITED")
+
+
+class ProvenanceMutationTests(unittest.TestCase):
+    """Mutation 3 (design.md): recomputing the baseline at read time makes
+    drift structurally undetectable."""
+
+    def test_mutation_3_recomputing_the_baseline_at_read_time_breaks_drift_detection(self) -> None:
+        proc = _run_against_mutant(
+            "return current_digest != entry[\"contract_sha256\"]",
+            "return current_digest != current_digest",
+            "tests.test_paper_decisions.ProvenanceTests"
+            ".test_drift_is_reported_on_a_single_byte_edit_and_block_is_untouched",
+            source_path=SKILL_SCRIPTS / "paper_provenance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 

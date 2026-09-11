@@ -46,6 +46,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_region  # noqa: E402
+import paper_provenance  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
@@ -436,8 +440,11 @@ def substitute(
     *,
     new_body: bytes | None = None,
     adopt: bool = False,
+    contract: Path | None = None,
+    clock=paper_region.default_clock,
 ) -> dict:
-    """The full 9-step algorithm against `<paper_dir>/main.tex`.
+    """The full algorithm against `<paper_dir>/main.tex`, 9 steps plus one
+    optional 10th.
 
     1–2. Read `main.tex` binary; digest it.
     3.   Scan and pair every marker (`MARKER_MALFORMED`, `BLOCK_UNPAIRED`,
@@ -448,10 +455,25 @@ def substitute(
     8.   Re-read `main.tex`; compare against the digest from step 2 — a
          compare-and-swap precondition (`TEX_MOVED`) guarding against a
          second session's edit landing between this call's read and write.
+    8b.  If `contract` was given, prove it is readable NOW, before any byte
+         reaches disk (`CONTRACT_UNREADABLE`, `the-paper-carries-its-own-
+         decisions`'s own step, inserted here rather than at the top so
+         every PRE-EXISTING refusal above still fires in exactly the same
+         order it always has — this never reorders or suppresses one of
+         them, block-substitution's own additive-refusal requirement).
     9.   Write the one-deep pre-image, THEN atomically replace `main.tex`.
          Step 8 precedes step 9 so a stale pre-image is never written; a
          crash between the two writes leaves the pre-image identical to
          `main.tex`, which is harmless.
+    10.  If `contract` was given, record its provenance
+         (`paper_provenance.record_write`) — the block body written in
+         step 9 is IDENTICAL whether or not `contract` is supplied; only
+         the `provenance` region differs (`PROVENANCE_HAND_EDITED` may
+         still refuse here, after the block itself is already written —
+         the block write and the provenance write are not one atomic
+         transaction, matching design.md's own "written body is unchanged"
+         acceptance criterion, which says nothing about provenance being
+         all-or-nothing with it).
     """
     validate_block_id(block_id)
     tex_path = resolve_main_tex(paper_dir)
@@ -469,8 +491,17 @@ def substitute(
             "main.tex changed on disk between this call's read and its write",
         )
 
+    if contract is not None:
+        try:
+            contract.read_bytes()
+        except OSError as exc:
+            raise Refused("CONTRACT_UNREADABLE", f"{contract}: {exc}")
+
     _atomic_replace(_pre_image_path(paper_dir), pre)
     _atomic_replace(tex_path, candidate)
+
+    if contract is not None:
+        paper_provenance.record_write(tex_path, block_id, contract, clock=clock)
 
     return {
         "block": block_id,

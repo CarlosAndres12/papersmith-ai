@@ -1034,8 +1034,12 @@ class RefusalRosterTests(unittest.TestCase):
         `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`,
         `DECLARE_VALUE_REQUIRED` from `cmd_declare`'s own mode selection in
         this file — `UNKNOWN_DECLARATION`/`UNKNOWN_FACT` are reused
-        verbatim from Phase 2 and add nothing new to the set."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 41)
+        verbatim from Phase 2 and add nothing new to the set. Moved from 41
+        to 43 in Slice C1, which adds `CONTRACT_UNREADABLE` (raised
+        directly inside `paper_block.substitute`, already-imported) and
+        `PROVENANCE_HAND_EDITED` (from the newly-imported
+        `paper_provenance.py`)."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 43)
 
 
 if __name__ == "__main__":
