@@ -27,6 +27,8 @@ SECTIONS_DIR = FORGE_ROOT / "sections"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_vocabulary  # noqa: E402
 import paper_contract  # noqa: E402
+import paper_graph  # noqa: E402
+import paper_readiness  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -474,6 +476,342 @@ class HeaderInsertionTests(unittest.TestCase):
 
             self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
             self.assertEqual(path.read_bytes(), original)
+
+
+def _write_section(directory: Path, filename: str, header: dict, body: bytes = b"Prose.\n") -> None:
+    (directory / filename).write_bytes(_header_bytes(header) + body)
+
+
+def _block(block_id: str, *, facts=(), declarations=(), citations="none", after=None) -> dict:
+    entry = {
+        "id": block_id,
+        "requires_facts": list(facts),
+        "requires_declarations": list(declarations),
+        "citations": citations,
+    }
+    if after is not None:
+        entry["after"] = after
+    return entry
+
+
+def _quote_source(file: str, quote: str) -> dict:
+    return {"file": file, "quote": quote}
+
+
+class GraphTests(unittest.TestCase):
+    """`section-contract` spec: flat id namespace, `after` transcription and
+    resolution, the exactly-two literal cross-section edges, and the
+    position-derived third edge the orchestrator settled at apply time
+    (`specs/section-contract/spec.md`'s Implementation note)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    # --- flat id namespace -------------------------------------------------
+
+    def test_a_block_id_colliding_with_a_section_id_refuses_id_collision(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1, "blocks": [_block("only")],
+        })
+        _write_section(self.sections_dir, "02-b.md", {
+            "section": "b", "position": 2, "blocks": [_block("a")],  # collides with section "a"
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "ID_COLLISION")
+        self.assertIn("a", ctx.exception.detail)
+
+    def test_disjoint_ids_across_sections_assemble_cleanly(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1, "blocks": [_block("only")],
+        })
+        _write_section(self.sections_dir, "02-b.md", {
+            "section": "b", "position": 2, "blocks": [_block("only")],  # same raw id, different section: fine
+        })
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(set(corpus.blocks), {"a.only", "b.only"})
+
+    # --- after: section target expands to every block ----------------------
+
+    def test_after_naming_a_section_expands_to_every_block_of_it(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "blocks": [_block("first"), _block("second")],
+        })
+        _write_section(self.sections_dir, "02-b.md", {
+            "section": "b", "position": 2,
+            "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "irrelevant")}],
+            "blocks": [_block("only")],
+        })
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+        edge_set = paper_graph.collect_edges(corpus)
+
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+        self.assertIn(("a.first", "b.only"), pairs)
+        self.assertIn(("a.second", "b.only"), pairs)
+
+    # --- after: an absent target is reported, never refused ----------------
+
+    def test_dangling_after_target_is_reported_never_refused(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "after": [{"target": "nonexistent", "source": _quote_source("sections/01-a.md", "x")}],
+            "blocks": [_block("only")],
+        })
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+        edge_set = paper_graph.collect_edges(corpus)  # must not raise
+
+        self.assertIn("nonexistent", edge_set.dangling)
+
+    # --- transcription lock: real corpus ------------------------------------
+
+    def _real_corpus(self):
+        return paper_graph.assemble_corpus(SECTIONS_DIR)
+
+    def test_every_transcribed_afters_quote_is_a_substring_of_its_named_file(self) -> None:
+        corpus = self._real_corpus()
+
+        def collapsed(text: str) -> str:
+            return " ".join(text.split())
+
+        checked = 0
+        for section_id, header in corpus.sections.items():
+            entries = list(header.after)
+            for raw_block in header.blocks:
+                entries += raw_block["after"]
+            for entry in entries:
+                source = entry["source"]
+                file_path = FORGE_ROOT / source["file"]
+                file_text = collapsed(file_path.read_text(encoding="utf-8"))
+                self.assertIn(
+                    collapsed(source["quote"]), file_text,
+                    f"{section_id}: quote not found verbatim (whitespace-collapsed) in {source['file']}",
+                )
+                checked += 1
+
+        self.assertGreater(checked, 0, "no transcribed after entries were found to check")
+
+    # --- exactly two literal cross-section edges, derived not hand-listed --
+
+    def test_the_shipped_corpus_has_exactly_two_literal_cross_section_after_edges(self) -> None:
+        corpus = self._real_corpus()
+
+        cross_section = set()
+        for section_id, header in corpus.sections.items():
+            for entry in header.after:
+                if entry["target"] != section_id and entry["target"] in corpus.sections:
+                    cross_section.add((section_id, entry["target"]))
+            for raw_block in header.blocks:
+                for entry in raw_block["after"]:
+                    if entry["target"] != section_id and entry["target"] in corpus.sections:
+                        cross_section.add((f"{section_id}.{raw_block['id']}", entry["target"]))
+
+        self.assertEqual(
+            cross_section,
+            {("abstract", "conclusions"), ("introduction.block-3", "related-work")},
+        )
+
+    # --- the position-derived third edge (orchestrator settlement) ---------
+
+    def test_title_and_keywords_position_derived_edge_targets_exactly_the_seven_body_sections(self) -> None:
+        corpus = self._real_corpus()
+
+        body_sections = {
+            sid for sid, header in corpus.sections.items()
+            if corpus.sections["abstract"].position < header.position < corpus.sections["back-matter"].position
+        }
+
+        self.assertEqual(
+            body_sections,
+            {
+                "introduction", "related-work", "materials-and-methods",
+                "experimental-setup", "results-and-discussion", "limitations",
+                "conclusions",
+            },
+        )
+
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+        tk_blocks = corpus.order_by_section["title-and-keywords"]
+        for section_id in body_sections:
+            for target_qualified in corpus.order_by_section[section_id]:
+                for tk_qualified in tk_blocks:
+                    self.assertIn((target_qualified, tk_qualified), pairs)
+
+    def test_position_derived_edge_is_computed_from_looked_up_positions_not_a_hardcoded_integer(self) -> None:
+        # Re-derive the same corpus with abstract's position changed (still
+        # a valid, internally consistent renumbering) and confirm the body
+        # set moves with it -- proof the computation reads `position` via
+        # section id lookups rather than a baked-in `2`/`10` pair.
+        with tempfile.TemporaryDirectory() as tmp:
+            alt_dir = Path(tmp) / "sections"
+            alt_dir.mkdir()
+            _write_section(alt_dir, "01-title-and-keywords.md", {
+                "section": "title-and-keywords", "position": 1, "blocks": [_block("only")],
+            })
+            _write_section(alt_dir, "02-abstract.md", {
+                "section": "abstract", "position": 3, "blocks": [_block("only")],  # moved from 2 to 3
+            })
+            _write_section(alt_dir, "03-middle.md", {
+                "section": "middle", "position": 4, "blocks": [_block("only")],
+            })
+            _write_section(alt_dir, "04-back-matter.md", {
+                "section": "back-matter", "position": 5, "blocks": [_block("only")],
+            })
+
+            corpus = paper_graph.assemble_corpus(alt_dir)
+            edge_set = paper_graph.collect_edges(corpus)
+            pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+            self.assertIn(("middle.only", "title-and-keywords.only"), pairs)
+
+
+class OrderTests(unittest.TestCase):
+    """`writing-readiness` spec: the derived writing order, and its
+    distinctness from both filename order and rendering (`position`)
+    order."""
+
+    def test_order_is_deterministic_across_repeated_derivations(self) -> None:
+        corpus_1 = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edges_1 = paper_graph.collect_edges(corpus_1)
+        order_1 = paper_graph.derive_order(corpus_1, edges_1)
+
+        corpus_2 = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edges_2 = paper_graph.collect_edges(corpus_2)
+        order_2 = paper_graph.derive_order(corpus_2, edges_2)
+
+        self.assertEqual(order_1, order_2)
+
+    def test_rendering_order_differs_from_filename_order(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        # Rendering order: by `position` -- introduction (3) before
+        # related-work (4), even though the filenames sort the other way
+        # (06-introduction.md > 05-related-work.md).
+        self.assertLess(corpus.sections["introduction"].position, corpus.sections["related-work"].position)
+        filenames = sorted(p.name for p in SECTIONS_DIR.glob("*.md"))
+        intro_filename_index = filenames.index("06-introduction.md")
+        rw_filename_index = filenames.index("05-related-work.md")
+        self.assertGreater(intro_filename_index, rw_filename_index)  # filename order disagrees
+
+    def test_related_work_precedes_introduction_block_3_and_follows_blocks_1_2_4(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edges = paper_graph.collect_edges(corpus)
+        order = paper_graph.derive_order(corpus, edges)
+        index = {qid: i for i, qid in enumerate(order)}
+
+        for rw_block in corpus.order_by_section["related-work"]:
+            self.assertLess(index["introduction.block-1"], index[rw_block])
+            self.assertLess(index["introduction.block-2"], index[rw_block])
+            self.assertLess(index["introduction.block-4"], index[rw_block])
+            self.assertLess(index[rw_block], index["introduction.block-3"])
+
+    def test_a_two_block_mutual_after_cycle_refuses_order_cycle_naming_both(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            sections_dir.mkdir()
+            _write_section(sections_dir, "01-a.md", {
+                "section": "a", "position": 1,
+                "blocks": [_block(
+                    "x", after=[{"target": "b.y", "source": _quote_source("sections/01-a.md", "irrelevant")}]
+                )],
+            })
+            _write_section(sections_dir, "02-b.md", {
+                "section": "b", "position": 2,
+                "blocks": [_block(
+                    "y", after=[{"target": "a.x", "source": _quote_source("sections/02-b.md", "irrelevant")}]
+                )],
+            })
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+
+            with self.assertRaises(Refused) as ctx:
+                paper_graph.derive_order(corpus, edges)
+
+            self.assertEqual(ctx.exception.code, "ORDER_CYCLE")
+            self.assertIn("a.x", ctx.exception.detail)
+            self.assertIn("b.y", ctx.exception.detail)
+
+    def test_acyclic_synthetic_corpus_orders_without_refusing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            sections_dir.mkdir()
+            _write_section(sections_dir, "01-a.md", {
+                "section": "a", "position": 1, "blocks": [_block("only")],
+            })
+            _write_section(sections_dir, "02-b.md", {
+                "section": "b", "position": 2,
+                "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "x")}],
+                "blocks": [_block("only")],
+            })
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            order = paper_graph.derive_order(corpus, edges)
+
+            self.assertLess(order.index("a.only"), order.index("b.only"))
+
+
+class ReadinessTests(unittest.TestCase):
+    """`writing-readiness` spec: per-block `writable`/`blocked`, and the
+    case a facts-only check gets wrong."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def test_a_block_with_every_requirement_satisfied_is_writable(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "blocks": [_block("only", facts=["dataset"])],
+        })
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+
+        report = paper_readiness.compute_readiness(corpus, satisfied_facts={"dataset"}, satisfied_declarations=set())
+
+        entry = next(r for r in report if r["block"] == "a.only")
+        self.assertEqual(entry["status"], "writable")
+        self.assertEqual(entry["missing_facts"], [])
+        self.assertEqual(entry["missing_declarations"], [])
+
+    def test_a_block_blocked_only_by_a_declaration_is_not_writable(self) -> None:
+        _write_section(self.sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "blocks": [_block("only", facts=["dataset"], declarations=["repository-url"])],
+        })
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+
+        report = paper_readiness.compute_readiness(
+            corpus, satisfied_facts={"dataset"}, satisfied_declarations=set()
+        )
+
+        entry = next(r for r in report if r["block"] == "a.only")
+        self.assertEqual(entry["status"], "blocked")
+        self.assertEqual(entry["missing_facts"], [])
+        self.assertEqual(entry["missing_declarations"], ["repository-url"])
+
+    def test_back_matter_reports_zero_missing_facts_and_its_declarations_missing(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+
+        report = paper_readiness.compute_readiness(corpus, satisfied_facts=set(), satisfied_declarations=set())
+
+        bm_entries = [r for r in report if r["block"].startswith("back-matter.")]
+        self.assertGreater(len(bm_entries), 0)
+        for entry in bm_entries:
+            self.assertEqual(entry["missing_facts"], [])
+            if entry["missing_declarations"]:
+                self.assertEqual(entry["status"], "blocked")
 
 
 if __name__ == "__main__":
