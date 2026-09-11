@@ -67,7 +67,9 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'subject_plural_es': 'ecuaciones', "
         "'subject_collective': 'mathematics', "
         "'subject_collective_es': 'matemática', "
-        "'artifact_noun': 'formulation'}, "
+        "'artifact_noun': 'formulation', "
+        "'names': ['equation', 'equations', 'ecuación', 'ecuaciones', "
+        "'mathematics', 'matemática', 'formulation']}, "
         f"'documents': {{'directory': Path({str(documents_dir)!r}), "
         "'label': 'proposal'}")
 
@@ -641,6 +643,54 @@ class DocumentsDirectoryOwnTierTests(unittest.TestCase):
         profile_file = _write_profile(tmp_dir, full)
         module = _fresh_resolver_load(str(profile_file))
         self.assertFalse(Path(module.PROFILE["documents"]["directory"]).exists())
+
+
+class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
+    """Threat-matrix RED test (design.md, Environment-variable routing,
+    task 9.2): `IMPLEMENTATION_PROPOSALS` must still win over
+    `documents.directory` -- `proposals_root()`'s override check runs
+    BEFORE the profile-supplied default, exactly as it did in Cut 1 for the
+    hardcoded `FORGE_ROOT / "proposals"`. Proven via a real subprocess
+    against a Cut-2-complete fixture profile whose `documents.directory`
+    deliberately points somewhere else, never a monkeypatch (recorded
+    scar: patching a module attribute has zero effect on a subprocess)."""
+
+    def test_the_env_override_wins_over_documents_directory(self):
+        fixture_dir = Path(tempfile.mkdtemp(prefix="documents-directory-override-"))
+        self.addCleanup(shutil.rmtree, fixture_dir, ignore_errors=True)
+        profile_documents_dir = fixture_dir / "not-the-real-proposals-dir"
+        profile_documents_dir.mkdir()
+        env_documents_dir = fixture_dir / "the-real-proposals-dir"
+        env_documents_dir.mkdir()
+        revision_name = "seal-2.md"
+        (env_documents_dir / revision_name).write_text(
+            "the env-routed revision text\n", encoding="utf-8")
+        (profile_documents_dir / revision_name).write_text(
+            "the profile-routed revision text (must not be read)\n",
+            encoding="utf-8")
+
+        full = _cut2_profile(fixture_dir)
+        full["documents"]["directory"] = profile_documents_dir
+        profile_file = _write_profile(fixture_dir, full)
+
+        env = dict(os.environ)
+        env[_ENV_VAR] = str(profile_file)
+        env["IMPLEMENTATION_PROPOSALS"] = str(env_documents_dir)
+        proc = subprocess.run(
+            [sys.executable, str(LAUNCHER), "admit", "--target",
+             "/tmp/does-not-matter-for-this-refusal", "--name", "Method",
+             "--revision", revision_name],
+            capture_output=True, text=True, env=env)
+
+        # The refusal this hits (target/`src/` absent) fires AFTER
+        # `revision_source` reads the bound text -- so a refusal naming
+        # anything at all proves the environment-routed file, not the
+        # profile-routed one, was read.
+        self.assertNotIn(
+            "REVISION_UNREADABLE", proc.stdout + proc.stderr,
+            "the env override did not win: the revision was reported "
+            "unreadable, which only happens if the profile's own "
+            "documents.directory was read instead")
 
 
 if __name__ == "__main__":

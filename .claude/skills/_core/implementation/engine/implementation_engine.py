@@ -90,6 +90,28 @@ REMOTE_EXECUTION_SHARD_IO_SCRIPT = (
 SKILL_ROOT = PROFILE["kit"]["root"]
 CLI_PATH = PROFILE["cli"]["path"]
 
+# Cut 2 (`the-domain-crosses-the-seam`, design.md D1/D7): the domain
+# vocabulary surface, hoisted here once -- exactly where `SKILL_ROOT`/
+# `CLI_PATH` already are -- rather than re-read at each of the sites design.md
+# D2 locates by name. Landed ONE constant per S-step (D7's landing order:
+# S3-S9), never all at once, so a seal movement attributes to exactly the
+# field just landed.
+CLAIM_KEY = PROFILE["provenance"]["claim_key"]  # S3
+AUTHORED_INIT_SENTENCE = PROFILE["provenance"]["authored_init_sentence"]  # S4
+ARTIFACT_NOUN = PROFILE["vocabulary"]["artifact_noun"]  # S4
+LOCUS_KEY = PROFILE["findings"]["locus_key"]  # S5
+REMEDY_LOCUS_KEY = PROFILE["findings"]["remedy_locus_key"]  # S6
+NOTATION_KEYS = PROFILE["findings"]["notation_keys"]  # S7
+CITATION_PATTERN = PROFILE["findings"]["citation_pattern"]  # S8
+DOCUMENTS_DIRECTORY = PROFILE["documents"]["directory"]  # S9
+DOCUMENTS_LABEL = PROFILE["documents"]["label"]  # S9
+SUBJECT_SINGULAR = PROFILE["vocabulary"]["subject_singular"]  # S10.1
+SUBJECT_PLURAL = PROFILE["vocabulary"]["subject_plural"]  # S10.2
+SUBJECT_SINGULAR_ES = PROFILE["vocabulary"]["subject_singular_es"]  # S10.3
+SUBJECT_PLURAL_ES = PROFILE["vocabulary"]["subject_plural_es"]  # S10.4
+SUBJECT_COLLECTIVE = PROFILE["vocabulary"]["subject_collective"]  # S10.5
+SUBJECT_COLLECTIVE_ES = PROFILE["vocabulary"]["subject_collective_es"]  # S10.6
+
 #: The prefix EVERY command this engine publishes carries, and the reason it
 #: is not simply `implementation_cli.py`.
 #:
@@ -2800,7 +2822,7 @@ def unreached_mathematics(modules: list[dict], declaration: dict,
             "sections": module.get("sections", []),
             # What the arm claims to exercise and does not, named at the resolution
             # the reader can act on: the equation, not the section it lives in.
-            "equations": module.get("equations", []),
+            CLAIM_KEY: module.get(CLAIM_KEY, []),
             "declaredBy": declared_by,
         })
     return unreached
@@ -2813,10 +2835,10 @@ def unreached_mathematics(modules: list[dict], declaration: dict,
 #: instead of general.
 ARMS_UNDECLARED_CONSEQUENCE = (
     "{count} module{plural} under `src/{package}/` declare{verb} the sections "
-    "of a proposal, and no arm claims any of them: `{path}` names `arms` "
+    "of a {document}, and no arm claims any of them: `{path}` names `arms` "
     "empty. `unreachedModules` is the one join this flow makes between the "
     "method's own provenance and the bench's declaration -- the two documents "
-    "can both be impeccable while an arm reimplements an equation instead of "
+    "can both be impeccable while an arm reimplements an {subject} instead of "
     "calling it, and only crossing them says so. It is built FROM `arms`, so "
     "with none declared it answers `[]` on every run whatever those modules "
     "hold and whatever the harness calls; `armsReached` answers `null` for "
@@ -2863,7 +2885,8 @@ def undeclared_arms_note(target: Path, name: str, declaration: dict,
     holder = f"src/{package}_Benchmark/__init__.py"
     return ARMS_UNDECLARED_CONSEQUENCE.format(
         count=len(claimable), plural="" if len(claimable) == 1 else "s",
-        verb="s" if len(claimable) == 1 else "", package=package, path=holder)
+        verb="s" if len(claimable) == 1 else "", package=package, path=holder,
+        document=DOCUMENTS_LABEL, subject=SUBJECT_SINGULAR)
 
 
 def benchmark_unfaithfulness(target: Path, name: str) -> list[dict]:
@@ -2884,7 +2907,7 @@ def benchmark_unfaithfulness(target: Path, name: str) -> list[dict]:
             continue
         modules.append({"module": str(file.relative_to(target)),
                         "sections": prov.get("sections", []),
-                        "equations": prov.get("equations", [])})
+                        CLAIM_KEY: prov.get(CLAIM_KEY, [])})
     return unreached_mathematics(
         modules, declaration, benchmark_reach(target, package, bench_package))
 
@@ -3271,7 +3294,7 @@ def wiring_proposal(target: Path, name: str, baselines: list[str]) -> dict:
         modules.append({
             "module": f"src/{package_name(name)}/{file.name}",
             "sections": provenance.get("sections", []),
-            "equations": provenance.get("equations", []),
+            CLAIM_KEY: provenance.get(CLAIM_KEY, []),
             "invariants": provenance.get("invariants", []),
         })
 
@@ -4239,10 +4262,8 @@ def authored_package_init(name: str) -> str:
     Exports the target's own modules, and step 9 has written none of them
     yet, so it exports nothing.
     """
-    return (f'"""Reference implementation of the {name} formulation.\n\n'
-            "Each module declares the sections and equations it implements in\n"
-            "`__provenance__`, and every invariant listed there has a matching\n"
-            "test under tests/.\n"
+    return (f'"""Reference implementation of the {name} {ARTIFACT_NOUN}.\n\n'
+            f"{AUTHORED_INIT_SENTENCE}"
             '"""\n\n'
             "__all__ = []\n")
 
@@ -4416,7 +4437,7 @@ def proposals_root() -> Path:
     suite depend on one paper.
     """
     override = os.environ.get("IMPLEMENTATION_PROPOSALS")
-    return Path(override) if override else FORGE_ROOT / "proposals"
+    return Path(override) if override else DOCUMENTS_DIRECTORY
 
 
 #: The first bytes a published revision carries, and the only fact about a
@@ -4576,7 +4597,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
     source = revision_source(revision)
     if source is None:
         return {"status": "unknown", "reason": f"revision {revision!r} not readable",
-                "unknownEquations": [], "undefinedNotation": [], "introducesNotation": []}
+                NOTATION_KEYS["unknown"]: [], "undefinedNotation": [], "introducesNotation": []}
 
     tags = set(TAG_RE.findall(source))
     unknown_equations: list[str] = []
@@ -4584,7 +4605,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
     introduces: list[str] = []
 
     for finding in findings:
-        for field in ("equations", "remedy_equations"):
+        for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
             missing = [e for e in finding.get(field, []) if e not in tags]
             if missing:
                 unknown_equations.append(f"{finding['id']}.{field}: {missing}")
@@ -4602,7 +4623,7 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
         status = "needs-deliberation"
     else:
         status = "ok"
-    return {"status": status, "unknownEquations": unknown_equations,
+    return {"status": status, NOTATION_KEYS["unknown"]: unknown_equations,
             "undefinedNotation": undefined_notation, "introducesNotation": introduces}
 
 
@@ -7257,7 +7278,7 @@ def migrate(target: Path, current: dict) -> None:
         f"chore(structure): normalize repository layout for {current['name']}")
 
 
-CITATION_RE = re.compile(r"Ecs?\.?\s*\(?(\d+)\)?|Eq\.?\s*\(?(\d+)\)?|Ecuaciones?\s*\((\d+)\)")
+CITATION_RE = re.compile(CITATION_PATTERN)
 
 
 def finding_impact(finding: dict, source: str) -> dict:
@@ -7269,7 +7290,7 @@ def finding_impact(finding: dict, source: str) -> dict:
     nobody else refers to, adding nothing, is local. Anything else carries
     implications the deliberation has to weigh with time, not inline.
     """
-    equations = finding.get("remedy_equations", [])
+    equations = finding.get(REMEDY_LOCUS_KEY, [])
     citations = 0
     for match in CITATION_RE.finditer(source):
         number = match.group(1) or match.group(2) or match.group(3)
@@ -7277,7 +7298,7 @@ def finding_impact(finding: dict, source: str) -> dict:
             citations += 1
     introduces = len(finding.get("introduces", []))
     local = len(equations) <= 1 and introduces == 0 and citations <= 1
-    return {"equations": len(equations), "introducesNotation": introduces,
+    return {NOTATION_KEYS["locus"]: len(equations), "introducesNotation": introduces,
             "citedElsewhere": citations, "class": "local" if local else "structural"}
 
 
@@ -7382,15 +7403,15 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
         adoption = adoption_state(finding, source)
         item = {"id": finding["id"], "kind": finding.get("kind"),
                 "status": finding.get("status"), "rate": finding.get("rate"),
-                "equations": finding.get("equations"),
-                "remedyEquations": finding.get("remedy_equations"),
+                NOTATION_KEYS["locus"]: finding.get(LOCUS_KEY),
+                NOTATION_KEYS["remedyLocus"]: finding.get(REMEDY_LOCUS_KEY),
                 "introduces": finding.get("introduces", []),
                 "impact": impact, "adoption": adoption,
                 "statement": finding.get("statement"), "remedy": finding.get("remedy")}
         if adoption["state"] == "adopted":
             settled.append(item)
         elif (impact["class"] == "local" and finding.get("remedy_block")
-                and finding.get("remedy_equations")):
+                and finding.get(REMEDY_LOCUS_KEY)):
             # Local and written out: hand the deliberation a request it can act
             # on. The locus travels as the equation's own tag rather than as a
             # quote of the text being corrected — a bare fragment like a symbol
@@ -7403,32 +7424,43 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             # knows; `compose` does that once the entry is in hand.
             item["deliberation"] = {
                 "instruction": finding.get("remedy"),
-                "selectedEntryId": f"\\tag{{{finding['remedy_equations'][0]}}}",
+                "selectedEntryId": f"\\tag{{{finding[REMEDY_LOCUS_KEY][0]}}}",
                 "compose": {"command": "compose", "finding": finding["id"],
                             "entryTextFrom": "RESOLVE_TARGET.text"},
             }
             inline.append(item)
         else:
-            if impact["class"] == "local" and not finding.get("remedy_equations"):
+            # M2 doctrine tension (design.md, recorded unresolved, NOT fixed
+            # here): moving this hardcoded Spanish prose into `vocabulary` is
+            # correct for the extraction -- but `SKILL.md`'s own doctrine
+            # ("Speak the language the user is speaking") is violated by it
+            # being hardcoded Spanish at all, regardless of source. Cut 2
+            # hardens that violation into a contract shape rather than
+            # resolving it: translating it here would be a behavioural delta
+            # the seal must refuse.
+            if impact["class"] == "local" and not finding.get(REMEDY_LOCUS_KEY):
                 # Local by measurement only because it names no equation at all.
                 # There is no locus to resolve in the document, so there is
                 # nothing the deliberation could be asked to replace.
-                reason = ("Este hallazgo mide como local, pero no declara qué ecuación "
-                          "reescribiría (`remedy_equations` está vacío), así que no hay "
-                          "un locus que resolver en el documento.")
+                reason = (
+                    f"Este hallazgo mide como local, pero no declara qué {SUBJECT_SINGULAR_ES} "
+                    f"reescribiría (`{REMEDY_LOCUS_KEY}` está vacío), así que no hay "
+                    "un locus que resolver en el documento.")
                 item["deferredBecause"] = "remedy-locus-missing"
             elif impact["class"] == "local":
                 # Local reach, but nobody wrote the corrected block. Deferring is
                 # the honest outcome; saying "not local" here would be false.
-                reason = ("Este cambio es de alcance local, pero el hallazgo no trae el "
-                          "bloque corregido escrito (`remedy_block`). La redacción de la "
-                          "matemática es la decisión, y no se infiere de la prosa.")
+                reason = (
+                    "Este cambio es de alcance local, pero el hallazgo no trae el "
+                    "bloque corregido escrito (`remedy_block`). La redacción de la "
+                    f"{SUBJECT_COLLECTIVE_ES} es la decisión, y no se infiere de la prosa.")
                 item["deferredBecause"] = "remedy-text-missing"
             else:
                 reason = (
-                    f"Este cambio NO es local: reescribe {impact['equations']} ecuación(es), "
+                    f"Este cambio NO es local: reescribe {impact[NOTATION_KEYS['locus']]} "
+                    f"{SUBJECT_SINGULAR_ES}(es), "
                     f"agrega {impact['introducesNotation']} símbolo(s) de notación y toca "
-                    f"ecuaciones citadas {impact['citedElsewhere']} vez/veces en el resto del "
+                    f"{SUBJECT_PLURAL_ES} citadas {impact['citedElsewhere']} vez/veces en el resto del "
                     "documento. Merece una sesión propia.")
                 item["deferredBecause"] = "structural-reach"
             item["prompt"] = (
@@ -7438,7 +7470,8 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                 f"{finding.get('rate')}):\n{finding.get('statement')}\n\n"
                 f"CORRECCIÓN PROPUESTA (validada, no adoptada):\n{finding.get('remedy')}\n\n"
                 f"NOTACIÓN QUE AGREGARÍA: {', '.join(finding.get('introduces', [])) or 'ninguna'}\n"
-                f"ECUACIONES A TOCAR: {', '.join(finding.get('remedy_equations', []))}")
+                f"{SUBJECT_PLURAL_ES.upper()} A TOCAR: "
+                f"{', '.join(finding.get(REMEDY_LOCUS_KEY, []))}")
             deferred.append(item)
 
     # Diagnostic and costless (design decision 7): a new report key, never a
@@ -7552,10 +7585,11 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     verdicts = {}
     for finding in findings:
         reasons = []
-        for field in ("equations", "remedy_equations"):
+        for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
             missing = [e for e in finding.get(field, []) if e not in tags]
             if missing:
-                reasons.append(f"{field} cites equations absent from the revision: {missing}")
+                reasons.append(
+                    f"{field} cites {SUBJECT_PLURAL} absent from the revision: {missing}")
         marker = (finding.get("adoption") or {}).get("absent")
         if not marker:
             reasons.append("declares no adoption marker, so adoption could never be read back")
@@ -10922,7 +10956,7 @@ def _wiring_first_publication(target: Path, name: str, facts: dict) -> dict:
     the question that goes with it."""
     return _next_step_question_entry(
         target, name,
-        f"{name} (target {target}) declares mathematics no arm reaches, and "
+        f"{name} (target {target}) declares {SUBJECT_COLLECTIVE} no arm reaches, and "
         "the wiring draft is published beside this question; "
         + NEXT_STEP_REPAIR_CHOICE)
 
@@ -14276,7 +14310,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "module": rel,
             "revision": prov.get("revision"),
             "sections": prov.get("sections", []),
-            "equations": prov.get("equations", []),
+            CLAIM_KEY: prov.get(CLAIM_KEY, []),
             "invariants": prov.get("invariants", []),
         })
 
@@ -14637,8 +14671,8 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "status": audit_status,
             "findings": [
                 {"id": f["id"], "kind": f.get("kind"), "status": f.get("status"),
-                 "rate": f.get("rate"), "equations": f.get("equations"),
-                 "remedyEquations": f.get("remedy_equations")}
+                 "rate": f.get("rate"), NOTATION_KEYS["locus"]: f.get(LOCUS_KEY),
+                 NOTATION_KEYS["remedyLocus"]: f.get(REMEDY_LOCUS_KEY)}
                 for f in findings
             ],
             "findingsWithoutEvidence": without_evidence,

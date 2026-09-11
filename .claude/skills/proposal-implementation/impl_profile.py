@@ -191,8 +191,17 @@ PROFILE = {
         "subject_collective_es": "matemática",
         # `authored_package_init`'s `"{name} formulation"`.
         "artifact_noun": "formulation",
-        # Declared at S13 (design.md D7), alongside the two neutrality locks
-        # it exists to serve -- NOT here. See `test_implementation_domain_lock.py`.
+        # S13 (design.md D7): both neutrality locks, and nothing else --
+        # that "nothing else" is the field's own justification. Declared
+        # from the measurement's own token list (Phase 0.5's fresh scan),
+        # never from what happens to pass. Deliberately excludes "proposal"
+        # -- that word collides with 78 of 152 campaign-proposal hits
+        # elsewhere in this engine and is governed by its own three-layer
+        # exclusion test instead (design.md D6).
+        "names": [
+            "equation", "equations", "ecuación", "ecuaciones",
+            "mathematics", "matemática", "formulation",
+        ],
     },
     "documents": {
         # SINGLE-ENTRY SHAPE ONLY -- `documents` becoming a list is Cut 3's

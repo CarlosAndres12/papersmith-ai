@@ -76,6 +76,11 @@ _REQUIRED_PRESENCE: tuple[tuple[str, str], ...] = (
     ("vocabulary", "subject_collective"),
     ("vocabulary", "subject_collective_es"),
     ("vocabulary", "artifact_noun"),
+    # S13 (design.md D7): declared alongside the two neutrality locks it
+    # exists to serve, not at S2 with the other fourteen -- this presence
+    # requirement lands here, not above, so `DomainFieldLeafRefusalTests`'s
+    # `vocabulary.names` case stays red through S12 and turns green only now.
+    ("vocabulary", "names"),
     ("documents", "label"),
 )
 
