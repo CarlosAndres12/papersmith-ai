@@ -60,7 +60,7 @@ as "zero movers" for every leaf tried.
 #### Scenario: Changing one field moves only its named digest
 - GIVEN the sealed 28-case corpus
 - WHEN `provenance.claim_key` changes and the seal re-runs
-- THEN only `verify` and `handoff` digests move; the other 26 are byte-identical
+- THEN only `probe`, `verify-a`, `verify-b` and `verify-t` move -- the measured set, never `handoff` -- and the other 24 are byte-identical
 
 ### Requirement: The Coarse Provenance Key Stays Shared, Never Profile-Supplied
 
