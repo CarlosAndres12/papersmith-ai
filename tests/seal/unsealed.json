@@ -1,0 +1,3 @@
+{
+  "propose": "propose's own campaign-proposal digest (cmd_propose's `digest` field) is sha256 over a JSON payload that embeds `_now_iso8601()` (the `at` field) at second precision, so it differs across two immediate runs even with source/session/job/rationale fixed -- none of the six normalized sources reach an opaque hash DERIVED FROM, but not textually equal to, a timestamp. Every other byte of the output agrees across the two runs; only `digest` moves. Measured via seal_capture.py's own double-run disagreement check, 2026-09-11."
+}

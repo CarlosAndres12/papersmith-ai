@@ -515,13 +515,33 @@ the design is the whole change.
 
 ## Open Questions
 
-- [ ] The 60 s discover-delta ceiling is a forecast, not a measurement. Apply measures it
-      and reports; if it is exceeded, cut duplicate cases, never covered commands.
-- [ ] Whether `materialize` (case 28) has a bounded, non-destructive leg on a scratch copy,
-      or must be pinned at a refusal like `step` and `env`. Resolve by running it once
-      during apply; if it is slow or reaches outside the scratch, pin it at its refusal.
+- [x] The 60 s discover-delta ceiling is a forecast, not a measurement. **Resolved**: the
+      new seal file's own isolated cost is `Ran 38 tests in 4.941s`, well inside the
+      ceiling; the full-suite wall-clock is dominated by inter-run system-load noise
+      (587.935s → 528.710s → 458.560s across three measurements of a growing but still
+      noise-dominated suite), never attributable to this file alone. No cases cut.
+- [x] Whether `materialize` (case 28) has a bounded, non-destructive leg on a scratch copy,
+      or must be pinned at a refusal like `step` and `env`. **Resolved**: measured —
+      `materialize --stage scaffold` (with `--plan`/`--seed`) runs instantly and writes
+      only inside the scratch target (real kit files, never outside it). Kept at its
+      current non-destructive leg; no pin needed.
 - [ ] `compose` (M1) is sealed and otherwise untouched. That decision stays out of this
       change.
+- [x] **Not anticipated by the original design, resolved during apply**: `propose`'s own
+      campaign digest embeds `_now_iso8601()`, so it disagrees across two immediate
+      captures even with source/session/job/rationale fixed — none of the six normalized
+      sources reach an opaque hash derived from, but not textually equal to, a timestamp.
+      Declared unsealed with a reason (D6's own mechanism, spec.md's own provision for
+      exactly this), rather than a seventh normalizer (spec.md names exactly six sources).
+      28 of 29 cases sealed; see `tests/seal_capture.py`'s `KNOWN_UNSEALED_REASONS`.
+- [x] **Not anticipated by the original design, resolved during apply**: case 14
+      (`verify --revision draft-1.md`, "hand-authored family + tied") cannot share fixture
+      A's declared family with case 12 (`markerOwned true`) — measured: `verify`'s
+      `discovery`/`tied`/`markerOwned` fields derive SOLELY from the target's own declared
+      revision (`cmd_verify`'s own `family` derivation), never from `--revision`. Gave case
+      14 its own fixture, `fixture_t` in `corpus.py`: `__benchmark__` undeclared, one
+      module's own `__provenance__` declares family `draft-1.md`, falling back exactly like
+      the existing precedent `test_a_directory_nobody_manages_behaves_exactly_as_it_did`.
 
 ## Citations Checked
 
