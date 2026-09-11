@@ -384,7 +384,7 @@ anything itself.**
 
 ```bash
 .venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write \
-    --section materials-and-methods --block mm-proposal \
+    --section 01-materials-and-methods --block mm-proposal \
     --draft draft.json --audit audit.json --evidence evidence.json
 ```
 

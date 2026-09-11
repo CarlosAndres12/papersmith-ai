@@ -418,6 +418,18 @@ def install_header(path: Path, header: dict) -> dict:
     existing bytes, one-shot and idempotent (design.md, `Header insertion
     into the ten shipped files`).
 
+    **Follow-up, recorded rather than acted on**: this function is exercised
+    only by `tests/test_paper_contract.py::HeaderInsertionTests` (owned by
+    `the-contract-is-data-not-code`, the change that added it) and has no
+    production caller — the corpus's ten `sections/*.md` files already carry
+    their headers, inserted once. `the-writer-may-assert-only-what-it-was-
+    given`'s own corrective re-verify flagged this as the eleventh instance
+    of "correct function wired to nothing" in this build, but it is
+    pre-existing and out of scope for that corrective: deleting or wiring a
+    caller here belongs to whoever owns the header-insertion workflow this
+    function was built for, not to a change fixing an unrelated mode-
+    transcription gap.
+
     Refuses `HEADER_PRESENT` (work-state) when `path` already opens with a
     `---` fence -- this is what makes a second run refuse rather than
     double-write. Refuses `BODY_MUTATED` (work-state) when the post-write
