@@ -943,6 +943,104 @@ class ModeWideningTests(unittest.TestCase):
                 self.assertIsNone(paper_contract.resolve_mode(header, block), (path.name, block["id"]))
 
 
+class ContractHeaderTests(unittest.TestCase):
+    """`a-diagram-that-compiles-or-says-why`, `section-contract` spec
+    delta: `figure` joins `_BLOCK_OPTIONAL`, all six subkeys required
+    (tasks.md 3.1/3.2/3.6)."""
+
+    _FIGURE = {
+        "components_from": "contributions", "ordered": True,
+        "excludes": ["dataset", "baseline"], "caption_enumerates": True,
+        "caption_decodes": True, "mandatory": True,
+    }
+
+    def _header(self, figure=None) -> dict:
+        block = {
+            "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
+            "citations": "none",
+        }
+        if figure is not None:
+            block["figure"] = figure
+        return {"section": "demo", "position": 1, "blocks": [block]}
+
+    def test_a_valid_figure_object_parses(self) -> None:
+        header = paper_contract.parse_header(self._header(figure=self._FIGURE))
+        self.assertEqual(header.blocks[0]["figure"], self._FIGURE)
+
+    def test_no_figure_key_resolves_to_none(self) -> None:
+        header = paper_contract.parse_header(self._header())
+        self.assertIsNone(header.blocks[0]["figure"])
+
+    def test_a_figure_object_missing_a_subkey_refuses_malformed_figure_obligation(self) -> None:
+        broken = {k: v for k, v in self._FIGURE.items() if k != "caption_decodes"}
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(figure=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_FIGURE_OBLIGATION")
+        self.assertIn("caption_decodes", ctx.exception.detail)
+
+    def test_a_figure_object_with_an_unknown_key_refuses_malformed_figure_obligation(self) -> None:
+        broken = dict(self._FIGURE, extra_key="nope")
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(figure=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_FIGURE_OBLIGATION")
+
+    def test_an_unknown_components_from_fact_refuses_unknown_fact(self) -> None:
+        broken = dict(self._FIGURE, components_from="not-a-real-fact")
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(figure=broken))
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_a_non_boolean_ordered_refuses_malformed_figure_obligation(self) -> None:
+        broken = dict(self._FIGURE, ordered="yes")
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(figure=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_FIGURE_OBLIGATION")
+
+    def test_a_non_string_excludes_entry_refuses_malformed_figure_obligation(self) -> None:
+        broken = dict(self._FIGURE, excludes=[1, 2])
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(figure=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_FIGURE_OBLIGATION")
+
+
+class FigureObligationTranscriptionTests(unittest.TestCase):
+    """design.md, `Open Questions`: "a test asserts each `excludes` entry and
+    the `components_from` fact name occur in the holder contract's prose,
+    whitespace-normalised." Scoped to the PROSE below the header fence, not
+    the JSON header itself -- a components_from/excludes value that only
+    ever appeared inside the machine-written header would prove nothing
+    about a human having stated it (design.md's own narrower-than-the-
+    sibling's scoping note)."""
+
+    _HOLDERS = {
+        "01-materials-and-methods.md": "mm-proposal",
+        "02-experimental-setup.md": "es-assessment",
+        "05-related-work.md": "rw-synthesis-artefact",
+    }
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return " ".join(text.split())
+
+    def test_every_excludes_entry_and_components_from_occur_in_the_holders_own_prose(self) -> None:
+        for filename, block_id in self._HOLDERS.items():
+            path = SECTIONS_DIR / filename
+            header, body = paper_contract.parse(path.read_bytes())
+            block = next(b for b in header.blocks if b["id"] == block_id)
+            figure = block["figure"]
+            self.assertIsNotNone(figure, f"{filename}: {block_id} declares no figure")
+            prose = self._normalize(body.decode("utf-8"))
+            self.assertIn(
+                self._normalize(figure["components_from"]), prose,
+                f"{filename}: components_from {figure['components_from']!r} not found in prose",
+            )
+            for excluded in figure["excludes"]:
+                self.assertIn(
+                    self._normalize(excluded), prose,
+                    f"{filename}: excludes entry {excluded!r} not found in prose",
+                )
+
+
 class RedactorInputContractTests(unittest.TestCase):
     """`evidence-bound-drafting` spec, `Requirement: Redactor Input
     Contract`."""
@@ -1962,8 +2060,20 @@ class RefusalRosterTests(unittest.TestCase):
         (`MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `AUDIT_EXHAUSTED` -- 3);
         WU2 starts importing `paper_leak.py` (`STYLE_OVERLAP` -- 1) and
         `paper_style.py` (raises none of its own, reusing
-        `SPAN_NOT_IN_SOURCE`) -- 1 + 6 + 3 + 3 + 1 = 14 new codes."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 79)
+        `SPAN_NOT_IN_SOURCE`) -- 1 + 6 + 3 + 3 + 1 = 14 new codes. Moved
+        from 79 to 93 in `a-diagram-that-compiles-or-says-why`: `paper_cli.py`
+        starts importing `paper_latex.py` (raises none of its own -- every
+        one of its refusals is reused/named by `paper_figure.py`'s own
+        call sites), `paper_figure.py` (`DIAGRAM_SOURCE_ABSENT`,
+        `LATEX_TOOLCHAIN_ABSENT`, `LATEX_PACKAGE_ABSENT`,
+        `REPAIR_BUDGET_SPENT`, `DIAGRAM_PLOTS_DATA`, `MANIFEST_SOURCE_MISMATCH`,
+        `LATEX_LOG_ABSENT`, `LATEX_OUTCOME_UNEXPLAINED` -- 8) and
+        `paper_obligation.py` (`COMPONENT_MISMATCH`, `EXCLUDED_COMPONENT`,
+        `SHARED_COMPONENT`, `CAPTION_INCOMPLETE`, `MANDATORY_DIAGRAM_ABSENT`
+        -- 5), and `paper_contract.py`'s own `_parse_figure` adds
+        `MALFORMED_FIGURE_OBLIGATION` (1) to an already-imported module --
+        8 + 5 + 1 = 14 new codes."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 93)
 
 
 if __name__ == "__main__":
