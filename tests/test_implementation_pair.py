@@ -63,6 +63,12 @@ CLI = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli
 
 CASES_PATH = TESTS_DIR / "pair" / "cases.json"
 DIGESTS_PATH = TESTS_DIR / "pair" / "digests.json"
+#: Re-verify (Cut 3, second correction) WARNING 2: the spec's own named
+#: escape valve for "a branch that cannot be captured as a byte-exact
+#: golden" (`tests/seal/unsealed.json`'s pattern), replicated here for this
+#: corpus so the set of exempt cases is a declared, enforced membership --
+#: never a silent absence.
+UNSEALED_PATH = TESTS_DIR / "pair" / "unsealed.json"
 SEAL_DIGESTS_PATH = TESTS_DIR / "seal" / "digests.json"
 
 #: Which of the pair corpus's two fixture profiles each case runs against --
@@ -94,6 +100,10 @@ def _load_cases() -> list:
 
 def _load_digests() -> dict:
     return json.loads(DIGESTS_PATH.read_text(encoding="utf-8"))
+
+
+def _load_unsealed() -> dict:
+    return json.loads(UNSEALED_PATH.read_text(encoding="utf-8"))
 
 
 def _build_env_with_profile_override(profile_path):
@@ -164,6 +174,38 @@ class PairCorpusComparisonTests(unittest.TestCase):
         case_ids = {case["id"] for case in _load_cases()}
         golden_ids = set(_load_digests())
         self.assertEqual(case_ids, golden_ids)
+
+
+class PairCorpusMembershipTests(unittest.TestCase):
+    """Re-verify (Cut 3, second correction) WARNING 2: `tests/seal/unsealed.
+    json`'s own escape valve for "a branch that cannot be captured as a
+    byte-exact golden" (its own `SealMembershipTests`), mirrored here for
+    `tests/pair/`. Both of this corpus's two existing cases already have
+    goldens (proven above), so the correct membership today is the empty
+    set -- asserted, not merely absent, so a case added later with neither
+    a golden nor a declared reason is caught instead of silently dropping
+    through."""
+
+    #: A literal, not derived -- growing this requires editing the test,
+    #: the same deliberate friction `tests/seal/unsealed.json`'s own
+    #: `SealMembershipTests.EXPECTED_UNSEALED` uses.
+    EXPECTED_UNSEALED = frozenset()
+
+    def test_every_pair_case_is_either_sealed_or_declared_unsealed(self):
+        cases = {case["id"] for case in _load_cases()}
+        digests = set(_load_digests())
+        unsealed = set(_load_unsealed())
+        self.assertEqual(digests | unsealed, cases)
+        self.assertEqual(digests & unsealed, set())
+
+    def test_the_unsealed_set_is_exactly_its_declared_membership(self):
+        self.assertEqual(frozenset(_load_unsealed()), self.EXPECTED_UNSEALED)
+
+    def test_every_unsealed_entry_states_a_reason(self):
+        for case_id, reason in _load_unsealed().items():
+            with self.subTest(case=case_id):
+                self.assertIsInstance(reason, str)
+                self.assertGreaterEqual(len(reason), 20)
 
 
 class TwoDocumentsResolveTests(unittest.TestCase):
@@ -524,6 +566,22 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
             "        'adoption': {'absent': 'a = b', 'expect': ['g = h + k']},\n"
             "        'remedy_block': '$$\\ng = h + k \\\\tag{1.1}\\n$$',\n"
             "    },\n"
+            "    {\n"
+            "        'id': 'pair-lifecycle-doc1-finding',\n"
+            "        'kind': 'gap',\n"
+            "        'status': 'measured',\n"
+            "        'rate': 'always',\n"
+            "        'statement': 'Document 1 declares its own notation, "
+            "independent of document 0.',\n"
+            "        'remedy': 'No change to document 0; this finding exists "
+            "only to prove verify routes its compatibility check to the "
+            "document it names.',\n"
+            "        'document': 'experiments',\n"
+            "        'equations': [],\n"
+            "        'remedy_equations': [],\n"
+            "        'uses': ['independently readable'],\n"
+            "        'introduces': [],\n"
+            "    },\n"
             "]\n", encoding="utf-8")
 
         subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
@@ -699,6 +757,20 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
             record["documents"],
             [{"label": "experiments", "revision": self.REVISION,
               "revisionSha256": self._doc1_sha256()}])
+        # Re-verify (Cut 3, second correction) WARNING 1: C7's
+        # `sources_by_document` construction (L7797) is reached by the
+        # subprocess above -- confirmed by the verify session's own
+        # mutation, which observed a computed-but-unchecked `"impact":
+        # {"class": {"proposal": "local"}}` -- but nothing asserted its
+        # OUTPUT. `finding_impact`'s `class` becomes a per-document MAPPING
+        # (never the plain string it is under one document) only when this
+        # exact site's `sources_by_document` argument is populated, so the
+        # type itself -- dict, not str -- is a structural control: turning
+        # this site off collapses `class` back to a bare string regardless
+        # of either finding's own content.
+        impact_class = record["findings"]["pair-lifecycle-finding"]["impact"]["class"]
+        self.assertIsInstance(impact_class, dict)
+        self.assertEqual(impact_class, {"proposal": "local"})
 
         # `verify`: C8's fidelity-by-document fold AND `admissibility_
         # record`'s own extra-document staleness read (reached because
@@ -722,6 +794,23 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         # would answer `"unknown"` regardless of whether the function ran
         # at all.
         self.assertNotEqual(extra_entry["status"], "unknown")
+
+        # Re-verify (Cut 3, second correction) WARNING 1: C7's sibling site,
+        # `cmd_verify`'s `verify_sources_by_document` construction (L14839),
+        # reached but likewise unasserted (confirmed identical to L7797 by
+        # code+test-file inspection). `pair-lifecycle-doc1-finding` (added
+        # to `tests/findings.py` above) names document 1 (`experiments`)
+        # and declares `uses: ['independently readable']` -- a phrase
+        # present verbatim in document 1's own text and ABSENT from
+        # document 0's. `remedy_compatibility` only sees it when THIS
+        # site's construction actually routes the check to document 1's
+        # text: skip the construction and the finding defaults to document
+        # 0's text, where the phrase is missing, and the audit would
+        # wrongly report it incompatible -- a genuine control, not a
+        # tautology.
+        compatibility = verify_result["audit"]["compatibility"]
+        self.assertEqual(compatibility["status"], "ok", compatibility)
+        self.assertEqual(compatibility["undefinedNotation"], [])
 
 
 if __name__ == "__main__":
