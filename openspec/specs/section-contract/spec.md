@@ -18,11 +18,20 @@ id, a mandatory `position` (rendering place), an optional `after` (list of
 section ids), an optional `mode` (the section-level default drafting mode),
 and a mandatory `blocks` list in order. Each block MUST declare `id`,
 `requires_facts`, `requires_declarations`, and `citations`; each block MAY
-declare `optional`, its own `after`, and its own `mode` (overriding the
-section-level default when present). A header missing any mandatory field, or
-carrying a key outside this widened schema, MUST refuse `MALFORMED_HEADER`
-naming the missing or unknown key. Everything below the header MUST be passed
-through unread.
+declare `optional`, its own `after`, its own `mode` (overriding the
+section-level default when present), and a `figure` object. A `figure`
+object, when present, MUST declare `ordered`, `excludes`,
+`caption_enumerates`, `caption_decodes`, and `mandatory`; it MAY additionally
+declare `components_from`, naming the one fact whose value IS the diagram's
+full expected component list — declared only when that equality genuinely
+holds (the diagram is that one fact's own list by contract), and omitted (or
+explicit `null`) for a block whose diagram is a composite crossing over
+several categories of content that no single fact's value can equal. A
+header missing any mandatory field, carrying a key outside this widened
+schema, or a `figure` object missing any of its five required subkeys, MUST
+refuse `MALFORMED_HEADER` (or `MALFORMED_FIGURE_OBLIGATION` for the `figure`
+case) naming the missing or unknown key. Everything below the header MUST be
+passed through unread.
 
 #### Scenario: Valid header parses
 
@@ -50,6 +59,27 @@ through unread.
   different `mode`
 - WHEN the reader resolves that block's effective mode
 - THEN it resolves to the block's own `mode`, not the section's
+
+#### Scenario: A valid `figure` object parses
+
+- GIVEN a block declaring `figure: {components_from: contributions, ordered:
+  true, excludes: [dataset, baseline], caption_enumerates: true,
+  caption_decodes: true, mandatory: true}`
+- WHEN the reader parses it
+- THEN it accepts the block with no refusal
+
+#### Scenario: A `figure` object missing a subkey refuses
+
+- GIVEN a block's `figure` object with no `caption_decodes` key
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_FIGURE_OBLIGATION` naming `caption_decodes`
+
+#### Scenario: A `figure` object without `components_from` parses
+
+- GIVEN a block declaring `figure: {ordered: false, excludes: [], caption_enumerates: true,
+  caption_decodes: false, mandatory: true}` (no `components_from` key)
+- WHEN the reader parses it
+- THEN it accepts the block with no refusal, and `components_from` resolves to `None`
 
 ### Requirement: Closed Fact Vocabulary
 
