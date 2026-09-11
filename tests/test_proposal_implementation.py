@@ -6871,6 +6871,51 @@ class LatestRevisionDiscoveryTests(unittest.TestCase):
         self.assertIsNone(impl.latest_revision(None))
 
 
+class NonRevisionSha256ScalarsAreDocumentCountInvariantTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 12, design.md D2/C6):
+    `cmd_verify`'s `module["stale"]` (over `prov.get("revision")`),
+    `benchmark`'s `built_against`/`staleRevision`, `admissibility_record`'s
+    returned `revision`, and `fidelity`'s `latestRevision`/`revisionSource`.
+
+    **Measured finding, recorded rather than silently absorbed** (per this
+    session's own findings policy): all five reads compare or report a
+    revision NAME (`args.revision`/a module's own declared string), never a
+    per-document content hash. A revision's name is, by this cut's own
+    central design (M5, D1b: one name resolved against every declared
+    document's own directory), the SAME string across every document --
+    there is no second name for a second document to diverge into. None of
+    these five sites reference `DOCUMENTS`/`len(DOCUMENTS)` anywhere, and
+    none needs to: their Cut-3 shape is their Cut-2 shape, unedited,
+    confirmed here rather than assumed. This is NOT a shape change to the
+    deliverable -- it is the same "every scalar wire field keeps today's
+    exact shape" invariant D2's own table already states for every class,
+    applied to five reads whose natural per-document extension is empty.
+
+    No production code changes in this phase; this class is verification
+    only, locking the finding in rather than leaving it to be re-derived
+    (or silently invalidated by a later change) the next time a document
+    joins the profile.
+    """
+
+    def test_none_of_the_five_c6_sites_reference_documents_or_its_length(self):
+        source = ENGINE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        cmd_verify = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "cmd_verify")
+        body = ast.get_source_segment(source, cmd_verify)
+        for anchor in ('module["stale"] = bool(revision) and module["revision"] != revision',
+                      'built_against = declaration.get("revision")',
+                      'stale_revision = bool(revision) and built_against != revision',
+                      '"latestRevision": revision,',
+                      '"revisionSource": "argument" if args.revision else ('):
+            self.assertIn(anchor, body, anchor)
+        admissibility_source = ast.get_source_segment(source, next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "admissibility_record"))
+        self.assertIn('"revision": record.get("revision")', admissibility_source)
+
+
 class VerifyDiscoversTheNewestRevisionTests(unittest.TestCase):
     """La costura, de punta a punta: el banco atado a una revisión vieja mientras
     en `proposals/` ya vive una más nueva, y nadie pasa `--revision`.
