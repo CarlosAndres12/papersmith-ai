@@ -1028,8 +1028,14 @@ class RefusalRosterTests(unittest.TestCase):
         (`GUIDANCE_OUTSIDE_REPOSITORY`, `UNKNOWN_GUIDANCE_CLASS`,
         `MALFORMED_GUIDANCE_MARKER`) at module level ahead of either
         module's own verb wiring (tasks.md, 1.10) — six new codes, reachable
-        and classified the moment the import lands."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 36)
+        and classified the moment the import lands. Moved from 36 to 41 in
+        Slice B, which wires `declare`: `DECLARATION_FIXED` and
+        `DECLARATIONS_HAND_EDITED` from `paper_declarations.py`, plus
+        `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`,
+        `DECLARE_VALUE_REQUIRED` from `cmd_declare`'s own mode selection in
+        this file — `UNKNOWN_DECLARATION`/`UNKNOWN_FACT` are reused
+        verbatim from Phase 2 and add nothing new to the set."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 41)
 
 
 if __name__ == "__main__":

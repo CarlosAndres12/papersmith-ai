@@ -23,6 +23,10 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_block  # noqa: E402
 import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
+import paper_scaffold  # noqa: E402
+import paper_vocabulary  # noqa: E402
+import paper_graph  # noqa: E402
+import paper_declarations  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -323,6 +327,186 @@ class GuidanceRegistryMutationTests(unittest.TestCase):
         _assert_guard_failed_under_mutation(self, proc)
 
 
+_FIXED_CLOCK = "2024-01-01T00:00:00+00:00"
+
+
+def _block_record(qualified_id: str, *, requires_facts=(), requires_declarations=()):
+    """A minimal, real `paper_graph.BlockRecord` — `affected_blocks` only
+    ever reads `.requires_facts`/`.requires_declarations`, so the other
+    fields are filled with harmless placeholders rather than driven through
+    a full `assemble_corpus` disk fixture."""
+    return paper_graph.BlockRecord(
+        section="synthetic",
+        block_id=qualified_id.split(".")[-1],
+        qualified_id=qualified_id,
+        block_index=0,
+        position=1,
+        requires_facts=tuple(requires_facts),
+        requires_declarations=tuple(requires_declarations),
+        citations="none",
+        optional=False,
+    )
+
+
+class DeclarationsTests(unittest.TestCase):
+    """`specs/paper-declarations/spec.md`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_recording_a_fact_as_a_declaration_refuses_unknown_declaration(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_declaration(
+                self.paper_dir, "contributions", "x", clock=self._clock
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_DECLARATION")
+        self.assertIn("contributions", ctx.exception.detail)
+
+    def test_recording_a_declaration_as_a_fact_refuses_unknown_fact(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_fact(
+                self.paper_dir, "repository-url", "x", clock=self._clock
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertIn("repository-url", ctx.exception.detail)
+
+    def test_the_partition_is_pairwise_disjoint_and_covers_every_fact(self) -> None:
+        self.assertEqual(len(paper_declarations.OBSERVABLE_FACTS), 5)
+        self.assertEqual(len(paper_declarations.DERIVED_FACTS), 4)
+        self.assertEqual(len(paper_declarations.STRUCTURAL_FACTS), 1)
+        union = (
+            set(paper_declarations.OBSERVABLE_FACTS)
+            | set(paper_declarations.DERIVED_FACTS)
+            | set(paper_declarations.STRUCTURAL_FACTS)
+        )
+        self.assertEqual(union, set(paper_vocabulary.FACTS))
+        self.assertTrue(
+            set(paper_declarations.OBSERVABLE_FACTS).isdisjoint(paper_declarations.DERIVED_FACTS)
+        )
+        self.assertTrue(
+            set(paper_declarations.OBSERVABLE_FACTS).isdisjoint(paper_declarations.STRUCTURAL_FACTS)
+        )
+        self.assertTrue(
+            set(paper_declarations.DERIVED_FACTS).isdisjoint(paper_declarations.STRUCTURAL_FACTS)
+        )
+
+    def test_facts_and_declarations_vocabularies_are_pinned_and_disjoint(self) -> None:
+        self.assertEqual(len(paper_vocabulary.FACTS), 10)
+        self.assertEqual(len(paper_vocabulary.DECLARATIONS), 6)
+        self.assertTrue(set(paper_vocabulary.FACTS).isdisjoint(paper_vocabulary.DECLARATIONS))
+
+    def test_a_fixed_entry_refuses_a_plain_overwrite(self) -> None:
+        paper_declarations.set_declaration(
+            self.paper_dir, "author-roles", "Alice: writing", clock=self._clock
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_declaration(
+                self.paper_dir, "author-roles", "Bob: writing", clock=self._clock
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATION_FIXED")
+
+    def test_reopen_then_declare_admits_a_new_value(self) -> None:
+        paper_declarations.set_declaration(
+            self.paper_dir, "author-roles", "Alice: writing", clock=self._clock
+        )
+        paper_declarations.reopen(self.paper_dir, "author-roles", clock=self._clock)
+
+        result = paper_declarations.set_declaration(
+            self.paper_dir, "author-roles", "Bob: writing", clock=self._clock
+        )
+
+        self.assertEqual(result["value"], "Bob: writing")
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        record = paper_region.read_region(tex_path.read_bytes(), "declarations")
+        entry = next(r for r in record["body"]["records"] if r["id"] == "author-roles")
+        self.assertEqual(entry["value"], "Bob: writing")
+        self.assertTrue(entry["fixed"])
+
+    def test_reopen_narrows_to_exactly_the_naming_blocks(self) -> None:
+        corpus = paper_graph.Corpus(
+            sections={},
+            blocks={
+                "a.one": _block_record("a.one", requires_declarations=["repository-url"]),
+                "a.two": _block_record("a.two", requires_declarations=["repository-url"]),
+                "a.three": _block_record("a.three", requires_declarations=["grant-title"]),
+            },
+            order_by_section={},
+        )
+
+        affected = paper_declarations.affected_blocks(corpus, "repository-url")
+
+        self.assertEqual(affected, {"a.one", "a.two"})
+
+    def test_declarations_hand_edited_refuses_and_writes_nothing(self) -> None:
+        paper_declarations.set_declaration(
+            self.paper_dir, "author-roles", "Alice: writing", clock=self._clock
+        )
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        # Corrupt exactly one byte of the region's body -- a hand edit that
+        # does not touch the marker lines at all.
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"Alice", b"Alicf", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_declaration(
+                self.paper_dir, "grant-title", "A Title", clock=self._clock
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+        self.assertEqual(tex_path.read_bytes(), corrupted, "a refused write must leave disk untouched")
+
+
+class DeclarationsMutationTests(unittest.TestCase):
+    """Mutations 2, 5, 6 (design.md)."""
+
+    def test_mutation_2_allowing_overwrite_of_a_fixed_entry_breaks_the_refusal_test(self) -> None:
+        proc = _run_against_mutant(
+            'if existing is not None and existing.get("fixed"):',
+            "if False:",
+            "tests.test_paper_decisions.DeclarationsTests.test_a_fixed_entry_refuses_a_plain_overwrite",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_5_over_invalidating_every_block_breaks_the_reopen_scope_test(self) -> None:
+        proc = _run_against_mutant(
+            "return {\n"
+            "        qualified_id\n"
+            "        for qualified_id, block in corpus.blocks.items()\n"
+            "        if target_id in block.requires_facts or target_id in block.requires_declarations\n"
+            "    }",
+            "return set(corpus.blocks)",
+            "tests.test_paper_decisions.DeclarationsTests.test_reopen_narrows_to_exactly_the_naming_blocks",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_6_swapping_the_declaration_validator_for_the_fact_one_breaks_the_vocabulary_guard(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "paper_vocabulary.validate_declaration(declaration_id)",
+            "paper_vocabulary.validate_fact(declaration_id)",
+            "tests.test_paper_decisions.DeclarationsTests"
+            ".test_recording_a_fact_as_a_declaration_refuses_unknown_declaration",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
 
 
 if __name__ == "__main__":

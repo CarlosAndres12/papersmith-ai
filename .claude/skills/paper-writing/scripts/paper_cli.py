@@ -6,11 +6,13 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires seven verbs: `scaffold`, `open`, `status`, `substitute` (from
-`only-the-block-changes`) and `contract`, `readiness`, `order` (from
-`the-contract-is-data-not-code`, appended afterwards — the two changes'
-entries are disjoint, so either landing order merges). Left extensible on
-purpose; nothing here assumes it is the last verb this file will ever grow.
+Wires eight verbs: `scaffold`, `open`, `status`, `substitute` (from
+`only-the-block-changes`); `contract`, `readiness`, `order` (from
+`the-contract-is-data-not-code`); and `declare` (from
+`the-paper-carries-its-own-decisions`, Slice B — appended afterwards, its
+entries disjoint from both prior changes' own, so any landing order
+merges). Left extensible on purpose; nothing here assumes it is the last
+verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -27,7 +29,8 @@ import paper_contract  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
 import paper_region  # noqa: E402,F401 -- registered for the roster derivation
-import paper_guidance  # noqa: E402,F401 -- ahead of its own verb wiring (Slice B/C2)
+import paper_guidance  # noqa: E402,F401 -- ahead of its own verb wiring (Slice C2)
+import paper_declarations  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -109,6 +112,20 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "GUIDANCE_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
     "UNKNOWN_GUIDANCE_CLASS": WORK_STATE,
     "MALFORMED_GUIDANCE_MARKER": WORK_STATE,
+    # --- declare (paper_declarations.py; UNKNOWN_FACT/UNKNOWN_DECLARATION
+    # already classified above -- reused verbatim, never a second code for
+    # the same condition, design.md's own decision) ---------------------
+    "DECLARATION_FIXED": WORK_STATE,
+    "DECLARATIONS_HAND_EDITED": WORK_STATE,
+    # --- declare's own mode selection (this file; the same shape
+    # SUBSTITUTE_MODE_REQUIRED/ADOPT_BODY_CONFLICT and
+    # OPEN_POSITION_REQUIRED/OPEN_POSITION_CONFLICT already establish for
+    # `substitute`/`open` -- not named in design.md's refusal table, which
+    # only enumerates the region/vocabulary-level codes, so this is a
+    # deliberate small extension of an existing convention) --------------
+    "DECLARE_MODE_REQUIRED": INVOCATION_DEFECT,
+    "DECLARE_MODE_CONFLICT": INVOCATION_DEFECT,
+    "DECLARE_VALUE_REQUIRED": INVOCATION_DEFECT,
 }
 
 
@@ -195,6 +212,31 @@ def cmd_order(args: argparse.Namespace) -> dict:
     return {"order": order, "danglingEdges": sorted(set(edge_set.dangling))}
 
 
+def cmd_declare(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    modes_given = [flag for flag in ("declaration", "fact", "reopen") if getattr(args, flag, None)]
+    if not modes_given:
+        raise Refused(
+            "DECLARE_MODE_REQUIRED",
+            "exactly one of --declaration <id>, --fact <id>, --reopen <id> is required.",
+        )
+    if len(modes_given) > 1:
+        raise Refused(
+            "DECLARE_MODE_CONFLICT",
+            f"{modes_given} were given together; exactly one mode is required.",
+        )
+    if args.reopen:
+        return paper_declarations.reopen(paper_dir, args.reopen)
+    if args.value is None:
+        raise Refused(
+            "DECLARE_VALUE_REQUIRED",
+            "--declaration/--fact requires --value <the recorded value or resolution>.",
+        )
+    if args.declaration:
+        return paper_declarations.set_declaration(paper_dir, args.declaration, args.value)
+    return paper_declarations.set_fact(paper_dir, args.fact, args.value)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -266,10 +308,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="override sections/ location; must resolve inside the repository root",
     )
 
+    p_declare = sub.add_parser(
+        "declare",
+        help="record a declaration or fact resolution, or reopen a fixed one",
+    )
+    p_declare.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_declare.add_argument("--declaration", default=None, help="a declaration id to record")
+    p_declare.add_argument("--fact", default=None, help="a fact id to record a resolution for")
+    p_declare.add_argument("--reopen", default=None, help="an id to clear the fixed state of")
+    p_declare.add_argument(
+        "--value", default=None,
+        help="the value (--declaration) or resolution (--fact) to record",
+    )
+
     return parser
 
 
-COMMANDS = ("scaffold", "status", "open", "substitute", "contract", "readiness", "order")
+COMMANDS = ("scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare")
 _COMMANDS = {
     "scaffold": cmd_scaffold,
     "status": cmd_status,
@@ -278,6 +336,7 @@ _COMMANDS = {
     "contract": cmd_contract,
     "readiness": cmd_readiness,
     "order": cmd_order,
+    "declare": cmd_declare,
 }
 
 
