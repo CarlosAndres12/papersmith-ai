@@ -136,10 +136,11 @@ move, never declaring a new golden.
 
 ## ADDED Requirements
 
+
 ### Requirement: Ten Domain-Specific Profile Fields Are The Whole Vocabulary Surface
 
 Each field MUST be a validated resolver leaf, named in
-`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` by its dotted path, and MUST move only its
+`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` by its dotted (or indexed) path, and MUST move only its
 own named sealed digest(s) when changed. A field satisfying neither MUST NOT exist.
 
 | Field | Read by | Digest(s) moved — MEASURED |
@@ -158,8 +159,8 @@ own named sealed digest(s) when changed. A field satisfying neither MUST NOT exi
 | `vocabulary.subject_collective_es` | Spanish refusal builders | **none — zero-mover** |
 | `vocabulary.artifact_noun` | `authored_package_init` | **none — zero-mover** |
 | `vocabulary.names` | both locks below, nothing else | lock goes red |
-| `documents.directory` | `proposals_root()`, 5 refusals | `admit-e0`, `close-e0`, `gate-e0`, `offer-e0`, `position-e0` |
-| `documents.label` | `undeclared_arms_note` only | **none — zero-mover** |
+| `documents[i].directory` | `proposals_root()`, 5 refusals, validated per index | index 0: `admit-e0`, `close-e0`, `gate-e0`, `offer-e0`, `position-e0` — unchanged from the measured set |
+| `documents[i].label` | `undeclared_arms_note` only, validated per index | **none — zero-mover**, any index |
 
 **This table was corrected after verification and is now the measured truth, not a
 prediction.** Its first version was written from design.md's forecast and diverged
@@ -172,7 +173,7 @@ inside `ARMS_UNDECLARED_CONSEQUENCE`'s `.format()`), gated on `declaration.get(
 
 **Seven of the fifteen leaves are zero-movers**, and that is a recorded state, not
 a gap to hunt a stronger test for. A zero-mover is still read — its removal raises
-`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming its exact dotted leaf — it is
+`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming its exact dotted (or indexed) leaf — it is
 simply not observable in the sealed stdout of these 28 particular fixtures. The
 removal-refusal plus the two neutrality locks are its whole instrument, and saying
 so is the honest outcome.
@@ -186,6 +187,18 @@ under system `python3` instead of `.venv/bin/python` broke `CLI_INVOCATION`
 resolution and crashed every subprocess **identically on both sides**, which reads
 as "zero movers" for every leaf tried.
 
+Under `len(documents) > 1`, each entry is validated and refused by its own
+index: removing `documents[1].directory` MUST raise
+`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[1].directory`
+exactly, never the bare `documents.directory`. Under `len(documents) == 1`,
+index 0's behavior — including its digest set — is unchanged from the
+measured table above.
+
+(Previously: `documents.directory` and `documents.label` were validated as
+single top-level leaves, with no index. They are now per-entry leaves of a
+list, validated and refused by their own index; a single-document profile's
+index-0 behavior is unchanged.)
+
 #### Scenario: A missing leaf refuses by its own dotted name
 - GIVEN a profile omitting `findings.remedy_locus_key`
 - WHEN the resolver validates it
@@ -196,6 +209,11 @@ as "zero movers" for every leaf tried.
 - WHEN `provenance.claim_key` changes and the seal re-runs
 - THEN only `probe`, `verify-a`, `verify-b` and `verify-t` move -- the measured set, never `handoff` -- and the other 24 are byte-identical
 
+#### Scenario: A second document's missing leaf refuses by its indexed name
+- GIVEN a two-document fixture profile with `documents[1].directory` omitted
+- WHEN the resolver validates it
+- THEN it raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming
+  `documents[1].directory`, not `documents.directory`
 ### Requirement: The Coarse Provenance Key Stays Shared, Never Profile-Supplied
 
 `"sections"` MUST stay a hardcoded literal in the engine and every kit asset. The
