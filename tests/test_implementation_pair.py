@@ -28,9 +28,11 @@ purpose: swapping in one of THIS corpus's two fixture profiles per case.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -47,6 +49,17 @@ os.environ.setdefault(
 
 from seal import harness as seal_harness  # noqa: E402  (path set above)
 from pair import corpus as pair_corpus  # noqa: E402  (path set above)
+import impl_position  # noqa: E402  (path set by seal_harness's own import)
+
+#: Cut 3 corrective apply (verify FAIL, CRITICAL finding): the real CLI
+#: entry point, the same one every subprocess case in this suite already
+#: runs against -- needed directly (not only through `seal_harness.run_case`)
+#: by the stateful lifecycle classes below, whose whole point is ledger
+#: state accumulated ACROSS several real subprocess calls against the same
+#: target, something the single-command golden-digest mechanism cannot
+#: represent (`seal_harness.run_case` gives every case a fresh scratch
+#: target).
+CLI = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
 
 CASES_PATH = TESTS_DIR / "pair" / "cases.json"
 DIGESTS_PATH = TESTS_DIR / "pair" / "digests.json"
@@ -210,6 +223,505 @@ class SealCorpusUntouchedByPairCorpusTests(unittest.TestCase):
             key: value for key, value in seal_digests.items()
             if key != "__corpus_fingerprint__"}
         self.assertEqual(len(case_entries), 28)
+
+
+class AuthorizationBindingKeysPresenceBranchTests(unittest.TestCase):
+    """Corrective apply, Cut 3 (verify FAIL, CRITICAL finding), instruction
+    2: a DIRECT proof of `_authorization_binding_keys`'s presence-gated
+    branch -- independent of the full gate/offer subprocess machinery in
+    `TwoDocumentLifecycleTests` below, which also reaches it (via a real
+    minted token's own `gate_binding` re-derivation) but depends on git,
+    job folders and a file-based capacity adapter. This class needs none
+    of that: `_authorization_binding_keys` is a pure function over
+    whatever mapping it is handed, so its presence branch is provable with
+    no subprocess at all -- reusing `seal_harness.impl`, the identical
+    already-imported engine module every other file in this suite reads,
+    never a second import of it."""
+
+    def test_documentrevisions_present_grows_the_ninth_key(self):
+        base = dict.fromkeys(seal_harness.impl._AUTHORIZATION_BINDING_KEYS, None)
+        binding = {**base, "documentRevisions": [
+            {"label": "experiments", "revision": "r1.md", "sha256": None}]}
+        keys = seal_harness.impl._authorization_binding_keys(binding)
+        self.assertIn("documentRevisions", keys)
+        self.assertEqual(len(keys), 9)
+
+    def test_documentrevisions_absent_stays_at_eight_keys(self):
+        binding = dict.fromkeys(seal_harness.impl._AUTHORIZATION_BINDING_KEYS, None)
+        keys = seal_harness.impl._authorization_binding_keys(binding)
+        self.assertNotIn("documentRevisions", keys)
+        self.assertEqual(len(keys), 8)
+        self.assertEqual(set(keys), set(seal_harness.impl._AUTHORIZATION_BINDING_KEYS))
+
+
+class TwoDocumentPositionWriteTests(unittest.TestCase):
+    """Corrective apply, Cut 3 (verify FAIL, CRITICAL finding): `cmd_
+    position`'s own four `len(DOCUMENTS) > 1` sites (C2), each reached by a
+    real subprocess `position` call against a fresh product directory
+    under the two-document fixture profile -- absent (no block yet),
+    install (a fresh write), then an unchanged refresh. `TwoDocument
+    LifecycleTests` below also reaches the WRITE branch once, incidentally,
+    through `close`'s own internal refresh call; this class is the direct,
+    three-call proof of all four sites C2 itself owns, isolated from the
+    rest of the lifecycle."""
+
+    REVISION = "pair-position-r1.md"
+    REVISION_TEXT = "## 1\ntexto.\n"
+    PACKAGE = "PositionOnly"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-position-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-position-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text(self.REVISION_TEXT, encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-position-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.REVISION).write_text(
+            "Document 1's own position-only text -- a real, independently "
+            "readable file at DOCUMENTS[1]'s own directory.\n",
+            encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_pair_position_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-position"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-position@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / self.PACKAGE).mkdir(parents=True)
+        # A candidate holder, exactly `tests/seal/corpus.py`'s own fixture
+        # placeholder: `_chosen_holder` (used by a fresh `--sequence`
+        # install) never invents a checklist file, it only ever picks
+        # among candidates `agreements_state` already found -- an empty
+        # product dir refuses `POSITION_HOLDER_ABSENT` before the install
+        # below ever gets to write anything.
+        (self.box / self.PACKAGE / "AGREED.md").write_text(
+            "# Agreed\n\n## Ladder\n\n- [ ] First measurable claim.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, *args):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def _doc1_sha256(self) -> str:
+        return hashlib.sha256((self.doc1 / self.REVISION).read_bytes()).hexdigest()
+
+    def test_absent_install_then_unchanged_all_carry_the_documents_group(self):
+        # L10771 (cmd_position's own "nothing to refresh" branch): no
+        # block exists yet, and the additive `documents` key is present
+        # even here.
+        absent = self.run_cli("position", "--target", str(self.box), "--name",
+                              self.PACKAGE, "--revision", self.REVISION,
+                              "--session", "s1")
+        self.assertEqual(absent.returncode, 0, absent.stdout + absent.stderr)
+        absent_result = json.loads(absent.stdout)
+        self.assertEqual(absent_result["status"], "absent")
+        self.assertIn("documents", absent_result)
+        self.assertEqual(
+            absent_result["documents"],
+            [{"label": "experiments", "revision": self.REVISION,
+              "revisionSha256": self._doc1_sha256()}])
+
+        # L10836 (header gains the group) / L10946 (ledger event) / L10956
+        # (final written return): a fresh INSTALL.
+        sequence = json.dumps([{"text": "First step.", "witness": {"kind": "record"}}])
+        install = self.run_cli("position", "--target", str(self.box), "--name",
+                               self.PACKAGE, "--revision", self.REVISION,
+                               "--session", "s1", "--sequence", sequence,
+                               "--target-level", "final")
+        self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+        install_result = json.loads(install.stdout)
+        self.assertEqual(install_result["status"], "written")
+        self.assertIn("documents", install_result)
+        self.assertEqual(
+            install_result["documents"],
+            [{"label": "experiments", "revision": self.REVISION,
+              "revisionSha256": self._doc1_sha256()}])
+        agreed = (self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
+        self.assertIn("documents=", agreed)
+        ledger = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
+        events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertIn("documents", events[-1])
+
+        # L10923 (the unchanged branch's own additive `documents`
+        # comparison): an identical second call finds nothing derived
+        # moved, so it must compare the `documents` group too, not only
+        # the pre-Cut-3 three scalar fields.
+        refresh = self.run_cli("position", "--target", str(self.box), "--name",
+                               self.PACKAGE, "--revision", self.REVISION,
+                               "--session", "s1", "--target-level", "final")
+        self.assertEqual(refresh.returncode, 0, refresh.stdout + refresh.stderr)
+        refresh_result = json.loads(refresh.stdout)
+        self.assertEqual(refresh_result["status"], "unchanged")
+        self.assertIn("documents", refresh_result)
+        events_after_refresh = [
+            json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(
+            len(events_after_refresh), 1,
+            "an unchanged refresh must append no second ledger event")
+
+
+class TwoDocumentLifecycleTests(unittest.TestCase):
+    """Corrective apply, Cut 3 (`a-revision-is-two-documents`, verify FAIL,
+    CRITICAL finding): real subprocess cases against the two-document
+    fixture profile for `gate`/`offer`/`close`/`admit`/`position`/`verify`
+    -- the six commands the verify report named as unreached, plus
+    `probe` for C1. Every call below is a genuine child process, never
+    in-process `impl.cmd_*` (this suite's own recorded scar:
+    monkeypatching a module attribute has zero effect on a subprocess), so
+    `IMPLEMENTATION_DOMAIN_PROFILE`/`IMPLEMENTATION_PROPOSALS`/
+    `IMPLEMENTATION_PROPOSALS_1` are real child-process environment
+    variables -- the same mechanism the pair corpus's own driver
+    established (`_build_env_with_profile_override`), extended here to a
+    STATEFUL, multi-command flow the single-command golden-digest
+    mechanism (`seal_harness.run_case`, a fresh scratch target per case)
+    cannot represent: this flow's whole point is ledger state
+    (`position.jsonl`, `tests/admissibility.json`) accumulated across
+    several real calls against the SAME target.
+
+    The launch-capacity registration below drops a real, pid-scoped module
+    into `remote-execution/scripts/adapters/` -- the identical, already-
+    sanctioned mechanism `test_remote_execution.py::AdapterEnvironmentTests
+    .test_dropping_a_module_into_adapters_becomes_reachable_by_backend_name`
+    establishes (a module dropped there becomes reachable by `--backend`/
+    a job folder's own declared `service`, with no change to `remote_cli.py`
+    itself), reused here rather than reinvented, and removed in
+    `addCleanup` regardless of outcome -- never a monkeypatch of `ADAPTER`
+    from this test process, which a REAL subprocess `offer`/`gate` call
+    could never see.
+    """
+
+    REVISION = "pair-lifecycle-r1.md"
+    REVISION_TEXT = (
+        "## 1\n\n$$\na = b \\tag{1.1}\n$$\n\n"
+        "Throughout, the estimator is written E[x].\n\n"
+        "The corrected form now reads g = h + k.\n"
+    )
+    REVISION_SHA256 = hashlib.sha256(REVISION_TEXT.encode("utf-8")).hexdigest()
+    PACKAGE = "Method"
+    SERVICE = f"pairlifecycle{os.getpid()}"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-lifecycle-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-lifecycle-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text(self.REVISION_TEXT, encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-lifecycle-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.REVISION).write_text(
+            "Document 1's own text -- a real, independently readable file "
+            "at DOCUMENTS[1]'s own directory, never document 0's copy.\n",
+            encoding="utf-8")
+
+        self._register_capacity_adapter()
+        self.box, self.commit = self._build_box()
+
+    def _doc1_sha256(self) -> str:
+        return hashlib.sha256((self.doc1 / self.REVISION).read_bytes()).hexdigest()
+
+    def _child_env(self):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return env
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE,
+                              env=self._child_env())
+
+    def _register_capacity_adapter(self):
+        adapters_dir = (FORGE / ".claude" / "skills" / "remote-execution"
+                        / "scripts" / "adapters")
+        fixture_path = adapters_dir / f"{self.SERVICE}.py"
+        fixture_path.write_text(
+            "import importlib.util\n"
+            "import sys\n"
+            "from pathlib import Path\n"
+            "\n"
+            "def _load_adapter_seam():\n"
+            "    module_name = 'remote_execution_adapter'\n"
+            "    if module_name in sys.modules:\n"
+            "        return sys.modules[module_name]\n"
+            "    script = Path(__file__).resolve().parent.parent / 'adapter.py'\n"
+            "    spec = importlib.util.spec_from_file_location(module_name, script)\n"
+            "    module = importlib.util.module_from_spec(spec)\n"
+            "    sys.modules[module_name] = module\n"
+            "    spec.loader.exec_module(module)\n"
+            "    return module\n"
+            "\n"
+            "ADAPTER = _load_adapter_seam()\n"
+            f"ADAPTER.register_declared_capacity({self.SERVICE!r}, lambda: (1, 1))\n",
+            encoding="utf-8")
+        self.addCleanup(fixture_path.unlink)
+        self.addCleanup(
+            lambda: shutil.rmtree(adapters_dir / "__pycache__", ignore_errors=True))
+
+    def _build_box(self):
+        box = FORGE / "implementations" / f"_pair_lifecycle_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-lifecycle"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-lifecycle@example.invalid"
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "src" / self.PACKAGE / "kernels.py").write_text(
+            "__provenance__ = {\n"
+            f"    'revision': {self.REVISION!r}, 'sections': ['1'],\n"
+            "    'equations': ['1.1'], 'invariants': [],\n"
+            "}\n", encoding="utf-8")
+        (box / "src" / f"{self.PACKAGE}_Benchmark").mkdir(parents=True)
+        (box / "src" / f"{self.PACKAGE}_Benchmark" / "__init__.py").write_text(
+            "__benchmark__ = {\n"
+            f"    'revision': {self.REVISION!r}, 'premises': {{}},\n"
+            "    'arms': {'floor': {'sections': ['1']}}, 'search': {},\n"
+            "    'report': {}, 'distribution': {},\n"
+            "    'entry': {'module': 'Method_Benchmark.steps', 'function': 'run'},\n"
+            "}\n"
+            "__steps__ = {'measure': {'module': 'Method_Benchmark.steps', "
+            "'function': 'run'}}\n",
+            encoding="utf-8")
+        (box / "src" / f"{self.PACKAGE}_Benchmark" / "steps.py").write_text(
+            "def run(*a, **k):\n    return {}\n", encoding="utf-8")
+        (box / self.PACKAGE).mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "tests" / "findings.py").write_text(
+            "FINDINGS = [\n"
+            "    {\n"
+            "        'id': 'pair-lifecycle-finding',\n"
+            "        'kind': 'gap',\n"
+            "        'status': 'measured',\n"
+            "        'rate': 'always',\n"
+            "        'statement': 'The identity needs a correction.',\n"
+            "        'remedy': 'Replace a = b with the corrected identity.',\n"
+            "        'document': 'proposal',\n"
+            "        'equations': ['1.1'],\n"
+            "        'remedy_equations': ['1.1'],\n"
+            "        'uses': ['E[x]'],\n"
+            "        'introduces': [],\n"
+            "        'adoption': {'absent': 'a = b', 'expect': ['g = h + k']},\n"
+            "        'remedy_block': '$$\\ng = h + k \\\\tag{1.1}\\n$$',\n"
+            "    },\n"
+            "]\n", encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=box, env=env, check=True,
+            capture_output=True, text=True).stdout.strip()
+
+        job_dir = box / "tools" / self.SERVICE / "job1"
+        job_dir.mkdir(parents=True)
+        run_config = {
+            "schemaVersion": 1, "product": self.PACKAGE, "service": self.SERVICE,
+            "jobName": "job1", "commit": commit,
+            "repo": {"url": "https://example.invalid/repo.git", "ref": "main"},
+            "clonePaths": [f"src/{self.PACKAGE}"],
+            "run": {"module": f"{self.PACKAGE}.module", "function": "run", "kwargs": {}},
+            "runnerTemplate": [
+                {"path": "assets/runner_bootstrap.py", "sha256": "0" * 64},
+                {"path": "assets/runner_invoke.py", "sha256": "0" * 64},
+            ],
+        }
+        (job_dir / "run-config.json").write_text(json.dumps(run_config), encoding="utf-8")
+
+        smoke_path = box / self.PACKAGE / ".remote-execution" / "smoke.jsonl"
+        smoke_path.parent.mkdir(parents=True)
+        smoke_event = {"kind": "smokeResult", "ts": "2026-09-11T00:00:00Z",
+                        "jobName": "job1", "result": "pass", "commit": commit,
+                        "worker": "w1", "missing": []}
+        smoke_path.write_text(json.dumps(smoke_event) + "\n", encoding="utf-8")
+
+        header = {"revision": self.REVISION, "revisionSha256": self.REVISION_SHA256,
+                  "derivedAt": "2026-09-11T00:00:00Z", "session": "s1", "target": "final"}
+        # Ticked, not blank: job1's own smoke.jsonl above records a REAL
+        # passing result, so a blank mark here would DISAGREE with what
+        # `derive()` measures (a claim and its evidence pointing opposite
+        # ways is a disagreement regardless of which direction it points)
+        # -- `close` (unlike `gate`) refuses on any such disagreement
+        # before it will run at all, so the tick must already match the
+        # real, passing smoke result for `close` to succeed below.
+        items = [{"ordinal": 1, "mark": "x", "text": "Rehearse the job.",
+                  "witness": {"kind": "rehearsal", "operand": "job1"}}]
+        (box / self.PACKAGE / "AGREED.md").write_text(
+            impl_position.render(header, items), encoding="utf-8")
+
+        return box, commit
+
+    def test_the_full_lifecycle_reaches_every_named_gate(self):
+        """One flow, seven real subprocess commands, every one of Slice B's
+        `len(DOCUMENTS) > 1` runtime sites this corrective apply set out to
+        prove -- named per site in the comments beside each assertion."""
+
+        # C1 (position_state's `multi` branch, L637-654): reached the
+        # moment ANY command reads a target that already carries a
+        # `<!-- position -->` block under a two-document profile. `probe`
+        # is the simplest real reader -- a pure read, no ledger write.
+        probe = self.run_cli("probe", "--target", str(self.box), "--name",
+                             self.PACKAGE, "--revision", self.REVISION)
+        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+        probe_result = json.loads(probe.stdout)
+        bound_to = probe_result["position"]["boundTo"]
+        self.assertIsInstance(bound_to, dict)
+        self.assertEqual(set(bound_to), {"proposal", "experiments"})
+
+        # `propose` -- gate's own separate proposal precondition, unrelated
+        # to `len(DOCUMENTS)` itself but required before a minted token
+        # will pass `_verify_gate_proposal` below.
+        propose = self.run_cli(
+            "propose", "--target", str(self.box), "--name", self.PACKAGE,
+            "--session", "s1", "--job", "job1", "--worker", "w1",
+            "--rationale", "Campaign proposal for the pair lifecycle.")
+        self.assertEqual(propose.returncode, 0, propose.stdout + propose.stderr)
+
+        # `offer`: C5's own return/ledger-event sites AND C4's binding
+        # growth (`_authorization_binding`'s own `**` spread) -- a REAL
+        # launch action minted for job1, via the file-based capacity
+        # adapter dropped in `setUp`, never a monkeypatch.
+        offer = self.run_cli(
+            "offer", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1", "--answer", "yes")
+        self.assertEqual(offer.returncode, 0, offer.stdout + offer.stderr)
+        offer_result = json.loads(offer.stdout)
+        self.assertIn("documentRevisions", offer_result)
+        self.assertEqual(
+            offer_result["documentRevisions"],
+            [{"label": "experiments", "revision": self.REVISION,
+              "sha256": self._doc1_sha256()}])
+        launch = next(a for a in offer_result["actions"] if a["id"] == "launch")
+        token = launch["binding"]["authorization"]
+        self.assertTrue(token)
+        ledger_path = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
+        ledger_events = [json.loads(line) for line in
+                        ledger_path.read_text(encoding="utf-8").splitlines()]
+        offer_event = next(e for e in ledger_events if e["kind"] == "offer")
+        self.assertIn("documentRevisions", offer_event)
+
+        # `gate`: consumes the REAL token minted above -- the real success
+        # path the 29-case seal corpus can never reach on its own
+        # (`gate-e0`/`gate-e1` both refuse before minting anything).
+        # `gate_binding`'s own presence-gated `documentRevisions` spread
+        # feeds `_verify_gate_authorization`'s `_authorization_binding_
+        # keys(record)` call -- C4's verification-side companion to
+        # `AuthorizationBindingKeysPresenceBranchTests` above, exercised
+        # here with genuinely two-document-shaped data end to end.
+        gate = self.run_cli(
+            "gate", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1",
+            "--job", "job1", "--worker", "w1",
+            "--justification", "Rehearsal passed at the pinned commit.",
+            "--authorization", token, "--elect", "job1")
+        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        gate_result = json.loads(gate.stdout)
+        self.assertEqual(gate_result["status"], "recorded")
+        self.assertIn("documentRevisions", gate_result)
+        self.assertEqual(
+            gate_result["documentRevisions"],
+            [{"label": "experiments", "revision": self.REVISION,
+              "sha256": self._doc1_sha256()}])
+        ledger_events_after_gate = [
+            json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+        gate_event = next(e for e in ledger_events_after_gate if e["kind"] == "gate")
+        self.assertIn("documentRevisions", gate_event)
+
+        # `close`: also reaches C2's write path a second, independent way
+        # -- `close`'s own internal `cmd_position` refresh call finds the
+        # hand-authored header from `_build_box` carries no `documents=`
+        # group yet (it was written directly by this test, never through
+        # `cmd_position`) and writes one now.
+        close = self.run_cli(
+            "close", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1")
+        self.assertEqual(close.returncode, 0, close.stdout + close.stderr)
+        close_result = json.loads(close.stdout)
+        self.assertEqual(close_result["status"], "closed")
+        self.assertIn("documentRevisions", close_result)
+        agreed_after_close = (
+            self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
+        self.assertIn("documents=", agreed_after_close)
+        ledger_events_after_close = [
+            json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+        close_event = next(
+            e for e in reversed(ledger_events_after_close) if e["kind"] == "close")
+        self.assertIn("documentRevisions", close_event)
+
+        # A second `close`, over the now-unmoved position -- `not_open`,
+        # the exact `documentRevisions`-carrying comparison this
+        # corrective apply's own launch brief named as the mutation the
+        # 29-case seal corpus could never catch (task 11.3's own finding).
+        close_again = self.run_cli(
+            "close", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1")
+        self.assertEqual(
+            close_again.returncode, 0, close_again.stdout + close_again.stderr)
+        close_again_result = json.loads(close_again.stdout)
+        self.assertEqual(close_again_result["status"], "not_open")
+        self.assertIn("documentRevisions", close_again_result)
+
+        # `admit`: C3's write path AND C7's `require_document` gate
+        # (`read_findings`'s own `well_formed(..., require_document=True)`
+        # call) -- the finding declared above carries `document:
+        # "proposal"`, so `well_formed` accepts it instead of refusing
+        # `MALFORMED_FINDINGS`, and `cmd_admit` writes a real `documents`
+        # key into `tests/admissibility.json`.
+        admit = self.run_cli(
+            "admit", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(admit.returncode, 0, admit.stdout + admit.stderr)
+        record = json.loads(
+            (self.box / "tests" / "admissibility.json").read_text(encoding="utf-8"))
+        self.assertIn("documents", record)
+        self.assertEqual(
+            record["documents"],
+            [{"label": "experiments", "revision": self.REVISION,
+              "revisionSha256": self._doc1_sha256()}])
+
+        # `verify`: C8's fidelity-by-document fold AND `admissibility_
+        # record`'s own extra-document staleness read (reached because
+        # `admit` above already wrote a record `verify` now reads back).
+        verify = self.run_cli(
+            "verify", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+        verify_result = json.loads(verify.stdout)
+        fidelity_by_document = verify_result["fidelity"]["fidelityByDocument"]
+        self.assertEqual(
+            {entry["label"] for entry in fidelity_by_document},
+            {"proposal", "experiments"})
+        extra_entry = next(
+            e for e in fidelity_by_document if e["label"] == "experiments")
+        # Document 1's own revision genuinely resolves (a real, readable
+        # file at `IMPLEMENTATION_PROPOSALS_1`), so `_extra_document_
+        # fidelity_status` never falls back to its `"unknown"` branch here
+        # -- proving the function was reached with data that could tell
+        # the two branches apart, not merely with an absent revision that
+        # would answer `"unknown"` regardless of whether the function ran
+        # at all.
+        self.assertNotEqual(extra_entry["status"], "unknown")
 
 
 if __name__ == "__main__":
