@@ -2,6 +2,13 @@
 {
   "section": "title-and-keywords",
   "position": 1,
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/09-title-and-keywords.md",
+      "quote": "The title states what the thing is, not how well it did."
+    }
+  },
   "blocks": [
     {
       "id": "title",

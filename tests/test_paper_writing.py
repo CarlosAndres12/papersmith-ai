@@ -933,13 +933,36 @@ class ModeWideningTests(unittest.TestCase):
         header = paper_contract.parse_header(self._header())
         self.assertIsNone(paper_contract.resolve_mode(header, header.blocks[0]))
 
-    def test_all_ten_shipped_contracts_still_parse_with_no_mode_declared(self) -> None:
-        # `Headers Written Before mode Existed`: sections/*.md ship with no
-        # `mode` key yet, and that absence is schema-valid, not a
-        # violation -- `write`'s own readiness stage is what refuses on it
-        # (`WritingPipelineTests.test_no_mode_resolved_refuses_mode_absent`
-        # below), never this reader.
+    #: `Headers Written Before mode Existed`: an absent `mode` at both
+    #: levels is schema-valid, never a violation -- `write`'s own
+    #: readiness stage is what refuses on it
+    #: (`WritingPipelineTests.test_no_mode_resolved_refuses_mode_absent`),
+    #: never this reader. Three of the ten shipped contracts still carry
+    #: no quotable mode-bearing sentence in their own prose as of this
+    #: change's own corrective batch (`02-experimental-setup.md` --
+    #: reserved for a concurrent sibling correction and left untouched
+    #: here on purpose; `04-limitations.md` -- genuinely ambiguous, the
+    #: operator's own editorial call; `05-related-work.md` -- no sentence
+    #: found) and stay undeclared deliberately, not by oversight.
+    _SECTIONS_WITHOUT_MODE = (
+        "02-experimental-setup.md", "04-limitations.md", "05-related-work.md",
+    )
+
+    def test_shipped_contracts_declaring_mode_resolve_it_at_every_block(self) -> None:
         for path in sorted(SECTIONS_DIR.glob("*.md")):
+            if path.name in self._SECTIONS_WITHOUT_MODE:
+                continue
+            header, _body = paper_contract.parse(path.read_bytes())
+            self.assertIsNotNone(header.mode, path.name)
+            self.assertIn(header.mode["value"], paper_vocabulary.MODES, path.name)
+            self.assertEqual(header.mode["source"]["file"], f"sections/{path.name}")
+            for block in header.blocks:
+                resolved = paper_contract.resolve_mode(header, block)
+                self.assertIsNotNone(resolved, (path.name, block["id"]))
+
+    def test_sections_without_a_quotable_mode_sentence_still_parse_with_no_mode_declared(self) -> None:
+        for name in self._SECTIONS_WITHOUT_MODE:
+            path = SECTIONS_DIR / name
             header, _body = paper_contract.parse(path.read_bytes())
             self.assertIsNone(header.mode, path.name)
             for block in header.blocks:

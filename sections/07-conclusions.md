@@ -2,6 +2,13 @@
 {
   "section": "conclusions",
   "position": 9,
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/07-conclusions.md",
+      "quote": "They add nothing — every claim here already exists earlier, in more detail."
+    }
+  },
   "blocks": [
     {
       "id": "concl-block-1",

@@ -2,6 +2,13 @@
 {
   "section": "introduction",
   "position": 3,
+  "mode": {
+    "value": "argument",
+    "source": {
+      "file": "sections/06-introduction.md",
+      "quote": "Six argumentative functions, in fixed order, distributed across 7–13 paragraphs."
+    }
+  },
   "blocks": [
     {
       "id": "block-1",

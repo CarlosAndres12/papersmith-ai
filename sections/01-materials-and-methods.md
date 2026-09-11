@@ -2,6 +2,13 @@
 {
   "section": "materials-and-methods",
   "position": 5,
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/01-materials-and-methods.md",
+      "quote": "The proposal already exists."
+    }
+  },
   "blocks": [
     {
       "id": "mm-preamble",

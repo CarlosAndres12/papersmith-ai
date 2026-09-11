@@ -2,6 +2,13 @@
 {
   "section": "results-and-discussion",
   "position": 7,
+  "mode": {
+    "value": "argument",
+    "source": {
+      "file": "sections/03-results-and-discussion.md",
+      "quote": "The discussion is inferential by default and assertive by exception."
+    }
+  },
   "blocks": [
     {
       "id": "rd-general-task",

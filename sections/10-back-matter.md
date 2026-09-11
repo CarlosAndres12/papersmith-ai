@@ -2,6 +2,13 @@
 {
   "section": "back-matter",
   "position": 10,
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/10-back-matter.md",
+      "quote": "Every block here is an external fact, not a decision."
+    }
+  },
   "blocks": [
     {
       "id": "bm-author-contributions",

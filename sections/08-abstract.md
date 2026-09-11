@@ -11,6 +11,13 @@
       }
     }
   ],
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/08-abstract.md",
+      "quote": "The abstract is the whole argument at one-fiftieth scale, and for most readers it is the whole paper."
+    }
+  },
   "blocks": [
     {
       "id": "slot-1",
