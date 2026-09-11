@@ -204,3 +204,42 @@ contract shape.
 already routed by `classify` (nine data extensions), already matched by `REFERENCE_RE`,
 already carried by `detect_product_dir`. **The only thing missing is demandability** —
 B4's ~12 lines plus a detector, not an architecture extension.
+
+---
+
+## Operator ruling on B2 (taken after the measurement, before Cut 2 is planned)
+
+**Option A: profile-supply the FINE key only.** `sections` stays a shared word;
+`equations` becomes `PROFILE.provenance.claim_key`. ~9 code lines, 1 profile
+field, 1 kit token.
+
+The deciding argument is NOT the line count.
+
+1. **`sections` is not a domain word.** It names document structure, not subject
+   matter. Every managed markdown revision in this forge is organized in numbered
+   sections — the mathematical one and the experimental one alike. Moving it into
+   a profile would profile something that is not domain-specific, which is the
+   mirror of the error this whole seam exists to correct. `equations` IS the
+   domain; `sections` is not.
+
+2. **The join must not be able to drift.** `unreached_mathematics` crosses
+   `__provenance__["sections"]` with `__benchmark__["arms"][x]["sections"]` —
+   the measurement's own words, *"the join nothing else in the flow crosses"*.
+   A profile-supplied coarse key lets two domains pick different words, after
+   which a benchmark declaring arms in one vocabulary can never join a module
+   declaring provenance in the other. The result is an empty list, and an empty
+   list there **reads as success**: "nothing left unreached". Silent, and
+   confidence-inspiring. That is the worst failure shape available here.
+
+3. **The flexibility option B was buying already exists elsewhere.** The
+   legitimate objection to A is a future domain that does not organize its
+   document in numbered sections. `document_reader.drift_units(source)` — already
+   in the proposed profile field set — covers exactly that: the profile supplies
+   HOW units are extracted while the key stays `sections`. Shared vocabulary for
+   the join, domain-specific extraction. B pays 19 lines and a silent failure mode
+   for flexibility A already has through another door.
+
+Options C and D remain rejected: C changes `proposal-implementation`'s existing
+behaviour, which the operator's sister-skill constraint forbids; D would let an
+experiments target's modules declare `equations`, which is the leak the profile
+mechanism exists to remove.
