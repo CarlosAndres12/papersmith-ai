@@ -53,8 +53,12 @@ launcher. A seal blind to that is blind to the exact thing it exists to catch.
 (b) `[sys.executable, str(CLI)]` — this is the *repaired* shape
 `PublishedCommandsRunVerbatimTests` documents as the original defect. Sourcing argv from
 `CLI_INVOCATION` reuses the existing mechanism instead of inventing a second one, and it
-is also **why `CLI_INVOCATION` must be normalized out** (it is echoed inside published
-`resolve.command` values in refusal payloads).
+is also **why the interpreter portion of `CLI_INVOCATION` must be normalized out** (it is
+echoed inside published `resolve.command` values in refusal payloads) — narrowly, not the
+whole value. `str(CLI_PATH)` must survive normalization: a `CLI_PATH` that resolves to the
+wrong file after Cut 1 (measurement §C's single silent failure mode for that cut) is
+exactly the failure this seal exists to catch, and it can only be observable if the sealed
+bytes still name the file. See D4 N3.
 
 **Environment is constructed, never inherited.** The child env is an explicit dict:
 `PATH`, `HOME`, plus `PYTHONHASHSEED=0`, `PYTHONDONTWRITEBYTECODE=1`, `LC_ALL=C.UTF-8`,
@@ -137,6 +141,28 @@ inspected for shape can be satisfied by an empty file; an output is not.
   `adoption` to be live), and ≥1 item with non-empty `introduces`.
 - `test_data_absence_is_visible`: case 12 and case 13 digests differ, and case 13's output
   names a missing `Data` directory.
+
+  **BLOCKED — measured false during apply, 2026-09-11, before any capture ran.** `rg
+  'PRODUCT_DIRS\[1\]|"Data"'` over the whole 17,100-line CLI returns exactly THREE hits:
+  the tuple definition (111), `expected_dirs`'s own self-fulfilling filter (2502, the
+  exact line F5 touches), and the one `with_data = (target / name / "Data").is_dir()`
+  computation (14249) `cmd_verify` uses to build that same filter's argument. **No other
+  command, and no other field of `verify`'s own output, reads `Data` at all.** Built
+  fixture A (`Data/` present) and fixture B (`Data/` absent), otherwise byte-identical,
+  and ran `verify` against both: `json.loads(a.stdout) == json.loads(b.stdout)` is
+  **`True`** — the two payloads are completely identical, not merely `missingDirs`. This
+  is measurement finding B4 in the flesh ("`verify.structure.missingDirs` can never
+  contain a `Data/`" — confirmed exactly, and shown to reach the ENTIRE payload, not one
+  field), and B4/F4 (`plan` threading `--revision`, the fix that would make `with_data`
+  non-self-fulfilling) are explicitly Out of Scope in proposal.md. As specified, this test
+  cannot pass against the unmodified CLI, and the corpus cannot make it pass by
+  construction alone. Needs a decision: relax this test to a corpus-construction check
+  (fixture B's `Data/` is provably absent on disk, independent of any captured output —
+  satisfies spec.md's literal "provably exercise ... reached by at least one case"
+  wording) instead of a captured-output claim, choose a different command for this
+  coverage cell if one exists (none was found), or accept case 13 as a case that is
+  captured and sealed like any other but does not itself prove `Data`-absence is
+  observable — because today it is not. Apply did not choose among these; design must.
 - `test_both_revision_families_and_a_tie_are_exercised`: case 12 reports
   `markerOwned: true`; case 14 reports a non-empty `tied`.
 - `test_every_f3_site_is_sealed_in_both_env_states`: exact set equality over
@@ -146,9 +172,24 @@ inspected for shape can be satisfied by an empty file; an output is not.
 
 `tests/seal/normalize.py` — an ordered tuple `NORMALIZERS = (N3, N2, N1, N5)` of named
 single-purpose functions. **The order is load-bearing and pinned by
-`test_normalizer_order_is_pinned`**: `CLI_INVOCATION` contains `sys.executable` and
-`str(CLI_PATH)`, so if N2 rewrote the forge prefix first, N3's literal would no longer
-match.
+`test_normalizer_order_is_pinned`**: N3's match target is the interpreter token
+`shlex.quote(sys.executable or "python3")` only — narrower than the whole
+`CLI_INVOCATION` string (see the correction below). In this repo the venv interpreter
+itself resolves under `FORGE_ROOT` (`<repo>/.venv/bin/python3`), so if N2 rewrote the
+forge prefix first, N3's literal would no longer match. N3 must still run before N2.
+
+**Correction to the original N3 shape (found by the parallel Cut-1 proposal, before
+capture).** The first draft of N3 replaced the *entire* `impl.CLI_INVOCATION` value with
+`<CLI>`, which erases `str(CLI_PATH)` along with the interpreter. That is exactly the
+byte the seal exists to protect: measurement §C names Cut 1's single silent failure mode
+as `CLI_PATH` resolving to the engine instead of the launcher, and design D2 chose real
+subprocess invocation over in-process specifically so that resolution would be
+observable ("an in-process seal is blind to exactly that"). A whole-value N3 erasure
+makes the seal blind to the one failure it was built to catch — green regardless of
+which file actually ran. **Fixed**: N3 normalizes only the interpreter token, leaving
+`str(CLI_PATH)` in the sealed bytes; N2 then turns that absolute path into the stable,
+machine-independent `<FORGE>/.claude/skills/proposal-implementation/scripts/implementation_cli.py`.
+A wrongly-resolved `CLI_PATH` now changes that substring and moves the digest.
 
 Each normalizer gets **two** tests — a reach pair and a guard pair. The reach pair is its
 named mutation (delete the normalizer, the pair stops collapsing, red). The guard pair is
@@ -159,7 +200,7 @@ shown *not* to eat adjacent real output.
 |---|---|---|---|
 | **N1** `iso8601_timestamps` | `\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z` → `<TS>` | two samples differing only in a `_now_iso8601()` stamp | `"2026-09-10"` (bare date) and `"2026-09-11"` remain different |
 | **N2** `absolute_roots` | exact substring replacement, longest-first, of the four known roots: scratch target → `<TARGET>`, corpus root → `<CORPUS>`, `str(FORGE_ROOT)` → `<FORGE>`, proposals dir → `<PROPOSALS>` | two samples differing only in the tmpdir name | `src/Seal/__init__.py` and `src/Seal/steps.py` remain different; `/usr/bin/x` is untouched |
-| **N3** `cli_invocation` | exact `impl.CLI_INVOCATION` value → `<CLI>` | two samples differing only in the interpreter path | `python3 other.py` remains different from `python3 another.py` |
+| **N3** `cli_invocation` | interpreter token only: `shlex.quote(sys.executable or "python3")` → `<PYTHON>` (NOT the whole `CLI_INVOCATION` value — `str(CLI_PATH)` must survive into N2) | two samples differing only in the interpreter path collapse | `python3 other.py` remains different from `python3 another.py` — the `CLI_PATH` difference must survive both N3 and N2 |
 | **N4** `session_identity` | **no substitution — pinned instead.** Every `--session` in `cases.json` is a literal from `{"seal-s1","seal-s2"}`; a test asserts no other value appears | change one case's `--session` literal → its digest moves → red. This proves session identity *reaches* the sealed bytes rather than being erased | — (N4 erases nothing, so it cannot over-normalize) |
 | **N5** `git_shas` | `\b[0-9a-f]{40}\b` → `<GITSHA>` (belt-and-braces: the corpus already commits under pinned identity and pinned dates) | two corpora committed at different dates | a 64-hex `sha256` survives (`\b…{40}\b` cannot match inside a 64-run); a second test asserts no golden contains a 7–12 hex short sha |
 | **N6** `content_digests` | **deliberately NOT normalized.** `source_digest`, `suite_digest` and `revisionSha256` are content-derived over a byte-fixed corpus, so they are already deterministic. Normalizing them would blind the seal to a change in the digest *algorithm* — exactly what Cut 2/3 can break | build the corpus with one byte flipped in `src/Seal/__init__.py` and assert the case-12 digest **moves**. If anyone later adds a `<DIGEST>` normalizer, the digest stops moving and this test goes red | — |
@@ -169,6 +210,18 @@ shown *not* to eat adjacent real output.
 of them (N4, N6) by *pinned determinism with a mutation* rather than by erasure, with the
 reason stated. A normalizer switched off and a normalizer never written produce identical
 green output; the reach pairs are what tell them apart.
+
+**N3's pinned companion — `test_the_sealed_cli_path_names_the_launcher`.** Narrowing N3
+to the interpreter only is correct only if `str(CLI_PATH)` actually survives, through N2,
+into the digested bytes; this test pins that directly, the same idiom N4 uses for
+`--session`. After full `normalize()`, every case whose captured stdout embeds
+`CLI_INVOCATION`-derived text — the `gate` cases (#19, #20), the `step` case (#25), the
+`discuss` case (#17) — contains the literal substring
+`<FORGE>/.claude/skills/proposal-implementation/scripts/implementation_cli.py`. Its named
+mutation: in the raw (pre-normalization) captured text, substitute a different resolved
+path for the launcher's before calling `normalize()` — the assertion must go red. This is
+the single most load-bearing mutation in the change: without it, the other normalizer
+proofs guard an instrument that cannot see the one thing Cut 1 can silently break.
 
 ### D5 — Flakiness defence: capture twice, refuse on disagreement
 
@@ -367,6 +420,7 @@ the same placeholders N2 produces, so the roster is readable and path-free.
 |---|---|---|
 | Unit | each normalizer | reach pair (collapses) + guard pair (stays distinct); D4 table |
 | Unit | normalizer order | `NORMALIZERS` identity pinned; N3 before N2 |
+| Unit | `CLI_PATH` identity | `test_the_sealed_cli_path_names_the_launcher` — pinned assertion the launcher path survives N3+N2 into the sealed bytes; mutation: a different resolved path → red (the most load-bearing mutation in the change, see D4) |
 | Unit | env allow-list | the child env builder emits no key outside the list |
 | Unit | F5 identity | pinned literal `expected_dirs` outputs; `PRODUCT_DATA` source guard |
 | Unit | F3 anchors | old spelling count `== 0`, permanently |
