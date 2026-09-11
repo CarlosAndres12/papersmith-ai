@@ -194,8 +194,25 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
         import paper_leak  # noqa: PLC0415
         paper_leak.check_tripwire(draft["latex"], contract.style_set)
 
+    # Ruling 2's real caller: every real `write` that reaches this point
+    # (contract-audit cleared) reports the style channel's own status in
+    # the returned envelope, never only through a standalone unit test.
+    # `register_result`/`overlap_result` stay `None` here -- that pair is
+    # the proof harness's own measurement over recorded A/B/S transcripts
+    # (`design.md`, Decision D6; `StyleLeakDetectionTests`), never computed
+    # for a single real `write` call, which only ever runs the tripwire
+    # above. An empty `style_set` still reaches this call, which is what
+    # makes "unmeasured" a real reported status rather than an omitted key.
+    style_report = style_channel_report(contract.style_set, None, None)
+
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
-    return {"status": "written", "block": contract.block_id, "verdicts": audit_result["verdicts"], **result}
+    return {
+        "status": "written",
+        "block": contract.block_id,
+        "verdicts": audit_result["verdicts"],
+        "styleChannel": style_report,
+        **result,
+    }
 
 
 def style_channel_report(recorded_samples: list, register_result: dict | None, overlap_result: dict | None) -> dict:

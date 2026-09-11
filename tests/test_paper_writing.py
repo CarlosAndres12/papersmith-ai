@@ -1588,6 +1588,28 @@ class WritingPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "audit-fired")
         self.assertEqual(result["attempt"], 1)
 
+    def test_a_real_write_with_no_style_set_reports_the_style_channel_unmeasured(self) -> None:
+        """Ruling 2's own guarantee ('never a silent pass') has no real
+        caller unless a genuine `write_block` invocation surfaces it. This
+        drives the pipeline end to end -- not `style_channel_report` in
+        isolation -- with an empty `style_set`, the only value Work Unit 1
+        alone ever produces, and asserts the returned envelope itself
+        reports `unmeasured` rather than omitting the field entirely."""
+        contract = _write_contract(citations_regime="none", evidence_set=(), style_set=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["styleChannel"], {"status": "unmeasured"})
+
+    def test_a_real_write_with_a_style_set_reports_the_style_channel_measured(self) -> None:
+        sample = {
+            "reference": "paperA",
+            "span": "one two three four five six seven eight nine ten",
+        }
+        contract = _write_contract(citations_regime="none", evidence_set=(), style_set=(sample,))
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["styleChannel"]["status"], "measured")
+
 
 class StyleChannelReportingTests(unittest.TestCase):
     """Ruling 2 (orchestrator, this change): an all-`noEquivalent` style set
