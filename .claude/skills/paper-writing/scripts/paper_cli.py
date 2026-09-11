@@ -615,9 +615,70 @@ def cmd_render(args: argparse.Namespace) -> dict:
     """`render`: compiles `paper/Figures/<id>.tex` standalone, exactly once
     per call (`authored-diagram` spec, `Requirement: Standalone Compile`).
     `--latexmk-path` is injectable ONLY for tests (`paper_latex.compile`'s
-    own `path` kwarg); omitted, `shutil.which` searches the real `PATH`."""
+    own `path` kwarg); omitted, `shutil.which` searches the real `PATH`.
+
+    `--acknowledge-reset` takes the OTHER branch entirely: the explicit
+    operator acknowledgement that clears a spent ledger (`authored-diagram`
+    spec, `Scenario: Acknowledgement clears the ledger`) — never combined
+    with a compile in the same call, so a reset is always its own,
+    unambiguous act.
+    """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
-    return paper_figure.render(paper_dir, args.figure_id, path=args.latexmk_path)
+    if args.acknowledge_reset:
+        paths = paper_figure.figure_paths(paper_dir, args.figure_id)
+        return paper_figure.acknowledge_reset(paths, args.figure_id)
+
+    result = paper_figure.render(paper_dir, args.figure_id, path=args.latexmk_path)
+    if args.section and args.block:
+        result["obligations"] = _check_obligations(paper_dir, args)
+    return result
+
+
+def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
+    """Optional, real caller of `paper_obligation.py`'s checks — run only
+    when `--section`/`--block` are given alongside `render`
+    (`diagram-obligation` spec: obligations are read off the contract's own
+    `figure:` declaration, never known). `--expected-components` supplies
+    the named `components_from` fact's resolved, ordered list explicitly —
+    this CLI never infers a list out of a free-text `declare --fact`
+    resolution, which records prose, not a schema.
+
+    Also checks separation against every SIBLING `<other_id>.diagram.json`
+    already under `paper/Figures/` — the cross-diagram intersection
+    `check_shared_components` exists for, with no second CLI argument
+    needed: every other diagram this figure could collide with is already
+    on disk.
+    """
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    section_path = sections_dir / f"{args.section}.md"
+    header, _body = paper_contract.parse(section_path.read_bytes())
+    block = next(b for b in header.blocks if b["id"] == args.block)
+    figure = block["figure"]
+    if figure is None:
+        return {"checked": False, "reason": f"{args.block!r} declares no figure: obligation"}
+
+    paths = paper_figure.figure_paths(paper_dir, args.figure_id)
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    manifest_components = manifest.get("components", [])
+    expected = json.loads(args.expected_components) if args.expected_components else []
+
+    paper_obligation.check_components(figure, manifest_components, expected)
+    paper_obligation.check_excluded(figure, manifest_components)
+    paper_obligation.check_caption(
+        figure, manifest_components, manifest.get("encodings", []), manifest.get("caption", ""),
+    )
+    paper_obligation.check_mandatory(figure, paths["pdf"].is_file(), args.block)
+
+    sibling_components = {args.figure_id: manifest_components}
+    for sibling_manifest_path in sorted(paths["tex"].parent.glob("*.diagram.json")):
+        sibling_id = sibling_manifest_path.name[: -len(".diagram.json")]
+        if sibling_id == args.figure_id:
+            continue
+        sibling_manifest = json.loads(sibling_manifest_path.read_text(encoding="utf-8"))
+        sibling_components[sibling_id] = sibling_manifest.get("components", [])
+    paper_obligation.check_shared_components(sibling_components)
+
+    return {"checked": True}
 
 
 def cmd_place(args: argparse.Namespace) -> dict:
@@ -853,6 +914,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument(
         "--latexmk-path", default=None,
         help="test-only: override the PATH shutil.which searches for latexmk",
+    )
+    p_render.add_argument(
+        "--acknowledge-reset", action="store_true",
+        help="explicit operator acknowledgement: clears this id's spent repair-budget ledger, compiles nothing",
+    )
+    p_render.add_argument(
+        "--section", default=None,
+        help="run obligation checks after compiling: the sections/<id>.md stem --block belongs to",
+    )
+    p_render.add_argument(
+        "--block", default=None, help="the block id whose figure: obligation to check after compiling",
+    )
+    p_render.add_argument(
+        "--expected-components", default=None,
+        help="JSON array: components_from's resolved, ordered list, for the components check",
+    )
+    p_render.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
     )
 
     p_place = sub.add_parser(

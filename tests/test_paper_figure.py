@@ -544,12 +544,12 @@ class CLIWiringTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        test_root = (
+        self.test_root = (
             FORGE_ROOT / "implementations"
             / f".paper-figure-cli-wiring-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         )
-        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
-        self.paper_dir = test_root / "paper"
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
         (self.paper_dir / "Figures").mkdir(parents=True)
         self.bin_dir = Path(self._tmp.name) / "bin"
         _install_stub_latexmk(self.bin_dir)
@@ -583,6 +583,103 @@ class CLIWiringTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 2, proc.stdout)
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["code"], "DIAGRAM_SOURCE_ABSENT")
+
+    def test_acknowledge_reset_clears_the_ledger_through_the_cli(self) -> None:
+        (self.paper_dir / "Figures" / "diagR.tex").write_text("% node: box\n", encoding="utf-8")
+        (self.paper_dir / "Figures" / "diagR.diagram.json").write_text(
+            json.dumps({"components": ["box"]}), encoding="utf-8",
+        )
+        record_path = Path(self._tmp.name) / "record.jsonl"
+        env = {"STUB_MODE": "failure_error", "STUB_RECORD_PATH": str(record_path)}
+        for _attempt in range(4):
+            self._run(
+                "render", "--paper", str(self.paper_dir), "--figure-id", "diagR",
+                "--latexmk-path", str(self.bin_dir), env=env,
+            )
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagR", "--acknowledge-reset",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertTrue(payload["ledgerReset"])
+
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagR",
+            "--latexmk-path", str(self.bin_dir), env=env,
+        )
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["attemptsUsed"], 1)
+
+    def test_render_with_section_and_block_runs_obligation_checks(self) -> None:
+        (self.paper_dir / "Figures" / "diagO.tex").write_text(
+            "% node: encoder\n% node: decoder\n", encoding="utf-8",
+        )
+        (self.paper_dir / "Figures" / "diagO.diagram.json").write_text(
+            json.dumps({
+                "components": ["encoder", "decoder"], "encodings": [],
+                "caption": "Figure 1. encoder, decoder.",
+            }),
+            encoding="utf-8",
+        )
+        sections_dir = self.test_root / "sections"
+        sections_dir.mkdir()
+        (sections_dir / "demo.md").write_bytes(
+            b"---\n" + json.dumps({
+                "section": "demo", "position": 1,
+                "blocks": [{
+                    "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
+                    "citations": "none",
+                    "figure": {
+                        "components_from": "contributions", "ordered": True, "excludes": [],
+                        "caption_enumerates": True, "caption_decodes": False, "mandatory": True,
+                    },
+                }],
+            }).encode("utf-8") + b"\n---\nDemo prose.\n",
+        )
+        record_path = Path(self._tmp.name) / "record.jsonl"
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
+            "--expected-components", json.dumps(["encoder", "decoder"]),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["obligations"], {"checked": True})
+
+    def test_render_with_section_and_block_mismatched_components_refuses(self) -> None:
+        (self.paper_dir / "Figures" / "diagO2.tex").write_text("% node: encoder\n", encoding="utf-8")
+        (self.paper_dir / "Figures" / "diagO2.diagram.json").write_text(
+            json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
+            encoding="utf-8",
+        )
+        sections_dir = self.test_root / "sections2"
+        sections_dir.mkdir()
+        (sections_dir / "demo.md").write_bytes(
+            b"---\n" + json.dumps({
+                "section": "demo", "position": 1,
+                "blocks": [{
+                    "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
+                    "citations": "none",
+                    "figure": {
+                        "components_from": "contributions", "ordered": True, "excludes": [],
+                        "caption_enumerates": True, "caption_decodes": False, "mandatory": True,
+                    },
+                }],
+            }).encode("utf-8") + b"\n---\nDemo prose.\n",
+        )
+        record_path = Path(self._tmp.name) / "record2.jsonl"
+        proc = self._run(
+            "render", "--paper", str(self.paper_dir), "--figure-id", "diagO2",
+            "--latexmk-path", str(self.bin_dir),
+            "--section", "demo", "--block", "b1", "--sections", str(sections_dir),
+            "--expected-components", json.dumps(["encoder", "decoder"]),
+            env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
+        )
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "COMPONENT_MISMATCH")
 
 
 class DiagramMutationProofTests(unittest.TestCase):
