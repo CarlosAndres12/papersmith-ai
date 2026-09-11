@@ -344,6 +344,39 @@ class ValidateCLITests(unittest.TestCase):
         ])
         self.assertEqual(exit_code, 2)
 
+    def test_section_md_reads_the_regime_for_a_submitted_record(self) -> None:
+        # cmd_validate's own `_resolve_regime` -- a real production caller
+        # of `paper_validate.read_citations_regime`, not only the unit
+        # tests that exercise it directly.
+        section = self.root / "example.md"
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [{
+                "id": "intro.claim", "requires_facts": [], "requires_declarations": [],
+                "citations": "resolution",
+            }],
+        }
+        section.write_bytes(b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\nbody\n")
+        exit_code = paper_cli.main([
+            "validate", "--paper", str(self.paper_dir), "--block", "intro.claim",
+            "--claim", "the dataset holds 12000 labeled examples",
+            "--quote", "holds 12,000 labeled examples", "--source-md", str(self.source),
+            "--verdict", "holds", "--cite-key", "d1", "--section-md", str(section),
+        ])
+        self.assertEqual(exit_code, 0)
+        records = paper_evidence.read_records(self.paper_dir, "intro.claim")
+        self.assertEqual(records[-1]["regime"], "resolution")
+
+    def test_section_md_with_no_front_matter_refuses_contract_header_absent_through_the_cli(self) -> None:
+        section = self.root / "unheadered.md"
+        section.write_text("# No header\n", encoding="utf-8")
+        exit_code = paper_cli.main([
+            "validate", "--paper", str(self.paper_dir), "--block", "intro.claim",
+            "--claim", "x", "--quote", "holds 12,000 labeled examples", "--source-md", str(self.source),
+            "--verdict", "holds", "--section-md", str(section),
+        ])
+        self.assertEqual(exit_code, 2)
+
     def test_a_paraphrased_quote_refuses_span_not_in_source_through_the_cli(self) -> None:
         exit_code = paper_cli.main([
             "validate", "--paper", str(self.paper_dir), "--block", "intro.claim",

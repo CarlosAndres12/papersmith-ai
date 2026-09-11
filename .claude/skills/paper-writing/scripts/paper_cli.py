@@ -328,11 +328,26 @@ def _build_evidence_record(args: argparse.Namespace, round_number: int) -> paper
     else:
         verdict = paper_evidence.Verdict.insufficient(args.reason or "no --quote/--source-md given")
     return paper_evidence.EvidenceRecord.from_verdict(
-        block_id=args.block, regime=args.regime or "none", claim=args.claim,
+        block_id=args.block, regime=_resolve_regime(args, "none"), claim=args.claim,
         cite_key=args.cite_key or "", identifier=args.identifier or "",
         resolver=args.resolver or "", metadata_digest=args.metadata_digest or "",
         verdict=verdict, round=round_number,
     )
+
+
+def _resolve_regime(args: argparse.Namespace, fallback: str | None) -> str | None:
+    """`--regime` wins when given explicitly; otherwise, when `--section-md`
+    names an already-headered `sections/*.md` fixture, the regime is READ
+    from that file's own contract for `--block` (`paper_validate.
+    read_citations_regime` — real caller, not only the unit tests that
+    exercise it directly). `fallback` (a `--sentence` JSON's own embedded
+    `"regime"`, if any) is used only when neither of the above is given.
+    """
+    if args.regime:
+        return args.regime
+    if args.section_md:
+        return paper_validate.read_citations_regime(Path(args.section_md), args.block)
+    return fallback
 
 
 def cmd_validate(args: argparse.Namespace) -> dict:
@@ -349,7 +364,8 @@ def cmd_validate(args: argparse.Namespace) -> dict:
             for entry in sentence_obj.get("citations", [])
         )
         sentence = paper_validate.Sentence(text=sentence_obj["text"], citations=citations)
-        paper_validate.validate_placement(args.regime or sentence_obj.get("regime"), sentence)
+        regime = _resolve_regime(args, sentence_obj.get("regime"))
+        paper_validate.validate_placement(regime, sentence)
 
     if args.claim:
         existing = paper_evidence.read_records(paper_dir, args.block)
@@ -605,6 +621,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_validate.add_argument("--resolver", default=None, help="which connector resolved --identifier")
     p_validate.add_argument("--metadata-digest", default=None, help="the cached resolution's own digest")
     p_validate.add_argument("--regime", default=None, choices=paper_vocabulary.CITATIONS_REGIMES)
+    p_validate.add_argument(
+        "--section-md", default=None,
+        help="an already-headered sections/*.md path to read --block's citations regime from",
+    )
     p_validate.add_argument("--round", type=int, default=None, help="override the auto-derived round number")
     p_validate.add_argument(
         "--guidance", default=None,
