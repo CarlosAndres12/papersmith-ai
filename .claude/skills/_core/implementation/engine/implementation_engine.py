@@ -3997,7 +3997,23 @@ def pytest_anchor_missing(target: Path) -> bool:
     return "[tool.pytest.ini_options]" not in text or "pythonpath" not in text
 
 
-def well_formed(declared: object) -> list[dict]:
+def _valid_document_field(document: object) -> bool:
+    """A finding's own `document` field, valid shape (Cut 3,
+    `a-revision-is-two-documents`, D6): a non-empty label string, or a
+    non-empty list of non-empty label strings -- naming either document, or
+    both. Pure, no module state read: `well_formed` gates whether this is
+    even checked (`require_document`), so this function itself stays
+    testable regardless of how many documents any particular process
+    happens to have loaded.
+    """
+    if isinstance(document, str):
+        return bool(document.strip())
+    if isinstance(document, list) and document:
+        return all(isinstance(d, str) and d.strip() for d in document)
+    return False
+
+
+def well_formed(declared: object, *, require_document: bool = False) -> list[dict]:
     """Every entry must be a mapping carrying an id, or nothing downstream holds.
 
     `id` is the key the whole audit bridge is addressed by: the evidence test,
@@ -4005,6 +4021,14 @@ def well_formed(declared: object) -> list[dict]:
     named after it. An entry without one cannot be ruled on, so reading the file
     as if it declared nothing would be the worst answer available — it reports
     `audit: none`, which is what a repository with no findings at all reports.
+
+    `require_document` (Cut 3, D6): additive, default `False` -- every
+    existing caller and every populated `tests/findings.py` on disk,
+    including the seal corpus's own, keeps validating exactly as it always
+    has. `read_findings` is the one caller that ever passes `True`, and
+    only when `len(DOCUMENTS) > 1` -- naming which document(s) a finding
+    addresses is meaningless, and therefore never demanded, when only one
+    is declared.
     """
     if not isinstance(declared, list):
         raise Refused("MALFORMED_FINDINGS",
@@ -4019,6 +4043,12 @@ def well_formed(declared: object) -> list[dict]:
                           f"FINDINGS[{index}] carries no `id`; the evidence test, the "
                           "remedy test and the admissibility verdict are all addressed "
                           "by it, so nothing about this finding can be checked.")
+        if require_document and not _valid_document_field(finding.get("document")):
+            raise Refused("MALFORMED_FINDINGS",
+                          f"FINDINGS[{index}] carries no `document` field (a label, or "
+                          "a list of labels, naming which declared document(s) it "
+                          "addresses) -- required whenever more than one document is "
+                          "declared.")
     return declared
 
 
@@ -4065,7 +4095,7 @@ def read_findings(target: Path) -> list[dict]:
             raise Refused("MALFORMED_FINDINGS",
                           "FINDINGS is not a literal, so it cannot be read without "
                           "executing the target's code.") from exc
-        return well_formed(declared)
+        return well_formed(declared, require_document=len(DOCUMENTS) > 1)
     return []
 
 
@@ -4699,7 +4729,8 @@ def latest_revision(like: str | None) -> str | None:
 TAG_RE = re.compile(r"\\tag\{([^}]+)\}")
 
 
-def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
+def remedy_compatibility(findings: list[dict], revision: str | None,
+                         sources_by_document: dict[str, str] | None = None) -> dict:
     """Is each remedy expressible inside the proposal as it stands?
 
     A correction that is sound in isolation is still half a remedy if it cites
@@ -4712,6 +4743,16 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
     appear verbatim in the revision) and `introduces` (notation it would add).
     A non-empty `introduces` is not a failure: it is a remedy that cannot be
     called complete until the deliberation accepts the new notation.
+
+    `sources_by_document` (Cut 3, D6): additive, default `None`. A finding
+    naming a `document` field whose label(s) resolve in this mapping is
+    checked against THAT document's own text and tags, never document 0's
+    -- a remedy legitimately citing notation that lives only in a second
+    document must not be reported incompatible for not finding it in the
+    first. Every finding that names no resolvable label keeps checking
+    against `source` (document 0), exactly as before this parameter
+    existed -- which is every finding, under one document, since
+    `sources_by_document` is never even given there.
     """
     source = revision_source(revision)
     if source is None:
@@ -4724,11 +4765,20 @@ def remedy_compatibility(findings: list[dict], revision: str | None) -> dict:
     introduces: list[str] = []
 
     for finding in findings:
+        finding_source, finding_tags = source, tags
+        if sources_by_document:
+            named = finding.get("document")
+            labels = named if isinstance(named, list) else [named] if named else []
+            texts = [sources_by_document[label] for label in labels
+                    if label in sources_by_document]
+            if texts:
+                finding_source = "\n".join(texts)
+                finding_tags = set(TAG_RE.findall(finding_source))
         for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
-            missing = [e for e in finding.get(field, []) if e not in tags]
+            missing = [e for e in finding.get(field, []) if e not in finding_tags]
             if missing:
                 unknown_loci.append(f"{finding['id']}.{field}: {missing}")
-        absent = [s for s in finding.get("uses", []) if s not in source]
+        absent = [s for s in finding.get("uses", []) if s not in finding_source]
         if absent:
             undefined_notation.append(f"{finding['id']}: {absent}")
         if not finding.get("uses"):
@@ -7400,7 +7450,23 @@ def migrate(target: Path, current: dict) -> None:
 CITATION_RE = re.compile(CITATION_PATTERN)
 
 
-def finding_impact(finding: dict, source: str) -> dict:
+def _impact_class(remedy_loci: list, introduces: int, source: str) -> tuple[str, int]:
+    """The `local`/`structural` verdict and its own citation count, for ONE
+    document's text -- extracted from `finding_impact` (Cut 3, D6) so the
+    identical arithmetic serves a per-document mapping without a second
+    copy drifting beside the scalar path.
+    """
+    citations = 0
+    for match in CITATION_RE.finditer(source):
+        number = match.group(1) or match.group(2) or match.group(3)
+        if number in remedy_loci:
+            citations += 1
+    local = len(remedy_loci) <= 1 and introduces == 0 and citations <= 1
+    return ("local" if local else "structural"), citations
+
+
+def finding_impact(finding: dict, source: str,
+                    sources_by_document: dict[str, str] | None = None) -> dict:
     """How far into the proposal a remedy would reach.
 
     Three measurements, all read from the document rather than judged: how many
@@ -7408,17 +7474,37 @@ def finding_impact(finding: dict, source: str) -> dict:
     rest of the text cites those loci. A change that touches one locus
     nobody else refers to, adding nothing, is local. Anything else carries
     implications the deliberation has to weigh with time, not inline.
+
+    `locus`/`introducesNotation`/`citedElsewhere` are always computed
+    against `source` (document 0) and never change shape (Cut 3, D6:
+    "representation only", never a combined verdict). `class` alone
+    becomes a `{label: local|structural}` mapping, and only when
+    `sources_by_document` is given AND non-empty -- gated by the CALLER's
+    own decision (never a module-level document count read here), so this
+    function stays testable independent of how many documents any
+    particular process happens to have loaded. A finding naming no
+    `document` field, or naming a label absent from `sources_by_document`,
+    contributes nothing to the mapping; an empty mapping leaves `class` the
+    plain string it has always been.
     """
     remedy_loci = finding.get(REMEDY_LOCUS_KEY, [])
-    citations = 0
-    for match in CITATION_RE.finditer(source):
-        number = match.group(1) or match.group(2) or match.group(3)
-        if number in remedy_loci:
-            citations += 1
     introduces = len(finding.get("introduces", []))
-    local = len(remedy_loci) <= 1 and introduces == 0 and citations <= 1
-    return {NOTATION_KEYS["locus"]: len(remedy_loci), "introducesNotation": introduces,
-            "citedElsewhere": citations, "class": "local" if local else "structural"}
+    cls, citations = _impact_class(remedy_loci, introduces, source)
+    result = {NOTATION_KEYS["locus"]: len(remedy_loci), "introducesNotation": introduces,
+              "citedElsewhere": citations, "class": cls}
+    if sources_by_document:
+        named = finding.get("document")
+        labels = named if isinstance(named, list) else [named] if named else []
+        per_document = {}
+        for label in labels:
+            doc_source = sources_by_document.get(label)
+            if doc_source is None:
+                continue
+            doc_cls, _ = _impact_class(remedy_loci, introduces, doc_source)
+            per_document[label] = doc_cls
+        if per_document:
+            result["class"] = per_document
+    return result
 
 
 def adoption_state(finding: dict, source: str) -> dict:
@@ -7703,6 +7789,17 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     if not findings:
         raise Refused("NO_FINDINGS", "tests/findings.py declares no finding to rule on.")
 
+    # Cut 3 (`a-revision-is-two-documents`, C7/D6): additive, `None` under
+    # one document -- `finding_impact`'s own per-document reshape never
+    # fires there, since it is gated on this argument's own presence, never
+    # on a module-level document count read internally.
+    sources_by_document = None
+    if len(DOCUMENTS) > 1:
+        sources_by_document = {DOCUMENTS[0]["label"]: source}
+        for index in range(1, len(DOCUMENTS)):
+            sources_by_document[DOCUMENTS[index]["label"]] = revision_source(
+                args.revision, index)
+
     verdicts = {}
     for finding in findings:
         reasons = []
@@ -7733,7 +7830,7 @@ def cmd_admit(args: argparse.Namespace) -> dict:
             # anything: the deliberation settled that when it published.
             "introduces": [] if adoption["state"] == "adopted" else finding.get("introduces", []),
             "adoption": adoption,
-            "impact": finding_impact(finding, source),
+            "impact": finding_impact(finding, source, sources_by_document),
         }
 
     record = {
@@ -14712,7 +14809,14 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # The resolved revision, not the argument: these three ask what the proposal
     # says as it stands now, and answering them against a revision nobody named
     # left them permanently unknown on every ordinary invocation.
-    compatibility = remedy_compatibility(findings, revision)
+    # Cut 3 (C7/D6): additive, `None` under one document.
+    verify_sources_by_document = None
+    if len(DOCUMENTS) > 1:
+        verify_sources_by_document = {DOCUMENTS[0]["label"]: revision_source(revision)}
+        for index in range(1, len(DOCUMENTS)):
+            verify_sources_by_document[DOCUMENTS[index]["label"]] = revision_source(
+                revision, index)
+    compatibility = remedy_compatibility(findings, revision, verify_sources_by_document)
     ruling = admissibility_record(target, revision)
     uncontrolled = remedies_without_control(target / "tests", package_name(name))
     source = revision_source(revision)
