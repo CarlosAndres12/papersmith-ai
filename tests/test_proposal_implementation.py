@@ -21489,6 +21489,49 @@ class AuthorizationBindingKeysStructuralTests(unittest.TestCase):
             "keys _AUTHORIZATION_BINDING_KEYS declares")
 
 
+def _function_body_source(function: str) -> str:
+    """One named function's own source text, read from `ENGINE` by `ast` --
+    never `inspect.getsource`, which needs the module imported and would
+    read whatever copy `sys.modules` happens to hold. Nested definitions
+    are NOT included (a plain `ast.get_source_segment` over the top-level
+    `FunctionDef` node already excludes a nested one's own body from the
+    walk this reads, since the segment is a byte range, not a walk)."""
+    text = ENGINE.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    node = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == function)
+    return ast.get_source_segment(text, node)
+
+
+class LedgerDocumentRevisionsWiringTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 11, design.md D2/C5):
+    `cmd_gate`'s gate event + return, `cmd_offer`'s offer event + return,
+    and `cmd_close`'s `prior_close` comparison, `not_open` return, `close`
+    event and `closed` return all gain an additive `documentRevisions` key.
+
+    Proven structurally, by counting the literal `"documentRevisions"` key
+    string inside each function's own source text (`ast.get_source_segment`,
+    never `inspect.getsource`): a live two-document process cannot be
+    reached inside this shared test session, since `impl.DOCUMENTS` is
+    resolved once, at import, under this file's own real one-document
+    profile (the same constraint Phase 10's own tests already state).
+    `cmd_gate` already carries ONE occurrence (`gate_binding`, C4/Phase 7);
+    this phase's own two sites (event + return) bring it to three.
+    """
+
+    def test_cmd_gate_carries_three_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_gate").count('"documentRevisions"'), 3)
+
+    def test_cmd_offer_carries_two_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_offer").count('"documentRevisions"'), 2)
+
+    def test_cmd_close_carries_four_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_close").count('"documentRevisions"'), 4)
+
+
 class ProposeCommandTests(unittest.TestCase):
     """`propose` -- the campaign proposal (design D4, spec domain
     `submission-proposal`). One `proposal` event per call, multi-use,
