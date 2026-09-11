@@ -1,3 +1,70 @@
+---
+{
+  "section": "introduction",
+  "position": 3,
+  "blocks": [
+    {
+      "id": "block-1",
+      "requires_facts": [
+        "dataset"
+      ],
+      "requires_declarations": [],
+      "citations": "discovery"
+    },
+    {
+      "id": "block-2",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [],
+      "citations": "discovery"
+    },
+    {
+      "id": "block-3",
+      "requires_facts": [
+        "problem-statement"
+      ],
+      "requires_declarations": [],
+      "citations": "discovery",
+      "after": [
+        {
+          "target": "related-work",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "When a Related Work section exists, this block is written after it."
+          }
+        }
+      ]
+    },
+    {
+      "id": "block-4",
+      "requires_facts": [
+        "formulation",
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "block-5",
+      "requires_facts": [
+        "experimental-design",
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "block-6",
+      "requires_facts": [
+        "skeleton"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    }
+  ]
+}
+---
 # Introduction
 
 **Extent** 900–1650 words · 7–13 paragraphs

@@ -1,3 +1,43 @@
+---
+{
+  "section": "materials-and-methods",
+  "position": 5,
+  "blocks": [
+    {
+      "id": "mm-preamble",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "mm-dataset",
+      "requires_facts": [
+        "dataset"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution",
+      "optional": true
+    },
+    {
+      "id": "mm-borrowed-machinery",
+      "requires_facts": [
+        "formulation"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "mm-proposal",
+      "requires_facts": [
+        "formulation",
+        "implementation"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    }
+  ]
+}
+---
 # Materials and Methods
 
 **Extent** 560–3950 words · 2 to 5 subsections

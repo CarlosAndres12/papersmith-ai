@@ -1,3 +1,77 @@
+---
+{
+  "section": "abstract",
+  "position": 2,
+  "after": [
+    {
+      "target": "conclusions",
+      "source": {
+        "file": "sections/07-conclusions.md",
+        "quote": "The abstract is written after this section, because it compresses it."
+      }
+    }
+  ],
+  "blocks": [
+    {
+      "id": "slot-1",
+      "requires_facts": [
+        "dataset"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-2",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-3",
+      "requires_facts": [
+        "formulation"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-4",
+      "requires_facts": [
+        "formulation",
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-5",
+      "requires_facts": [
+        "experimental-design"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-6",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "slot-7",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    }
+  ]
+}
+---
 # Abstract
 
 **Extent** 216–280 words · 7–14 sentences · **one paragraph**

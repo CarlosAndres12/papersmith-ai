@@ -1,3 +1,51 @@
+---
+{
+  "section": "limitations",
+  "position": 8,
+  "blocks": [
+    {
+      "id": "lim-opening-concession",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "lim-proposal-items",
+      "requires_facts": [
+        "formulation"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "lim-validation-items",
+      "requires_facts": [
+        "experimental-design"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "lim-failure-mode",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none",
+      "optional": true
+    },
+    {
+      "id": "lim-closing",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "discovery",
+      "optional": true
+    }
+  ]
+}
+---
 # Limitations
 
 **Extent** 180–410 words · 1 paragraph, or 2 when the second carries a failure mode

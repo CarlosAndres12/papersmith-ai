@@ -1,3 +1,41 @@
+---
+{
+  "section": "conclusions",
+  "position": 9,
+  "blocks": [
+    {
+      "id": "concl-block-1",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "concl-block-2",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "concl-block-3",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "concl-block-4",
+      "requires_facts": [
+        "limitations"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    }
+  ]
+}
+---
 # Conclusions
 
 **Extent** 375–500 words · 3 or 4 paragraphs

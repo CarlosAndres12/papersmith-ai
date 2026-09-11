@@ -1,3 +1,38 @@
+---
+{
+  "section": "results-and-discussion",
+  "position": 7,
+  "blocks": [
+    {
+      "id": "rd-general-task",
+      "requires_facts": [
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "rd-contribution-blocks",
+      "requires_facts": [
+        "contributions",
+        "results"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "rd-cost",
+      "requires_facts": [
+        "results",
+        "implementation"
+      ],
+      "requires_declarations": [],
+      "citations": "none",
+      "optional": true
+    }
+  ]
+}
+---
 # Results and Discussion
 
 **Extent** 1170–4150 words · two or three content blocks, plus limitations last

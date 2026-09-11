@@ -1,3 +1,30 @@
+---
+{
+  "section": "title-and-keywords",
+  "position": 1,
+  "blocks": [
+    {
+      "id": "title",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "keywords",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [
+        "keyword-bounds",
+        "classification-line"
+      ],
+      "citations": "none"
+    }
+  ]
+}
+---
 # Title and Keywords
 
 **Extent** title 11–15 words · keywords 4–8

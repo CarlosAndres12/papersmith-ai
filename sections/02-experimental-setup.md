@@ -1,3 +1,36 @@
+---
+{
+  "section": "experimental-setup",
+  "position": 6,
+  "blocks": [
+    {
+      "id": "es-preamble",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "es-assessment",
+      "requires_facts": [
+        "dataset",
+        "contributions",
+        "experimental-design",
+        "gap"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution"
+    },
+    {
+      "id": "es-training-details",
+      "requires_facts": [
+        "implementation"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    }
+  ]
+}
+---
 # Experimental Set-Up
 
 **Extent** 1020–4140 words · a preamble and two subsections

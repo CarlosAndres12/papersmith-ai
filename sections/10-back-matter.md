@@ -1,3 +1,56 @@
+---
+{
+  "section": "back-matter",
+  "position": 10,
+  "blocks": [
+    {
+      "id": "bm-author-contributions",
+      "requires_facts": [],
+      "requires_declarations": [
+        "author-roles"
+      ],
+      "citations": "none"
+    },
+    {
+      "id": "bm-funding",
+      "requires_facts": [],
+      "requires_declarations": [
+        "grant-title",
+        "grant-code"
+      ],
+      "citations": "none"
+    },
+    {
+      "id": "bm-data-availability",
+      "requires_facts": [],
+      "requires_declarations": [
+        "repository-url"
+      ],
+      "citations": "none"
+    },
+    {
+      "id": "bm-conflicts-of-interest",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "bm-acknowledgments",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none",
+      "optional": true
+    },
+    {
+      "id": "bm-appendices",
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none",
+      "optional": true
+    }
+  ]
+}
+---
 # Back Matter
 
 The administrative block that sits after the conclusions and before the references.

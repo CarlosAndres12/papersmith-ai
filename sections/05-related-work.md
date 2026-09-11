@@ -1,3 +1,51 @@
+---
+{
+  "section": "related-work",
+  "position": 4,
+  "blocks": [
+    {
+      "id": "rw-preamble",
+      "requires_facts": [
+        "problem-statement"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "rw-panorama",
+      "requires_facts": [
+        "problem-statement"
+      ],
+      "requires_declarations": [],
+      "citations": "discovery"
+    },
+    {
+      "id": "rw-problem-blocks",
+      "requires_facts": [
+        "problem-statement"
+      ],
+      "requires_declarations": [],
+      "citations": "discovery"
+    },
+    {
+      "id": "rw-closing",
+      "requires_facts": [
+        "gap"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "rw-synthesis-artefact",
+      "requires_facts": [
+        "contributions"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    }
+  ]
+}
+---
 # Related Work
 
 **Extent** 820–1700 words
