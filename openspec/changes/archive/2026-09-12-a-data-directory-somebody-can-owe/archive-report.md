@@ -17,8 +17,8 @@ Slice B is archived with **PASS WITH WARNINGS**. The change enables `verify.stru
 
 **Related changes**:
 - **Slice A**: Single-document `experimental-implementation` skill (archived)
-- **Slice C**: Cross-document agreement in `experimental-deliberation` (follow-on)
-- **Slice D**: Experiments successor and Flow B (planning in progress, untracked)
+- **Slice C**: ALREADY DONE AND ARCHIVED (`2026-09-12-the-second-document-verified-on-its-own-terms`) -- per-document claim vocabulary and a fidelity fold that reads each document's own conditions. It is not a follow-on; B depended on it
+- **Slice D**: the ONLY slice remaining -- cross-document agreement, the experiments successor, and Flow B through to a test submission. Planning underway, and it carries one open operator decision: the cross-document citation key
 
 ## Verification Summary
 
@@ -147,12 +147,12 @@ The new detector's docstring spelled `**Dataset:**` as an example. `LockCDeclare
 
 ## Next Steps
 
-**Slice C** (follow-on): Cross-document agreement in `experimental-deliberation`
+**Slice C** is NOT a follow-on: it is archived, and cross-document agreement was never its scope
 - Requires Slice B complete (`dataset` atom needs declared markers to compare)
 - Adds `**Dataset:**` enforcement at skill profile tier
 - Approximately 200–300 lines, candidate for Q4 2026
 
-**Slice D** (follow-on): Experiments successor and Flow B
+**Slice D** is the only remaining slice: agreement, successor, and Flow B
 - Requires Slice C complete (agreement rule enables flow)
 - Planning in progress (untracked directory `openspec/changes/the-agreement-nothing-computes/`)
 - Explicit open decision: cross-document citation key without which every document refuses day one
@@ -167,3 +167,25 @@ The new detector's docstring spelled `**Dataset:**` as an example. `LockCDeclare
 1. Real bytes (not fixtures written to pass) prove detector correctness
 2. Spy-based assertions distinguish guards that read from guards that merely exist
 3. Inherited count assertions (apply-progress, design predictions) drift and must be re-measured, not inherited
+
+
+---
+
+## Correction: this report mislabelled the remaining work
+
+As first written, this report listed **Slice C** as a follow-on whose scope was
+cross-document agreement. Both halves are wrong, and in the direction that
+misleads.
+
+C is **archived** -- `openspec/changes/archive/2026-09-12-the-second-document-verified-on-its-own-terms/` --
+and its scope was per-document claim vocabulary and a fidelity fold reading each
+document's own conditions. **This very change depended on it**, because `Data/`
+becomes demandable only when a document declares a dataset, and `**Dataset:**` is
+enforced solely in the experimental deliberation domain.
+
+Cross-document agreement belongs to **D**, the only slice still open.
+
+Recorded rather than quietly fixed because this is the same failure the slice
+ordering already produced twice: a record that names the work in the wrong order
+teaches the wrong order to whoever reads it next, and costs more than the sentence
+it saved. The real state is **A, C, B archived; D remaining.**
