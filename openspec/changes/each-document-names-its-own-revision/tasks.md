@@ -288,15 +288,51 @@ to watch first — split it again if measured lines exceed ~500.
 
 ## Phase 4: Non-Interference Verification (after PR 3, before chain merge)
 
-- [ ] 4.1 Run `npm test`; confirm 595/595, unchanged from baseline `4dd91df`.
-- [ ] 4.2 Run `.venv/bin/python -m unittest discover -s tests`; confirm
+- [x] 4.1 Run `npm test`; confirm 595/595, unchanged from baseline `4dd91df`.
+
+      Confirmed: 595/595, pass 595, fail 0. Identical to baseline.
+- [x] 4.2 Run `.venv/bin/python -m unittest discover -s tests`; confirm
       `OK (skipped=6)` — `skipped=6` must not move, `Ran` may grow. Paste
       before/after counts.
-- [ ] 4.3 `git diff --exit-code` against `4dd91df` for `tests/seal/**`,
+
+      Before: `Ran 2913 tests ... OK (skipped=6)`.
+      After: `Ran 2923 tests ... OK (skipped=6)`.
+      `Ran` grew by exactly 10 — the 10 new tests this change added
+      (`DiscoverDocumentRevisionTests` x5, `DocumentRevisionNamesMemoTests`
+      x1, `DocumentOneBoundToTests` x1, `TwoDocumentAmbiguousFamilyRefuses
+      Tests` x1, `AmbiguousFamilyMutationProvesReachabilityTests` x2).
+      `skipped=6`, unmoved.
+- [x] 4.3 `git diff --exit-code` against `4dd91df` for `tests/seal/**`,
       `.claude/skills/{proposal,experimental}-deliberation/**`,
       `_core/deliberation/**` — must exit 0.
-- [ ] 4.4 Confirm D9's non-additions stayed out: no `--revision-<index>`
+
+      Confirmed: exit 0 for all three paths (verified `_core/deliberation`
+      resolves to `.claude/skills/_core/deliberation/`, the real path).
+- [x] 4.4 Confirm D9's non-additions stayed out: no `--revision-<index>`
       flag, no `KitAgreementLockTests._profile()` change, no
       `proposalDigest`-family rename.
-- [ ] 4.5 Run `_shared/tools/check_citations.py` against this tasks.md and
+
+      Confirmed: `git diff 4dd91df` over the engine has zero matches for
+      `--revision-`/`revision_1`-as-a-flag and zero matches for
+      `proposalDigest`; `git diff 4dd91df -- tests/test_implementation_
+      domain_lock.py` has zero matches for `_profile`.
+- [x] 4.5 Run `_shared/tools/check_citations.py` against this tasks.md and
       state the result before apply proceeds.
+
+      Ran `python3 ~/.claude/skills/_shared/tools/check_citations.py
+      --repo <repo> --artifact tasks.md`: exit 0, "every citation
+      resolves".
+
+## Final measured state
+
+- `npm test`: 595/595 (baseline 595/595, unchanged).
+- `.venv/bin/python -m unittest discover -s tests`: Ran 2923 (baseline
+  2913, +10 — this change's own new tests), OK (skipped=6, unmoved).
+- `sha256(tests/seal/digests.json)`:
+  `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75`
+  — byte-identical to the pre-change baseline, confirmed after every
+  slice and a final time here.
+- `git status --short`: clean.
+- Commits: `bec4d12` (Phase 1, RED), `67d07b2` (Phase 2, GREEN),
+  `96a4363` (Phase 3, the refusal + spec correction).
+  `git merge-base --is-ancestor bec4d12 HEAD` exits 0.
