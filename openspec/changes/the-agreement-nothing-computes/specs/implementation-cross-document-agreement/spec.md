@@ -25,9 +25,12 @@ An experiments document MAY cite a claim the proposal declares, using a
 form distinct from the existing within-document `[tests:X]`/`[exp:X]`
 pair — the proposal's own already-declared numbered claims (`\tag{N}`)
 are the resolution target; nothing about how the proposal declares a claim
-changes. This form MUST be validated by a per-`documents[N]` profile leaf
-whose absence is refused by its own indexed name, mirroring every other
-per-document leaf this forge already validates that way.
+changes. This form MUST be validated by the per-`documents[N]`
+`cross_citation` leaf `implementation-per-document-vocabulary` defines — a
+mapping of `pattern` and `resolves_against`, required per entry and absent
+only by an explicit `None` — whose own absence is refused by its exact
+indexed name, on `documents[N].dataset_marker`'s tier rather than the
+silence-tolerating five-leaf claim-vocabulary tier.
 
 #### Scenario: A citation resolving against a declared claim is accepted
 - GIVEN an experiments document citing a claim the proposal's current

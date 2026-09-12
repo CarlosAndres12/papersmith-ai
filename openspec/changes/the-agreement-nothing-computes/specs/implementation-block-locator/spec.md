@@ -24,8 +24,9 @@ constants, so a document whose declared form is not `\tag{}`/`$$…$$` can
 supply its own locator without touching the shared engine.
 
 #### Scenario: The existing single-document corpus is unaffected
-- GIVEN `proposal-implementation`'s profile, whose declared form is
-  `\tag{}`/`$$…$$`
+- GIVEN `proposal-implementation`'s profile, whose single `documents[0]`
+  entry declares `\tag{}`/`$$…$$` — today's exact hardcoded bytes, written
+  down rather than inherited from the engine
 - WHEN the locator resolves for it
 - THEN it behaves byte-identically to the pre-capability hardcoded
   `TAG_RE`/`DISPLAY_BLOCK_RE`, and `tests/seal/`'s 28 digests are unmoved
@@ -93,9 +94,12 @@ compatible.
 
 ## Boundary (explicitly not built here)
 
-Whether a document declares any locator at all — a document with no
-numbered display entries may legitimately declare none — and what
-`compose`/`admit` do for such a document are governed by
-`implementation-per-document-vocabulary` and `experimental-implementation-skill`
-respectively, not by this capability, which governs only how a declared
-locator is found and used once it exists.
+Which tier the leaf sits in, and the exact indexed names its absence is
+refused by, are governed by `implementation-per-document-vocabulary`, which
+requires it on every `documents[N]` entry and accepts no `None` — a
+consequence of this capability's own first requirement, since a leaf the
+engine may fall back from is a leaf the engine still hardcodes. What
+`compose`/`admit` do for a document whose declared locator matches nothing
+in its own text — a document with no numbered entries authored yet — belongs
+to `experimental-implementation-skill`. This capability governs only how a
+declared locator is found and used once it exists.
