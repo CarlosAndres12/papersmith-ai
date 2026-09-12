@@ -1316,5 +1316,174 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
             self.assertEqual(compatibility["undefinedNotation"], [])
 
 
+class TwoDocumentDriftControlTests(unittest.TestCase):
+    """Phase 2, C2a (design.md D6): the per-document fidelity fold's own
+    drift control. Two disjoint claim-key module scopes ("equations" for
+    document 0, "experiments" for document 1, matching the fixture profile's
+    own document-1 overlay -- M6) so `fidelityByDocument[N].status` can be
+    told apart from a shared computation at all.
+
+    Three independent mechanisms, three separate test methods (never one
+    method with three asserts -- a method halts at its first failing
+    assertion, design.md D6). Real subprocesses throughout: monkeypatching
+    a module attribute has zero effect on a child process.
+
+    **The red is structural, not asserted** (design.md D6): the shipped
+    engine computes ONE `stale` list and feeds it to every index's fold, so
+    C-fwd and C-inv are red because the two statuses cannot differ at all --
+    not because either assertion was authored to fail.
+    """
+
+    PACKAGE = "DriftControl"
+    DOC0_REVISION = "pair-drift-r01.md"
+    DOC1_OLD_REVISION = "pair-drift-plan-v00.md"
+    DOC1_NEW_REVISION = "pair-drift-plan-v01.md"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-drift-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-drift-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.DOC0_REVISION).write_text(
+            "## 1\ndocument zero's own text.\n", encoding="utf-8")
+
+        # Document 1's own directory carries BOTH an older and the current
+        # family member -- `discover_document_revision`'s seedless
+        # discovery picks the current one (the higher digit tuple) as
+        # `document_names[1]`, so a module bound to the OLDER name is
+        # genuinely stale under document 1's own naming, never document 0's.
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-drift-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.DOC1_OLD_REVISION).write_text(
+            "document one's own text, an older version.\n", encoding="utf-8")
+        (self.doc1 / self.DOC1_NEW_REVISION).write_text(
+            "document one's own text, the current version.\n", encoding="utf-8")
+
+    def _child_env(self):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return env
+
+    def _build_box(self, *, doc0_revision: str, doc1_revision: str,
+                   omit_provenance: bool = False):
+        """A real product directory with two modules under `src/`: one
+        declaring only document 0's claim key ("equations"), one declaring
+        only document 1's own overlay claim key ("experiments", M6) -- two
+        disjoint claim-key scopes, `omit_provenance` (C-shared) drops the
+        second module's `__provenance__` block entirely so it lands in the
+        shared `missing_provenance` list instead."""
+        box = FORGE / "implementations" / f"_pair_drift_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-drift"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-drift@example.invalid"
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "src" / self.PACKAGE / "doc0_module.py").write_text(
+            "__provenance__ = {\n"
+            f"    'revision': {doc0_revision!r}, 'sections': ['1'],\n"
+            "    'equations': ['1.1'], 'invariants': [],\n"
+            "}\n", encoding="utf-8")
+        if omit_provenance:
+            (box / "src" / self.PACKAGE / "doc1_module.py").write_text(
+                "# no __provenance__ at all -- lands in missing_provenance\n",
+                encoding="utf-8")
+        else:
+            (box / "src" / self.PACKAGE / "doc1_module.py").write_text(
+                "__provenance__ = {\n"
+                f"    'revision': {doc1_revision!r}, 'sections': ['1'],\n"
+                "    'experiments': ['T1'], 'invariants': [],\n"
+                "}\n", encoding="utf-8")
+        (box / self.PACKAGE).mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        return box
+
+    def _verify(self, box: Path) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "verify", "--target", str(box),
+             "--name", self.PACKAGE, "--revision", self.DOC0_REVISION],
+            capture_output=True, text=True, cwd=FORGE, env=self._child_env())
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return json.loads(proc.stdout)
+
+    def _by_label(self, fidelity_by_document: list, label: str) -> dict:
+        return next(e for e in fidelity_by_document if e["label"] == label)
+
+    def test_c_fwd_document_one_drifts_document_zero_clean(self):
+        """Document 0's module bound to its current revision, document 1's
+        module bound to an OLDER document-1 revision -- document 0 stays
+        clean, document 1 alone reports drift. Structurally red against the
+        shipped engine (design.md D6): it cannot emit two different
+        statuses for two entries at all, so this is red for a reason no
+        fixture author chose."""
+        box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_OLD_REVISION)
+        result = self._verify(box)
+        fidelity_by_document = result["fidelity"]["fidelityByDocument"]
+        doc0 = self._by_label(fidelity_by_document, "proposal")
+        doc1 = self._by_label(fidelity_by_document, "experiments")
+        self.assertEqual(doc0["status"], "ok", fidelity_by_document)
+        self.assertEqual(doc1["status"], "drift", fidelity_by_document)
+        self.assertIn("doc1_module.py", doc1["conditions"]["staleModules"])
+        self.assertEqual(doc0["conditions"]["staleModules"], [])
+
+    def test_c_inv_document_zero_drifts_document_one_clean(self):
+        """The control: the inverse assignment. Document 0's module bound
+        to an OLDER document-0-shaped revision name, document 1's module
+        bound to its own current revision -- document 0 alone reports
+        drift, document 1 stays clean."""
+        box = self._build_box(
+            doc0_revision="pair-drift-r00-older.md",
+            doc1_revision=self.DOC1_NEW_REVISION)
+        # Document 0's OWN revision file must resolve too, or its status
+        # would read "unknown" rather than genuinely "drift" -- a second,
+        # older document-0 revision text, distinct from the one `--revision`
+        # names below.
+        (self.doc0 / "pair-drift-r00-older.md").write_text(
+            "document zero's own text, an older version.\n", encoding="utf-8")
+        result = self._verify(box)
+        fidelity_by_document = result["fidelity"]["fidelityByDocument"]
+        doc0 = self._by_label(fidelity_by_document, "proposal")
+        doc1 = self._by_label(fidelity_by_document, "experiments")
+        self.assertEqual(doc0["status"], "drift", fidelity_by_document)
+        self.assertEqual(doc1["status"], "ok", fidelity_by_document)
+        self.assertIn("doc0_module.py", doc0["conditions"]["staleModules"])
+        self.assertEqual(doc1["conditions"]["staleModules"], [])
+
+    def test_c_shared_missing_provenance_reports_on_both(self):
+        """Negative control: a module with unreadable `__provenance__`
+        (attributable to no document) reports on BOTH documents' status --
+        `missing_provenance` stays shared (design.md D4), never split. This
+        method is the guard against a later "fix" that fakes a per-document
+        split for this one condition: it goes red the moment anyone does."""
+        box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_NEW_REVISION,
+            omit_provenance=True)
+        result = self._verify(box)
+        fidelity_by_document = result["fidelity"]["fidelityByDocument"]
+        doc0 = self._by_label(fidelity_by_document, "proposal")
+        doc1 = self._by_label(fidelity_by_document, "experiments")
+        self.assertEqual(doc0["status"], doc1["status"], fidelity_by_document)
+        self.assertEqual(doc0["status"], "drift", fidelity_by_document)
+        self.assertIn(
+            "src/DriftControl/doc1_module.py", doc0["conditions"]["missingProvenance"])
+        self.assertEqual(
+            doc0["conditions"]["missingProvenance"],
+            doc1["conditions"]["missingProvenance"])
+
+
 if __name__ == "__main__":
     unittest.main()

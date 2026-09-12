@@ -100,3 +100,27 @@ PROFILE = {
         {"directory": _FIXTURE_ROOT / "experiments", "label": "experiments"},
     ],
 }
+
+# Cut 3 slice C (`the-second-document-verified-on-its-own-terms`, design.md
+# M6): document 1's own per-document vocabulary overlay -- without it,
+# document 1 would inherit `claim_key: "equations"` under D1's fallback,
+# and its module scope would equal document 0's, leaving the drift-control
+# fixture (`TwoDocumentDriftControlTests`) unable to tell the two apart.
+# Applied via a post-hoc `update()` rather than inline in `documents[1]`'s
+# own literal above, so `tests/pair/corpus.py`'s existing
+# `_SECOND_DOCUMENT_ENTRY` anchor -- the "resolver per-index refusal"
+# branch, unrelated to this leaf -- keeps matching that entry's original
+# two-key text unedited.
+PROFILE["documents"][1].update({
+    "claim_key": "experiments",
+    "locus_key": "experiments",
+    "remedy_locus_key": "remedy_experiments",
+    "notation_keys": {
+        "locus": "experiments",
+        "remedyLocus": "remedyExperiments",
+        "unknown": "unknownExperiments",
+    },
+    "citation_pattern": (
+        r"Exps?\.?\s*\(?(\d+)\)?|Experiment\.?\s*\(?(\d+)\)?|"
+        r"Experimentos?\s*\((\d+)\)"),
+})
