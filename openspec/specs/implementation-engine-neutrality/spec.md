@@ -217,13 +217,13 @@ index-0 behavior is unchanged.)
 ### Requirement: The Coarse Provenance Key Stays Shared, Never Profile-Supplied
 
 `"sections"` MUST stay a hardcoded literal in the engine and every kit asset. The
-profile MUST NOT expose a coarse-key field. `unreached_mathematics` MUST cross
+profile MUST NOT expose a coarse-key field. `unreached_modules` MUST cross
 `__provenance__["sections"]` against `__benchmark__["arms"][x]["sections"]` using that
 literal on both sides.
 
 #### Scenario: The join reads the literal on both sides, unaffected by an unread key
 - GIVEN a profile declaring an extra, unread `provenance.drift_unit_key`
-- WHEN `unreached_mathematics` computes the join
+- WHEN `unreached_modules` computes the join
 - THEN both sides still read the literal `"sections"`, and the join is unaffected
 
 ### Requirement: §B1 Fields Excluded For A Recorded Reason Are Not Present

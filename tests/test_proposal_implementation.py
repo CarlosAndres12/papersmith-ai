@@ -28291,6 +28291,10 @@ _ENGLISH_COUNTS = {
     # Cut 3 (`a-revision-is-two-documents`, Phase 9, D3): one new reachable
     # work-state code, `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`.
     113: "One hundred and thirteen",
+    # `each-document-names-its-own-revision`, Phase 3, D3: one new reachable
+    # work-state code, `DOCUMENT_REVISION_UNREADABLE` -- measured here, never
+    # predicted, exactly as 113 itself was.
+    114: "One hundred and fourteen",
 }
 
 
@@ -28667,9 +28671,12 @@ class GatingRefusalRosterTests(unittest.TestCase):
         hundred and thirteen (`a-revision-is-two-documents`, Cut 3, D3) is
         that reading plus `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`, raised
         inside `cmd_position` itself -- measured here, never predicted, per
-        that change's own design.
+        that change's own design. One hundred and fourteen
+        (`each-document-names-its-own-revision`, D3) is that reading plus
+        `DOCUMENT_REVISION_UNREADABLE`, raised inside
+        `_extra_document_revisions` -- measured here, never predicted.
         """
-        self.assertEqual(len(reachable_refusal_codes()), 113)
+        self.assertEqual(len(reachable_refusal_codes()), 114)
 
     def test_the_roster_classifies_nothing_a_gating_command_cannot_raise(self):
         """The reverse direction, and the half the forward lock cannot give.

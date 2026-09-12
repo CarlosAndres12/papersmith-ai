@@ -4608,21 +4608,41 @@ def _extra_document_revisions(revision: str | None) -> list[dict]:
     `revision` is no longer the SAME string handed to document 0 -- it is
     document `index`'s own name, discovered independently inside its own
     directory (`document_revision_names`, memoized per process so two
-    calls in one command agree). `sha256` is `None` for a document whose
-    resolved name is not (yet) readable at that index -- the identical
-    "reported, never refused" tolerance `revision_source` itself already
-    keeps for document 0, extended per-index rather than special-cased;
-    the refusal a genuinely unreadable declared document earns
-    (`DOCUMENT_REVISION_UNREADABLE`) is this change's Phase 3, layered on
-    top of this same loop without moving it again.
+    calls in one command agree).
+
+    **D3: refuses, never reports a null sha, the moment a declared
+    document's resolved name does not read.** This is the one place the
+    refusal fires -- every writer (`cmd_admit`, `cmd_position`, `cmd_gate`,
+    `cmd_offer`, `cmd_close`) reaches it through this loop and inherits the
+    refusal by construction; `cmd_verify`'s own per-document fold
+    (`_extra_document_fidelity_status`) never calls this function at all,
+    so it keeps answering the named status `"unknown"` -- `revision_
+    discovery`'s standing "reported, never refused; verify is a reader"
+    position, unbroken. Structurally unreachable under one document: this
+    loop's own `range(1, len(DOCUMENTS))` never executes there.
     """
     names = document_revision_names(revision)
     entries = []
     for index in range(1, len(DOCUMENTS)):
         name = names[index]
         source = revision_source(name, index) if name else None
-        sha256 = (hashlib.sha256(source.encode("utf-8")).hexdigest()
-                  if source is not None else None)
+        if source is None:
+            diagnosis = discover_document_revision(index)
+            if len(diagnosis["families"]) > 1:
+                cause = ("ambiguous revision families in its own "
+                         f"directory: {diagnosis['families']}")
+            elif name is None:
+                cause = "no revision family found in its own directory"
+            else:
+                cause = (f"the discovered name {name!r} is not readable "
+                         "in its own directory")
+            raise Refused(
+                "DOCUMENT_REVISION_UNREADABLE",
+                f"document {index} ({DOCUMENTS[index]['label']!r}, "
+                f"{proposals_root(index)}) has no readable revision: "
+                f"{cause}. Publish a revision there before this binding "
+                "can be recorded.")
+        sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
         entries.append({
             "label": DOCUMENTS[index]["label"], "revision": name,
             "sha256": sha256,
@@ -16269,6 +16289,16 @@ GATING_REFUSALS: dict[str, str] = {
     # The malformed half of `NO_FINDINGS`, and a work state for the same
     # reason: the declaration is the target's, and no flag rewrites it.
     "MALFORMED_FINDINGS": WORK_STATE,
+    # `each-document-names-its-own-revision`, D3: raised inside
+    # `_extra_document_revisions`, reached by every binding-write site
+    # (`cmd_admit`, `cmd_position`, `cmd_gate`, `cmd_offer`, `cmd_close`) --
+    # never by `cmd_verify`, whose own fidelity fold answers `"unknown"`
+    # for the identical condition. No argument any of those commands
+    # accepts can clear it; publishing a readable revision in that
+    # document's own directory does -- a work state, not an invocation
+    # defect, the identical asymmetry `REVISION_UNREADABLE` does NOT carry
+    # (document 0 IS named by an argument; document N beyond it never is).
+    "DOCUMENT_REVISION_UNREADABLE": WORK_STATE,
     # `--about`'s own two parse refusals, reached from the gating commands that
     # take one. Both details name the exact spelling that would have worked.
     "DISCUSS_ABOUT_NOT_FOUND": INVOCATION_DEFECT,
@@ -17035,6 +17065,14 @@ _WORK_STATE_RESOLUTIONS = {
         args, "tests/findings.py does not read as a findings declaration (the "
               "refusal detail names how); correct it now, or record why "
               "admissibility is deferred, and why?"),
+    "DOCUMENT_REVISION_UNREADABLE": lambda args: _refusal_question(
+        args, "a declared document beyond document 0 has no readable "
+              "revision -- no family found in its own directory, more "
+              "than one family found (ambiguous), or its discovered name "
+              "does not read (the refusal detail names which and the "
+              "directory); publish exactly one readable revision there "
+              "now, or record why this document stays unpublished, and "
+              "why?"),
 
     # --- `step`'s subprocess runner ----------------------------------------
     "STEP_MODULE_MISSING": _step_declaration_question(

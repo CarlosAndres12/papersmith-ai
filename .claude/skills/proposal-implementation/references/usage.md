@@ -534,6 +534,13 @@ measuring anything: without it every `test_remedy_<id>` fails immediately, and a
 finding ruled inadmissible is never measured while the others still run. Only
 the verdict travels — the revision's text stays in the forge.
 
+Refuses `REVISION_UNREADABLE` when the pinned document 0 revision cannot be
+read, and, under a profile declaring more than one document,
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond it has no
+readable revision of its own (no family found, ambiguous families, or a
+discovered name that does not read) — the same code and cause every other
+binding-write command shares.
+
 Order is the whole point. A remedy that cites a missing equation or leans on
 undefined notation would otherwise be swept over 200 configurations, and those
 numbers would read as evidence for something that should not have reached the
@@ -1776,9 +1783,13 @@ is even read; the refusal is identical whether the target's ledger holds no
 appends a new event — it is never compared against, or deduplicated against,
 any prior `offer` event's answer. Refuses `OFFER_ANSWER_NOT_A_TOKEN` when
 `--answer` is given something other than `yes`/`no`, and
-`REVISION_UNREADABLE` when the pinned revision cannot be read. It does not
-touch a token an earlier `offer` already minted; see `gate`'s own closing
-paragraph for that gap, stated in full there.
+`REVISION_UNREADABLE` when the pinned revision cannot be read, and
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond document 0
+has no readable revision of its own — no family found in its own
+directory, more than one family found there (ambiguous), or a discovered
+name that does not read; the detail names the index, label, directory and
+cause. It does not touch a token an earlier `offer` already minted; see
+`gate`'s own closing paragraph for that gap, stated in full there.
 
 Every published `launch` action's `binding` carries a minted `authorization`
 token — a digest over the engine's own re-derived binding (job, commit,
@@ -2213,7 +2224,7 @@ the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-four codes, including
+carries a `resolve` key saying what. Sixty-five codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

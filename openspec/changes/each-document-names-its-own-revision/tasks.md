@@ -214,35 +214,77 @@ to watch first — split it again if measured lines exceed ~500.
 
 ## Phase 3 (PR 3 — Slice 3: the refusal + spec correction)
 
-- [ ] 3.1 Add `DOCUMENT_REVISION_UNREADABLE` to `GATING_REFUSALS`, classified
+- [x] 3.1 Add `DOCUMENT_REVISION_UNREADABLE` to `GATING_REFUSALS`, classified
       `WORK_STATE`; raise it inside `_extra_document_revisions` only, `detail`
       naming the index, label, directory, and cause (no family / ambiguous
       families / discovered name unreadable).
-- [ ] 3.2 Add the refusal's publication point to `refusal_resolution`.
-- [ ] 3.3 Add the roster row to `.claude/skills/proposal-implementation/SKILL.md`
+- [x] 3.2 Add the refusal's publication point to `refusal_resolution`.
+- [x] 3.3 Add the roster row to `.claude/skills/proposal-implementation/SKILL.md`
       and `references/usage.md`, alongside the existing `REVISION_UNREADABLE`
       row.
-- [ ] 3.4 Measure and update `reachable_refusal_codes()`'s pin in
+
+      Added to all four SKILL.md write-verb rows that already list
+      `REVISION_UNREADABLE` (`position`, `gate`, `offer`, `close`), plus a
+      new prose mention in `usage.md`'s `offer` paragraph and `admit`
+      section (`admit`'s own SKILL.md row defers to `usage.md` and carries
+      no inline code list).
+- [x] 3.4 Measure and update `reachable_refusal_codes()`'s pin in
       `tests/test_proposal_implementation.py` (predicted 113 → 114, exactly
       one; re-measure, do not repeat the number).
-- [ ] 3.5 test(pair): add the ambiguous-family corpus case (two families in
+
+      Measured 114, exactly one more, confirmed by
+      `GatingRefusalRosterTests` (18/18 green after the update). Both
+      doctrine-count sentences updated (SKILL.md: 114 total / 65 work-state;
+      usage.md: "Sixty-five codes, including").
+- [x] 3.5 test(pair): add the ambiguous-family corpus case (two families in
       document 1's root) and `TwoDocumentAmbiguousFamilyRefusesTests`,
       asserting exit code 2, `DOCUMENT_REVISION_UNREADABLE`, and a `detail`
       naming both families.
-- [ ] 3.6 Add `GatingRefusalRosterTests` coverage for the new code across all
+- [x] 3.6 Add `GatingRefusalRosterTests` coverage for the new code across all
       three roster surfaces (classification, `refusal_resolution`, doc row).
-- [ ] 3.7 Mutation test (D5): mutate the ambiguity branch from
+
+      Covered generically by three existing, fully-derived tests (no
+      hardcoded per-code list to extend): `test_every_refusal_reachable_
+      from_a_gating_command_is_classified`, `test_every_work_state_
+      publishes_something_runnable` (confirms `refusal_resolution` returns
+      a valid command/question for the new code), and `test_the_doctrine_
+      states_the_split_the_roster_actually_holds` (doc-row counts).
+      Confirmed by running the full class: 18/18 green.
+- [x] 3.7 Mutation test (D5): mutate the ambiguity branch from
       `raise Refused(...)` to "pick the first family" (not the `raise`
       itself — a sha lock survives that). Confirm every sha/`documents`
       assertion in the lifecycle classes still passes and only
       `TwoDocumentAmbiguousFamilyRefusesTests` catches it. Anchor discipline:
       assert old-spelling count is exactly 1 / new is 0 before the edit, and
       the reverse after, both directions.
-- [ ] 3.8 Correct `openspec/specs/implementation-engine-neutrality/spec.md`:
+
+      `AmbiguousFamilyMutationProvesReachabilityTests`, real engine file
+      mutated in place (guaranteed reverted in `addCleanup`, byte-identity
+      re-asserted after every run), real subprocesses only. Mutated
+      `discover_document_revision`'s own `len(families) > 1` branch (not
+      `_extra_document_revisions`'s `raise` itself) to pick the first
+      family found instead of reporting ambiguous. Measured: the
+      previously-ambiguous fixture now succeeds with a REAL sha
+      (`test_the_ambiguous_case_silently_succeeds_under_the_mutation`); the
+      unambiguous fixture's sha is UNCHANGED by the mutation
+      (`test_the_unambiguous_case_is_unaffected_by_the_mutation`), matching
+      "every sha/documents assertion in the lifecycle classes still
+      passes". Under the unmutated engine, this exact ambiguous fixture
+      refuses (proven separately by `TwoDocumentAmbiguousFamilyRefusesTests`)
+      — only an assertion on the refusal itself, never a sha comparison,
+      tells the two behaviours apart.
+- [x] 3.8 Correct `openspec/specs/implementation-engine-neutrality/spec.md`:
       `unreached_mathematics` → `unreached_modules`, both occurrences
       (requirement text and scenario). Confirm `rg unreached_mathematics
       openspec/specs/` returns nothing afterward.
-- [ ] 3.9 Run `tests/seal/`; confirm 28 digests byte-identical a third time.
+
+      Confirmed: `rg unreached_mathematics openspec/specs/` returns nothing.
+- [x] 3.9 Run `tests/seal/`; confirm 28 digests byte-identical a third time.
+
+      Confirmed: sha256
+      `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75`,
+      unchanged. Full `tests/test_implementation_seal.py` +
+      `tests/test_implementation_pair.py`: 67/67 pass.
 
 ## Phase 4: Non-Interference Verification (after PR 3, before chain merge)
 

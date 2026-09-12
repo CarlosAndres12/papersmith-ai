@@ -642,6 +642,224 @@ class DocumentOneBoundToTests(unittest.TestCase):
         self.assertEqual(bound_to_stale["experiments"], "stale")
 
 
+class TwoDocumentAmbiguousFamilyRefusesTests(unittest.TestCase):
+    """design.md D3/D5: a declared document beyond document 0 whose own
+    directory holds candidates from TWO different revision families is
+    ambiguous -- neither this side's convention to pick. A real subprocess
+    `position` call (a binding-write site) refuses `DOCUMENT_REVISION_
+    UNREADABLE`, exit code 2, with a `detail` naming both families. This
+    is the corpus case D5's own mutation test (below) needs: independent
+    of, and not satisfiable merely by, fixture data written to pass it --
+    document 1's directory here genuinely holds two readable, distinct
+    families, so only the refusal itself (never a sha/documents
+    assertion) can tell the correct behaviour from the mutated one."""
+
+    REVISION = "pair-ambiguous-r01.md"
+    PACKAGE = "AmbiguousOnly"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-ambiguous-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-ambiguous-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text("## 1\ntexto.\n", encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-ambiguous-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        # Two genuinely different, readable families -- neither a marker,
+        # so both are eligible and the family count is real, not a
+        # single-candidate accident.
+        (self.doc1 / "draft-1.md").write_text("family one", encoding="utf-8")
+        (self.doc1 / "final-2.md").write_text("family two", encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_pair_ambiguous_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-ambiguous"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-ambiguous@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / self.PACKAGE).mkdir(parents=True)
+        (self.box / self.PACKAGE / "AGREED.md").write_text(
+            "# Agreed\n\n## Ladder\n\n- [ ] First measurable claim.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, *args):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_ambiguous_families_refuse_naming_both(self):
+        result = self.run_cli(
+            "position", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["code"], "DOCUMENT_REVISION_UNREADABLE")
+        self.assertIn("draft-#.md", payload["detail"])
+        self.assertIn("final-#.md", payload["detail"])
+
+
+ENGINE = FORGE / ".claude/skills/_core/implementation/engine/implementation_engine.py"
+
+#: design.md D5: the mutation a WEAKER lock survives, so it is the one that
+#: proves the refusal is reachable rather than merely present in source.
+#: Deleting the `raise` entirely, or falling back to document 0's name,
+#: are both caught by the sha assertions alone (the picked file would not
+#: even exist under document 0's name in document 1's directory) and prove
+#: nothing about THIS refusal specifically. This mutation instead makes
+#: `discover_document_revision`'s own ambiguity branch silently pick the
+#: first family it found -- a REAL, readable file, with a REAL sha -- so
+#: every existing sha/`documents` assertion this suite makes elsewhere
+#: keeps passing, and only an assertion on the refusal ITSELF can tell the
+#: two behaviours apart.
+_AMBIGUITY_OLD = (
+    '    if len(families) > 1:\n'
+    '        return {**empty, "markerOwned": marker_owned, "nonManaged": non_managed,\n'
+    '                "families": sorted(families)}\n'
+    '\n'
+    '    (members,) = families.values()\n'
+)
+_AMBIGUITY_MUTATED = (
+    '    if len(families) > 1:\n'
+    '        pass  # MUTATED (D5): pick the first family instead of refusing\n'
+    '\n'
+    '    members = next(iter(families.values()))\n'
+)
+
+
+class AmbiguousFamilyMutationProvesReachabilityTests(unittest.TestCase):
+    """design.md D5: the mutation a weaker lock survives. Real engine
+    source, real subprocesses, guaranteed reverted -- never a monkeypatch
+    (a recorded scar: patching a module attribute has zero effect on a
+    subprocess, and every case exercised here is one).
+
+    Anchor discipline (design.md D8, carried): the old spelling's count is
+    asserted exactly 1 and the new spelling's exactly 0 BEFORE the
+    substitution, and the reverse AFTER -- both directions, so an anchor
+    that merely matched without changing anything cannot pass silently.
+    """
+
+    def setUp(self):
+        original = ENGINE.read_text(encoding="utf-8")
+        self.assertEqual(original.count(_AMBIGUITY_OLD), 1,
+                         "the ambiguity branch's anchor moved or was "
+                         "duplicated -- the mutation this test runs "
+                         "depends on it occurring exactly once")
+        self.assertEqual(original.count(_AMBIGUITY_MUTATED), 0,
+                         "the mutated spelling already appears in the "
+                         "real source before any mutation -- anchor invalid")
+        mutated = original.replace(_AMBIGUITY_OLD, _AMBIGUITY_MUTATED, 1)
+        self.assertEqual(mutated.count(_AMBIGUITY_OLD), 0)
+        self.assertEqual(mutated.count(_AMBIGUITY_MUTATED), 1)
+        ENGINE.write_text(mutated, encoding="utf-8")
+
+        def restore():
+            ENGINE.write_text(original, encoding="utf-8")
+            restored = ENGINE.read_text(encoding="utf-8")
+            self.assertEqual(restored, original,
+                             "the engine file was not restored byte-identical")
+            self.assertEqual(restored.count(_AMBIGUITY_OLD), 1)
+            self.assertEqual(restored.count(_AMBIGUITY_MUTATED), 0)
+        self.addCleanup(restore)
+
+        # A fresh two-document profile and a genuinely ambiguous document
+        # 1 (the identical corpus shape `TwoDocumentAmbiguousFamilyRefuses
+        # Tests` uses), plus a genuinely UNAMBIGUOUS one (the identical
+        # shape `TwoDocumentPositionWriteTests` uses) -- both real
+        # subprocess fixtures, so the mutated engine is exercised by both
+        # the branch it changes and the branch it must leave alone.
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-d5-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.REVISION = "pair-d5-r01.md"
+        self.REVISION_1 = "pair-d5-plan-v01.md"
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-d5-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text("## 1\ntexto.\n", encoding="utf-8")
+
+        self.unambiguous_doc1 = Path(tempfile.mkdtemp(prefix="pair-d5-unambiguous-"))
+        self.addCleanup(shutil.rmtree, self.unambiguous_doc1, ignore_errors=True)
+        (self.unambiguous_doc1 / self.REVISION_1).write_text(
+            "Document 1's own single-family text, unaffected by D5's own "
+            "mutation.\n", encoding="utf-8")
+
+        self.ambiguous_doc1 = Path(tempfile.mkdtemp(prefix="pair-d5-ambiguous-"))
+        self.addCleanup(shutil.rmtree, self.ambiguous_doc1, ignore_errors=True)
+        (self.ambiguous_doc1 / "draft-1.md").write_text("family one", encoding="utf-8")
+        (self.ambiguous_doc1 / "final-2.md").write_text("family two", encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_pair_d5_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-d5"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-d5@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / "PACKAGE").mkdir(parents=True)
+        (self.box / "PACKAGE" / "AGREED.md").write_text(
+            "# Agreed\n\n## Ladder\n\n- [ ] First measurable claim.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, doc1_root, *args):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_root)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_the_ambiguous_case_silently_succeeds_under_the_mutation(self):
+        # Under the REAL (unmutated) engine, this exact fixture refuses --
+        # proven by `TwoDocumentAmbiguousFamilyRefusesTests`. Under the
+        # mutation, it must instead succeed, binding a revision the
+        # operator never chose, with a REAL sha (the picked file IS
+        # readable) -- design.md D5's own prediction, measured here.
+        result = self.run_cli(
+            self.ambiguous_doc1, "position", "--target", str(self.box),
+            "--name", "PACKAGE", "--revision", self.REVISION, "--session", "s1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        entry = payload["documents"][0]
+        self.assertIn(entry["revision"], ("draft-1.md", "final-2.md"))
+        self.assertIsNotNone(entry["revisionSha256"])
+        expected_sha = hashlib.sha256(
+            (self.ambiguous_doc1 / entry["revision"]).read_bytes()).hexdigest()
+        self.assertEqual(entry["revisionSha256"], expected_sha)
+
+    def test_the_unambiguous_case_is_unaffected_by_the_mutation(self):
+        # The mutation touches only the `len(families) > 1` branch; a
+        # genuinely single-family document 1 must resolve to the
+        # IDENTICAL sha it would without the mutation -- "every sha and
+        # `documents` assertion in the lifecycle classes still passes"
+        # (design.md D5), proven directly rather than assumed.
+        result = self.run_cli(
+            self.unambiguous_doc1, "position", "--target", str(self.box),
+            "--name", "PACKAGE", "--revision", self.REVISION, "--session", "s1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        entry = payload["documents"][0]
+        expected_sha = hashlib.sha256(
+            (self.unambiguous_doc1 / self.REVISION_1).read_bytes()).hexdigest()
+        self.assertEqual(entry["revision"], self.REVISION_1)
+        self.assertEqual(entry["revisionSha256"], expected_sha)
+
+
 class TwoDocumentLifecycleTests(unittest.TestCase):
     """Corrective apply, Cut 3 (`a-revision-is-two-documents`, verify FAIL,
     CRITICAL finding): real subprocess cases against the two-document
