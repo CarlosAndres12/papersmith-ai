@@ -1,11 +1,21 @@
 {
   "__corpus_fingerprint__": {
-    "sha256": "7d2727b09532953a738b76f9852e0d1c239dc1314c82903f79abc3005af95c7a"
+    "sha256": "86ae97ba7822a6e8fd9740d6403b035dabf12569b03cd158676167b8c165a364"
   },
   "admit-t": {
     "bytes": 310,
     "exit": 0,
     "sha256": "d8422ea7e393bf81f8d81ae7ed6fddf2cb7220f3e0dd036f4d3e4454efdf7ea1"
+  },
+  "agree-disagree": {
+    "bytes": 3054,
+    "exit": 2,
+    "sha256": "55574d3d7e749df9beffd75185d74f5ea63598011145e79c8aabb5f7bbecf6e0"
+  },
+  "agree-undeclared": {
+    "bytes": 3181,
+    "exit": 2,
+    "sha256": "eaebb25764a1158562073ef0fbbdf3f68752f1e5c723bc55e86980fc6158e0c5"
   },
   "apply": {
     "bytes": 280,
@@ -90,7 +100,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "0b60783b5c3ade79e3883dfdeff57827b3366bfc11fb8cf37c338960dc262b85"
+    "sha256": "4efefb4b5931720fd5ca4647b5cc8028f705169d390a07b4b6d962128d5eb9f0"
   },
   "settle": {
     "bytes": 2826,

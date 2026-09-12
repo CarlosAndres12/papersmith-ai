@@ -94,5 +94,13 @@
 
   {"id": "compose-t", "command": "compose", "fixture": "T", "proposals": true,
    "argv": ["--target", "<TARGET>", "--finding", "heading-fix", "--entry-text",
-            "## 1\n\nOld first entry text.\n\n## 2\n\nSecond entry text.\n"]}
+            "## 1\n\nOld first entry text.\n\n## 2\n\nSecond entry text.\n"]},
+
+  {"id": "agree-undeclared", "command": "agree", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-1.md"]},
+
+  {"id": "agree-disagree", "command": "agree", "fixture": "A", "proposals": true,
+   "crossingTarget": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision",
+            "trial-crossing-disagree.md"]}
 ]
