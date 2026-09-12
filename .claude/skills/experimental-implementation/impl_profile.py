@@ -204,10 +204,18 @@ PROFILE = {
         {
             "directory": _FORGE_ROOT / "experiments",
             "label": "experiments",
+            # `a-data-directory-somebody-can-owe` (B1, design.md D1):
+            # required leaf, own tier. `None` here in B1 -- declared last,
+            # in B2, only after the fixture-proven detector (D10); B2's
+            # own commit changes this `None` to the real marker.
+            "dataset_marker": None,
         },
         {
             "directory": _FORGE_ROOT / "proposals",
             "label": "proposal",
+            # This document never owes a dataset -- stays `None`
+            # permanently (design.md D10).
+            "dataset_marker": None,
             "claim_key": "equations",
             "locus_key": "equations",
             "remedy_locus_key": "remedy_equations",

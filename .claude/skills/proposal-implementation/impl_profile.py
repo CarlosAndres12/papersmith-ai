@@ -220,6 +220,12 @@ PROFILE = {
             # with 78 of 152 campaign-proposal hits elsewhere in the engine
             # and is governed by its own three-layer exclusion test.
             "label": "proposal",
+            # `a-data-directory-somebody-can-owe` (B1, design.md D1,
+            # ruling 2): required, own tier -- `None` states out loud that
+            # this domain demands no dataset. The leaf's own detector never
+            # opens a file for a `None` entry (D1 property 1), so this
+            # sibling's 28 sealed digests stay byte-identical.
+            "dataset_marker": None,
         },
     ],
 }

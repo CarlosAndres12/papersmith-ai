@@ -96,8 +96,13 @@ PROFILE = {
     # two-entry `documents` list, so every pair branch `len(documents) > 1`
     # introduces has a reachable configuration in this repository.
     "documents": [
-        {"directory": _FIXTURE_ROOT / "proposals", "label": "proposal"},
-        {"directory": _FIXTURE_ROOT / "experiments", "label": "experiments"},
+        {"directory": _FIXTURE_ROOT / "proposals", "label": "proposal",
+         # `a-data-directory-somebody-can-owe` (B1, design.md D10): a
+         # fixture edit, not the reaching configuration -- required,
+         # `None` here.
+         "dataset_marker": None},
+        {"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",
+         "dataset_marker": None},
     ],
 }
 

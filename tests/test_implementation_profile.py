@@ -703,6 +703,7 @@ class DatasetMarkerLeafOwnTierTests(unittest.TestCase):
     def test_a_second_documents_missing_dataset_marker_refuses_by_indexed_name(self):
         tmp_dir = self._tmp_dir()
         full = _two_document_profile(tmp_dir)
+        del full["documents"][1]["dataset_marker"]
         profile_file = _write_profile(tmp_dir, full)
         with self.assertRaises(RuntimeError) as ctx:
             _fresh_resolver_load(str(profile_file))
@@ -885,7 +886,8 @@ class DocumentVocabularyOverlayTests(unittest.TestCase):
         full = _cut2_profile(tmp_dir)
         full["documents"][0].update(_document_one_overlay())
         full["documents"].append(
-            {"directory": tmp_dir / "documents-1", "label": "document-one"})
+            {"directory": tmp_dir / "documents-1", "label": "document-one",
+             "dataset_marker": None})
         (tmp_dir / "proposals").mkdir()
         profile_file = _write_profile(tmp_dir, full)
         module = _fresh_resolver_load(str(profile_file))
