@@ -143,6 +143,22 @@ LOCUS_KEY = document_vocabulary(0)["locus_key"]  # S5
 REMEDY_LOCUS_KEY = document_vocabulary(0)["remedy_locus_key"]  # S6
 NOTATION_KEYS = document_vocabulary(0)["notation_keys"]  # S7
 CITATION_PATTERN = PROFILE["findings"]["citation_pattern"]  # S8
+
+# Cut 3 slice C (design.md D7), the finding behind task 3.4: every reader
+# of `LOCUS_KEY`/`REMEDY_LOCUS_KEY`/`NOTATION_KEYS` beyond this definition
+# reads a FINDING's own declared field (its own locus, its own
+# `remedy_locus_key` entry, its own notation label) -- a property of the
+# finding itself, independent of which document the finding is checked
+# with. None of those readers sit inside a per-document loop the way
+# `_impact_class`'s citation matching does (`finding_impact`'s
+# `per_document` mapping calls only `_impact_class`, never these three
+# symbols directly). Threading `document_vocabulary(index)` through THOSE
+# reader lines would thread a per-document result into a single-artifact
+# field with no second index to vary by. The one reader that genuinely
+# runs once per document label -- `CITATION_RE`'s match inside
+# `_impact_class` -- is the one this slice threads
+# (`document_citation_re`, immediately below `CITATION_RE`'s own
+# definition).
 # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a LIST.
 # `DOCUMENTS_DIRECTORY`/`DOCUMENTS_LABEL` keep their S9 spellings, now
 # derived from entry 0 -- unchanged value at `len(DOCUMENTS) == 1`, which is
@@ -7675,15 +7691,50 @@ def migrate(target: Path, current: dict) -> None:
 # overlay declared, asserted in `tests/test_implementation_profile.py`.
 CITATION_RE = re.compile(document_vocabulary(0)["citation_pattern"])
 
+# Cut 3 slice C (design.md D7): one compiled pattern per declared
+# document, compiled ONCE at import -- never per finding per document,
+# the kind of quiet, repeated cost a reader cannot see. Index 0 reuses
+# `CITATION_RE` itself (the identical compiled pattern, not a second
+# compile of the same text): 21 existing reader lines (M1) already spell
+# that identifier.
+DOCUMENT_CITATION_PATTERNS: tuple[re.Pattern, ...] = tuple(
+    CITATION_RE if index == 0
+    else re.compile(document_vocabulary(index)["citation_pattern"])
+    for index in range(len(DOCUMENTS))
+)
 
-def _impact_class(remedy_loci: list, introduces: int, source: str) -> tuple[str, int]:
+#: Every declared document's label, resolved to its own index (design.md
+#: D7) -- `finding_impact`'s own lookup from a finding's declared
+#: `document` label to the pattern that document declared, never a copy
+#: interpolated from a sibling entry (mirrors the resolver's own rule,
+#: `implementation-per-document-vocabulary`).
+DOCUMENT_INDEX_BY_LABEL: dict[str, int] = {
+    doc["label"]: index for index, doc in enumerate(DOCUMENTS)
+}
+
+
+def document_citation_re(index: int) -> re.Pattern:
+    """Document `index`'s own compiled `citation_pattern` (design.md D7)."""
+    return DOCUMENT_CITATION_PATTERNS[index]
+
+
+def _impact_class(remedy_loci: list, introduces: int, source: str,
+                   pattern: re.Pattern = CITATION_RE) -> tuple[str, int]:
     """The `local`/`structural` verdict and its own citation count, for ONE
     document's text -- extracted from `finding_impact` (Cut 3, D6) so the
     identical arithmetic serves a per-document mapping without a second
     copy drifting beside the scalar path.
+
+    `pattern` (Cut 3 slice C, design.md D7): the compiled pattern to match
+    citations with, defaulting to `CITATION_RE` so every existing call
+    path (this function's own single-document callers) stays byte-
+    unchanged. `finding_impact`'s per-document loop passes each
+    document's OWN pattern, by its own label (`document_citation_re`),
+    never the shared scalar cross-applied to a document it was not
+    compiled for.
     """
     citations = 0
-    for match in CITATION_RE.finditer(source):
+    for match in pattern.finditer(source):
         number = match.group(1) or match.group(2) or match.group(3)
         if number in remedy_loci:
             citations += 1
@@ -7726,7 +7777,18 @@ def finding_impact(finding: dict, source: str,
             doc_source = sources_by_document.get(label)
             if doc_source is None:
                 continue
-            doc_cls, _ = _impact_class(remedy_loci, introduces, doc_source)
+            # Cut 3 slice C (design.md D7): each document's OWN
+            # citation_pattern, by its own label, never the shared
+            # `CITATION_RE` cross-applied to a document it was never
+            # compiled for. A label absent from `DOCUMENT_INDEX_BY_LABEL`
+            # (a caller-supplied `sources_by_document` naming a document
+            # this process's own `DOCUMENTS` never declared) falls back to
+            # `CITATION_RE` instead of raising -- this function stays a
+            # reader, never a gate, exactly its own docstring's standing
+            # rule.
+            index = DOCUMENT_INDEX_BY_LABEL.get(label)
+            pattern = document_citation_re(index) if index is not None else CITATION_RE
+            doc_cls, _ = _impact_class(remedy_loci, introduces, doc_source, pattern)
             per_document[label] = doc_cls
         if per_document:
             result["class"] = per_document

@@ -65,13 +65,13 @@ Chain strategy: stacked-to-main
 
 ## Phase 3: C2b — Per-document citation and notation threading
 
-- [ ] 3.1 RED: in `tests/test_implementation_pair.py`, add a case where document 0 and document 1 declare different `citation_pattern` values (already true after 2.1) and a finding names both documents; assert `finding_impact`'s returned mapping computes document 0's class using document 0's own pattern and document 1's using its own — red against the shipped single `CITATION_RE` (spec `implementation-document-binding` Requirement "A Finding May Name Either Or Both Documents..." scenario "Each named document's citations are matched by its own pattern").
-- [ ] 3.2 GREEN: give `_impact_class` a fourth parameter, the compiled pattern, defaulting to `CITATION_RE` (existing call path byte-unchanged); compile each index's pattern once at import via `document_vocabulary(N)["citation_pattern"]`, never per call (D7 — rejected: recompiling per finding per document).
-- [ ] 3.3 GREEN: give `finding_impact` the label→index map from `DOCUMENTS` and pass `document_citation_re(index)` for each named document's label, replacing the shared `CITATION_RE` read at this call site.
-- [ ] 3.4 GREEN: thread the remaining per-document reader lines (`NOTATION_KEYS`, `LOCUS_KEY`, `REMEDY_LOCUS_KEY`) inside the per-document mapping built in Phase 2, so all 21 reader lines (M1's re-derived count, not 26) read through `document_vocabulary(index)` rather than the module-level scalar.
-- [ ] 3.5 VERIFY: run 3.1's case green. Run `python -m unittest tests.seal` — 28 digests byte-identical. Re-measure `L1_EXPECTED_COUNT` (D9) — this phase edits `implementation_engine.py` prose most directly; confirm no new occurrence of `proposal`.
-- [ ] 3.6 MUTATE (Y9): in `_impact_class`, ignore the passed pattern and use the module-level `CITATION_RE` regardless of index; confirm 3.1's case goes red; restore.
-- [ ] 3.7 MEASURE: `reachable_refusal_codes()` — confirm unmoved (C2 adds no refusal; `verify` reads, it does not gate, per M4).
+- [x] 3.1 RED: in `tests/test_implementation_pair.py`, add a case where document 0 and document 1 declare different `citation_pattern` values (already true after 2.1) and a finding names both documents; assert `finding_impact`'s returned mapping computes document 0's class using document 0's own pattern and document 1's using its own — red against the shipped single `CITATION_RE` (spec `implementation-document-binding` Requirement "A Finding May Name Either Or Both Documents..." scenario "Each named document's citations are matched by its own pattern").
+- [x] 3.2 GREEN: give `_impact_class` a fourth parameter, the compiled pattern, defaulting to `CITATION_RE` (existing call path byte-unchanged); compile each index's pattern once at import via `document_vocabulary(N)["citation_pattern"]`, never per call (D7 — rejected: recompiling per finding per document).
+- [x] 3.3 GREEN: give `finding_impact` the label→index map from `DOCUMENTS` and pass `document_citation_re(index)` for each named document's label, replacing the shared `CITATION_RE` read at this call site.
+- [x] 3.4 GREEN: thread the remaining per-document reader lines (`NOTATION_KEYS`, `LOCUS_KEY`, `REMEDY_LOCUS_KEY`) inside the per-document mapping built in Phase 2, so all 21 reader lines (M1's re-derived count, not 26) read through `document_vocabulary(index)` rather than the module-level scalar.
+- [x] 3.5 VERIFY: run 3.1's case green. Run `python -m unittest tests.seal` — 28 digests byte-identical. Re-measure `L1_EXPECTED_COUNT` (D9) — this phase edits `implementation_engine.py` prose most directly; confirm no new occurrence of `proposal`.
+- [x] 3.6 MUTATE (Y9): in `_impact_class`, ignore the passed pattern and use the module-level `CITATION_RE` regardless of index; confirm 3.1's case goes red; restore.
+- [x] 3.7 MEASURE: `reachable_refusal_codes()` — confirm unmoved (C2 adds no refusal; `verify` reads, it does not gate, per M4).
 
 ## Phase 4: C3 — Declare the second document and delete the count-only lock
 

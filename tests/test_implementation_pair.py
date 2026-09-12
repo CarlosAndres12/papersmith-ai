@@ -1584,6 +1584,63 @@ class PerDocumentCitationImpactClassTests(unittest.TestCase):
         self.assertEqual(impact_class["experiments"], "structural")
 
 
+_Y9_OLD = "for match in pattern.finditer(source):"
+_Y9_MUTATED = "for match in CITATION_RE.finditer(source):"
+
+
+class CitationPatternMutationTests(unittest.TestCase):
+    """Y9 (design.md Mutation Plan): `_impact_class` ignores its own
+    passed pattern and matches with the shared, module-level `CITATION_RE`
+    regardless of index -- confirms `PerDocumentCitationImpactClassTests`'
+    own case goes red, on the REAL engine file, restored byte-identical."""
+
+    def test_ignoring_the_passed_pattern_reddens_the_per_document_case(self):
+        original = ENGINE.read_text(encoding="utf-8")
+        self.assertEqual(
+            original.count(_Y9_OLD), 1,
+            "the pattern-matching anchor moved or was duplicated -- the "
+            "mutation this test runs depends on it occurring exactly once")
+        self.assertEqual(
+            original.count(_Y9_MUTATED), 0,
+            "the mutated spelling already appears before any mutation -- "
+            "anchor invalid")
+        mutated = original.replace(_Y9_OLD, _Y9_MUTATED, 1)
+        self.assertEqual(mutated.count(_Y9_OLD), 0)
+        self.assertEqual(mutated.count(_Y9_MUTATED), 1)
+        ENGINE.write_text(mutated, encoding="utf-8")
+
+        def restore():
+            ENGINE.write_text(original, encoding="utf-8")
+            restored = ENGINE.read_text(encoding="utf-8")
+            self.assertEqual(restored, original,
+                             "the engine file was not restored byte-identical")
+            self.assertEqual(restored.count(_Y9_OLD), 1)
+            self.assertEqual(restored.count(_Y9_MUTATED), 0)
+        self.addCleanup(restore)
+
+        case = PerDocumentCitationImpactClassTests()
+        case.setUp()
+        try:
+            admit = case.run_cli(
+                "admit", "--target", str(case.box), "--name", case.PACKAGE,
+                "--revision", case.REVISION)
+            self.assertEqual(admit.returncode, 0, admit.stdout + admit.stderr)
+            record = json.loads(
+                (case.box / "tests" / "admissibility.json").read_text(encoding="utf-8"))
+            impact_class = record["findings"]["pair-citation-both-documents"]["impact"]["class"]
+            # Document 0's own class is unaffected (`CITATION_RE` already
+            # is its own pattern); document 1's is not -- the same
+            # discriminating assertion `PerDocumentCitationImpactClassTests`
+            # itself makes, now shown reddening under this exact mutation.
+            self.assertEqual(impact_class["proposal"], "structural")
+            self.assertNotEqual(
+                impact_class["experiments"], "structural",
+                "document 1's own citations should have been invisible to "
+                "the shared CITATION_RE under this mutation")
+        finally:
+            case.doCleanups()
+
+
 #: Y4-Y7 (design.md Mutation Plan): each mutates the REAL engine file in
 #: place, anchor discipline first (old count exactly 1, new count 0,
 #: before; the reverse after), a real subprocess exercises the mutation,
