@@ -64,10 +64,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 6: Mutation proof (B1)
 
-- [ ] 6.1 RED: X1 — delete `dataset_marker` from one `documents[N]`; assert `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` names that exact index.
-- [ ] 6.2 RED: X2 — `tests/test_implementation_domain_mutation.py`: `MUTATIONS["documents.dataset_marker"] = ('"dataset_marker": None,', '"dataset_marker": "## 2",')`; run against the sibling's real corpus; measure and record movers in `MEASURED_MOVERS` (predicted `verify-b`, possibly `verify-t`) — `pop` `impl_domain_profile` from `sys.modules`, clear `__pycache__`, anchor-count both endpoints.
-- [ ] 6.3 RED: X4 — in the fold, `dataset_marker(index)` → `dataset_marker(0)`; assert the document-1-only fixture (2.4) now fails and `tests/seal/` still survives.
-- [ ] 6.4 RED: X5 — `cmd_apply` passes `None` instead of the `approved["boundTo"]` seed; assert the 3.2 agreement test catches it; repeat for `_materialize_plan_gate`.
+- [x] 6.1 RED: X1 — delete `dataset_marker` from one `documents[N]`; assert `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` names that exact index. Already proven by Phase 1's `test_each_cut2_leaf_refuses_incomplete_and_names_itself` (index 0, via `_CUT2_LEAVES`) and `DatasetMarkerLeafOwnTierTests.test_a_second_documents_missing_dataset_marker_refuses_by_indexed_name` (index 1) — no new test needed.
+- [x] 6.2 RED: X2 — `tests/test_implementation_domain_mutation.py`: `MUTATIONS["documents.dataset_marker"] = ('"dataset_marker": None,', '"dataset_marker": "## 2",')`; run against the sibling's real corpus. **Measured**: `("verify-b", "verify-t")` moved (matches the design's prediction exactly), recorded in `MEASURED_MOVERS`.
+- [x] 6.3 RED: X4 — `OrFoldIndexHardcodeMutationTests`: in the fold, `DOCUMENTS[index]` → `DOCUMENTS[0]`, planted into a scratch copy of the WHOLE `_core/implementation/` tree (never the shipped engine), run directly (not through the launcher). Measured: the document-1-only fixture (2.4's configuration) now answers `False` under the mutation (was `True`); the sibling's own single-document profile answers identically under both engines (`False`), proving the mutation is a no-op there by construction.
+- [x] 6.4 RED: X5 — `SeedForcedNoneMutationTests`: `cmd_apply`/`_materialize_plan_gate` forced to pass `None` instead of the `approved["boundTo"]` seed, each in a scratch-forge copy, run via a real `plan`→`apply`/`materialize` flow. Measured: both mutations flip an otherwise-successful call to refuse `PLAN_STALE`.
 
 ## Phase 7: B1 non-interference gate
 

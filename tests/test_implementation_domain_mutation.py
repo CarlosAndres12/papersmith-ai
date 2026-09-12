@@ -41,6 +41,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +112,13 @@ MUTATIONS: dict[str, tuple[str, str]] = {
     # exercising the "documents.directory absent" path, which is not what
     # this leaf's mutation is proving).
     "documents.directory": ('"directory": _FORGE_ROOT / "proposals",', None),
+    # `a-data-directory-somebody-can-owe` (B1, design.md D8): X2. `tests/
+    # seal/corpus.py`'s own revision text already carries a line-leading
+    # `## 2` (M7), authored two changes ago for an unrelated purpose --
+    # mutating the sibling's declared `None` to that exact literal makes
+    # the detector answer true against REAL document bytes nobody wrote
+    # for this guard, never a fixture built to satisfy it.
+    "documents.dataset_marker": ('"dataset_marker": None,', '"dataset_marker": "## 2",'),
 }
 
 #: Measured (this apply session, real subprocess runs, every one of the 28
@@ -148,6 +156,17 @@ MEASURED_MOVERS: dict[str, tuple[str, ...]] = {
     "vocabulary.artifact_noun": (),  # ZERO-MOVER
     "documents.label": (),  # ZERO-MOVER
     "documents.directory": ("admit-e0", "close-e0", "gate-e0", "offer-e0", "position-e0"),
+    # `a-data-directory-somebody-can-owe` (B1, design.md D8): MEASURED,
+    # this apply session, real subprocess run over all 28 sealed cases --
+    # matches the design's prediction exactly. `verify-b` (fixture B, no
+    # `--revision`, discovers `seal-1.md`) and `verify-t` (fixture T,
+    # `--revision draft-1.md`) both name a revision whose text is the
+    # sibling's own `REVISION_TEXT` (M7's line-leading `## 2`); both
+    # fixtures lack `Seal/Data/`, so `with_data` goes true and
+    # `missingDirs` drops the `Data/` entry for both. `verify-a` (fixture
+    # A, `Data/` already present) stays put -- never a fixture written to
+    # make this true, the sibling's own pre-existing corpus.
+    "documents.dataset_marker": ("verify-b", "verify-t"),
 }
 
 
@@ -264,6 +283,309 @@ class PerLeafChangeMutationTests(unittest.TestCase):
                     f"-- expected {expected}, got {moved}. If this is a genuine, "
                     "understood change, MEASURED_MOVERS must be updated with the "
                     "new measurement, never assumed")
+
+
+#: X4 (`a-data-directory-somebody-can-owe`, B1, design.md's Mutation
+#: plan): the or-fold's own index read, anchor-counted both directions.
+#: Never mutate the shipped engine -- planted into a scratch copy only.
+_FOLD_INDEX_ANCHOR = 'DOCUMENTS[index].get("dataset_marker")'
+_FOLD_INDEX_MUTATED = 'DOCUMENTS[0].get("dataset_marker")'
+
+
+class OrFoldIndexHardcodeMutationTests(unittest.TestCase):
+    """X4 (design.md, task 6.3): `dataset_marker`'s or-fold reads
+    `DOCUMENTS[index]`, never a fixed index. Anchor-counted, planted into
+    a SCRATCH copy of the engine only, and run directly (never through
+    the launcher, whose own `sys.path.insert(0, ...)` would always
+    resolve `implementation_engine` back to the shipped copy)."""
+
+    def _run_declares_dataset(self, engine_source: str, profile_path: Path,
+                              revision: str) -> str:
+        """Runs `implementation_engine.declares_dataset(revision)` in a
+        fresh subprocess against a scratch copy of the WHOLE `_core/
+        implementation/` tree (the engine's own `sys.path.insert(0, ...
+        parents[1])` resolves its sibling imports -- `impl_domain_
+        profile`, `impl_layout`, etc. -- relative to the engine file's
+        OWN location, so a lone copy of just the engine file cannot
+        import them). Only `engine/implementation_engine.py` differs
+        from CORE's real, unedited siblings."""
+        with tempfile.TemporaryDirectory() as scratch_dir:
+            scratch_core = Path(scratch_dir) / "core"
+            shutil.copytree(
+                ENGINE_DIR.parent, scratch_core,
+                ignore=shutil.ignore_patterns("__pycache__"))
+            (scratch_core / "engine" / "implementation_engine.py").write_text(
+                engine_source, encoding="utf-8")
+            env = os.environ.copy()
+            env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(profile_path)
+            code = (
+                "import sys\n"
+                f"sys.path.insert(0, {str(scratch_core / 'engine')!r})\n"
+                "import implementation_engine as impl\n"
+                f"print(impl.declares_dataset({revision!r}))\n"
+            )
+            proc = subprocess.run([sys.executable, "-c", code],
+                                  capture_output=True, text=True, env=env)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            return proc.stdout.strip()
+
+    def test_hardcoding_index_zero_blinds_the_fold_to_document_one(self):
+        real_engine_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        self.assertEqual(real_engine_source.count(_FOLD_INDEX_ANCHOR), 1)
+        self.assertEqual(real_engine_source.count(_FOLD_INDEX_MUTATED), 0)
+        mutated_engine_source = real_engine_source.replace(
+            _FOLD_INDEX_ANCHOR, _FOLD_INDEX_MUTATED, 1)
+        self.assertEqual(mutated_engine_source.count(_FOLD_INDEX_ANCHOR), 0)
+        self.assertEqual(mutated_engine_source.count(_FOLD_INDEX_MUTATED), 1)
+
+        # The exact 2.4 configuration: two documents, only index 1
+        # declares, index 1's own revision carries the marker. Appended
+        # right before the documents list's own closing bracket -- the
+        # LAST bytes of the real profile file, asserted unique first.
+        doc1_dir = Path(tempfile.mkdtemp(prefix="x4-doc1-"))
+        self.addCleanup(shutil.rmtree, doc1_dir, ignore_errors=True)
+        (doc1_dir / "r1.md").write_text(
+            "**Dataset:** declared only here\n", encoding="utf-8")
+        documents_close_anchor = "        },\n    ],\n}"
+        self.assertEqual(REAL_PROFILE_SRC.count(documents_close_anchor), 1)
+        two_doc_close = (
+            "        },\n"
+            f"        {{'directory': Path({str(doc1_dir)!r}), 'label': 'extra',\n"
+            "         'dataset_marker': '**Dataset:**'},\n"
+            "    ],\n}"
+        )
+        two_doc_profile_src = REAL_PROFILE_SRC.replace(
+            documents_close_anchor, two_doc_close, 1)
+
+        with tempfile.TemporaryDirectory() as scratch_dir:
+            two_doc_profile = _write_scratch_profile(
+                Path(scratch_dir), two_doc_profile_src)
+
+            original_result = self._run_declares_dataset(
+                real_engine_source, two_doc_profile, "r0-does-not-exist.md")
+            mutated_result = self._run_declares_dataset(
+                mutated_engine_source, two_doc_profile, "r0-does-not-exist.md")
+
+        self.assertEqual(
+            original_result, "True",
+            "the unmutated fold must find index 1's own declared marker "
+            "even though document 0's own revision does not exist")
+        self.assertEqual(
+            mutated_result, "False",
+            "hardcoding the fold's read to index 0 must blind it to "
+            "document 1's own declared marker -- this is the mutation "
+            "tests/test_experimental_implementation.py's own or-fold case "
+            "(2.4) is written to catch")
+
+    def test_the_sibling_seal_is_unaffected_because_it_has_only_one_document(self):
+        """`tests/seal/` still survives this exact mutation: the sibling
+        declares exactly ONE document, so reading `DOCUMENTS[0]` instead
+        of `DOCUMENTS[index]` is a no-op there by construction -- proven
+        by execution, both engines answering identically against the
+        sibling's own real, unedited profile."""
+        real_engine_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        mutated_engine_source = real_engine_source.replace(
+            _FOLD_INDEX_ANCHOR, _FOLD_INDEX_MUTATED, 1)
+
+        original_result = self._run_declares_dataset(
+            real_engine_source, REAL_PROFILE, "seal-1.md")
+        mutated_result = self._run_declares_dataset(
+            mutated_engine_source, REAL_PROFILE, "seal-1.md")
+        self.assertEqual(original_result, mutated_result)
+        self.assertEqual(
+            original_result, "False",
+            "the sibling's own dataset_marker is None; both engines must "
+            "agree, unaffected by this mutation")
+
+
+class SeedForcedNoneMutationTests(unittest.TestCase):
+    """X5 (design.md, task 6.4): `cmd_apply` and `_materialize_plan_gate`
+    both re-derive the seed from the approved plan's own `boundTo` key --
+    mutate each, in turn, to pass `None` instead, and confirm an
+    apply/materialize that should succeed against a real declared marker
+    instead refuses `PLAN_STALE`, because `current["createDirs"]` (built
+    with no seed) no longer agrees with the approved plan (built with the
+    real one). This is the exact failure `RevisionThreadingAgreementTests`
+    (`tests/test_experimental_implementation.py`) is written to catch."""
+
+    PACKAGE = "X5SeedForced"
+    _SEED_ANCHOR = ('    seed = (approved.get("boundTo") or {}).get("revision")\n'
+                    '    current = build_plan(target, name, seed)')
+    _FORCED_NONE = '    current = build_plan(target, name, None)'
+
+    def setUp(self):
+        # A whole SCRATCH forge, not just a scratch engine file:
+        # `impl_layout.FORGE_ROOT` is `Path(__file__).resolve().parents[4]`,
+        # so the copied core tree must sit at the SAME four-level depth
+        # under some root, and that root needs its own `implementations/`
+        # for `resolve_target`'s workspace guard to accept a box under it.
+        self.scratch_forge = Path(tempfile.mkdtemp(prefix="x5-forge-"))
+        self.addCleanup(shutil.rmtree, self.scratch_forge, ignore_errors=True)
+        self.scratch_core = (
+            self.scratch_forge / ".claude" / "skills" / "_core" / "implementation")
+        shutil.copytree(ENGINE_DIR.parent, self.scratch_core,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        (self.scratch_forge / "implementations").mkdir(parents=True)
+
+    def _git_env(self) -> dict:
+        env = os.environ.copy()
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "x5-mutation-tests"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = (
+            "x5-mutation-tests@example.invalid")
+        return env
+
+    def _scratch_profile_with_marker(self, docs_dir: Path) -> Path:
+        mutated_profile_src = REAL_PROFILE_SRC.replace(
+            '"directory": _FORGE_ROOT / "proposals",',
+            f'"directory": Path({str(docs_dir)!r}),', 1)
+        mutated_profile_src = mutated_profile_src.replace(
+            '"dataset_marker": None,', '"dataset_marker": "**Dataset:**",', 1)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="x5-profile-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        # `_write_scratch_profile` (already established in this file) also
+        # re-anchors `_SKILL` to the REAL skill directory, or `kit.root`/
+        # `cli.path` would point at THIS tmp_dir instead.
+        return _write_scratch_profile(tmp_dir, mutated_profile_src)
+
+    def _box(self, suffix: str) -> Path:
+        box = self.scratch_forge / "implementations" / f"x5{suffix}"
+        box.mkdir(parents=True)
+        env = self._git_env()
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "tests").mkdir(parents=True)
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        return box
+
+    def _run_main(self, engine_source: str, profile_path: Path, argv: list[str]):
+        (self.scratch_core / "engine" / "implementation_engine.py").write_text(
+            engine_source, encoding="utf-8")
+        env = self._git_env()
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(profile_path)
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(self.scratch_core / 'engine')!r})\n"
+            "import implementation_engine as impl\n"
+            f"raise SystemExit(impl.main({argv!r}))\n"
+        )
+        return subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True, env=env)
+
+    def _mutate_first_occurrence(self, source: str) -> str:
+        idx = source.index(self._SEED_ANCHOR)
+        return source[:idx] + self._FORCED_NONE + source[idx + len(self._SEED_ANCHOR):]
+
+    def _mutate_second_occurrence(self, source: str) -> str:
+        first_end = source.index(self._SEED_ANCHOR) + len(self._SEED_ANCHOR)
+        head, tail = source[:first_end], source[first_end:]
+        idx = tail.index(self._SEED_ANCHOR)
+        return head + tail[:idx] + self._FORCED_NONE + tail[idx + len(self._SEED_ANCHOR):]
+
+    def test_cmd_apply_forced_to_none_refuses_plan_stale(self):
+        real_engine_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        self.assertEqual(real_engine_source.count(self._SEED_ANCHOR), 2)
+        mutated_engine_source = self._mutate_first_occurrence(real_engine_source)
+        self.assertEqual(mutated_engine_source.count(self._SEED_ANCHOR), 1)
+
+        docs_dir = Path(tempfile.mkdtemp(prefix="x5-docs-apply-"))
+        self.addCleanup(shutil.rmtree, docs_dir, ignore_errors=True)
+        (docs_dir / "r1.md").write_text(
+            "**Dataset:** declared here\n", encoding="utf-8")
+        profile_path = self._scratch_profile_with_marker(docs_dir)
+        box = self._box("_apply")
+
+        plan_proc = self._run_main(
+            real_engine_source, profile_path,
+            ["plan", "--target", str(box), "--name", self.PACKAGE,
+             "--revision", "r1.md"])
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stdout + plan_proc.stderr)
+        plan = json.loads(plan_proc.stdout)
+        self.assertIn(f"{self.PACKAGE}/Data", plan["createDirs"])
+        plan_dir = Path(tempfile.mkdtemp(prefix="x5-plan-"))
+        self.addCleanup(shutil.rmtree, plan_dir, ignore_errors=True)
+        plan_path = plan_dir / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        original_apply = self._run_main(
+            real_engine_source, profile_path,
+            ["apply", "--target", str(box), "--name", self.PACKAGE,
+             "--plan", str(plan_path)])
+        self.assertEqual(
+            original_apply.returncode, 0,
+            original_apply.stdout + original_apply.stderr)
+
+        # Undo the successful apply's own commit so the box is clean again
+        # for the mutated run, against the exact same approved plan.
+        subprocess.run(["git", "reset", "-q", "--hard", "HEAD~1"], cwd=box,
+                       env=self._git_env(), check=True, capture_output=True)
+
+        mutated_apply = self._run_main(
+            mutated_engine_source, profile_path,
+            ["apply", "--target", str(box), "--name", self.PACKAGE,
+             "--plan", str(plan_path)])
+        self.assertEqual(
+            mutated_apply.returncode, 2, mutated_apply.stdout + mutated_apply.stderr)
+        self.assertEqual(
+            json.loads(mutated_apply.stdout).get("code"), "PLAN_STALE",
+            "forcing cmd_apply's seed to None must refuse PLAN_STALE -- "
+            "this is the exact failure the PLAN_STALE agreement test "
+            "exists to catch")
+
+    def test_materialize_plan_gate_forced_to_none_refuses_plan_stale(self):
+        real_engine_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        mutated_engine_source = self._mutate_second_occurrence(real_engine_source)
+        self.assertEqual(mutated_engine_source.count(self._SEED_ANCHOR), 1)
+
+        docs_dir = Path(tempfile.mkdtemp(prefix="x5-docs-materialize-"))
+        self.addCleanup(shutil.rmtree, docs_dir, ignore_errors=True)
+        (docs_dir / "r1.md").write_text(
+            "**Dataset:** declared here\n", encoding="utf-8")
+        profile_path = self._scratch_profile_with_marker(docs_dir)
+        box = self._box("_materialize")
+
+        plan_proc = self._run_main(
+            real_engine_source, profile_path,
+            ["plan", "--target", str(box), "--name", self.PACKAGE,
+             "--revision", "r1.md"])
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stdout + plan_proc.stderr)
+        plan = json.loads(plan_proc.stdout)
+        plan_dir = Path(tempfile.mkdtemp(prefix="x5-plan-materialize-"))
+        self.addCleanup(shutil.rmtree, plan_dir, ignore_errors=True)
+        plan_path = plan_dir / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+        argv = ["materialize", "--target", str(box), "--name", self.PACKAGE,
+                "--stage", "scaffold", "--plan", str(plan_path), "--seed", "7"]
+        original = self._run_main(real_engine_source, profile_path, argv)
+        self.assertNotEqual(
+            json.loads(original.stdout or "{}").get("code"), "PLAN_STALE",
+            "the unmutated gate must not refuse PLAN_STALE against its own "
+            "matching plan")
+
+        # The unmutated call may have written (uncommitted) scaffold
+        # files past the gate -- restore the pristine, committed state
+        # before the mutated run, or DIRTY_WORKTREE fires before the gate
+        # is even reached.
+        subprocess.run(["git", "reset", "-q", "--hard"], cwd=box,
+                       env=self._git_env(), check=True, capture_output=True)
+        subprocess.run(["git", "clean", "-qfd"], cwd=box,
+                       env=self._git_env(), check=True, capture_output=True)
+
+        mutated = self._run_main(mutated_engine_source, profile_path, argv)
+        self.assertEqual(mutated.returncode, 2, mutated.stdout + mutated.stderr)
+        self.assertEqual(
+            json.loads(mutated.stdout).get("code"), "PLAN_STALE",
+            "forcing _materialize_plan_gate's seed to None must refuse "
+            "PLAN_STALE")
 
 
 class LockAHonestyTests(unittest.TestCase):
