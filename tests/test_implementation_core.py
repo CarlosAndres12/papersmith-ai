@@ -254,6 +254,27 @@ class CoreNamesNoDomainTests(unittest.TestCase):
                          REPOSITORY_ROOT / "implementations")
 
 
+class ZeroBareDataLiteralTests(unittest.TestCase):
+    """F5's class finished (`a-data-directory-somebody-can-owe`, B1,
+    design.md D6, task 5.2): `PRODUCT_DATA` taken off the CLI -- never
+    hardcoded here -- and asserted to appear quoted exactly once in the
+    engine's own source: the `PRODUCT_DIRS` tuple. Every other former
+    bare `"Data"` site (`classify`, `build_plan`'s `with_data`
+    expression, `cmd_verify`) now reads `PRODUCT_DATA`, never the
+    literal; derived from the CLI rather than restated, this holds a
+    fifth product category to the same rule the day one appears."""
+
+    def test_the_quoted_literal_appears_exactly_once(self):
+        cli = CoreNamesNoDomainTests._cli_module()
+        needle = f'"{cli.PRODUCT_DATA}"'
+        source = ENGINE_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(needle), 1,
+            f"{needle!r} must appear quoted exactly once in the engine's "
+            "own source -- the PRODUCT_DIRS tuple -- with every other "
+            "bare-Data site reading PRODUCT_DATA instead")
+
+
 class UnbackedTickTests(unittest.TestCase):
     """A tick nobody measured is an assertion; a blank box nobody measured is
     not. `derive()` could not tell them apart.

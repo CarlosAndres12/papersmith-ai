@@ -2811,7 +2811,7 @@ def classify(path: str, name: str, product_dir: str | None = None) -> tuple[str 
     if ext in NOTEBOOK_EXT:
         return f"{name}/Notebooks/{basename}", "notebook"
     if ext in DATA_EXT:
-        return f"{name}/Data/{basename}", "dataset"
+        return f"{name}/{PRODUCT_DATA}/{basename}", "dataset"
     if ext in MODEL_EXT:
         return f"{name}/Models/{basename}", "trained artifact"
     if ext in RESULT_EXT:
@@ -4060,8 +4060,8 @@ def build_plan(target: Path, name: str, revision: str | None = None) -> dict:
                        | set(collisions) | occupied)
 
     with_data = (declares_dataset(revision)
-                 or dir_exists_after(target, f"{name}/Data", renames, name)
-                 or any(m["to"].startswith(f"{name}/Data/") for m in moves))
+                 or dir_exists_after(target, f"{name}/{PRODUCT_DATA}", renames, name)
+                 or any(m["to"].startswith(f"{name}/{PRODUCT_DATA}/") for m in moves))
     missing = [d for d in expected_dirs(name, with_data)
                if not dir_exists_after(target, d, renames, name)]
     gaps = scaffold_gaps(target, name)
@@ -15155,7 +15155,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # `unparsable`/the three `*_recorded` folds depend on stays exactly
     # where it was. Output key order is fixed by the final dict literal
     # below, so the move is observationally inert.
-    with_data = declares_dataset(revision) or (target / name / "Data").is_dir()
+    with_data = declares_dataset(revision) or (target / name / PRODUCT_DATA).is_dir()
     missing_dirs = [d for d in expected_dirs(name, with_data) if not (target / d).is_dir()]
     structure_ok = (not missing_dirs and not stray and not stale_refs
                     and not unparsable

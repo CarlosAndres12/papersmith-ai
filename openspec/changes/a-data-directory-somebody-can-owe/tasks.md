@@ -59,8 +59,8 @@ Chain strategy: stacked-to-main
 
 ## Phase 5: Finish F5 (B1)
 
-- [ ] 5.1 GREEN: replace the 3 remaining bare `"Data"` sites (`classify`, `build_plan`'s two-occurrence expression, `cmd_verify`) with `PRODUCT_DATA`.
-- [ ] 5.2 RED+GREEN: `tests/test_implementation_core.py` — `ZeroBareDataLiteralTests`: `PRODUCT_DATA` taken off the CLI, asserted to appear quoted exactly once in engine source (the `PRODUCT_DIRS` tuple).
+- [x] 5.1 GREEN: replace the 3 remaining bare `"Data"` sites (`classify`, `build_plan`'s two-occurrence expression, `cmd_verify`) with `PRODUCT_DATA`.
+- [x] 5.2 RED+GREEN: `tests/test_implementation_core.py` — `ZeroBareDataLiteralTests`: `PRODUCT_DATA` taken off the CLI, asserted to appear quoted exactly once in engine source (the `PRODUCT_DIRS` tuple). Measured RED before 5.1 (2 quoted occurrences), GREEN after (1).
 
 ## Phase 6: Mutation proof (B1)
 
