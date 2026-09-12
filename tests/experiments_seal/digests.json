@@ -1,6 +1,6 @@
 {
   "__corpus_fingerprint__": {
-    "sha256": "cedf38237de27d706805b913b15dee0959dae894f75286665c55e50337b0cd43"
+    "sha256": "7d2727b09532953a738b76f9852e0d1c239dc1314c82903f79abc3005af95c7a"
   },
   "admit-t": {
     "bytes": 310,
@@ -90,7 +90,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "dab5e2b9a625add7d9c78a46790e5426de6db0b9f65e101b3856fef794fdedbd"
+    "sha256": "0b60783b5c3ade79e3883dfdeff57827b3366bfc11fb8cf37c338960dc262b85"
   },
   "settle": {
     "bytes": 2826,

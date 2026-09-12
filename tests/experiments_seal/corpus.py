@@ -86,6 +86,37 @@ PROPOSAL_REVISION_TEXT = (
     "and Ecuaciones(9) a third time.\n"
 )
 
+#: `the-agreement-nothing-computes` (Slice D, design.md D5/D6, tasks.md
+#: 2.10): the corpus's crossing axis -- document 0 citing the
+#: `[claims:N]` form, and document 1 (proposal-shaped) declaring the
+#: matching `\tag{N}`. Named outside the `trial-(\d+)\.md` family (M7's
+#: own naming, like `dataset-0.md`/`trial-t.md`), so no existing case's
+#: discovery changes and no existing revision's bytes move.
+#:
+#: Both directions share ONE target (`PROPOSAL_CROSSING_TEXT`, declaring
+#: `\tag{9}` alone) rather than one target per module: `crossing_state`'s
+#: own `absent`/`untested` set differences are what tell resolved from
+#: disagreeing apart, not two differently-shaped targets (M10's own
+#: instruction -- the fixture supplies both directions, and the negative
+#: one is the acceptance condition, never a fixture that could only ever
+#: satisfy the check).
+CROSSING_RESOLVED_TEXT = (
+    "## 1\n"
+    "\n"
+    "This experiment sustains the proposal's own claim, citing [claims:9].\n"
+)
+CROSSING_DISAGREEMENT_TEXT = (
+    "## 1\n"
+    "\n"
+    "This experiment cites a claim the proposal does not declare: "
+    "[claims:5].\n"
+)
+PROPOSAL_CROSSING_TEXT = (
+    "## 1\n"
+    "\n"
+    "The mathematical proposal declares its own claim as $$a = b \\tag{9}$$.\n"
+)
+
 #: `tests/findings.py`'s content: `experiments`/`remedy_experiments` --
 #: THIS domain's own `locus_key`/`remedy_locus_key`, never `equations`/
 #: `remedy_equations`. Slice C (`the-second-document-verified-on-its-own-
@@ -323,6 +354,14 @@ def _build_documents(root: Path) -> Path:
     # naming), so no existing case's discovery changes.
     (documents / "trial-t.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + FIXTURE_T_REVISION_TEXT.encode("utf-8"))
+    # `the-agreement-nothing-computes` (Slice D, design.md D5/D6, tasks.md
+    # 2.10): the crossing axis's own document-0 half -- named outside the
+    # `trial-(\d+)\.md` family, same reasoning as `dataset-0.md`/
+    # `trial-t.md` above.
+    (documents / "trial-crossing-resolved.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + CROSSING_RESOLVED_TEXT.encode("utf-8"))
+    (documents / "trial-crossing-disagree.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + CROSSING_DISAGREEMENT_TEXT.encode("utf-8"))
     return documents
 
 
@@ -334,6 +373,12 @@ def _build_document_one(root: Path) -> Path:
     documents.mkdir(parents=True)
     (documents / "trial-plan-v01.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + PROPOSAL_REVISION_TEXT.encode("utf-8"))
+    # `the-agreement-nothing-computes` (Slice D, design.md D5/D6, tasks.md
+    # 2.10): the crossing axis's own target -- the ONE document 1 revision
+    # both `CROSSING_RESOLVED_TEXT` and `CROSSING_DISAGREEMENT_TEXT`
+    # resolve against.
+    (documents / "trial-plan-crossing.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + PROPOSAL_CROSSING_TEXT.encode("utf-8"))
     return documents
 
 
