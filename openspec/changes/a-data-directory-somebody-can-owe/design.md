@@ -490,3 +490,30 @@ inherited**: `PRODUCT_DIRS`, `PRODUCT_DATA`, `PRODUCT_NOTEBOOKS`, `DATA_EXT`,
    already returns it as a reason string (M4).
 
 No test suite was run, per this change's brief.
+
+
+---
+
+## Correction after verify (W1): three registrations, not one
+
+D3's table says *"One registration (the eight-name set becomes nine; ten commands
+carry the flag)"*. **The count of commands is right and the mechanism is wrong.**
+
+Measured at HEAD: `add_argument("--revision"` appears at **three** sites. The
+eight-name set (`verify`, `admit`, `handoff`, `probe`, `position`, `gate`,
+`offer`, `close`) is one; `walk` has always had its own; and B gave **`plan` a
+third of its own** rather than widening the set. Ten commands carry the flag,
+through three registrations.
+
+D3's *ruling* stands untouched and is what mattered: the flag lands on `plan`
+alone, and `cmd_apply` and `_materialize_plan_gate` take the seed from the
+approved plan's own `boundTo` key, so the three `build_plan` call sites agree by
+construction. Only the sentence describing how the registration was spelled was
+wrong.
+
+Worth recording because of the pattern, not the line. This is the **fifth**
+inherited count in this project that did not survive being checked:
+`_POSITION_HEADER_RE` never existed; the engine's subject words were 89/30/28 and
+not 88/23/20; Slice A's tasks were 33 and not 40; `--revision` reached nine
+commands and not eight; and this change's own tasks are **37**, not the 30 its
+apply report stated. Every one was caught by counting rather than by reading.
