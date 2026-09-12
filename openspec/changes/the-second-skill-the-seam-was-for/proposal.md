@@ -1,161 +1,203 @@
 # Proposal: The second skill the seam was for
 
+> **This supersedes an earlier version of this file.** The earlier version was
+> built on a premise that has since been **fixed in code**, not merely
+> re-judged. It held that "Cut 3's pair cannot bind these two real documents" —
+> `revision_source` resolved one filename against every declared document's
+> root, and the two publishers can never share a filename. The archived change
+> `2026-09-11-each-document-names-its-own-revision` closed that: each document
+> now discovers its own name in its own root, and an unreadable one refuses.
+> The earlier version's **slice A (600–900 lines) is therefore already
+> delivered**, and its ~4,000–5,700 estimate and three-change recommendation
+> derived from a burden that no longer exists. Both are re-derived below.
+> Two of its other measured claims also went stale: `unreached_mathematics` is
+> gone from the live spec (only an `impl_profile.py` comment still names it),
+> and its "~1,112 authored lines" anchor for the second deliberation skill was
+> wrong by 2.8×.
+
 ## Intent
 
-Five cycles moved the implementation CLI behind a profile seam so a second
-skill could be thin. Build it: `experimental-implementation`, carrying its own
-north, verifying code against **both** the latest mathematical proposal and the
-latest experiments document, publishing an experiments successor when the code
-contradicts it, and reaching a test submission through Flow B's existing paths.
+Build `experimental-implementation`: the second skill the profile seam was cut
+for. Its own north, verification against **both** the latest mathematical
+proposal and the latest experiments document, an experiments successor when the
+code contradicts it, and a test submission through Flow B's existing paths.
 
-## Measured before proposing
+## Measured at `b3ca9aa` — every symbol grepped this session
 
-Symbols were resolved in source, never inherited. Three inherited claims moved.
-
-| Claim | Measured at HEAD | Consequence |
+| Claim inherited | Measured | Consequence |
 |---|---|---|
-| `unreached_mathematics` crosses the join | **Does not exist.** Cut 2 renamed it `unreached_modules` (wire `unreachedModules`). Still named 2× in the **live** `implementation-engine-neutrality/spec.md` | A live spec carries a dead symbol. Correct it here. |
-| Cut 3 made the pair addressable | `revision_source(revision, index)` = `proposals_root(index) / revision` — **one filename in N roots**. `revision_discovery` takes **no index** (reads `proposals_root()`). `--revision` is one scalar token for the eight commands that register it; `plan` still registers none (F4 holds). | See below. |
-| `acknowledgedRemovals` is the precedent | Lives in `_core/deliberation/engine/orchestrator.ts` — **TypeScript**. The Python engine has no analogue. | It is a shape to copy, not code to port. |
+| The document pair cannot bind | **Fixed.** `discover_document_revision(index)`, `document_revision_names(revision)`, `_DOCUMENT_NAME_CACHE`; `revision_source(revision, index)` is a dumb reader; `DOCUMENT_REVISION_UNREADABLE` refuses. `_document_extra_sources` wired at **9** `position_state` call sites | The old slice A is done. Drop it. |
+| `unreached_mathematics` sits in a live spec | **No longer.** `openspec/specs/implementation-engine-neutrality/spec.md` spells `unreached_modules` twice. One stale mention survives, in `impl_profile.py`'s `provenance` comment | One comment line, not a spec correction. |
+| Engine subject-word collision | **Stands.** Occurrences in `implementation_engine.py`, case-insensitive, word-boundary: `benchmark(s)` **89**, `experiment(s)` **30**, `baseline(s)` **28** (the brief's 88/23/20 were lines, or an older count) | `vocabulary.names` gets the namespace word only. |
+| `KitAgreementLockTests._profile()` hardcodes `proposal-implementation` | **Stands**, while `discover_profiles()` globs `.claude/skills/*/impl_profile.py` | A second kit is unheld. |
+| M5 deferred for want of a second profile | **Stands.** No stub exists, deliberately — a `skipTest` would move `skipped=6` | Landable here. |
 
-**The blocking finding.** `proposal-deliberation` publishes
-`proposals/research-concept-<slug>-r01.md`; `experimental-deliberation`
-publishes `experiments/experiments-<slug>-v01.md` (`stem`, `directory`,
-`revisionPattern: "v"`). The two documents **can never share a filename**, so
-Cut 3's join cannot bind them. `_extra_document_revisions` answers `sha256:
-None` for an unreadable index and does not refuse — "reported, never refused".
-Operator items 2 and 5 are therefore **not reachable by configuration**, and
-their failure mode is the one this project keeps paying for: a check that reads
-green because it measured nothing. Cut 3's own fixture writes `r1.md` into both
-roots, so the fixture does not expose it either.
+### The finding that now drives the shape
 
-**The second blocking finding.** `LockBEngineNeutralityTests` unions **every**
-profile's `vocabulary.names` and scans the engine. Measured in
-`implementation_engine.py`: `experiment(s)` **30**, `benchmark(s)` **89**,
-`baseline|ablation|protocol|metric|sweep` **39**. This domain's subject words
-cannot enter `names`. Both precedents already answer it —
-`experimental-deliberation` declares `names: ["experimental-deliberation"]`
-(its namespace only), and `documents.label: "proposal"` is governed by a
-three-layer exclusion test instead. Follow them; record the collision.
+**The claim vocabulary is a module-level scalar, one layer above the revision
+scalar that was just fixed.** `CLAIM_KEY`, `LOCUS_KEY`, `REMEDY_LOCUS_KEY`,
+`NOTATION_KEYS` and `CITATION_RE` are read once from `PROFILE[...]`, not from
+`documents[N]`. `documents[N]` validates exactly two leaves — `directory` and
+`label`. So document 1 can name its own root, its own label and its own
+revision, and still cannot say that **its** claims are experiments rather than
+equations.
+
+The consequence is already visible: `_extra_document_fidelity_status` folds
+four conditions its own docstring calls *document-count-invariant* —
+`stale`, `missing_provenance`, `untested`, `unreached`, all about the shared
+source tree — plus one per-document fact, whether the revision resolves. So a
+second document reports `drift` when **document 0** drifted. Declare the
+experiments document today and item 2 is a check that reads green having
+measured nothing: the exact failure class six cycles have been paying off.
+`with_data` is the same shape at both producers (`build_plan`, `cmd_verify`):
+derived from the directory's own existence, so `missingDirs` can never hold a
+`Data/`.
 
 ## Scope
 
 ### In Scope
-- Per-document revision addressing (indexed discovery, independent naming, per-index refusals, no silent `None`).
-- The `experimental-implementation` skill: `impl_profile.py` with its own `OBJECTIVE_FLOW` and two `documents`, launcher, two ~70-line agents, `SKILL.md`, its own sealed corpus.
-- `Data/` demandable **per product folder** (`--revision` on `plan`, `source` threaded into `build_plan`, plus the detector; `with_data` is self-fulfilling at both producers today).
-- The two mechanical cross-document refusals + per-discrepancy acknowledgment.
-- The experiments-successor composer, with its block locator shipped **beside the profile** (operator ruling: option A).
+- `experimental-implementation`: `impl_profile.py` with its own `OBJECTIVE_FLOW`
+  and no `profile.ts` (`declared_objective` raises on both), launcher, `SKILL.md`,
+  two ~75-line agents, its own sealed corpus.
+- Per-document claim vocabulary, and a per-document fidelity fold that reads
+  document N's **own** content.
+- `Data/` demandable **per product folder**.
+- The two mechanical cross-document refusals + per-discrepancy acknowledgment,
+  mirroring `acknowledgedRemovals` (`_core/deliberation/engine/orchestrator.ts`).
+- The experiments-successor composer, block locator **beside the profile**
+  (ruling A). Note `TAG_RE` is read by `remedy_compatibility` and `cmd_admit`
+  too, not only `cmd_compose` — the locator's reach is wider than M1 recorded.
 - Flow B's existing paths through to a test submission.
-- **M5 becomes landable**: it was deferred only because "the others set is empty" with one profile. This change creates the second. Land it as its own unit.
+- **M5**, and `KitAgreementLockTests._profile()` globbing like `discover_profiles()`.
 
 ### Out of Scope
-- Any rename of `proposalDigest` or its ten campaign-proposal relatives; F6; **M2** (`cmd_handoff`'s hardcoded Spanish, still unresolved).
-- Judging whether an experiment's metric or protocol *corresponds* to a claim. Tutor bullet in `SKILL.md`, never a check — it would block correct work and pass broken work.
-- Any engine-generated resolution proposal. The engine refuses and names the discrepancy; the agent proposes in conversation; the operator decides.
+- Any rename of `proposalDigest` or its ten campaign-proposal relatives; **M2**; F6.
+- Judging whether an experiment's metric or protocol *corresponds* to a claim —
+  tutor bullet in `SKILL.md`, never a check.
+- Any engine-generated resolution proposal, and any inference of repair
+  direction: that stays the gate Flow B step 5 already asks.
 
 ## Capabilities
 
 ### New Capabilities
-- `experimental-implementation-skill`: the second skill's own surface — north, agents, profile leaves, launcher, seal corpus.
-- `implementation-cross-document-agreement`: the two refusals, per-discrepancy acknowledgment, and the explicit non-verdict boundary.
+- `experimental-implementation-skill`: north, agents, profile leaves, launcher, seal corpus.
+- `implementation-cross-document-agreement`: two refusals, per-discrepancy
+  acknowledgment, the explicit non-verdict boundary.
 - `implementation-product-data`: `Data/` demandable per product folder.
 
 ### Modified Capabilities
-- `implementation-document-binding`: per-document revision addressing; the silent-`None` tolerance becomes a named refusal.
-- `implementation-engine-neutrality`: the `names` collision ruling; M5; correct the dead `unreached_mathematics` citation.
+- `implementation-document-binding`: claim vocabulary per document; a fidelity
+  status that reads its own document.
+- `implementation-engine-neutrality`: the `names` collision ruling; M5.
 - `implementation-cli-seal`: the second skill's corpus; non-interference extended.
 
 ## Approach
 
 Mirror the seam, do not fork it. One command roster, one refusal vocabulary,
-one place the flow is described. The engine refuses and names; judgment stays
-with the operator.
+one place the flow is described. Every new pair is gated on
+`len(DOCUMENTS) == 1` behaving byte-identically — the bar all 28 digests hold.
+The engine refuses and names; judgment stays with the operator.
 
 ## Affected Areas
 
 | Area | Impact | Description |
 |---|---|---|
-| `_core/implementation/engine/implementation_engine.py` | Modified | Indexed revision addressing, `Data/` demandability, the two cross-document refusals |
+| `_core/implementation/engine/implementation_engine.py` | Modified | Per-document claim vocabulary, real per-document fidelity, `Data/` demandability, the two refusals |
+| `_core/implementation/impl_domain_profile.py` | Modified | New per-`documents[N]` required leaves and their validation tier |
 | `.claude/skills/experimental-implementation/` | New | Profile, launcher, `SKILL.md`, block locator |
-| `.claude/agents/implementation-*` (two new) | New | ~70 lines each, no logic |
-| `tests/test_implementation_domain_lock.py` | Modified | `KitAgreementLockTests._profile()` hardcodes `proposal-implementation`; it must glob like `discover_profiles()` |
+| `.claude/agents/implementation-*` (two new) | New | ~75 lines each, no logic |
+| `tests/test_implementation_domain_lock.py` | Modified | `_profile()` globs; M5 lands as a real test |
 | `tests/seal/` | Added beside | Existing 28 untouched; `git diff --exit-code tests/seal/` exits 0 |
 
 ## Risks
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| A `names` word reddens the engine on 158 sites | **High** | Declare the namespace word only; record the collision |
-| Second document binds to `None` and reads green | **High** | Replace the tolerance with a named refusal; mutation-prove it |
-| Engine edits move a sibling digest | Med | All 28 byte-identical; `skipped=6` unmoved |
+| Second document's fidelity reads green having measured nothing | **High** | Slice C is the whole answer; no `documents[1]` entry ships before it |
+| A `names` word reddens the engine on 147 occurrences | **High** | Namespace word only; it need only appear in the profile's own source text, which `test_every_declared_name_really_is_that_domain_speaking` checks |
 | `L1_EXPECTED_COUNT = 96` / `L1_EXPECTED_FILES` pin breaks | Med | Any new engine file spelling `proposal` reddens it |
-| A branch no configuration reaches (Cut 3 shipped 24) | Med | Name the reaching case per branch before writing the assertion |
-| `declared_objective` raises on both norths | Low | The new skill declares `OBJECTIVE_FLOW` and **no** `profile.ts` |
-| The agreement stage is unmeasurable | Med | If its `behindWhen` matches `UNMEASURABLE`, every bound agent must name it (`test_an_unmeasurable_stage_is_never_delegated`) |
+| Engine edits move a sibling digest | Med | All 28 byte-identical; `skipped=6` unmoved |
+| A branch no configuration reaches | Med | Name the reaching case per branch before writing the assertion |
+| A method halts before its second mechanism | Med | `subTest` or separate methods, per `b3ca9aa` |
+| No corpus exists to author fixtures from | **High** | `proposals/` and `experiments/` hold only `.gitkeep` |
 
-## Size — and one change or three
+## Size — and how many changes
 
-Cut 3 estimated ~1,400 and measured **2,497 (+78%)**. Anchors measured here:
-`proposal-implementation/SKILL.md` is **2,854 lines**; the second *deliberation*
-skill cost ~1,112 authored lines **with zero engine changes** — and this one
-needs engine changes.
+Two anchors, measured here, both worse than the old proposal's:
+
+- The second **deliberation** skill cost **1,536 skill lines + 1,593 test lines
+  = 3,129**, with zero engine changes. The old proposal's "~1,112" was wrong.
+- A second skill's `SKILL.md` is **not** thinner than its sibling's:
+  `experimental-deliberation/SKILL.md` is **383** against
+  `proposal-deliberation/SKILL.md`'s **322**. On this side the sibling is
+  `proposal-implementation/SKILL.md` at **2,854**.
+- Cut 3 came in **+78%**; only the amendment hit its estimate (865 vs ~870).
 
 | Slice | Delivers | Estimate |
 |---|---|---|
-| A — per-document revision addressing (engine) | Makes items 2 and 5 reachable at all | 600–900 |
-| B — the skill, thin | Items 1, 2, 5, 6; M5 | 1,800–2,600 |
-| C — agreement + successor + Flow B | Items 3, 4 | 1,500–2,200 |
-| | | **~4,000–5,700** |
+| A — the skill, **one** document | Item 1 identical; M5; the kit-lock glob | 1,500–2,400 |
+| B — `Data/` demandable per product folder | Item 6 | 250–450 |
+| C — the second document verified on its own terms | Items 2, 5 | 900–1,500 |
+| D — agreement + successor + Flow B to a submission | Items 3, 4 | 1,200–1,900 |
+| | | **~3,850–6,250** |
 
-**Recommendation: three chained changes, not one and not two.** Slice A is
-engine work under the byte-identical bar and belongs with the cuts, not with
-authoring. B is independently useful the moment it lands — a running second
-skill. C is the only judgment work and should not be rushed behind B's bulk.
-Two is the minimum honest split (A+B, then C); three is what the numbers say.
-Against a `review_budget_lines: 1400`, one change is not deliverable.
+**Recommendation: four chained changes. One is not deliverable and two is not
+honest.** The ordering is deliberate and differs from the superseded proposal's:
+**A goes first with a single-document profile**, because that configuration is
+byte-identical engine behaviour, it delivers operator item 1 exactly, and it
+puts the second profile on disk that M5 and the kit lock have been waiting for.
+B is small, independent of the pair, and cheap to review. C is the new scalar→pair
+and must land before any `documents[1]` entry ships, or item 2 ships as a check
+that measured nothing. D is the only judgment work and must not be rushed behind
+A's bulk. Against `review_budget_lines: 1400`, A alone likely needs stacking.
 
 ## Rollback Plan
 
-Each slice is its own branch. B and C are additive — delete
-`.claude/skills/experimental-implementation/`, the two agent files, and the new
-seal corpus, and the sibling is untouched by construction. A is the only slice
-that edits shared code; revert it and re-run the 28-digest seal, which is the
-existing proof that the revert was complete.
+Each slice is its own branch. A, B and D are additive — delete
+`.claude/skills/experimental-implementation/`, the two agent files and the new
+seal corpus, and the sibling is untouched by construction. C is the only slice
+that reshapes shared reads; revert it and re-run the 28-digest seal, which is
+the existing proof the revert was complete.
 
 ## Dependencies
 
-- `experimental-deliberation` must be able to publish an experiments document. `experiments/` holds only `.gitkeep` today, and `proposals/` likewise — **there is no corpus in this worktree**, so every fixture must be authored.
-- `_core/deliberation/engine/orchestrator.ts` as the shape source for acknowledgment.
+- `experimental-deliberation` must publish an experiments document
+  (`experiments/experiments-<slug>-v01.md`). `experiments/` and `proposals/`
+  hold only `.gitkeep` here — **every fixture must be authored**.
+- `_core/deliberation/engine/orchestrator.ts` as the shape source for
+  acknowledgment (TypeScript; a shape to copy, not code to port).
 
 ## Success Criteria
 
 - [ ] All 28 sealed digests byte-identical; `npm test` 595/595; Python `OK (skipped=6)` with `Ran` grown, not pinned.
-- [ ] The second document's revision is named independently of the first, and an unresolvable one **refuses by name** rather than reporting `None`.
+- [ ] Document 1's fidelity status changes when **document 1's own text** changes, proven by a fixture where document 0 is clean.
 - [ ] Both cross-document refusals are mutation-proven, each with the corpus case that reaches it named.
-- [ ] The engine emits no resolution proposal — only the named discrepancy.
+- [ ] The engine emits no resolution proposal and infers no repair direction.
 - [ ] `verify.structure.missingDirs` can contain a `Data/`.
-- [ ] M5 landed as a real test, not a `skipTest` (which would move `skipped=6`).
+- [ ] M5 lands as a real test, not a `skipTest`.
+- [ ] `KitAgreementLockTests` holds the second skill's kit without being edited again.
 - [ ] No file under `proposal-implementation/` or `proposal-deliberation/` is modified.
 
 ## Proposal question round
 
-Interactive mode; this executor cannot prompt. Four questions whose answers
-change the artifact, with the assumption used in the meantime.
+Interactive mode; this executor cannot prompt. Questions whose answers change
+the artifact, with the assumption used meanwhile. Two of the old four are now
+answered by the fix and are dropped.
 
-1. **The join.** The ruling says the documents "cross mechanically", but
-   `reference-experimental.ts` documents `[tests:X]` as citing an experiment
-   `[exp:X]` declares in the **same** document, while the proposal declares
-   `\tag{}`/`\label{}`. What is the actual cross-document key? *Assumed: a new
-   explicit citation form is required; without one, refusal kind 1 fires on
-   every document from day one.*
-2. **Naming the second revision.** Given the two documents can never share a
-   filename: a second flag (`--experiments-revision`), or per-index discovery
-   with no flag at all? *Assumed: discovery, with a flag as override.*
-3. **Three slices or two?** *Assumed: three.*
+1. **The cross-document key.** `reference-experimental.ts` documents `[tests:X]`
+   as citing an `[exp:X]` declared in the **same** document; the proposal
+   declares `\tag{}`/`\label{}`. What key crosses them? *Assumed: a new explicit
+   citation form is required; without one, refusal kind 1 fires on every
+   document from day one.*
+2. **Where per-document claim vocabulary lives.** New leaves on `documents[N]`
+   (`claim_key`, `locus_key`, `citation_pattern`), or a parallel list beside
+   `provenance`? *Assumed: on `documents[N]`, since that is the tier already
+   validated per index.*
+3. **Four slices, and A shipping single-document first?** *Assumed: yes to both.*
 4. **`documents[1].label`.** `"experiments"` is the Cut-3 fixture's literal. Is
-   that this skill's real label? *Assumed: yes.*
+   it this skill's real label? *Assumed: yes.*
 
-**Citations checked.** Every symbol named above was resolved in source by name
-this session. `unreached_mathematics` did not resolve and is reported as a
-defect rather than repeated.
+**Citations checked.** Every symbol above was resolved in source by name this
+session, never by line number and never inherited. `unreached_mathematics` was
+re-checked and found only in an `impl_profile.py` comment and in prose
+artifacts; it is reported, not repeated as live.
