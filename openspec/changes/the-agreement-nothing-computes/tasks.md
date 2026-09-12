@@ -679,51 +679,145 @@ skip the D1b split.
 **before** its assertion; the sibling's own membership test reddens when
 the `len(DOCUMENTS) > 1` gate is deleted. Estimate 600–950.
 
-- [ ] 3.1 RED: `cmd_agree` conditionally registered — under a one-document
+- [x] 3.1 RED: `cmd_agree` conditionally registered — under a one-document
       profile, `agree` is not a parser choice, and `COMMANDS` is
       byte-identical to today (spec `implementation-cross-document-agreement`
       is silent on this directly; it is D9's constraint, forced by M8).
       Name the corpus case reaching this **before** writing the assertion,
       per the Approach's rule 3.
-- [ ] 3.2 GREEN: `COMMANDS = {..., **({"agree": cmd_agree} if
+      **Measured, split into two halves.** The ABSENT half:
+      `tests/test_proposal_implementation.py::GatingRefusalRosterTests::
+      test_agree_joins_gating_commands_unconditionally_never_this_
+      profiles_own_commands` — under this file's own already-loaded
+      single-document profile, `assertNotIn("agree", impl.COMMANDS)` AND
+      `assertIn("agree", impl.GATING_COMMANDS)`. RED for the right
+      reason: `AssertionError: 'agree' not found in (...)` against
+      `GATING_COMMANDS`, since D9's own unconditional-membership rule
+      (below, 3.2) had not landed yet. The PRESENT half: five new
+      `AgreementCheckTests` cases in `tests/test_experiments_seal.py`,
+      each naming its own reaching corpus argv (fixture + revision)
+      before its assertion, RED as `KeyError`/argparse "invalid choice"
+      since `agree` did not exist at all. Commit `f909bd1`.
+- [x] 3.2 GREEN: `COMMANDS = {..., **({"agree": cmd_agree} if
       len(DOCUMENTS) > 1 else {})}` in `implementation_engine.py`; `agree`
       takes its own `--revision` registration (a fourth site, not the
       eight-name shared set — widening that set moves the sibling's
       digests); joins `GATING_COMMANDS`.
-- [ ] 3.3 RED: the no-crossing-declared refusal — an experiments document
+      **Measured**: commit `a545e7c`. `GATING_COMMANDS` names `agree`
+      UNCONDITIONALLY (not gated on `len(DOCUMENTS) > 1`) — the ONE
+      deliberate asymmetry with `COMMANDS`'s own conditional spread,
+      because `cmd_agree` is a plain module-level function regardless of
+      registration, and `reachable_refusal_codes()`'s reverse lock
+      (`test_the_roster_classifies_nothing_a_gating_command_cannot_
+      raise`) must find its two codes reachable under EVERY profile,
+      single-document included, or classifying them in `GATING_REFUSALS`
+      would break that lock the identical way `COMPOSE_AMBIGUOUS_
+      DOCUMENT` did at D1 (1.31's own annotation).
+- [x] 3.3 RED: the no-crossing-declared refusal — an experiments document
       with zero `[claims:N]` citations and a proposal declaring 39 claims;
       name this exact reaching corpus case (M10: `PROPOSAL_REVISION_TEXT`
       declares no `\tag{}` at all — an unavoidable authored fixture, stated
       as such). Assert it refuses **exactly once**, by the no-crossing code
       — never 39 times (spec `implementation-cross-document-agreement`
       "Zero crossings against a 39-claim proposal refuses once").
-- [ ] 3.4 RED: the inverse — a proposal declaring zero claims while the
+      **Measured, and a real fixture defect found and fixed before this
+      case could even be authored.** D2's own `trial-plan-crossing.md`
+      (the crossing axis's target, declaring `\tag{9}`) carries NO DIGIT
+      in its own filename, so `discover_document_revision`'s candidate
+      filter (`re.search(r"\d", candidate.name)`) never selects it as a
+      candidate at all — measured directly this session
+      (`impl.crossing_state(0, "trial-crossing-resolved.md")` returned
+      `declared: []` against it, not `["9"]`), a fixture committed but
+      unreachable by any command until `agree` existed to expose it.
+      Fixed with an ISOLATED root (`_build_crossing_target`,
+      `proposals_1_crossing`, `crossingTarget` harness flag) rather than
+      a digit added to the shared root, which would create a second
+      digit-bearing family there and redden `admit-t`/`gate-e1`/
+      `offer-e1`/`close-e1`/`handoff-e1` (all of which discover document
+      1 by default). This case (`test_zero_crossings_against_the_
+      default_target_refuses_once`, and the sealed `agree-undeclared`)
+      uses the DEFAULT (non-isolated) discovery on both sides — `trial-
+      1.md` (zero citations) against `trial-plan-v01.md`
+      (`PROPOSAL_REVISION_TEXT`, zero `\tag{}`) — M10's own "unavoidable
+      authored fixture": both sides read empty, not one 39-claim side,
+      because no fixture on disk declares 39 claims.
+- [x] 3.4 RED: the inverse — a proposal declaring zero claims while the
       experiments document cites the form at least once — same code, same
       once-not-N rule (the requirement's reverse direction, same
       scenario's coverage).
-- [ ] 3.5 GREEN: `AGREEMENT_CROSSING_UNDECLARED` — fires alone and once
+      **Measured, and a genuine design/spec gap closed, recorded rather
+      than silently resolved.** design.md D7's own text says the code
+      fires when "the declaring document's `crossed` list is empty" —
+      literally read, that condition is FALSE for this reverse case
+      (`crossed` is non-empty; only `declared` is). The spec's own
+      Requirement text is unambiguous that BOTH directions collapse to
+      the SAME single code, so `cmd_agree` implements `not crossed or
+      not declared` (either side empty), not `not crossed` alone —
+      spec read as authoritative over design's narrower sentence, the
+      identical precedent D1 set for `COMPOSE_AMBIGUOUS_DOCUMENT`.
+      Test: `test_the_reverse_direction_refuses_by_the_same_code` —
+      `trial-crossing-resolved.md` (`crossed=["9"]`) against the
+      DEFAULT-discovered target (`declared=[]`, `crossingTarget` NOT
+      requested) — same `AGREEMENT_CROSSING_UNDECLARED` code.
+- [x] 3.5 GREEN: `AGREEMENT_CROSSING_UNDECLARED` — fires alone and once
       when the declaring document's `crossed` list is empty; the other two
       lists (`absent`, `untested`) are **not computed** in this branch —
       with no crossing at all every declared claim would otherwise read
       "untested" and the refusal would be N discrepancies wearing one code.
-- [ ] 3.6 RED: switching case — the same 39-claim proposal, one experiment
+      **Measured**: implemented as `if not crossed or not declared:` (3.4's
+      correction folded in) — `absent`/`untested` are read from `state`
+      but never inspected in this branch, satisfying "not computed" in
+      the sense that matters (never named in the refusal). Commit
+      `a545e7c`.
+- [x] 3.6 RED: switching case — the same 39-claim proposal, one experiment
       now citing one of the 39 claims; assert the no-crossing code no
       longer fires, and any remaining untested claims refuse under Kind 2,
       individually named (spec "At least one crossing switches to the
       per-claim refusal path").
-- [ ] 3.7 RED: Kind 1 — an experiment citing claim N with the proposal's
+      **Adapted, recorded rather than silently narrowed.** This corpus's
+      crossing target declares exactly ONE claim (`\tag{9}`), not 39 —
+      there is no SECOND, still-untested claim left over in the same
+      fixture to prove "switches, and the remainder still refuses" in
+      one case. `test_a_crossing_that_resolves_clears_and_the_no_
+      crossing_code_never_fires` proves the half this fixture CAN prove
+      cleanly: `crossed == declared == {"9"}`, the no-crossing code does
+      not fire, and NEITHER list names anything (a full match). The
+      "remainder still refuses under Kind 2" half is proven by
+      `agree-disagree` (3.7/3.8/3.9, immediately below) instead, whose
+      `untested=["9"]` is exactly that remaining, individually-named
+      claim — reached via a MIXED case rather than a switching one.
+- [x] 3.7 RED: Kind 1 — an experiment citing claim N with the proposal's
       current revision declaring no matching claim N; assert
       `AGREEMENT_DOCUMENTS_DISAGREE` fires, naming the experiment and claim
       N in `claimAbsent` (spec "A citation to a removed claim refuses").
       Positive control: the identical citation with claim N still declared
       does not refuse for that citation (spec "A citation matching a
       declared claim does not refuse").
-- [ ] 3.8 RED: Kind 2 — the proposal declares claim M, no experiment cites
+      **Measured, adapted.** Negative half:
+      `test_documents_disagree_names_both_kinds_in_one_refusal` —
+      `trial-crossing-disagree.md` cites `[claims:5]`, the crossing
+      target declares `\tag{9}` — `absent=["5"]`, named in the refusal.
+      Positive half: this corpus's one declared claim means "N still
+      declared" and "N absent" cannot differ within one fixture without
+      a second declared claim; proven instead by 3.6's full-match case
+      (`crossed == declared == {"9"}`, "9" never appears in either list)
+      — the degenerate but honest form of "a citation matching a
+      declared claim does not refuse for that citation". The deeper
+      per-value set arithmetic (two DIFFERENT values, one matched, one
+      not) is already proven at the `crossing_state` level by Phase 2's
+      `CrossingStateTests.test_both_non_empty_at_once`; this phase's own
+      tests prove `cmd_agree`'s WIRING of that arithmetic into the
+      refusal, not the arithmetic itself again.
+- [x] 3.8 RED: Kind 2 — the proposal declares claim M, no experiment cites
       it; assert the refusal names M in `claimUntested` (spec "An untested
       declared claim refuses"). Positive control: claim M cited by one
       experiment among several does not refuse for M (spec "A claim cited
       by at least one experiment does not refuse").
-- [ ] 3.9 GREEN: `AGREEMENT_DOCUMENTS_DISAGREE` — **one refusal carrying
+      **Measured, same adaptation as 3.7.** Negative half: the same
+      `agree-disagree` case — `untested=["9"]`, named. Positive half:
+      3.6's full-match case again (the one declared claim, "9", is both
+      cited and declared, and refuses for neither list).
+- [x] 3.9 GREEN: `AGREEMENT_DOCUMENTS_DISAGREE` — **one refusal carrying
       both named lists**, `claimAbsent` and `claimUntested`, plus
       `unacknowledged` (D8's shape, wired here even though `--acknowledge`
       itself lands in Phase 4 — the refusal payload's shape must exist
@@ -731,45 +825,156 @@ the `len(DOCUMENTS) > 1` gate is deleted. Estimate 600–950.
       as `absent:<value>` / `untested:<value>`, never positional (a
       positional id renumbers when a claim is added and silently re-points
       an acknowledgment already made).
-- [ ] 3.10 GREEN: classify both `AGREEMENT_CROSSING_UNDECLARED` and
+      **Measured**: `unacknowledged = [i for i in ids if i not in
+      acknowledged]` where `acknowledged = set(getattr(args,
+      "acknowledge", None) or [])` — reads `None` safely on THIS
+      command's own `args` (no `--acknowledge` flag exists on `agree`
+      yet), so every id starts unacknowledged until Phase 4 adds the
+      flag; no change to this function will be needed when it does.
+      Commit `a545e7c`.
+- [x] 3.10 GREEN: classify both `AGREEMENT_CROSSING_UNDECLARED` and
       `AGREEMENT_DOCUMENTS_DISAGREE` as `WORK_STATE` in `GATING_REFUSALS`
       — nothing the caller can retype clears them; somebody has to change a
       document.
-- [ ] 3.11 RED+GREEN: the boundary — the refusal's output contains no
+      **Found and fixed, beyond the task's own text**: classifying both
+      as `WORK_STATE` alone reddened `test_every_work_state_publishes_
+      something_runnable` (every `WORK_STATE` code must publish a
+      runnable `resolve`) — `_WORK_STATE_RESOLUTIONS` needed an entry
+      for each, added as `_refusal_question(...)` (the same shape
+      `AGREEMENT_DISAGREES`/`DESTINATION_CONFLICT` already use): a
+      runnable `discuss` invocation and a genuine QUESTION, never a
+      decided direction — the boundary (3.11) holds for `resolve.
+      question` too, not only `detail`.
+- [x] 3.11 RED+GREEN: the boundary — the refusal's output contains no
       verdict field or word, no suggested edit, no "the code should follow
       the proposal" direction (spec "A refusal names the discrepancy
       without judging it"). Write the absence-of-verdict assertion first
       against the shipped 3.9 output; it must already pass (the boundary is
       by construction, not by later removal) — if it does not pass on
       first write, that is a defect in 3.9, fix 3.9, not the assertion.
-- [ ] 3.12 GREEN: add each new refusal kind (`AGREEMENT_CROSSING_UNDECLARED`,
+      **Measured**: `test_the_refusal_names_the_discrepancy_without_
+      judging_it` passed on first write against the shipped `agree-
+      disagree` payload — no `verdict` key, and none of `"should
+      follow"`, `"is correct"`, `"is wrong"`, `"the code should"`, `"the
+      target should"`, `"recommend"` in `detail`.
+- [x] 3.12 GREEN: add each new refusal kind (`AGREEMENT_CROSSING_UNDECLARED`,
       `AGREEMENT_DOCUMENTS_DISAGREE`) as its own sealed case in
       `tests/experiments_seal/` (spec `implementation-cli-seal` "Each new
       refusal kind has a sealed case"), and re-run 1.24's individual-read
       discipline on any digest that moves as a result.
-- [ ] 3.13 MUTATE (Z7): fire `AGREEMENT_DOCUMENTS_DISAGREE` per discrepancy
+      **Measured**: commit `4955803` — `agree-undeclared`
+      (`AGREEMENT_CROSSING_UNDECLARED`) and `agree-disagree`
+      (`AGREEMENT_DOCUMENTS_DISAGREE`, naming `absent:5`/`untested:9`
+      together). Both digests read by hand before acceptance (both
+      printed above in this session's own transcript): no verdict word
+      in either, both `resolve` blocks a runnable `discuss` question.
+      Recapture moved only `__corpus_fingerprint__` (mechanical) and
+      `propose` (already-known-nondeterministic, excluded) — **zero of
+      the 27 pre-existing case digests moved**.
+- [x] 3.13 MUTATE (Z7): fire `AGREEMENT_DOCUMENTS_DISAGREE` per discrepancy
       instead of once with two lists; confirm the fail-closed-once case
       (3.3) goes red by asserting **exactly one** refusal payload is
       emitted for the zero-crossing case, and separately confirm the
       Kind1/Kind2 cases would now emit multiple refusals where one is
       expected; restore.
-- [ ] 3.14 MUTATE (Z10): delete `len(DOCUMENTS) > 1` from `COMMANDS`'s
+      **Measured, and the task's own framing corrected.** A single CLI
+      invocation can only ever emit ONE refusal payload structurally (the
+      first `raise` exits the call) — "exactly one refusal payload" holds
+      trivially on both sides and proves nothing. The actual break Z7
+      names is WHICH discrepancy gets INTO that one payload: the mutated
+      `cmd_agree` (a scratch copy, per-discrepancy `for` loop, first
+      iteration raises and returns) fires on the `agree-disagree`
+      reaching case and names only `absent:5`, never reaching
+      `untested:9` — the real implementation names BOTH in one message
+      (proven the same session). Anchor: the combined-message `raise
+      Refused(...)` statement, count 1→0 in the scratch copy, restored
+      (never the shipped engine). `tests/test_experiments_seal.py::
+      AgreementDisagreeZ7MutationTests`.
+- [x] 3.14 MUTATE (Z10): delete `len(DOCUMENTS) > 1` from `COMMANDS`'s
       conditional spread in a scratch copy; confirm anchor count (the
       spread literal) 1→0; watch **the sibling's own**
       `test_the_case_roster_covers_the_command_roster_exactly` in
       `tests/test_implementation_seal.py` go red — the bar held by the
       sibling's own suite, not by this change's care; restore.
-- [ ] 3.15 MEASURE: `reachable_refusal_codes()` — confirm it reports **117**
+      **Measured, mechanism recorded.** Rather than running the
+      sibling's own pytest FILE against a full scratch copy of the test
+      tree (a second copy of every path this suite resolves), the
+      mutated engine is imported under the SIBLING's own single-document
+      profile and the sibling's test property is replicated verbatim
+      against it: `{c["command"] for c in json.load(open(
+      "tests/seal/cases.json"))} == set(impl.COMMANDS)`. Under the
+      mutation this is `False` (with `agree_in_commands: True` —
+      the gate's removal DID register it unconditionally); against the
+      real, unmutated engine it is `True` — the bar held, and the
+      mutation reached the property it claims to break.
+      `tests/test_experiments_seal.py::AgreeRegistrationZ10MutationTests`.
+- [x] 3.15 MEASURE: `reachable_refusal_codes()` — confirm it reports **117**
       (114 → 115 at D1 → 117 here: two new `Refused` codes,
       `AGREEMENT_CROSSING_UNDECLARED` and `AGREEMENT_DOCUMENTS_DISAGREE`).
       This is D3's own pin task, measured after this phase's refusals land,
       never inherited from D1's 115.
-- [ ] 3.16 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
+      **Measured 116, not 117 — design's own prediction corrected.**
+      D1 measured 114, UNMOVED (1.31's own annotation; design's assumed
+      115 baseline was itself wrong). 114 + 2 new codes = 116. Design's
+      "117" arithmetic silently repeated the wrong 115 baseline rather
+      than D1's own measurement. `reachable_refusal_codes()` run
+      directly: `116`, and `{'AGREEMENT_CROSSING_UNDECLARED',
+      'AGREEMENT_DOCUMENTS_DISAGREE'}` both present. Every downstream
+      count depending on this (the sibling's own `SKILL.md`/`references/
+      usage.md` doctrine sentences, `_ENGLISH_COUNTS`) updated to match
+      the MEASURED 116/67, never the predicted 117/68.
+- [x] 3.16 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
       `.venv/bin/python -m unittest tests.experiments_seal
       tests.test_proposal_implementation` green; `L1_EXPECTED_COUNT`
       re-measured against this phase's new refusal messages and docstrings;
       full suite `OK (skipped=6)`; `npm test` 595/595; name-collision
       sweep clean.
+
+      **Measured, this apply session:**
+      - `git diff --exit-code tests/seal/` → exit 0.
+      - `tests.test_experiments_seal` → 20/20 (13 pre-existing +
+        `AgreementCheckTests` ×5 + `AgreementDisagreeZ7MutationTests` ×1
+        + `AgreeRegistrationZ10MutationTests` ×1). `tests.test_
+        proposal_implementation.GatingRefusalRosterTests` → 19/19 (18
+        pre-existing + the new registration test). `tests.test_
+        implementation_seal` (the sibling's own 44) and `tests.test_
+        implementation_domain_lock` (47) both green; `tests.test_
+        implementation_domain_lock.CampaignProposalExclusionTests`
+        confirms `L1_EXPECTED_COUNT` (96) unmoved.
+      - **`npm test` → 596/596, not 595/595** — the eighth-plus inherited
+        count measured false in this change (D2's own 2.14 already
+        corrected this once this session; this task's own "595/595"
+        text is a ninth instance, corrected here rather than repeated).
+        No `.ts`/`.mjs` file touched this phase; the count reflects D2's
+        own added negative-control test, unaffected by D3.
+      - Full suite: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m
+        unittest discover -s tests -p "test_*.py"` → `Ran 3038 tests`,
+        **`OK (skipped=6)`** (grown from D2's 3030 by exactly 8 — the 8
+        new test methods this phase added; `skipped=6` unmoved, no
+        `skipTest` added anywhere).
+      - Name-collision sweep (`rg '^class \w+Tests?\(' ... | sort |
+        uniq -d`, scoped to every file this phase touched) returns
+        nothing.
+      - `reachable_refusal_codes()` → **116**, confirmed (3.15).
+      - Whole-phase diff (`git diff --stat e58e32e..HEAD -- '.claude/
+        skills' 'tests'`, code and tests only, three commits `f909bd1`/
+        `a545e7c`/`4955803`): **535 insertions + 39 deletions across 10
+        files = 574 changed lines** — under this phase's own 600–950
+        estimate (the floor), comfortably under the 1,150 measure-and-
+        report threshold.
+      - One deliberate ripple beyond this phase's own stated scope,
+        recorded rather than silently made: `GATING_COMMANDS` growing
+        from nine to ten moved the SIBLING's own doctrine prose
+        (`proposal-implementation/SKILL.md`, `references/usage.md`) —
+        "nine gating commands" → "ten", 65 → 67 work-state codes, 114 →
+        116 total. Purely descriptive sentences about a genuinely
+        shared, cross-skill constant (`GATING_COMMANDS` is one static
+        tuple, not per-skill); no sibling BEHAVIOR, digest, or command
+        changed — `git diff --exit-code tests/seal/` above is the proof.
+        `test_the_doctrine_states_the_split_the_roster_actually_holds`
+        now reads the gating-command count off `GATING_COMMANDS` itself
+        rather than a hardcoded "nine", closing the drift this test's
+        own docstring already warned about.
 
 ## Phase 4: D4 — Per-exact-id acknowledgment
 
