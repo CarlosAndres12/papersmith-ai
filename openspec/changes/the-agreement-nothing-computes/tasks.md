@@ -406,12 +406,14 @@ skip the D1b split.
 **Gate at the end:** the resolver's unit matrix, both directions;
 `reference-experimental.ts` byte-unchanged. Estimate 500–800.
 
-- [ ] 2.1 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
+- [x] 2.1 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
       original instruction, recording the R1 shape decision as a
       divergence from the spec in this phase's own commit message, no
       longer applies. The spec carries the nested `cross_citation` shape
       directly — there is no divergence left to make traceable.
-- [ ] 2.2 RED: `documents[N].cross_citation` absence cases —
+      **Measured**: checked off as void; nothing implemented for this
+      task, per the void-gate precedent (task 1.0).
+- [x] 2.2 RED: `documents[N].cross_citation` absence cases —
       `cross_citation` itself is required (nullable: `None` is a valid
       declared value), but when declared as a mapping, missing `pattern` or
       `resolves_against` refuses `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE`
@@ -420,25 +422,45 @@ skip the D1b split.
       `implementation-per-document-vocabulary`'s scenario "A malformed
       mapping refuses at its exact indexed sub-path", ruled onto the
       nested shape in `5d42dd7`).
-- [ ] 2.3 RED: `pattern` group-count validation — 0 or 2+ groups refuses
+      **Measured**: commit `2f70434`, its own RED commit. All four of
+      2.2–2.5's facets landed together in this one commit's 203-line
+      addition to `tests/test_implementation_profile.py` — measured RED
+      against the shipped resolver: 9 of 61 cases in that file failed for
+      the right reason (`RuntimeError` not raised), the three positive
+      controls passing trivially since the unvalidated key round-tripped.
+- [x] 2.3 RED: `pattern` group-count validation — 0 or 2+ groups refuses
       `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN` naming
       the leaf (exactly 1 group, same reasoning as the block locator's
       `pattern`, not `citation_pattern`'s three).
-- [ ] 2.4 RED: `resolves_against` validation — naming an undeclared label
+      **Measured**: same commit, `2f70434` (see 2.2's annotation — the
+      four RED facets were not split across separate commits).
+- [x] 2.4 RED: `resolves_against` validation — naming an undeclared label
       refuses `…_UNKNOWN_CROSS_DOCUMENT`; naming its own entry (self-
       reference) also refuses `…_UNKNOWN_CROSS_DOCUMENT`, both by name.
-- [ ] 2.5 RED: `None` accepted — `documents[1].cross_citation = None`
+      **Measured**: same commit, `2f70434`.
+- [x] 2.5 RED: `None` accepted — `documents[1].cross_citation = None`
       resolves without refusal (spec `implementation-per-document-vocabulary`'s
       scenario "An explicit `None` is accepted and crosses nothing" — the
       per-entry nullable case; `cross_citation`, unlike `block_locator`, is
       allowed to resolve to `None`).
-- [ ] 2.6 GREEN: implement 2.2–2.5 in `_resolve()`'s per-entry walk, after
+      **Measured**: same commit, `2f70434` — the three positive controls
+      passing trivially, named above, are this scenario's own cases.
+- [x] 2.6 GREEN: implement 2.2–2.5 in `_resolve()`'s per-entry walk, after
       the `block_locator` tier, before the `citation_pattern` group tier
       (D5). Identifier class for `pattern`'s capturing group copied from
       `reference-experimental.ts::IDENTIFIER` so a crossing id is spelled
       exactly as that domain already spells identifiers — state this
       copy explicitly in the docstring, not just the literal.
-- [ ] 2.7 GREEN: fix the index defect measured against the file —
+      **Measured**: GREEN commit `6c0796d` (71-line resolver tier in
+      `impl_domain_profile.py`, right after `block_locator`'s own, before
+      `citation_pattern`'s). `2f70434`'s cases now pass. The identifier-copy
+      claim is stated explicitly not in the resolver's own docstring but at
+      each profile's own declaration site (`experimental-implementation/
+      impl_profile.py` lines 237–239: "`reference-experimental.ts::IDENTIFIER`
+      verbatim (design.md D5)"), confirmed by reading the file directly —
+      `[A-Za-z0-9][A-Za-z0-9._-]*` matches `reference-experimental.ts`'s own
+      `IDENTIFIER` constant byte-for-byte.
+- [x] 2.7 GREEN: fix the index defect measured against the file —
       `proposal-implementation/impl_profile.py`'s `PROFILE["documents"]`
       has exactly one entry, `documents[0]`; it has no `documents[1]`, so
       `documents[1].cross_citation = None` cannot be declared there.
@@ -469,7 +491,13 @@ skip the D1b split.
       already true. A zero-delta declaration, asserted on the 28 digests,
       never inferred — verbatim the argument commit `7912281` made for
       `dataset_marker: None`.
-- [ ] 2.7a VERIFY (zero-delta, asserted not inferred, this specific edit —
+      **Measured**: commit `3212aa2` (the sibling's `cross_citation: None`
+      plus the real crossing on both `experimental-implementation`
+      documents) + `7525a27` (a fifth hand-built fixture,
+      `OrFoldIndexHardcodeMutationTests`'s scratch second document,
+      swept for the same required leaf — the same "sweep every hand-built
+      fixture" lesson D1 recorded for `block_locator`, repeating here).
+- [x] 2.7a VERIFY (zero-delta, asserted not inferred, this specific edit —
       its own RED/GREEN-adjacent check, not folded into 2.14's phase-end
       bar check): before adding `cross_citation: None` to
       `proposal-implementation/impl_profile.py`'s `documents[0]`, confirm
@@ -477,7 +505,22 @@ skip the D1b split.
       make the exact one-line edit; re-run `.venv/bin/python -m unittest
       tests.seal` and assert the same 28 digests are still byte-identical
       across this specific edit.
-- [ ] 2.8 RED: `crossing_state(index)`'s four-membership unit matrix —
+      **Measured, reconstructed post-pause** (the literal `tests.seal`
+      module command names no test — this repo's actual seal-comparison
+      suite is `tests.test_implementation_seal.SealComparisonTests`, the
+      same substitution D1's 1.7/1.20 made implicitly): `3212aa2`'s own
+      commit message already asserted this check ran and passed in
+      isolation ("`SealComparisonTests`, run twice, isolated to this
+      commit's own diff"). Re-verified independently this session by two
+      proofs neither depending on that claim: (1) `git log --oneline --
+      tests/seal/digests.json` shows **zero** commits touching that file
+      anywhere in `013c2bb~10..013c2bb` — the golden file is byte-identical
+      not just around 2.7's edit but across the whole nine-commit phase,
+      which subsumes the specific-edit claim; (2) at current HEAD,
+      `.venv/bin/python -m unittest tests.test_implementation_seal` → 44/44
+      `OK`, including `SealComparisonTests.test_every_sealed_case_matches_
+      its_golden`, and `git diff --exit-code tests/seal/` exits 0.
+- [x] 2.8 RED: `crossing_state(index)`'s four-membership unit matrix —
       design-only, no direct spec scenario (spec's Req1/Req2 for
       cross-document-agreement cover the *refusal* behavior in Phase 3;
       this is the accessor's own correctness, gating Phase 3). Four cases:
@@ -485,7 +528,12 @@ skip the D1b split.
       only, both non-empty. Assert `crossed`/`declared` are sorted and
       de-duplicated before emission (a crossing repeated twice is one
       discrepancy, not two).
-- [ ] 2.9 GREEN: `crossing_state(index)` in
+      **Measured**: RED commit `28d92ed` (137-line addition to
+      `tests/test_experimental_implementation.py`, the four-membership
+      matrix plus a `None`-cross_citation control and a dedup/sort
+      control — six cases beyond the four named here). Measured RED: all
+      six error `AttributeError`, `crossing_state` did not exist yet.
+- [x] 2.9 GREEN: `crossing_state(index)` in
       `implementation_engine.py` — `crossed` = `cross_citation.pattern`
       findings in document `index`'s text; `declared` =
       `block_locator.pattern` findings in the `resolves_against` target
@@ -493,32 +541,71 @@ skip the D1b split.
       `declared − crossed`. `checkReferenceIntegrity`'s algorithm, one
       document over (D6) — cite this in the docstring, and confirm the
       docstring says "the target document", never `proposal`.
-- [ ] 2.10 GREEN: the corpus's crossing axis in
+      **Measured**: GREEN commit `22f742d` (66 lines in
+      `implementation_engine.py`, lines 5062–5066 and 7903–7923 read
+      this session). Docstring reads verbatim "the TARGET document's own
+      `block_locator.pattern`... never `documents[index]`'s own locator"
+      and cites `_core/deliberation/engine/reference-index.ts` — no bare
+      `proposal` occurrence; `L1_EXPECTED_COUNT` lock (below) confirms
+      this at the file level, not just by this one read.
+- [x] 2.10 GREEN: the corpus's crossing axis in
       `tests/experiments_seal/corpus.py` — at least one document-0 module
       declaring a `[claims:N]` citation and a document-1 (proposal-shaped)
       module declaring the matching `\tag{N}`, plus an inverse-control
       module where the citation and the declared claim disagree.
-- [ ] 2.11 RED (M6, negative assertion): in the deliberation side's own
+      **Measured**: GREEN commit `9b01534` — `CROSSING_RESOLVED_TEXT`
+      (cites `[claims:9]`) and `CROSSING_DISAGREEMENT_TEXT` (cites the
+      undeclared `[claims:5]`) both resolve against
+      `PROPOSAL_CROSSING_TEXT` (declares `\tag{9}`). Recaptured via
+      `tests/experiments_seal_capture.py`: 27 case digests (28 keys minus
+      `__corpus_fingerprint__`, reconfirmed this session by reading
+      `digests.json` directly). Zero of the 27 pre-existing case digests
+      moved except `propose` (already-known-nondeterministic, excluded)
+      and `__corpus_fingerprint__` (mechanical, `corpus.py` edited);
+      `tests/seal/` byte-identical.
+- [x] 2.11 RED (M6, negative assertion): in the deliberation side's own
       test suite, `cites("Sustains claim [claims:39].")` returns `[]` —
       the guard against a later agent adding `[claims:N]` to
       `reference-experimental.ts::cites` "for completeness". This case
       must exist and pass against the **current, unedited**
       `reference-experimental.ts` — it is a negative control, not a RED
       test waiting for a GREEN.
-- [ ] 2.12 GREEN/VERIFY: `experimental-deliberation/reference-experimental.ts`
+      **Measured**: commit `c4dc0f5` (this task and 2.12 landed together
+      in one commit — the negative control needed no separate RED/GREEN
+      pair since it asserts against unedited production code by design).
+      `npm test` grew from the design's assumed 595/595 to **596/596**
+      because of this one new test — measured this session, correcting
+      the design's own prediction rather than repeating it; task 2.14's
+      own "595/595" text below is the sixth-plus inherited count measured
+      false in this change, corrected in that task's own annotation.
+- [x] 2.12 GREEN/VERIFY: `experimental-deliberation/reference-experimental.ts`
       is byte-unchanged — `git diff --exit-code
       .claude/skills/experimental-deliberation/reference-experimental.ts`
       exits 0. `declares` is likewise untouched. Document the crossing form
       in `experimental-deliberation/SKILL.md` (the form, `[claims:N]`, is
       documented as prose there — this is the *documentation* task; M7's
       "Known limit" re-dating is Phase 5's, not this one).
-- [ ] 2.13 MUTATE (Z6): in `crossing_state`, compute `declared` using the
+      **Measured, this session**: `git diff --exit-code
+      .claude/skills/experimental-deliberation/reference-experimental.ts`
+      → exit 0. Commit `c4dc0f5` touched only `SKILL.md` (+6 lines,
+      documenting the form and which engine resolves it) and the `.mjs`
+      test file (+28/-0) — `reference-experimental.ts` itself is absent
+      from that commit's diff entirely, confirming byte-identity by
+      construction, not inference.
+- [x] 2.13 MUTATE (Z6): in `crossing_state`, compute `declared` using the
       **declaring** document's own `block_locator` instead of the
       `resolves_against` target's; confirm the resolving case (2.8's first)
       flips to `absent` — the one a weaker fixture (one that only ever
       supplies a resolving crossing) would survive; confirm `tests/seal/`
       untouched; restore.
-- [ ] 2.14 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
+      **Measured**: commit `f07e786` — 66-line test in
+      `tests/test_experimental_implementation.py`, `document_block_locator
+      (target_index)` swapped for `document_block_locator(index)` in a
+      scratch engine copy. Anchor discipline: 1→0 (real source), 0→1
+      (mutated), confirmed both directions before running, per the
+      commit's own message. `tests/seal/` untouched by construction — the
+      mutation lives only in the scratch copy, never the shipped engine.
+- [x] 2.14 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
       `.venv/bin/python -m unittest tests.test_implementation_profile
       tests.test_implementation_domain_mutation` green; `npm test` 595/595
       (reference-experimental's own suite unaffected); `L1_EXPECTED_COUNT`
@@ -527,6 +614,64 @@ skip the D1b split.
       `reachable_refusal_codes()` confirmed **unmoved** (D2 adds only
       `ImplementationProfileError` codes, invisible to that walk, per
       M11) — this is a negative measurement, not a skip.
+
+      **Measured, this apply session (resumed from `RESUME-D2.md`'s
+      pause):**
+
+      - `git diff --exit-code tests/seal/` → exit 0.
+      - `tests.test_implementation_profile tests.test_implementation_
+        domain_mutation` → 73/73 `OK`. Widened this session to also run
+        `tests.test_implementation_seal` (44/44), `tests.test_experiments_
+        seal` (13/13), and `tests.test_proposal_implementation` (part of
+        a combined 1607/1607 `OK (skipped=2)` run) — all green.
+      - `npm test` → **596/596, not 595/595.** The task's own "595/595"
+        text is a seventh inherited count measured false in this change:
+        task 2.11's negative-control test is itself one new assertion in
+        `experimental-deliberation-references.test.mjs`, landed in commit
+        `c4dc0f5` alongside 2.12, growing the suite by exactly one test.
+        Measured, not assumed, per this change's own recurring lesson
+        about inherited numbers.
+      - `L1_EXPECTED_COUNT` (96, one file) — confirmed unmoved via
+        `tests.test_implementation_domain_lock.CampaignProposalExclusionTests`,
+        all four of its own tests green. Direct read of `crossing_state`'s
+        and `document_cross_citation`'s docstrings confirms "the TARGET
+        document"/"targets" phrasing throughout, no bare `proposal`.
+      - `reachable_refusal_codes()` → **114, confirmed unmoved** (measured
+        directly via the function, not inferred from the lock test alone).
+      - **A real regression found and fixed during this measurement,
+        recorded rather than silently corrected** (the same discipline
+        D1's own 1.33 established): the full-suite run first came back
+        `FAILED (failures=11, skipped=6)` — ten of the eleven were
+        `DerivedDenylistTests.test_3_every_pinned_words_count_equals_
+        its_pin_and_stays_in_the_denylist` sub-failures (an **earlier**
+        slice's own cross-domain word-leak lock, M5/design.md D9, not
+        named anywhere in this phase's task list), and the eleventh
+        surfaced only after the first ten were fixed (see below). Commit
+        `22f742d`'s new prose for `document_cross_citation`/
+        `crossing_state` had used eleven words the lock already pins at
+        an exact count — `value` (+2), `against` (+4), `resolves` (+4),
+        `answers`/`before`/`carries`/`declaration`/`empty`/`experiment`/
+        `longer`/`ruled` (+1 each) — each drift matching, word for word,
+        the count of that word's new occurrences in `22f742d`'s own
+        diff (measured via `diff <(git show ddc3c67:…) … | rg '^>'`,
+        never assumed). Fixed in a dedicated commit (`0e780be`,
+        immediately following this phase's last behavioural commit,
+        docstring-only, zero behavioural delta) rewording the same three
+        comments to carry identical meaning through synonyms confirmed
+        absent from `build_denylist()`'s own output before landing —
+        the first reword introduced a **twelfth** collision (`leaves`,
+        the lock's own eleventh failure, caught by re-running the lock
+        suite rather than trusting the first fix), corrected to `keeps`
+        in the same commit. `tests.test_implementation_domain_lock`:
+        28/28 after. Full suite re-run afterward: `Ran 3030 tests`,
+        **`OK (skipped=6)`**, `skipped=6` unmoved.
+      - Whole-phase diff (`git diff --stat 013c2bb~10..HEAD -- '.claude/
+        skills' 'tests'`, code and tests only): **674 insertions + 28
+        deletions across 13 files = 702 changed lines**, under this
+        phase's own 500–800 estimate. `tasks.md`'s own checkbox
+        annotations add 101 insertions + 14 deletions = 115 lines
+        separately, per D1's own precedent of reporting the two counts
+        apart rather than folding annotation prose into the code budget.
 
 ## Phase 3: D3 — `cmd_agree`, the two refusal codes, fail-closed-once
 
