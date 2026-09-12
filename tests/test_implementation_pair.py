@@ -502,59 +502,75 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
         return hashlib.sha256((self.doc1 / self.REVISION_1).read_bytes()).hexdigest()
 
     def test_absent_install_then_unchanged_all_carry_the_documents_group(self):
+        """Corrective apply (subTest reshape): the three phases below are
+        independent `cmd_position` branches (C2's own three call sites --
+        absent, write, unchanged); each now runs inside its own `subTest`
+        so a failure in one phase is reported without hiding whether the
+        other two still hold, instead of the method halting at the first
+        `assertEqual`. Same assertions, same expected values -- only how
+        a failure surfaces changes. `ledger` is a deterministic path (not
+        a subprocess result), so it is computed once, before any phase, to
+        keep the later phases free of any dependency on an earlier
+        phase's success."""
+        ledger = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
+
         # L10771 (cmd_position's own "nothing to refresh" branch): no
         # block exists yet, and the additive `documents` key is present
         # even here.
-        absent = self.run_cli("position", "--target", str(self.box), "--name",
-                              self.PACKAGE, "--revision", self.REVISION,
-                              "--session", "s1")
-        self.assertEqual(absent.returncode, 0, absent.stdout + absent.stderr)
-        absent_result = json.loads(absent.stdout)
-        self.assertEqual(absent_result["status"], "absent")
-        self.assertIn("documents", absent_result)
-        self.assertEqual(
-            absent_result["documents"],
-            [{"label": "experiments", "revision": self.REVISION_1,
-              "revisionSha256": self._doc1_sha256()}])
+        with self.subTest(phase="absent"):
+            absent = self.run_cli("position", "--target", str(self.box), "--name",
+                                  self.PACKAGE, "--revision", self.REVISION,
+                                  "--session", "s1")
+            self.assertEqual(absent.returncode, 0, absent.stdout + absent.stderr)
+            absent_result = json.loads(absent.stdout)
+            self.assertEqual(absent_result["status"], "absent")
+            self.assertIn("documents", absent_result)
+            self.assertEqual(
+                absent_result["documents"],
+                [{"label": "experiments", "revision": self.REVISION_1,
+                  "revisionSha256": self._doc1_sha256()}])
 
         # L10836 (header gains the group) / L10946 (ledger event) / L10956
         # (final written return): a fresh INSTALL.
-        sequence = json.dumps([{"text": "First step.", "witness": {"kind": "record"}}])
-        install = self.run_cli("position", "--target", str(self.box), "--name",
-                               self.PACKAGE, "--revision", self.REVISION,
-                               "--session", "s1", "--sequence", sequence,
-                               "--target-level", "final")
-        self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
-        install_result = json.loads(install.stdout)
-        self.assertEqual(install_result["status"], "written")
-        self.assertIn("documents", install_result)
-        self.assertEqual(
-            install_result["documents"],
-            [{"label": "experiments", "revision": self.REVISION_1,
-              "revisionSha256": self._doc1_sha256()}])
-        agreed = (self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
-        self.assertIn("documents=", agreed)
-        ledger = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
-        events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(len(events), 1)
-        self.assertIn("documents", events[-1])
+        with self.subTest(phase="install"):
+            sequence = json.dumps(
+                [{"text": "First step.", "witness": {"kind": "record"}}])
+            install = self.run_cli("position", "--target", str(self.box), "--name",
+                                   self.PACKAGE, "--revision", self.REVISION,
+                                   "--session", "s1", "--sequence", sequence,
+                                   "--target-level", "final")
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+            install_result = json.loads(install.stdout)
+            self.assertEqual(install_result["status"], "written")
+            self.assertIn("documents", install_result)
+            self.assertEqual(
+                install_result["documents"],
+                [{"label": "experiments", "revision": self.REVISION_1,
+                  "revisionSha256": self._doc1_sha256()}])
+            agreed = (self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
+            self.assertIn("documents=", agreed)
+            events = [json.loads(line) for line in
+                     ledger.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertIn("documents", events[-1])
 
         # L10923 (the unchanged branch's own additive `documents`
         # comparison): an identical second call finds nothing derived
         # moved, so it must compare the `documents` group too, not only
         # the pre-Cut-3 three scalar fields.
-        refresh = self.run_cli("position", "--target", str(self.box), "--name",
-                               self.PACKAGE, "--revision", self.REVISION,
-                               "--session", "s1", "--target-level", "final")
-        self.assertEqual(refresh.returncode, 0, refresh.stdout + refresh.stderr)
-        refresh_result = json.loads(refresh.stdout)
-        self.assertEqual(refresh_result["status"], "unchanged")
-        self.assertIn("documents", refresh_result)
-        events_after_refresh = [
-            json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
-        self.assertEqual(
-            len(events_after_refresh), 1,
-            "an unchanged refresh must append no second ledger event")
+        with self.subTest(phase="refresh (unchanged)"):
+            refresh = self.run_cli("position", "--target", str(self.box), "--name",
+                                   self.PACKAGE, "--revision", self.REVISION,
+                                   "--session", "s1", "--target-level", "final")
+            self.assertEqual(refresh.returncode, 0, refresh.stdout + refresh.stderr)
+            refresh_result = json.loads(refresh.stdout)
+            self.assertEqual(refresh_result["status"], "unchanged")
+            self.assertIn("documents", refresh_result)
+            events_after_refresh = [
+                json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(
+                len(events_after_refresh), 1,
+                "an unchanged refresh must append no second ledger event")
 
 
 class DocumentOneBoundToTests(unittest.TestCase):
@@ -614,32 +630,43 @@ class DocumentOneBoundToTests(unittest.TestCase):
                               capture_output=True, text=True, cwd=FORGE, env=env)
 
     def test_current_then_stale_after_document_one_changes(self):
-        sequence = json.dumps([{"text": "First step.", "witness": {"kind": "record"}}])
-        install = self.run_cli(
-            "position", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION, "--session", "s1",
-            "--sequence", sequence, "--target-level", "final")
-        self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+        """Corrective apply (subTest reshape): `install` establishes the
+        recorded state, then `current` and `stale` are two independently
+        meaningful moments of the SAME `boundTo` mechanism -- each now in
+        its own `subTest` so a failure in one moment is reported without
+        hiding the other, instead of the method halting at the first
+        `assertEqual`. Same assertions, same expected values -- only how
+        a failure surfaces changes."""
+        with self.subTest(phase="install"):
+            sequence = json.dumps(
+                [{"text": "First step.", "witness": {"kind": "record"}}])
+            install = self.run_cli(
+                "position", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION, "--session", "s1",
+                "--sequence", sequence, "--target-level", "final")
+            self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
 
-        probe_current = self.run_cli(
-            "probe", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION)
-        self.assertEqual(probe_current.returncode, 0,
-                         probe_current.stdout + probe_current.stderr)
-        bound_to_current = json.loads(probe_current.stdout)["position"]["boundTo"]
-        self.assertEqual(bound_to_current["experiments"], "current")
+        with self.subTest(phase="current"):
+            probe_current = self.run_cli(
+                "probe", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION)
+            self.assertEqual(probe_current.returncode, 0,
+                             probe_current.stdout + probe_current.stderr)
+            bound_to_current = json.loads(probe_current.stdout)["position"]["boundTo"]
+            self.assertEqual(bound_to_current["experiments"], "current")
 
         (self.doc1 / self.REVISION_1).write_text(
             "Document 1's own bound-to text, version TWO -- changed after "
             "the position was recorded.\n", encoding="utf-8")
 
-        probe_stale = self.run_cli(
-            "probe", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION)
-        self.assertEqual(probe_stale.returncode, 0,
-                         probe_stale.stdout + probe_stale.stderr)
-        bound_to_stale = json.loads(probe_stale.stdout)["position"]["boundTo"]
-        self.assertEqual(bound_to_stale["experiments"], "stale")
+        with self.subTest(phase="stale (after document 1 changes)"):
+            probe_stale = self.run_cli(
+                "probe", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION)
+            self.assertEqual(probe_stale.returncode, 0,
+                             probe_stale.stdout + probe_stale.stderr)
+            bound_to_stale = json.loads(probe_stale.stdout)["position"]["boundTo"]
+            self.assertEqual(bound_to_stale["experiments"], "stale")
 
 
 class TwoDocumentAmbiguousFamilyRefusesTests(unittest.TestCase):
@@ -1078,51 +1105,72 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
     def test_the_full_lifecycle_reaches_every_named_gate(self):
         """One flow, seven real subprocess commands, every one of Slice B's
         `len(DOCUMENTS) > 1` runtime sites this corrective apply set out to
-        prove -- named per site in the comments beside each assertion."""
+        prove -- named per site in the comments beside each assertion.
+
+        Corrective apply (subTest reshape): each named site below runs
+        inside its own `subTest` block, so an unrelated site's failure is
+        reported independently instead of the method halting at the
+        first `assertEqual` -- same assertions, same expected values,
+        only how a failure surfaces changes. `ledger_path` is a
+        deterministic path (never a subprocess result), so it is computed
+        once up front. `token`, `record` and `verify_result` are read by a
+        LATER site's real subprocess call or assertions, so each gets a
+        safe default assigned before its producing site's block: if that
+        block's own subTest catches a failure before the real value is
+        ever assigned, a later site still runs against the default
+        (reporting its own, independent result) instead of the method
+        crashing outright on a bare `NameError`."""
+
+        ledger_path = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
+        token = ""
+        record: dict = {}
+        verify_result: dict = {}
 
         # C1 (position_state's `multi` branch, L637-654): reached the
         # moment ANY command reads a target that already carries a
         # `<!-- position -->` block under a two-document profile. `probe`
         # is the simplest real reader -- a pure read, no ledger write.
-        probe = self.run_cli("probe", "--target", str(self.box), "--name",
-                             self.PACKAGE, "--revision", self.REVISION)
-        self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
-        probe_result = json.loads(probe.stdout)
-        bound_to = probe_result["position"]["boundTo"]
-        self.assertIsInstance(bound_to, dict)
-        self.assertEqual(set(bound_to), {"proposal", "experiments"})
+        with self.subTest(site="C1 probe boundTo"):
+            probe = self.run_cli("probe", "--target", str(self.box), "--name",
+                                 self.PACKAGE, "--revision", self.REVISION)
+            self.assertEqual(probe.returncode, 0, probe.stdout + probe.stderr)
+            probe_result = json.loads(probe.stdout)
+            bound_to = probe_result["position"]["boundTo"]
+            self.assertIsInstance(bound_to, dict)
+            self.assertEqual(set(bound_to), {"proposal", "experiments"})
 
         # `propose` -- gate's own separate proposal precondition, unrelated
         # to `len(DOCUMENTS)` itself but required before a minted token
         # will pass `_verify_gate_proposal` below.
-        propose = self.run_cli(
-            "propose", "--target", str(self.box), "--name", self.PACKAGE,
-            "--session", "s1", "--job", "job1", "--worker", "w1",
-            "--rationale", "Campaign proposal for the pair lifecycle.")
-        self.assertEqual(propose.returncode, 0, propose.stdout + propose.stderr)
+        with self.subTest(site="propose precondition"):
+            propose = self.run_cli(
+                "propose", "--target", str(self.box), "--name", self.PACKAGE,
+                "--session", "s1", "--job", "job1", "--worker", "w1",
+                "--rationale", "Campaign proposal for the pair lifecycle.")
+            self.assertEqual(propose.returncode, 0, propose.stdout + propose.stderr)
 
         # `offer`: C5's own return/ledger-event sites AND C4's binding
         # growth (`_authorization_binding`'s own `**` spread) -- a REAL
         # launch action minted for job1, via the file-based capacity
         # adapter dropped in `setUp`, never a monkeypatch.
-        offer = self.run_cli(
-            "offer", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION, "--session", "s1", "--answer", "yes")
-        self.assertEqual(offer.returncode, 0, offer.stdout + offer.stderr)
-        offer_result = json.loads(offer.stdout)
-        self.assertIn("documentRevisions", offer_result)
-        self.assertEqual(
-            offer_result["documentRevisions"],
-            [{"label": "experiments", "revision": self.REVISION_1,
-              "sha256": self._doc1_sha256()}])
-        launch = next(a for a in offer_result["actions"] if a["id"] == "launch")
-        token = launch["binding"]["authorization"]
-        self.assertTrue(token)
-        ledger_path = self.box / self.PACKAGE / ".implementation" / "position.jsonl"
-        ledger_events = [json.loads(line) for line in
-                        ledger_path.read_text(encoding="utf-8").splitlines()]
-        offer_event = next(e for e in ledger_events if e["kind"] == "offer")
-        self.assertIn("documentRevisions", offer_event)
+        with self.subTest(site="C4/C5 offer"):
+            offer = self.run_cli(
+                "offer", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION, "--session", "s1", "--answer", "yes")
+            self.assertEqual(offer.returncode, 0, offer.stdout + offer.stderr)
+            offer_result = json.loads(offer.stdout)
+            self.assertIn("documentRevisions", offer_result)
+            self.assertEqual(
+                offer_result["documentRevisions"],
+                [{"label": "experiments", "revision": self.REVISION_1,
+                  "sha256": self._doc1_sha256()}])
+            launch = next(a for a in offer_result["actions"] if a["id"] == "launch")
+            token = launch["binding"]["authorization"]
+            self.assertTrue(token)
+            ledger_events = [json.loads(line) for line in
+                            ledger_path.read_text(encoding="utf-8").splitlines()]
+            offer_event = next(e for e in ledger_events if e["kind"] == "offer")
+            self.assertIn("documentRevisions", offer_event)
 
         # `gate`: consumes the REAL token minted above -- the real success
         # path the 29-case seal corpus can never reach on its own
@@ -1132,58 +1180,63 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         # keys(record)` call -- C4's verification-side companion to
         # `AuthorizationBindingKeysPresenceBranchTests` above, exercised
         # here with genuinely two-document-shaped data end to end.
-        gate = self.run_cli(
-            "gate", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION, "--session", "s1",
-            "--job", "job1", "--worker", "w1",
-            "--justification", "Rehearsal passed at the pinned commit.",
-            "--authorization", token, "--elect", "job1")
-        self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
-        gate_result = json.loads(gate.stdout)
-        self.assertEqual(gate_result["status"], "recorded")
-        self.assertIn("documentRevisions", gate_result)
-        self.assertEqual(
-            gate_result["documentRevisions"],
-            [{"label": "experiments", "revision": self.REVISION_1,
-              "sha256": self._doc1_sha256()}])
-        ledger_events_after_gate = [
-            json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
-        gate_event = next(e for e in ledger_events_after_gate if e["kind"] == "gate")
-        self.assertIn("documentRevisions", gate_event)
+        with self.subTest(site="C4 gate"):
+            gate = self.run_cli(
+                "gate", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION, "--session", "s1",
+                "--job", "job1", "--worker", "w1",
+                "--justification", "Rehearsal passed at the pinned commit.",
+                "--authorization", token, "--elect", "job1")
+            self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+            gate_result = json.loads(gate.stdout)
+            self.assertEqual(gate_result["status"], "recorded")
+            self.assertIn("documentRevisions", gate_result)
+            self.assertEqual(
+                gate_result["documentRevisions"],
+                [{"label": "experiments", "revision": self.REVISION_1,
+                  "sha256": self._doc1_sha256()}])
+            ledger_events_after_gate = [
+                json.loads(line) for line in
+                ledger_path.read_text(encoding="utf-8").splitlines()]
+            gate_event = next(e for e in ledger_events_after_gate if e["kind"] == "gate")
+            self.assertIn("documentRevisions", gate_event)
 
         # `close`: also reaches C2's write path a second, independent way
         # -- `close`'s own internal `cmd_position` refresh call finds the
         # hand-authored header from `_build_box` carries no `documents=`
         # group yet (it was written directly by this test, never through
         # `cmd_position`) and writes one now.
-        close = self.run_cli(
-            "close", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION, "--session", "s1")
-        self.assertEqual(close.returncode, 0, close.stdout + close.stderr)
-        close_result = json.loads(close.stdout)
-        self.assertEqual(close_result["status"], "closed")
-        self.assertIn("documentRevisions", close_result)
-        agreed_after_close = (
-            self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
-        self.assertIn("documents=", agreed_after_close)
-        ledger_events_after_close = [
-            json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
-        close_event = next(
-            e for e in reversed(ledger_events_after_close) if e["kind"] == "close")
-        self.assertIn("documentRevisions", close_event)
+        with self.subTest(site="C2 close"):
+            close = self.run_cli(
+                "close", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION, "--session", "s1")
+            self.assertEqual(close.returncode, 0, close.stdout + close.stderr)
+            close_result = json.loads(close.stdout)
+            self.assertEqual(close_result["status"], "closed")
+            self.assertIn("documentRevisions", close_result)
+            agreed_after_close = (
+                self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
+            self.assertIn("documents=", agreed_after_close)
+            ledger_events_after_close = [
+                json.loads(line) for line in
+                ledger_path.read_text(encoding="utf-8").splitlines()]
+            close_event = next(
+                e for e in reversed(ledger_events_after_close) if e["kind"] == "close")
+            self.assertIn("documentRevisions", close_event)
 
         # A second `close`, over the now-unmoved position -- `not_open`,
         # the exact `documentRevisions`-carrying comparison this
         # corrective apply's own launch brief named as the mutation the
         # 29-case seal corpus could never catch (task 11.3's own finding).
-        close_again = self.run_cli(
-            "close", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION, "--session", "s1")
-        self.assertEqual(
-            close_again.returncode, 0, close_again.stdout + close_again.stderr)
-        close_again_result = json.loads(close_again.stdout)
-        self.assertEqual(close_again_result["status"], "not_open")
-        self.assertIn("documentRevisions", close_again_result)
+        with self.subTest(site="close again (not_open)"):
+            close_again = self.run_cli(
+                "close", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION, "--session", "s1")
+            self.assertEqual(
+                close_again.returncode, 0, close_again.stdout + close_again.stderr)
+            close_again_result = json.loads(close_again.stdout)
+            self.assertEqual(close_again_result["status"], "not_open")
+            self.assertIn("documentRevisions", close_again_result)
 
         # `admit`: C3's write path AND C7's `require_document` gate
         # (`read_findings`'s own `well_formed(..., require_document=True)`
@@ -1191,17 +1244,19 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         # "proposal"`, so `well_formed` accepts it instead of refusing
         # `MALFORMED_FINDINGS`, and `cmd_admit` writes a real `documents`
         # key into `tests/admissibility.json`.
-        admit = self.run_cli(
-            "admit", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION)
-        self.assertEqual(admit.returncode, 0, admit.stdout + admit.stderr)
-        record = json.loads(
-            (self.box / "tests" / "admissibility.json").read_text(encoding="utf-8"))
-        self.assertIn("documents", record)
-        self.assertEqual(
-            record["documents"],
-            [{"label": "experiments", "revision": self.REVISION_1,
-              "revisionSha256": self._doc1_sha256()}])
+        with self.subTest(site="C3/C7 admit"):
+            admit = self.run_cli(
+                "admit", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION)
+            self.assertEqual(admit.returncode, 0, admit.stdout + admit.stderr)
+            record = json.loads(
+                (self.box / "tests" / "admissibility.json").read_text(encoding="utf-8"))
+            self.assertIn("documents", record)
+            self.assertEqual(
+                record["documents"],
+                [{"label": "experiments", "revision": self.REVISION_1,
+                  "revisionSha256": self._doc1_sha256()}])
+
         # Re-verify (Cut 3, second correction) WARNING 1: C7's
         # `sources_by_document` construction (L7797) is reached by the
         # subprocess above -- confirmed by the verify session's own
@@ -1213,32 +1268,34 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         # type itself -- dict, not str -- is a structural control: turning
         # this site off collapses `class` back to a bare string regardless
         # of either finding's own content.
-        impact_class = record["findings"]["pair-lifecycle-finding"]["impact"]["class"]
-        self.assertIsInstance(impact_class, dict)
-        self.assertEqual(impact_class, {"proposal": "local"})
+        with self.subTest(site="C7 sources_by_document (admit impact class)"):
+            impact_class = record["findings"]["pair-lifecycle-finding"]["impact"]["class"]
+            self.assertIsInstance(impact_class, dict)
+            self.assertEqual(impact_class, {"proposal": "local"})
 
         # `verify`: C8's fidelity-by-document fold AND `admissibility_
         # record`'s own extra-document staleness read (reached because
         # `admit` above already wrote a record `verify` now reads back).
-        verify = self.run_cli(
-            "verify", "--target", str(self.box), "--name", self.PACKAGE,
-            "--revision", self.REVISION)
-        self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
-        verify_result = json.loads(verify.stdout)
-        fidelity_by_document = verify_result["fidelity"]["fidelityByDocument"]
-        self.assertEqual(
-            {entry["label"] for entry in fidelity_by_document},
-            {"proposal", "experiments"})
-        extra_entry = next(
-            e for e in fidelity_by_document if e["label"] == "experiments")
-        # Document 1's own revision genuinely resolves (a real, readable
-        # file at `IMPLEMENTATION_PROPOSALS_1`), so `_extra_document_
-        # fidelity_status` never falls back to its `"unknown"` branch here
-        # -- proving the function was reached with data that could tell
-        # the two branches apart, not merely with an absent revision that
-        # would answer `"unknown"` regardless of whether the function ran
-        # at all.
-        self.assertNotEqual(extra_entry["status"], "unknown")
+        with self.subTest(site="C8 verify fidelityByDocument"):
+            verify = self.run_cli(
+                "verify", "--target", str(self.box), "--name", self.PACKAGE,
+                "--revision", self.REVISION)
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            verify_result = json.loads(verify.stdout)
+            fidelity_by_document = verify_result["fidelity"]["fidelityByDocument"]
+            self.assertEqual(
+                {entry["label"] for entry in fidelity_by_document},
+                {"proposal", "experiments"})
+            extra_entry = next(
+                e for e in fidelity_by_document if e["label"] == "experiments")
+            # Document 1's own revision genuinely resolves (a real, readable
+            # file at `IMPLEMENTATION_PROPOSALS_1`), so `_extra_document_
+            # fidelity_status` never falls back to its `"unknown"` branch
+            # here -- proving the function was reached with data that could
+            # tell the two branches apart, not merely with an absent
+            # revision that would answer `"unknown"` regardless of whether
+            # the function ran at all.
+            self.assertNotEqual(extra_entry["status"], "unknown")
 
         # Re-verify (Cut 3, second correction) WARNING 1: C7's sibling site,
         # `cmd_verify`'s `verify_sources_by_document` construction (L14839),
@@ -1253,9 +1310,10 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         # 0's text, where the phrase is missing, and the audit would
         # wrongly report it incompatible -- a genuine control, not a
         # tautology.
-        compatibility = verify_result["audit"]["compatibility"]
-        self.assertEqual(compatibility["status"], "ok", compatibility)
-        self.assertEqual(compatibility["undefinedNotation"], [])
+        with self.subTest(site="C7 verify_sources_by_document (compatibility)"):
+            compatibility = verify_result["audit"]["compatibility"]
+            self.assertEqual(compatibility["status"], "ok", compatibility)
+            self.assertEqual(compatibility["undefinedNotation"], [])
 
 
 if __name__ == "__main__":
