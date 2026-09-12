@@ -46,3 +46,22 @@ that a second `documents` entry with its own directory and label resolves.
 - WHEN a case touching a citation or notation payload is captured
 - THEN the captured output reflects document 1's own declared values for
   document 1, and document 0's own for document 0
+
+
+## Correction after verify (W1): captured, not digested
+
+The requirement above says the drift-control fixture is "captured and digested",
+and the two scenarios say "both digested". **No seal or digest artifact exists
+for it, and none should.**
+
+What was built proves the same property by real-subprocess assertion in
+`TwoDocumentDriftControlTests`, which is what design.md's own Testing Strategy
+classifies it as -- **Integration**, never a planned digest capture. The
+implementation matches the design; this spec's wording matched neither.
+
+The distinction is not cosmetic here. A digest proves *these exact bytes did not
+move*; an assertion proves *this document's status differs from that one's*. The
+drift control needs the second: its whole point is that document 0 stays clean
+while document 1 drifts, and a digest of that pair would freeze a difference
+rather than demonstrate one. Wording corrected to the mechanism that was built
+and is proven, rather than the mechanism the sentence happened to name.

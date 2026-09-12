@@ -270,7 +270,18 @@ it a stray `documents[1]` survives the rollback silently.
       modified.
 - [ ] `tests/pair/` and `tests/fixtures/two_documents/` resolve unchanged.
 - [ ] The engine emits no cross-document verdict and infers no repair direction.
-- [ ] The slice table records **A → C → {B, D}** with B's dependency on C stated.
+- [x] The slice table records **A → C → {B, D}** with B's dependency on C stated.
+      **Closed after verify (W2).** No literal table anywhere carried the order; the
+      Slice A proposal's A/B/C/D listing is archived and, per this proposal's own Q5
+      ruling, is not edited. The ordering and its evidence now live in this document's
+      own prose (above) AND in Slice A's archive report, which carries a correction
+      naming the inversion. That inversion has recurred **twice** in this project --
+      once in the Slice A proposal, once in its archive report -- because an A/B/C/D
+      listing reads as a sequence to anyone skimming. The evidence, stated wherever
+      the order appears: `Data/` becomes demandable only when a document declares a
+      dataset, and `**Dataset:**` is enforced solely in the experimental deliberation
+      domain -- the mathematical one has none. B before C would ship a branch no
+      configuration can reach.
 
 ## Size — and how many changes
 
