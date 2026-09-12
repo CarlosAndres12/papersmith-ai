@@ -5041,6 +5041,31 @@ def document_block_locator(index: int) -> dict:
     return _BLOCK_LOCATORS[index]
 
 
+# `the-agreement-nothing-computes` (Slice D, design.md D5/D6): a crossing
+# resolves against the SAME declaration `document_block_locator` already
+# carries -- no second vocabulary is introduced anywhere. `None` stays
+# `None` (this leaf's own legal declared absence); a declared mapping's
+# `pattern` compiles ONCE at import, per index, mirroring `_BLOCK_LOCATORS`
+# exactly.
+_CROSS_CITATIONS: tuple[dict | None, ...] = tuple(
+    (
+        {
+            "pattern": re.compile(DOCUMENTS[index]["cross_citation"]["pattern"]),
+            "resolves_against": DOCUMENTS[index]["cross_citation"]["resolves_against"],
+        }
+        if DOCUMENTS[index]["cross_citation"] is not None else None
+    )
+    for index in range(len(DOCUMENTS))
+)
+
+
+def document_cross_citation(index: int) -> dict | None:
+    """Document `index`'s compiled crossing pattern and the label it
+    resolves against, or `None` if that document declares no crossing.
+    Compiled ONCE at import, per index -- never per call."""
+    return _CROSS_CITATIONS[index]
+
+
 def finding_document_indices(finding: dict) -> list[int]:
     """The document indices a finding names, `[0]` when it names none --
     `document` may be a single label, a list of labels, or absent entirely.
@@ -7873,6 +7898,47 @@ DOCUMENT_INDEX_BY_LABEL: dict[str, int] = {
 def document_citation_re(index: int) -> re.Pattern:
     """Document `index`'s own compiled `citation_pattern` (design.md D7)."""
     return DOCUMENT_CITATION_PATTERNS[index]
+
+
+def crossing_state(index: int, revision: str | None) -> dict:
+    """`documents[index]`'s own crossing against the document its
+    `cross_citation` resolves against -- `checkReferenceIntegrity`'s
+    algorithm (`_core/deliberation/engine/reference-index.ts`), one
+    document over (design.md D6). Returns `{"crossed": [...], "declared":
+    [...], "absent": [...], "untested": [...]}`.
+
+    `crossed` -- every value `documents[index]`'s own `cross_citation.
+    pattern` finds in ITS OWN text (`document_revision_names(revision)`
+    resolves which name belongs to which index, exactly as
+    `_extra_document_revisions` already does). `declared` -- every value
+    the TARGET document's own `block_locator.pattern` finds in ITS OWN
+    text -- `resolves_against`'s label, resolved through
+    `DOCUMENT_INDEX_BY_LABEL`, never `documents[index]`'s own locator
+    (that swap is Z6's own mutation). `absent` = `crossed - declared`:
+    kind 1, a citation the target no longer declares. `untested` =
+    `declared - crossed`: kind 2, a declared entry no experiment cites.
+    Both lists sorted and de-duplicated before emission, so the result is
+    a function of the documents' own bytes, never of citation order or
+    repetition -- a crossing cited twice is one discrepancy, not two.
+
+    `documents[index].cross_citation` being `None` answers every
+    membership empty: a document declaring no crossing participates in
+    no discrepancy, in either direction (design.md's own Open Question,
+    ruled)."""
+    crossing = document_cross_citation(index)
+    if crossing is None:
+        return {"crossed": [], "declared": [], "absent": [], "untested": []}
+    names = document_revision_names(revision)
+    target_index = DOCUMENT_INDEX_BY_LABEL[crossing["resolves_against"]]
+    source = revision_source(names[index], index)
+    target_source = revision_source(names[target_index], target_index)
+    crossed = sorted(set(crossing["pattern"].findall(source or "")))
+    declared = sorted(set(
+        document_block_locator(target_index)["pattern"].findall(target_source or "")))
+    absent = sorted(set(crossed) - set(declared))
+    untested = sorted(set(declared) - set(crossed))
+    return {"crossed": crossed, "declared": declared,
+            "absent": absent, "untested": untested}
 
 
 def _impact_class(remedy_loci: list, introduces: int, source: str,
