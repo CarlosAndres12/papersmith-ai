@@ -227,6 +227,20 @@ PROFILE = {
                 "block_pattern": r"(?s)## \d+.*?(?=\n## |\Z)",
                 "identity": "## {value}",
             },
+            # `the-agreement-nothing-computes` (Slice D, design.md D5,
+            # task 2.7): THIS document -- the experiments document -- is
+            # the one that cites the mathematical proposal's declared
+            # claims, `[claims:N]` resolving against `documents[1]`'s own
+            # `block_locator.pattern` findings (`resolves_against:
+            # "proposal"`, that entry's own `label`). One capturing group,
+            # the identifier class copied from
+            # `reference-experimental.ts::IDENTIFIER` verbatim (design.md
+            # D5) so a crossing id is spelled exactly as that domain
+            # already spells identifiers.
+            "cross_citation": {
+                "pattern": r"\[claims:([A-Za-z0-9][A-Za-z0-9._-]*)\]",
+                "resolves_against": "proposal",
+            },
         },
         {
             "directory": _FORGE_ROOT / "proposals",
@@ -243,6 +257,11 @@ PROFILE = {
                 "block_pattern": r"(?s)\$\$.*?\$\$",
                 "identity": "\\tag{{{value}}}",
             },
+            # `the-agreement-nothing-computes` (Slice D, design.md D5,
+            # task 2.7): the mathematical proposal cites no experiments
+            # document -- `None`, this leaf's own legal declared absence,
+            # correctly indexed here (this entry already IS `documents[1]`).
+            "cross_citation": None,
             "claim_key": "equations",
             "locus_key": "equations",
             "remedy_locus_key": "remedy_equations",

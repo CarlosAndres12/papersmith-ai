@@ -238,6 +238,16 @@ PROFILE = {
                 "block_pattern": r"(?s)\$\$.*?\$\$",
                 "identity": "\\tag{{{value}}}",
             },
+            # `the-agreement-nothing-computes` (Slice D, design.md D5,
+            # task 2.7): required, own tier, NULLABLE -- `None` here.
+            # This skill declares exactly one document, so there is no
+            # second declared label in ITS OWN `documents` list to cite:
+            # the mathematical proposal cites no experiments document.
+            # This is the sibling's SECOND sanctioned edit to this file
+            # in ten changes, after `block_locator` (task 1.7) -- the
+            # required shape asks it to write down a value that is
+            # already true, never an engine default it never chose.
+            "cross_citation": None,
         },
     ],
 }

@@ -110,14 +110,20 @@ PROFILE = {
              "pattern": r"\\tag\{([^}]+)\}",
              "block_pattern": r"(?s)\$\$.*?\$\$",
              "identity": "\\tag{{{value}}}",
-         }},
+         },
+         # Nullable (unlike `block_locator`): this fixture proves the
+         # per-index resolver walk, not a real crossing -- `None` is a
+         # legal declared value and keeps this entry a fixture edit, not a
+         # reaching configuration `crossing_state`'s own tests must supply.
+         "cross_citation": None},
         {"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",
          "dataset_marker": None,
          "block_locator": {
              "pattern": r"\\tag\{([^}]+)\}",
              "block_pattern": r"(?s)\$\$.*?\$\$",
              "identity": "\\tag{{{value}}}",
-         }},
+         },
+         "cross_citation": None},
     ],
 }
 

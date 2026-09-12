@@ -39,10 +39,11 @@ _SKILL_ANCHOR = "_SKILL = Path(__file__).resolve().parent"
 #: `a-data-directory-somebody-can-owe` (B1): the template's second entry
 #: gained a required `dataset_marker` leaf (a fixture edit, not the
 #: reaching configuration -- `None` here). `the-agreement-nothing-computes`
-#: (Slice D) grew it again with a required `block_locator` leaf. Both
-#: anchors below and their mutated counterparts grew with the template,
-#: keeping the same "directory removed, everything else kept" shape the
-#: resolver's per-index refusal branch depends on.
+#: (Slice D) grew it again with a required `block_locator` leaf, and once
+#: more with a required (nullable) `cross_citation` leaf. Both anchors
+#: below and their mutated counterparts grew with the template, keeping the
+#: same "directory removed, everything else kept" shape the resolver's
+#: per-index refusal branch depends on.
 _SECOND_DOCUMENT_ENTRY = (
     '{"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",\n'
     '         "dataset_marker": None,\n'
@@ -50,7 +51,8 @@ _SECOND_DOCUMENT_ENTRY = (
     '             "pattern": r"\\\\tag\\{([^}]+)\\}",\n'
     '             "block_pattern": r"(?s)\\$\\$.*?\\$\\$",\n'
     '             "identity": "\\\\tag{{{value}}}",\n'
-    '         }}')
+    '         },\n'
+    '         "cross_citation": None}')
 _SECOND_DOCUMENT_WITHOUT_DIRECTORY = (
     '{"label": "experiments",\n'
     '         "dataset_marker": None,\n'
@@ -58,7 +60,8 @@ _SECOND_DOCUMENT_WITHOUT_DIRECTORY = (
     '             "pattern": r"\\\\tag\\{([^}]+)\\}",\n'
     '             "block_pattern": r"(?s)\\$\\$.*?\\$\\$",\n'
     '             "identity": "\\\\tag{{{value}}}",\n'
-    '         }}')
+    '         },\n'
+    '         "cross_citation": None}')
 
 
 @dataclasses.dataclass(frozen=True)
