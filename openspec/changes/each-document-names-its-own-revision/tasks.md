@@ -105,9 +105,12 @@ to watch first — split it again if measured lines exceed ~500.
       fixture edit must not move a document-0-only golden).
 - [x] 1.4 Commit the RED state alone (`test(...)`, no implementation) as
       this slice's deliverable. — `bec4d12`
-- [ ] 1.5 After PR 2 and PR 3 land, verify
+- [x] 1.5 After PR 2 and PR 3 land, verify
       `git merge-base --is-ancestor <slice-1-red-sha> <tip>` exits 0 —
       the RED commit must remain a real, unamended ancestor.
+
+      Confirmed: `git merge-base --is-ancestor bec4d12 HEAD` exits 0
+      (HEAD `576e6b9`).
 
 ## Phase 2 (PR 2 — Slice 2: per-document resolution)
 
