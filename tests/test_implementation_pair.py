@@ -1485,6 +1485,105 @@ class TwoDocumentDriftControlTests(unittest.TestCase):
             doc1["conditions"]["missingProvenance"])
 
 
+class PerDocumentCitationImpactClassTests(unittest.TestCase):
+    """Phase 3, C2b (design.md D7): `finding_impact`'s per-document
+    `class` mapping must compute each named document's class using THAT
+    document's own `citation_pattern` -- never a single pattern shared
+    across every index (spec `implementation-document-binding`,
+    Requirement "A Finding May Name Either Or Both Documents...",
+    scenario "Each named document's citations are matched by its own
+    pattern"). Real subprocess `admit`, reading the written
+    `tests/admissibility.json` back -- the same mechanism
+    `TwoDocumentLifecycleTests` already proves this call site with,
+    isolated here to a single, minimal, purpose-built fixture."""
+
+    REVISION = "pair-citation-r01.md"
+    REVISION_1 = "pair-citation-plan-v01.md"
+    PACKAGE = "CitationImpact"
+    #: Document 0's own citation syntax ("Ec.(N)"), cited TWICE -- under
+    #: document 0's OWN pattern this is `structural` (citations > 1).
+    REVISION_TEXT = "## 1\nEc.(11) and again Ec.(11) elsewhere.\n"
+    #: Document 1's own citation syntax ("Exp.(N)", M6's overlay), cited
+    #: THREE times -- under document 1's OWN pattern this is `structural`
+    #: too, but under the SHIPPED shared `CITATION_RE` (document 0's own
+    #: "Ec."/"Eq." syntax), NONE of these match at all, so the buggy
+    #: computation reads zero citations and reports `local` instead. This
+    #: is the discriminating difference the RED test measures.
+    REVISION_1_TEXT = (
+        "Document 1's own text. Exp.(11) is cited, Exp.(11) again, and "
+        "Exp.(11) a third time.\n")
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-citation-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-citation-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text(self.REVISION_TEXT, encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-citation-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.REVISION_1).write_text(self.REVISION_1_TEXT, encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_pair_citation_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-citation"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-citation@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / self.PACKAGE).mkdir(parents=True)
+        (self.box / "tests").mkdir(parents=True)
+        (self.box / "tests" / "findings.py").write_text(
+            "FINDINGS = [\n"
+            "    {\n"
+            "        'id': 'pair-citation-both-documents',\n"
+            "        'kind': 'gap',\n"
+            "        'status': 'measured',\n"
+            "        'rate': 'always',\n"
+            "        'statement': 'Both documents cite the same locus, "
+            "differently.',\n"
+            "        'remedy': 'No change; this finding exists only to "
+            "prove per-document citation matching.',\n"
+            "        'document': ['proposal', 'experiments'],\n"
+            "        'equations': ['11'], 'remedy_equations': ['11'],\n"
+            "        'uses': [], 'introduces': [],\n"
+            "        'adoption': {'absent': 'UNPATCHED_MARKER', "
+            "'expect': ['nothing']},\n"
+            "    },\n"
+            "]\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, *args):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_each_named_documents_citations_are_matched_by_its_own_pattern(self):
+        admit = self.run_cli(
+            "admit", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(admit.returncode, 0, admit.stdout + admit.stderr)
+        record = json.loads(
+            (self.box / "tests" / "admissibility.json").read_text(encoding="utf-8"))
+        impact_class = record["findings"]["pair-citation-both-documents"]["impact"]["class"]
+        self.assertIsInstance(impact_class, dict)
+        self.assertEqual(impact_class["proposal"], "structural")
+        # The discriminating assertion: document 1's own three "Exp.(1.1)"
+        # citations are visible ONLY under its own citation_pattern.
+        # Matched with the shared, module-level `CITATION_RE` (document
+        # 0's "Ec."/"Eq." syntax), none of them match at all, and this
+        # reads `local` instead -- red against the shipped engine.
+        self.assertEqual(impact_class["experiments"], "structural")
+
+
 #: Y4-Y7 (design.md Mutation Plan): each mutates the REAL engine file in
 #: place, anchor discipline first (old count exactly 1, new count 0,
 #: before; the reverse after), a real subprocess exercises the mutation,
