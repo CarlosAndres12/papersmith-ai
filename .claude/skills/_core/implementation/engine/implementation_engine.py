@@ -4004,7 +4004,25 @@ def plan_scale(plan: dict, target: Path) -> dict:
     }
 
 
-def build_plan(target: Path, name: str) -> dict:
+def _plan_bound_to(revision: str) -> dict:
+    """`plan["boundTo"]`, emitted only when `revision is not None`
+    (`a-data-directory-somebody-can-owe`, design.md D4): the name `plan`
+    bound to, and each declared document's own resolved name plus
+    whether IT individually declares a dataset. `cmd_apply` and
+    `_materialize_plan_gate` read `["revision"]` back out of this exact
+    key to re-derive `declares_dataset` identically (D3) -- the BYTES are
+    re-read, never the boolean cached, so a marker deleted since approval
+    still moves `createDirs` and still refuses `PLAN_STALE`."""
+    names = document_revision_names(revision)
+    documents = [
+        {"label": DOCUMENTS[index]["label"], "revision": name,
+         "declaresDataset": _document_declares_dataset(index, name)}
+        for index, name in enumerate(names) if name is not None
+    ]
+    return {"revision": revision, "documents": documents}
+
+
+def build_plan(target: Path, name: str, revision: str | None = None) -> dict:
     paths = tracked_files(target)
     product_dir = detect_product_dir(target, name, paths)
     renames = (
@@ -4041,9 +4059,9 @@ def build_plan(target: Path, name: str) -> dict:
     conflicts = sorted({m["to"] for m in moves if (target / m["to"]).exists()}
                        | set(collisions) | occupied)
 
-    with_data = dir_exists_after(target, f"{name}/Data", renames, name) or any(
-        m["to"].startswith(f"{name}/Data/") for m in moves
-    )
+    with_data = (declares_dataset(revision)
+                 or dir_exists_after(target, f"{name}/Data", renames, name)
+                 or any(m["to"].startswith(f"{name}/Data/") for m in moves))
     missing = [d for d in expected_dirs(name, with_data)
                if not dir_exists_after(target, d, renames, name)]
     gaps = scaffold_gaps(target, name)
@@ -4070,6 +4088,12 @@ def build_plan(target: Path, name: str) -> dict:
         "unclassified": unclassified,
         "scaffoldFiles": gaps,
     }
+    # `a-data-directory-somebody-can-owe` (B1, design.md D4): emitted only
+    # when a document was nameable, so a bare `plan` with no `--revision`
+    # stays byte-identical to before this key existed. Set beside
+    # `reorganization`, after the plan literal.
+    if revision is not None:
+        plan["boundTo"] = _plan_bound_to(revision)
     plan["reorganization"] = plan_scale(plan, target)
     return plan
 
@@ -7611,7 +7635,7 @@ def cmd_plan(args: argparse.Namespace) -> dict:
     target = resolve_target(args.target)
     name = validate_name(args.name)
     require_clean_worktree(target)
-    return build_plan(target, name)
+    return build_plan(target, name, args.revision)
 
 
 def cmd_apply(args: argparse.Namespace) -> dict:
@@ -7624,7 +7648,15 @@ def cmd_apply(args: argparse.Namespace) -> dict:
     if approved.get("target") != str(target) or approved.get("name") != name:
         raise Refused("PLAN_MISMATCH", "The approved plan was produced for a different target or name.")
 
-    current = build_plan(target, name)
+    # `a-data-directory-somebody-can-owe` (B1, design.md D3): the seed
+    # comes from the APPROVAL, never a second `--revision` flag on this
+    # command -- so a `plan --revision X` approved and then applied bare
+    # cannot produce `PLAN_STALE`. `boundTo` itself is never a member of
+    # the four-key comparison below: `current["boundTo"]` (if any) is
+    # derived from this exact same seed, so comparing the two keys is a
+    # check that cannot fail.
+    seed = (approved.get("boundTo") or {}).get("revision")
+    current = build_plan(target, name, seed)
     # `referenceUpdates` belongs in this comparison as much as the moves do: a
     # commit that only edits a file's *contents* leaves renames, moves and
     # createDirs identical, so nothing would refuse — and `apply` would then
@@ -15759,7 +15791,11 @@ def _materialize_plan_gate(target: Path, name: str, plan_path: str) -> None:
     if approved.get("target") != str(target) or approved.get("name") != name:
         raise Refused("PLAN_MISMATCH",
                       "The approved plan was produced for a different target or name.")
-    current = build_plan(target, name)
+    # Same re-derivation `cmd_apply` performs (design.md D3): the seed
+    # comes from the approval's own `boundTo` key, never a flag this
+    # command does not carry.
+    seed = (approved.get("boundTo") or {}).get("revision")
+    current = build_plan(target, name, seed)
     if any(current[key] != approved.get(key)
            for key in ("renames", "moves", "createDirs", "referenceUpdates")):
         raise Refused(
@@ -17711,6 +17747,19 @@ def main(argv: list[str] | None = None) -> int:
                                 "exactly this operator-declared list; the "
                                 "engine never substitutes one of its own. "
                                 "Omit it for a single-send launch")
+        if name == "plan":
+            # `a-data-directory-somebody-can-owe` (B1, design.md D3): the
+            # ONLY parser registration -- `apply` and `materialize` never
+            # carry this flag; both re-derive the same seed from the
+            # approved plan's own `boundTo` key, so the three call sites
+            # agree by construction rather than by operator discipline.
+            p.add_argument("--revision", default=None,
+                           help="a document revision to consult for a "
+                                "declared dataset; omit it and plan opens "
+                                "no document at all. The name is recorded "
+                                "in the plan's own boundTo key and re-read "
+                                "from there by apply and materialize -- "
+                                "never re-typed on either command")
         if name == "walk":
             p.add_argument("--session", required=True,
                            help="the session driving this walk, stamped on "

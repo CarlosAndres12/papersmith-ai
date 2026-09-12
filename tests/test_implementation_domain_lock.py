@@ -270,20 +270,31 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: field this pin already counted heavily before this change, now read
 #: from more call sites. A deliberate, measured, recorded growth, never a
 #: silent bump.
+#: `a-data-directory-somebody-can-owe` (B1): ten of these grew again, the
+#: same deliberate, measured, recorded shape `"module"`'s own comment
+#: above already established for Cut 3 slice C -- new engine prose (the
+#: dataset detector, `--revision`'s threading through `build_plan`'s
+#: three call sites, `boundTo`) reads naturally with ordinary English
+#: words this pin already exempts; contorting every sentence to avoid
+#: them would be the cosmetic exercise this lock's own docstring warns
+#: against, not a stronger guard. `after` 78->79, `approved` 25->29,
+#: `before` 223->224, `beside` 91->92, `check` 145->146, `command`
+#: 263->266, `materialize` 29->31, `rather` 330->331, `recorded` 75->76,
+#: `refuses` 86->87.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 75, "admissible": 3, "after": 78, "against": 181,
-    "agreed": 23, "answered": 71, "answers": 98, "approved": 25,
-    "audit": 15, "before": 223, "benchmark": 91, "beside": 91,
-    "carries": 176, "check": 145, "checkable": 3, "claim": 34,
-    "command": 263, "commands": 15, "compares": 23, "declaration": 189,
+    "actually": 75, "admissible": 3, "after": 79, "against": 181,
+    "agreed": 23, "answered": 71, "answers": 98, "approved": 29,
+    "audit": 15, "before": 224, "benchmark": 91, "beside": 92,
+    "carries": 176, "check": 146, "checkable": 3, "claim": 34,
+    "command": 266, "commands": 15, "compares": 23, "declaration": 189,
     "destinations": 37, "empty": 111, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 31,
-    "longer": 46, "makes": 43, "materialize": 29, "materialized": 10,
+    "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
     "measured": 140, "measurement": 43, "module": 183, "named": 164,
     "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
-    "place": 50, "premises": 7, "produces": 44, "rather": 330,
-    "readable": 23, "recorded": 75, "refuses": 86, "remedy": 48,
+    "place": 50, "premises": 7, "produces": 44, "rather": 331,
+    "readable": 23, "recorded": 76, "refuses": 87, "remedy": 48,
     "remote": 55, "reported": 142, "resolves": 32, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
     "something": 67, "stage": 82, "steps": 133, "sweep": 7,
