@@ -229,6 +229,15 @@ def _resolve() -> Mapping[str, Any]:
                 missing.append(f"documents[{index}].directory")
             if not entry_is_mapping or "label" not in entry:
                 missing.append(f"documents[{index}].label")
+            # `a-data-directory-somebody-can-owe` (B1, design.md D1): its
+            # own required tier, appended right after `label` -- never a
+            # member of `_DOCUMENT_VOCABULARY_LEAVES` below, which is
+            # all-or-nothing over five leaves this one has nothing to do
+            # with. A string or the literal `None` both satisfy presence;
+            # `None` means "this document never owes a dataset", declared
+            # rather than silently absent.
+            if not entry_is_mapping or "dataset_marker" not in entry:
+                missing.append(f"documents[{index}].dataset_marker")
             if entry_is_mapping:
                 # Cut 3 slice C (design.md D1): all-or-nothing per entry.
                 # An entry declaring none of the five vocabulary leaves is
