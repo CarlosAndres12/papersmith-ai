@@ -766,6 +766,34 @@ class PlanTests(unittest.TestCase):
         provenance_by_block = {p["block"]: p["state"] for p in report["provenance"]}
         self.assertEqual(provenance_by_block["results"], "drifted")
 
+    def test_one_contract_edit_flags_every_block_sharing_that_contract(self) -> None:
+        """`specs/contract-provenance/spec.md`, `Requirement: Whole-File
+        Hashing Over-Reports by Design`, `One edit flags every block of the
+        section` — two blocks provenanced against the SAME contract file;
+        editing one byte of it must drift BOTH, even though only one of the
+        two ever reads the other's own guidance text. Under-reporting (a
+        real drift going unreported for either block) is the failure this
+        guards against; over-reporting both is the accepted, deliberate
+        direction the spec names."""
+        paper_block.open_block(self.paper_dir, "results-a", at_end=True)
+        paper_block.substitute(
+            self.paper_dir, "results-a", new_body=b"a\n", contract=self.contract_path,
+            clock=self._clock,
+        )
+        paper_block.open_block(self.paper_dir, "results-b", at_end=True)
+        paper_block.substitute(
+            self.paper_dir, "results-b", new_body=b"b\n", contract=self.contract_path,
+            clock=self._clock,
+        )
+
+        self.contract_path.write_bytes(b"contract v2\n")
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        provenance_by_block = {p["block"]: p["state"] for p in report["provenance"]}
+        self.assertEqual(provenance_by_block["results-a"], "drifted")
+        self.assertEqual(provenance_by_block["results-b"], "drifted")
+
 
 class InsumosObserverThreatMatrixTests(unittest.TestCase):
     """Threat matrix (design.md): process integration. `insumos-observer`'s
