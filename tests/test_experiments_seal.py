@@ -518,6 +518,75 @@ class AgreementDisagreeZ7MutationTests(unittest.TestCase):
             "Z7 did not reach the property it is supposed to break")
 
 
+class AcknowledgeZ8MutationTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D4, design.md Mutation plan,
+    tasks.md 4.5): Z8 -- `--acknowledge` clears the WHOLE unacknowledged
+    list rather than only the named id, in a SCRATCH copy (never the
+    shipped engine). This is the mutation a weaker, single-discrepancy
+    assertion would survive -- it cannot tell 'cleared the named id'
+    from 'cleared everything'; the two-discrepancy fixture (4.1's own)
+    can."""
+
+    def test_z8_acknowledging_one_id_clears_both_under_the_mutation(self):
+        real_source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        anchor = "    unacknowledged = [i for i in ids if i not in acknowledged]\n"
+        self.assertEqual(real_source.count(anchor), 1)
+        mutated_block = "    unacknowledged = [] if acknowledged else ids\n"
+        mutated_source = real_source.replace(anchor, mutated_block, 1)
+        self.assertEqual(mutated_source.count(anchor), 0)
+        self.assertNotEqual(mutated_source, real_source)
+
+        scratch_core = Path(tempfile.mkdtemp(prefix="z8-core-"))
+        self.addCleanup(shutil.rmtree, scratch_core, ignore_errors=True)
+        shutil.copytree(ENGINE_DIR.parent, scratch_core / "core",
+                        ignore=shutil.ignore_patterns("__pycache__"),
+                        dirs_exist_ok=True)
+        (scratch_core / "core" / "engine" / "implementation_engine.py").write_text(
+            mutated_source, encoding="utf-8")
+
+        tmp = tempfile.mkdtemp(prefix="z8-corpus-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        roots = ec.build(Path(tmp) / "corpus")
+        target_dir = FORGE / "implementations" / f"_z8_target_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, target_dir, ignore_errors=True)
+        shutil.copytree(roots.fixture_a, target_dir, dirs_exist_ok=True)
+
+        skill_dir = FORGE / ".claude" / "skills" / "experimental-implementation"
+        env = os.environ.copy()
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(skill_dir / "impl_profile.py")
+        env["IMPLEMENTATION_PROPOSALS"] = str(roots.proposals)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(roots.proposals_1_crossing)
+        code = (
+            "import sys, argparse, json\n"
+            f"sys.path.insert(0, {str(scratch_core / 'core' / 'engine')!r})\n"
+            "import implementation_engine as impl\n"
+            "import impl_guards\n"
+            f"impl_guards.WORKSPACE = impl.Path({str(FORGE / 'implementations')!r})\n"
+            f"args = argparse.Namespace(target={str(target_dir)!r}, name='Trial', "
+            "revision='trial-crossing-disagree.md', acknowledge=['absent:5'])\n"
+            "try:\n"
+            "    result = impl.cmd_agree(args)\n"
+            "    print(json.dumps({'refused': False, 'status': result['status']}))\n"
+            "except impl.Refused as r:\n"
+            "    print(json.dumps({'refused': True, 'code': r.code, 'detail': r.detail}))\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        mutated_payload = json.loads(proc.stdout.strip())
+        # 4.1's own case: only 'absent:5' acknowledged, 'untested:9' still
+        # outstanding. The real engine still refuses, naming untested:9
+        # alone (proven in AcknowledgmentTests, above). The mutated one
+        # clears BOTH the moment any id is acknowledged -- caught here as
+        # a false "agreed".
+        self.assertFalse(
+            mutated_payload["refused"],
+            "the mutation did not reach the property it is supposed to "
+            "break -- it still refused with only one id acknowledged")
+        self.assertEqual(mutated_payload["status"], "agreed")
+
+
 class AgreeRegistrationZ10MutationTests(unittest.TestCase):
     """`the-agreement-nothing-computes` (Slice D, design.md Mutation plan,
     tasks.md 3.14): Z10 -- delete `len(DOCUMENTS) > 1` from `COMMANDS`'s
