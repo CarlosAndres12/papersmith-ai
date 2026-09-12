@@ -36,9 +36,18 @@ _SKILL_ANCHOR = "_SKILL = Path(__file__).resolve().parent"
 #: `directory` value) by `build_broken_second_document()` -- proving the
 #: resolver's per-index walk names the missing leaf `documents[1].directory`
 #: by its own indexed path, never the bare field name.
+#: `a-data-directory-somebody-can-owe` (B1): the template's second entry
+#: gained a required `dataset_marker` leaf (a fixture edit, not the
+#: reaching configuration -- `None` here), so this anchor's text and its
+#: mutated counterpart both grew by that one line, keeping the same
+#: "directory removed, everything else kept" shape the resolver's
+#: per-index refusal branch depends on.
 _SECOND_DOCUMENT_ENTRY = (
-    '{"directory": _FIXTURE_ROOT / "experiments", "label": "experiments"}')
-_SECOND_DOCUMENT_WITHOUT_DIRECTORY = '{"label": "experiments"}'
+    '{"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",\n'
+    '         "dataset_marker": None}')
+_SECOND_DOCUMENT_WITHOUT_DIRECTORY = (
+    '{"label": "experiments",\n'
+    '         "dataset_marker": None}')
 
 
 @dataclasses.dataclass(frozen=True)

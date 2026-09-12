@@ -71,10 +71,10 @@ Chain strategy: stacked-to-main
 
 ## Phase 7: B1 non-interference gate
 
-- [ ] 7.1 `git diff --exit-code tests/seal/` exits 0.
-- [ ] 7.2 Full suite: `npm test` 595/595; Python `OK (skipped=6)` with `Ran` grown, `skipped=6` unmoved, no `skipTest` added.
-- [ ] 7.3 Assert `reachable_refusal_codes()`'s derived roster unchanged (zero new refusal codes).
-- [ ] 7.4 Assert `tests/experiments_seal/digests.json` unmoved (B1 touches zero of its 20 cases).
+- [x] 7.1 `git diff --exit-code tests/seal/` exits 0. Measured: exit 0, sha256 `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75` (unchanged from baseline).
+- [x] 7.2 Full suite: `npm test` 595/595; Python `OK (skipped=6)` with `Ran` grown, `skipped=6` unmoved, no `skipTest` added. Measured: `npm test` 595/595; Python `Ran 2996 tests ... OK (skipped=6)` (grown from the 2977 baseline by the 19 new B1 test cases). **Found and fixed a real regression along the way**: `tests/test_experimental_implementation.py`'s `_engine_with_documents` helper set `IMPLEMENTATION_DOMAIN_PROFILE` and mutated `sys.modules["impl_domain_profile"]` without restoring either — leaking into every later-running test file in the same `unittest discover` process and reddening ~110 unrelated cases in `test_proposal_implementation.py`. Fixed by restoring both to their pre-call state in a `finally` block. Also fixed `tests/pair/corpus.py`'s `_SECOND_DOCUMENT_ENTRY`/`_SECOND_DOCUMENT_WITHOUT_DIRECTORY` anchors, stale after task 1.3's fixture edit added a `dataset_marker` line to the second document entry.
+- [x] 7.3 Assert `reachable_refusal_codes()`'s derived roster unchanged (zero new refusal codes). Measured: `len(reachable_refusal_codes()) == 114`, matching the pre-change count exactly (the docstring's inherited "112" claim was already stale before this change; 114 is what `test_proposal_implementation.py`'s own pinned assertion holds today, unmoved).
+- [x] 7.4 Assert `tests/experiments_seal/digests.json` unmoved (B1 touches zero of its 20 cases). Measured: `git diff --exit-code tests/experiments_seal/` exits 0.
 
 ## Phase 8: Shipped declaration (B2)
 

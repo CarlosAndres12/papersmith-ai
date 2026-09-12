@@ -198,7 +198,16 @@ def _engine_with_documents(documents: list[dict]):
     """A fresh engine import whose ONLY difference from the real,
     resolving `experimental-implementation` profile is its `documents`
     list -- every other leaf is untouched, so the resolver's other checks
-    stay satisfied and only the detector's own behaviour is exercised."""
+    stay satisfied and only the detector's own behaviour is exercised.
+
+    `IMPLEMENTATION_DOMAIN_PROFILE` and the `impl_domain_profile` entry
+    in `sys.modules` are both restored to their PRE-CALL state before
+    returning -- this whole process's environment and module cache are
+    shared with every other test file `unittest discover` runs in the
+    same process, and leaving either one set would silently redirect an
+    unrelated, later-running suite's own profile resolution (measured:
+    it did, reddening ~110 cases in `test_proposal_implementation.py`
+    before this restore existed)."""
     profile = dict(_real_profile())
     profile["documents"] = documents
     tmp_dir = Path(tempfile.mkdtemp(prefix="dataset-marker-detector-"))
@@ -208,7 +217,10 @@ def _engine_with_documents(documents: list[dict]):
         f"PROFILE = {_to_source(profile)}\n",
         encoding="utf-8")
 
-    os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = str(profile_file)
+    env_var = "IMPLEMENTATION_DOMAIN_PROFILE"
+    had_env = env_var in os.environ
+    original_env = os.environ.get(env_var)
+    os.environ[env_var] = str(profile_file)
     sys.modules.pop("impl_domain_profile", None)
     if str(ENGINE_DIR) not in sys.path:
         sys.path.insert(0, str(ENGINE_DIR))
@@ -221,6 +233,11 @@ def _engine_with_documents(documents: list[dict]):
         spec.loader.exec_module(module)
     finally:
         sys.modules.pop(name, None)
+        sys.modules.pop("impl_domain_profile", None)
+        if had_env:
+            os.environ[env_var] = original_env
+        else:
+            os.environ.pop(env_var, None)
     return module, tmp_dir
 
 
