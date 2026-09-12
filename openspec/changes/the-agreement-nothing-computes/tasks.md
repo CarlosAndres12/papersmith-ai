@@ -372,11 +372,34 @@ skip the D1b split.
 - [x] 1.32 MEASURE: `L1_EXPECTED_COUNT` (96) and `L1_EXPECTED_FILES` (one
       file) — grep every file touched this phase before committing it;
       confirm the lock's own test is unmoved.
-- [ ] 1.33 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
-      `.venv/bin/python -m unittest tests.pair` — `tests/pair/digests.json`
-      unmoved (M9 — measure, its cases run `name`); full Python suite `Ran`
-      grown, `OK (skipped=6)`; `npm test` 595/595; name-collision sweep
-      (global constraints) returns nothing.
+- [x] 1.33 VERIFY (phase gate). **Measured, this apply session:**
+      `git diff --exit-code tests/seal/` exits 0 (confirmed after every
+      commit). `tests/pair/digests.json` unmoved (`git diff --stat` shows
+      only `tests/pair/corpus.py`'s anchor-text growth, never the
+      digests). Full Python suite: `.venv/bin/python -m unittest discover
+      -s tests -p "test_*.py"` → `Ran 3014 tests`, **`OK (skipped=6)`**
+      (grown from the inherited baseline, `skipped=6` unmoved). `npm test`
+      → **595/595**, unaffected (no `.ts`/`.mjs` file touched this
+      phase). Name-collision sweep (`rg '^class \w+Tests?\(' ... | sort |
+      uniq -d`, scoped per file, not across files) returns nothing for
+      every file this phase touched.
+
+      **Two real regressions found and fixed during this measurement,
+      recorded rather than silently corrected**: `tests/pair/corpus.py`'s
+      `_SECOND_DOCUMENT_ENTRY`/`_SECOND_DOCUMENT_WITHOUT_DIRECTORY`
+      anchors were hardcoded to the fixture template's pre-`block_locator`
+      shape (14 tests failed on the first full-suite run); and seven more
+      hand-built `documents[]` entries across
+      `tests/test_experimental_implementation.py` lacked the leaf (6
+      tests failed on the second full-suite run). Both fixed, both
+      re-verified green on the third full run.
+
+      **Measured total for D1 (all nine commits, `git diff HEAD~9
+      --stat`)**: 1,080 changed lines across `.claude/skills` and
+      `tests` (1,022 insertions + 58 deletions across 17 files), 1,215
+      including this file's own checkbox annotations — under the
+      1,150-line D1 contingency threshold measured at the 1.15 checkpoint
+      (~1,015 then), so **D1b did not fire**.
 
 ## Phase 2: D2 — The cross-document key and its resolver
 
