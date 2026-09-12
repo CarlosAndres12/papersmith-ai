@@ -3,56 +3,54 @@
 ## Counts, derived here, not inherited
 
 - **Requirements: 19.** Measured by `rg -c '^### Requirement:' openspec/changes/the-agreement-nothing-computes/specs/*/spec.md` → matches the brief.
-- **Scenarios: 44, not 52.** Measured by `rg -c '^#### Scenario:' openspec/changes/the-agreement-nothing-computes/specs/*/spec.md`: `implementation-cross-document-agreement` 13, `implementation-block-locator` 7, `implementation-document-binding` 6, `implementation-per-document-vocabulary` 5, `implementation-cli-seal` 7, `experimental-implementation-skill` 6. Sum = 44. The brief's "52" is a sixth inherited count that failed this session; every task below maps to one of these 44, plus design-only items (`COMPOSE_AMBIGUOUS_DOCUMENT`, the crossing-state unit matrix, M7's drive-and-report) that carry no scenario of their own and are marked as such.
+- **Scenarios: 46, not 52.** Measured by `rg -c '^#### Scenario:' openspec/changes/the-agreement-nothing-computes/specs/*/spec.md`: `implementation-cross-document-agreement` 13, `implementation-block-locator` 7, `implementation-document-binding` 6, `implementation-per-document-vocabulary` 7, `implementation-cli-seal` 7, `experimental-implementation-skill` 6. Sum = 46. `implementation-per-document-vocabulary` moved 5 → 7 when `5d42dd7` resolved R1/R2 (below) directly in the spec text: the nested `cross_citation` requirement now carries 4 scenarios ("A declared crossing is validated and used", "An explicit `None` is accepted and crosses nothing", "Omitting the leaf refuses by its own indexed name", "A malformed mapping refuses at its exact indexed sub-path") and the required-non-nullable `block_locator` requirement carries 3 ("Every shipped entry declares one, and the existing corpus is unmoved", "A missing sub-key refuses at its exact indexed path", "A wrong-shaped locator refuses by name"). The brief's "52" is a sixth inherited count that failed this session; every task below maps to one of these 46, plus design-only items (`COMPOSE_AMBIGUOUS_DOCUMENT`, the crossing-state unit matrix, M7's drive-and-report) that carry no scenario of their own and are marked as such.
 - **Mutations: 10 (Z1–Z10)**, named in design.md's Mutation plan, one task each below, distributed D1×5, D2×1, D3×2, D4×1, D5×1.
-- **Task count: 78**, counted from the numbered list below at the time this file was written. Apply re-derives this if any task is split (the D1 contingency) or merged.
+- **Task count: 100**, re-derived 2026-09-12 after the R1/R2 pre-apply reconciliation (the inherited 78 was measured false; `rg -o '^\s*- \[[ x]\] [0-9]+\.[0-9]+[a-z]?' | wc -l` gives 100). Apply re-derives this if any task is split (the D1 contingency) or merged.
 
-## Design/Spec Reconciliation — Measured, Not Assumed
+## Design/Spec Reconciliation — Resolved Pre-Apply, Not Deferred
 
-Two places where design.md's mechanics and a spec.md's literal scenario text
-diverge. Design is the authority for *how*; the spec text below is what a
-later spec-sync pass must reconcile, and apply must not silently pick one
-without recording which it built.
+Two places where design.md's mechanics and a spec.md's literal scenario
+text once diverged. Both are **resolved pre-apply, in commit `5d42dd7`**,
+which rewrote the three delta specs (`implementation-per-document-
+vocabulary`, `implementation-block-locator`, `implementation-cross-
+document-agreement`) to carry design's side directly. Apply must not
+record either as an open item; there is nothing left for a later spec-sync
+pass to reconcile.
 
-**R1 — the cross-document leaf's name and shape.** `implementation-per-document-vocabulary`'s
-spec names the leaf `cross_citation_pattern` (flat, pattern-only) and its
-scenario asserts a malformed pattern "refuses, naming
-`documents[0].cross_citation_pattern` exactly." design.md's D5 names it
-`cross_citation` — a required-but-nullable object `{pattern,
-resolves_against}`. A flat pattern-only leaf cannot carry
-`resolves_against`, and D5's own rejected-options table (`"the other
-document"` / `index + 1` / an explicit label) measured that an explicit
-target label is required once a third document is conceivable. **Build
-design's nested shape.** The RED tasks below (2.x) assert the resolver
-names `documents[N].cross_citation.pattern` and
-`documents[N].cross_citation.resolves_against` at their own indexed
-sub-paths — not the spec's flat string. Task 2.1 records this choice in the
-verify report as an open spec-sync item, not a silent substitution.
+**R1 — the cross-document leaf's name and shape, resolved.** The spec now
+names the leaf `cross_citation` — a mapping of `pattern` and
+`resolves_against`, required per entry, absent only by an explicit `None`
+— on `documents[N].dataset_marker`'s tier, not the flat pattern-only
+`cross_citation_pattern` design.md's D5 rejected drafting against. The
+ruling is measured, not stylistic: the shipped precedent in
+`impl_domain_profile.py` already carries both shapes side by side —
+`dataset_marker` is a flat required-nullable scalar, while
+`documents[N].notation_keys` is a nested mapping validated sub-key by
+sub-key, refusing `documents[N].notation_keys.locus` and its two siblings
+by their own indexed names (`_NOTATION_KEYS_REQUIRED`). A crossing needs a
+target label as well as a pattern; a flat scalar has nowhere to carry one,
+so the nested precedent, not the flat one, is what the leaf's own shape
+measures against.
 
-**R2 — required vs. optional per entry.** `implementation-per-document-vocabulary`'s
-spec frames `block_locator` as a MAY-declare leaf, independently optional
-per `documents[N]` entry ("entry declaring none MUST resolve to absence
-behavior... never a forced fallback"). design.md's D1 makes it a
-**required, non-nullable triple on every `documents[N]` entry**, explicitly
-rejecting nullable ("a zero-mover, the unprovable-field shape nine changes
-have removed") and explicitly *not* joining the five-leaf
-`_DOCUMENT_VOCABULARY_LEAVES` all-or-nothing tier. **Build design's
-required-triple rule** for the two profiles this change actually ships
-(`proposal-implementation`, `experimental-implementation`) — both of this
-domain's documents have loci, so requiring it closes exactly the decorative-lock
-risk M1 found. The spec's two "sibling declares none" / "no document's
-locator is inferred from another's" scenarios (per-document-vocabulary
-Req2) are **not reachable by either shipped profile** under design's rule;
-task 1.3 below exercises them against a **synthetic scratch profile**
-(never by relaxing the required tier on a shipped profile) so the scenarios
-are covered without contradicting D1's required-tier choice. Record this
-too as an open spec-sync item.
+**R2 — required vs. optional per entry, resolved.** The spec now requires
+`block_locator` on every `documents[N]` entry, non-nullable — `None` is
+not accepted here, unlike `cross_citation`. The ruling is an absence test
+run against the shipped engine, not a preference: `remedy_compatibility`
+computes `tags = set(TAG_RE.findall(source))` unconditionally
+(`implementation_engine.py:5061`) — on silence the engine does not fail
+closed, it silently applies the LaTeX locator to a document that is not
+LaTeX, which is the live defect this capability exists to close. The
+five-leaf `_DOCUMENT_VOCABULARY_LEAVES` tier may stay silent because its
+fallback is the **host's own** top-level `provenance.*`/`findings.*`
+values — the same host declared them. `block_locator` has no such
+host-declared fallback, so its silence cannot be safe the way theirs is.
 
-Neither reconciliation blocks any task below; both are named so a spec-sync
-pass after apply corrects the two spec.md files to match what was actually
-built, rather than a later reader inheriting a description of code that
-does not exist — the exact failure mode this project has hit five times
-already this session.
+**Also specified in `5d42dd7`:** `cross_citation.pattern` carries exactly
+one capturing group, with a scenario asserting a three-group pattern is
+also refused — `citation_pattern`'s three groups exist only because
+`_impact_class` reads `group(1) or group(2) or group(3)`; that reader has
+no counterpart for `cross_citation`, so copying the three-group rule here
+would enforce a count nothing reads.
 
 ## Review Workload Forecast
 
@@ -163,33 +161,40 @@ own `git diff --exit-code tests/seal/` and zero-of-24 re-check before D2
 starts. If the count is at or under 1,150, continue in the same unit and
 skip the D1b split.
 
-- [ ] 1.0 GATE: record R1 and R2 (above) in the verify report's open items
-      before writing any profile leaf; confirm `documents[N].block_locator`
-      will be required-non-nullable (D1) and `documents[N].cross_citation`
-      will be the nested `{pattern, resolves_against}` shape (D5) — not the
-      spec's flat `cross_citation_pattern` name, which is a Phase 2 concern
-      but must not be designed around here by accident.
+- [ ] 1.0 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
+      original instruction, recording R1 and R2 in the verify report's
+      open items before writing any profile leaf, no longer applies —
+      neither is an open item (see Design/Spec Reconciliation above). What
+      remains of this GATE: confirm, before writing any profile leaf, that
+      `documents[N].block_locator` is required-non-nullable and
+      `documents[N].cross_citation` is the nested `{pattern,
+      resolves_against}` shape — both now the spec's own text, not a
+      design-only choice this task records as a divergence.
 - [ ] 1.1 RED: in `tests/test_implementation_profile.py`, one case per
       `block_locator` sub-key (`pattern`, `block_pattern`, `identity`)
       declaring a `documents[N]` entry missing that sub-key, asserting
       `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` names the exact indexed
       path (`documents[1].block_locator.identity`, etc.) — 3 cases, against
       the shipped resolver where the leaf is unrecognized (spec
-      `implementation-per-document-vocabulary` is silent on required-vs-MAY
-      here; this task exercises design's required rule directly, per R2).
+      `implementation-per-document-vocabulary`'s scenario "A missing
+      sub-key refuses at its exact indexed path", ruled required-non-
+      nullable in `5d42dd7`; this task exercises that rule directly).
 - [ ] 1.2 GREEN: in `.claude/skills/_core/implementation/impl_domain_profile.py`,
       add the `block_locator` resolver tier after the `dataset_marker`
       check, before the `citation_pattern` group tier (D1) — required on
       every `documents[N]` entry, non-nullable, all three sub-keys or a
       named `…_INCOMPLETE` per missing one.
-- [ ] 1.3 RED+GREEN: exercise per-document-vocabulary's "sibling declares
-      none" / "no document's locator is inferred from another's" scenarios
-      against a **synthetic scratch profile** (never a shipped one, per
-      R2) — one entry declares a locator, the sibling entry declares none
-      and resolves without refusal, unaffected by the first's declaration.
-      This is the two per-document-vocabulary Req2 scenarios; mark them
-      COMPLIANT-by-scratch-fixture in the verify report, not
-      COMPLIANT-by-shipped-profile.
+- [ ] 1.3 RED+GREEN: exercise per-document-vocabulary's "A missing sub-key
+      refuses at its exact indexed path" scenario against a **synthetic
+      scratch profile** (never a shipped one — both shipped profiles
+      declare a complete `block_locator` on every entry, so neither can
+      exercise an omission). One entry declares a complete `block_locator`;
+      the sibling entry omits one sub-key. Assert the omission refuses at
+      its own exact indexed path (`documents[N].block_locator.<sub_key>`),
+      and that the omitting entry borrows neither the other entry's
+      locator nor falls back to the engine's `TAG_RE`/`DISPLAY_BLOCK_RE`
+      constants. Mark this COMPLIANT-by-scratch-fixture in the verify
+      report, not COMPLIANT-by-shipped-profile.
 - [ ] 1.4 RED: shape-validation cases — an uncompilable `pattern`; a
       `pattern` with 0 or 2 groups (must be exactly 1, never 3 — the
       `citation_pattern` rule does not apply here, and a case exists
@@ -365,19 +370,20 @@ skip the D1b split.
 **Gate at the end:** the resolver's unit matrix, both directions;
 `reference-experimental.ts` byte-unchanged. Estimate 500–800.
 
-- [ ] 2.1 GATE: record the R1 shape decision (nested `cross_citation`) in
-      this phase's own commit message, referencing the reconciliation
-      section above, so the divergence from the spec's flat
-      `cross_citation_pattern` name is traceable at review time, not
-      discovered at spec-sync time.
+- [ ] 2.1 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
+      original instruction, recording the R1 shape decision as a
+      divergence from the spec in this phase's own commit message, no
+      longer applies. The spec carries the nested `cross_citation` shape
+      directly — there is no divergence left to make traceable.
 - [ ] 2.2 RED: `documents[N].cross_citation` absence cases —
       `cross_citation` itself is required (nullable: `None` is a valid
       declared value), but when declared as a mapping, missing `pattern` or
       `resolves_against` refuses `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE`
       naming `documents[N].cross_citation.pattern` /
       `.resolves_against` exactly — 2 cases (spec
-      `implementation-per-document-vocabulary` "A malformed pattern refuses
-      by its exact indexed name", read against the nested shape per R1).
+      `implementation-per-document-vocabulary`'s scenario "A malformed
+      mapping refuses at its exact indexed sub-path", ruled onto the
+      nested shape in `5d42dd7`).
 - [ ] 2.3 RED: `pattern` group-count validation — 0 or 2+ groups refuses
       `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN` naming
       the leaf (exactly 1 group, same reasoning as the block locator's
@@ -386,10 +392,9 @@ skip the D1b split.
       refuses `…_UNKNOWN_CROSS_DOCUMENT`; naming its own entry (self-
       reference) also refuses `…_UNKNOWN_CROSS_DOCUMENT`, both by name.
 - [ ] 2.5 RED: `None` accepted — `documents[1].cross_citation = None`
-      resolves without refusal (spec `implementation-per-document-vocabulary`
-      "An undeclared profile is not refused for the leaf's absence" — the
-      per-entry nullable case, distinct from the leaf-absent-everywhere
-      case of R2 since `cross_citation` itself, unlike `block_locator`, is
+      resolves without refusal (spec `implementation-per-document-vocabulary`'s
+      scenario "An explicit `None` is accepted and crosses nothing" — the
+      per-entry nullable case; `cross_citation`, unlike `block_locator`, is
       allowed to resolve to `None`).
 - [ ] 2.6 GREEN: implement 2.2–2.5 in `_resolve()`'s per-entry walk, after
       the `block_locator` tier, before the `citation_pattern` group tier
@@ -397,13 +402,45 @@ skip the D1b split.
       `reference-experimental.ts::IDENTIFIER` so a crossing id is spelled
       exactly as that domain already spells identifiers — state this
       copy explicitly in the docstring, not just the literal.
-- [ ] 2.7 GREEN: declare `documents[1].cross_citation = None` on
-      `proposal-implementation/impl_profile.py` and on
-      `experimental-implementation/impl_profile.py`'s `documents[1]`
-      (the mathematical proposal cites no experiments document);
-      `documents[0]`'s (`experimental-implementation`) `cross_citation`
-      declares `pattern: r"\[claims:([A-Za-z0-9][A-Za-z0-9._-]*)\]"`,
+- [ ] 2.7 GREEN: fix the index defect measured against the file —
+      `proposal-implementation/impl_profile.py`'s `PROFILE["documents"]`
+      has exactly one entry, `documents[0]`; it has no `documents[1]`, so
+      `documents[1].cross_citation = None` cannot be declared there.
+      Declare `documents[0].cross_citation = None` on that profile instead
+      (its only entry cites no experiments document — there is no second
+      document in this profile's own list to cite). Declare
+      `documents[1].cross_citation = None` on
+      `experimental-implementation/impl_profile.py`'s `documents[1]` (that
+      profile's mathematical-proposal entry, correctly indexed already —
+      the mathematical proposal cites no experiments document);
+      `documents[0]`'s (`experimental-implementation`, the experiments
+      document) `cross_citation` declares
+      `pattern: r"\[claims:([A-Za-z0-9][A-Za-z0-9._-]*)\]"`,
       `resolves_against: "proposal"`.
+
+      **The sibling's second declaration on this file, carried here with
+      its justification.** `proposal-implementation/impl_profile.py`'s
+      `documents[0]` already gained `block_locator` at 1.7 — this change's
+      first addition to that file, today's exact engine bytes written down
+      rather than inherited. This task's `cross_citation: None` is the
+      second. Between them, `block_locator` (1.7) and `cross_citation`
+      (here) are this change's whole edit to that file: the sibling's
+      second sanctioned edit in ten changes, after `dataset_marker: None`
+      (an earlier change) was its first. The optional shape would have
+      saved the sibling nothing — it would either keep being served an
+      engine default it never chose, or resolve to absence and move its 28
+      digests; the required shape asks it to write down a value that is
+      already true. A zero-delta declaration, asserted on the 28 digests,
+      never inferred — verbatim the argument commit `7912281` made for
+      `dataset_marker: None`.
+- [ ] 2.7a VERIFY (zero-delta, asserted not inferred, this specific edit —
+      its own RED/GREEN-adjacent check, not folded into 2.14's phase-end
+      bar check): before adding `cross_citation: None` to
+      `proposal-implementation/impl_profile.py`'s `documents[0]`, confirm
+      `.venv/bin/python -m unittest tests.seal` is 28/28 byte-identical;
+      make the exact one-line edit; re-run `.venv/bin/python -m unittest
+      tests.seal` and assert the same 28 digests are still byte-identical
+      across this specific edit.
 - [ ] 2.8 RED: `crossing_state(index)`'s four-membership unit matrix —
       design-only, no direct spec scenario (spec's Req1/Req2 for
       cross-document-agreement cover the *refusal* behavior in Phase 3;
@@ -757,11 +794,13 @@ promised**. Estimate 600–950.
       `…_INVALID_CROSS_CITATION_PATTERN`, `…_UNKNOWN_CROSS_DOCUMENT`
       confirmed invisible to that walk (`ImplementationProfileError`, per
       M11).
-- [ ] 6.11 R1 and R2 (the two spec/design reconciliation items) filed as an
-      explicit follow-up — a spec-sync correction to
-      `implementation-per-document-vocabulary/spec.md`'s leaf name/shape and
-      required/optional framing — so the spec matches the code that shipped,
-      not the code the operator's ruling superseded.
+- [ ] 6.11 VOID (resolved pre-apply in `5d42dd7`): R1 and R2 were resolved
+      before apply — `implementation-per-document-vocabulary/spec.md`
+      already carries the nested `cross_citation` shape and the
+      required-non-nullable `block_locator` tier, along with
+      `implementation-block-locator` and `implementation-cross-document-
+      agreement`'s matching text. There is no spec-sync correction left to
+      file as a post-apply follow-up.
 - [ ] 6.12 Report the measured total changed-line count per slice against
       design's 2,750–4,350 floor and this file's own 750–1,150 /
       500–800 / 600–950 / 300–500 / 600–950 per-phase estimates — do not
