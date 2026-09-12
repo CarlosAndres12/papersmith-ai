@@ -7,6 +7,11 @@
     "exit": 0,
     "sha256": "d8422ea7e393bf81f8d81ae7ed6fddf2cb7220f3e0dd036f4d3e4454efdf7ea1"
   },
+  "agree-acknowledge-one": {
+    "bytes": 3042,
+    "exit": 2,
+    "sha256": "159929f9184484bf38ceb53b432e3375ad11061d2230e9a95bae9da9e4ebcf1c"
+  },
   "agree-disagree": {
     "bytes": 3054,
     "exit": 2,
@@ -100,7 +105,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "4efefb4b5931720fd5ca4647b5cc8028f705169d390a07b4b6d962128d5eb9f0"
+    "sha256": "0eec545c3eb1d642f0912230f3a1a8118db8fad0b1fc4acc9cbf2d8faa2534de"
   },
   "settle": {
     "bytes": 2826,

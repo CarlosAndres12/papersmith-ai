@@ -102,5 +102,10 @@
   {"id": "agree-disagree", "command": "agree", "fixture": "A", "proposals": true,
    "crossingTarget": true,
    "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision",
-            "trial-crossing-disagree.md"]}
+            "trial-crossing-disagree.md"]},
+
+  {"id": "agree-acknowledge-one", "command": "agree", "fixture": "A",
+   "proposals": true, "crossingTarget": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision",
+            "trial-crossing-disagree.md", "--acknowledge", "absent:5"]}
 ]
