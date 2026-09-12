@@ -142,7 +142,22 @@ Specs merged from main sources:
 
 The change has been fully planned (proposal), specified (3 spec files), designed (design.md with 7 measurements), tasked (33 tasks, 4 stacked units), implemented (sdd-apply), verified (sdd-verify PASS), and archived (this report + filesystem moves).
 
-**Ready for the next change.** Recommended next: Slice B (Data/ per product folder, 250–450 lines) — prerequisite for C.
+**Ready for the next change.** Recommended next: **Slice C** — the second
+document verified on its own terms (the operator's items 2 and 5).
+
+**CORRECTION, applied after this report was first written.** Its original line
+named Slice B as the next change and called it "prerequisite for C". **That is
+inverted.** B depends on C, not the other way round.
+
+`Data/` becomes demandable when *the document declares a dataset*, and
+`**Dataset:**` is enforced only in the experimental deliberation domain — the
+mathematical one has none. So B before C would ship a branch no configuration
+can reach, which is the exact defect class seven cycles have been paying off.
+
+The real order is **A → C → {B, D}**, and B and D do not depend on each other.
+The Slice A proposal's own table lists them A, B, C, D, and that ordering is
+what produced this error twice. It is recorded here so a later session reads the
+dependency rather than the table.
 
 ---
 
