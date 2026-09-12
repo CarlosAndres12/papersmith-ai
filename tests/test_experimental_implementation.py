@@ -241,6 +241,18 @@ def _engine_with_documents(documents: list[dict]):
     return module, tmp_dir
 
 
+#: `the-agreement-nothing-computes` (Slice D, design.md D1/R2): every
+#: `documents[N]` entry this file constructs by hand now needs a complete,
+#: valid `block_locator` -- required and non-nullable. Real content is
+#: irrelevant to what these fixtures exist to prove.
+def _block_locator() -> dict:
+    return {
+        "pattern": r"(?m)^## (\d+)$",
+        "block_pattern": r"(?s)## \d+.*?(?=\n## |\Z)",
+        "identity": "## {value}",
+    }
+
+
 class DatasetDeclaredDetectorTests(unittest.TestCase):
     """B1 (`a-data-directory-somebody-can-owe`, design.md D1/D2, tasks.md
     Phase 2): the dataset-declared detector, proven directly -- pure
@@ -263,7 +275,8 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         itself."""
         docs_dir = self._tmp_docs_dir()
         engine, _ = _engine_with_documents([
-            {"directory": docs_dir, "label": "experiments", "dataset_marker": None},
+            {"directory": docs_dir, "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator()},
         ])
         calls = []
         original = engine.revision_source
@@ -285,7 +298,8 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "intro line\n**Dataset:** the corpus\nmore text\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
-             "dataset_marker": "**Dataset:**"},
+             "dataset_marker": "**Dataset:**",
+             "block_locator": _block_locator()},
         ])
         self.assertTrue(engine.declares_dataset("r1.md"))
 
@@ -300,7 +314,8 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "but this one never puts it first\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
-             "dataset_marker": "**Dataset:**"},
+             "dataset_marker": "**Dataset:**",
+             "block_locator": _block_locator()},
         ])
         self.assertFalse(engine.declares_dataset("r1.md"))
 
@@ -317,7 +332,7 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "Dazzzztaset: this is not the literal marker\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
-             "dataset_marker": marker},
+             "dataset_marker": marker, "block_locator": _block_locator()},
         ])
         self.assertFalse(engine.declares_dataset("r1.md"))
 
@@ -336,9 +351,10 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         (doc1_dir / "only-candidate-9.md").write_text(
             "**Dataset:** declared only here\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
-            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None},
+            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator()},
             {"directory": doc1_dir, "label": "proposal",
-             "dataset_marker": "**Dataset:**"},
+             "dataset_marker": "**Dataset:**", "block_locator": _block_locator()},
         ])
         self.assertTrue(engine.declares_dataset("r1.md"))
 
@@ -352,9 +368,10 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         (doc1_dir / "candidate-9.md").write_text(
             "**Dataset:** would be found if discovery ran\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
-            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None},
+            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator()},
             {"directory": doc1_dir, "label": "proposal",
-             "dataset_marker": "**Dataset:**"},
+             "dataset_marker": "**Dataset:**", "block_locator": _block_locator()},
         ])
         calls = []
         original = engine.document_revision_names
@@ -394,7 +411,14 @@ class RevisionThreadingAgreementTests(unittest.TestCase):
         profile = dict(_real_profile())
         profile["documents"] = [
             {"directory": docs_dir, "label": "experiments",
-             "dataset_marker": "**Dataset:**"},
+             "dataset_marker": "**Dataset:**",
+             # `the-agreement-nothing-computes` (Slice D, design.md D1/R2):
+             # required, own tier, non-nullable.
+             "block_locator": {
+                 "pattern": r"(?m)^## (\d+)$",
+                 "block_pattern": r"(?s)## \d+.*?(?=\n## |\Z)",
+                 "identity": "## {value}",
+             }},
         ]
         tmp_profile_dir = Path(tempfile.mkdtemp(prefix="plan-revision-profile-"))
         self.addCleanup(shutil.rmtree, tmp_profile_dir, ignore_errors=True)

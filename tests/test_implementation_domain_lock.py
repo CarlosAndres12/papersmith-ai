@@ -387,14 +387,14 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: per-document `remedy_compatibility` loop's own prose reads naturally
 #: with ordinary English words this pin already exempts. `against`
 #: 181->184, `before` 224->225, `carries` 176->177, `commands` 15->16,
-#: `declaration` 189->191, `module` 183->184, `named` 164->169, `refuses`
+#: `declaration` 189->190, `module` 183->184, `named` 164->169, `refuses`
 #: 87->89, `value` 219->223, `whose` 141->142, `write` 104->106.
 M5_PINNED_RESIDUE: dict[str, int] = {
     "actually": 75, "admissible": 3, "after": 79, "against": 184,
     "agreed": 23, "answered": 71, "answers": 98, "approved": 29,
     "audit": 15, "before": 225, "benchmark": 91, "beside": 92,
     "carries": 177, "check": 146, "checkable": 3, "claim": 34,
-    "command": 266, "commands": 16, "compares": 23, "declaration": 191,
+    "command": 266, "commands": 16, "compares": 23, "declaration": 190,
     "destinations": 37, "empty": 111, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 31,
