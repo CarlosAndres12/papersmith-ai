@@ -2211,9 +2211,9 @@ state, alongside the scenarios — not verified by hand once.
 
 Every refusal leaves the CLI through one handler and prints the same JSON:
 `status`, `code`, `detail`, exit `2`, nothing appended anywhere. Refusals a call
-to one of the nine **gating** commands can reach — `apply`, `admit`, `gate`,
-`offer`, `close`, `step`, `settle`, `materialize`, `position` — carry one more
-thing, and which ones carry it is itself the answer to a question:
+to one of the ten **gating** commands can reach — `apply`, `admit`, `gate`,
+`offer`, `close`, `step`, `settle`, `materialize`, `position`, `agree` — carry
+one more thing, and which ones carry it is itself the answer to a question:
 
 > Can the caller clear this by changing the invocation alone, without touching
 > the repository?
@@ -2224,7 +2224,7 @@ the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-five codes, including
+carries a `resolve` key saying what. Sixty-seven codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

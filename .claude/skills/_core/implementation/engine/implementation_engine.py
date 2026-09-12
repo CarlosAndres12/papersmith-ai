@@ -8402,6 +8402,57 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     }
 
 
+def cmd_agree(args: argparse.Namespace) -> dict:
+    """Whether document 0's own crossing form (`documents[0].cross_citation`)
+    still agrees with what the target document currently declares --
+    `crossing_state(0, args.revision)` is the whole computation
+    (`implementation-cross-document-agreement`, design.md D6/D7). Names
+    the discrepancy; never a verdict over which side is right -- that
+    reading stays with an agent working in conversation (the spec's own
+    Boundary section).
+
+    Registered only under `len(DOCUMENTS) > 1` (D9) -- `cmd_agree` itself
+    stays a plain module-level function either way, so
+    `reachable_refusal_codes()` can see its two codes under a single
+    document too (Z10 proves the REGISTRATION gate, never this function's
+    own presence).
+    """
+    target = resolve_target(args.target)
+    validate_name(args.name)
+    if revision_source(args.revision) is None:
+        raise Refused(
+            "REVISION_UNREADABLE",
+            f"{args.revision!r} is not readable; there is nothing to check "
+            "for a crossing.")
+    state = crossing_state(0, args.revision)
+    crossed, declared = state["crossed"], state["declared"]
+    if not crossed or not declared:
+        raise Refused(
+            "AGREEMENT_CROSSING_UNDECLARED",
+            "Document 0 declares no crossing into the target document at "
+            "all -- either it cites nothing there, or the target currently "
+            "declares nothing a citation could reach. Refused once, never "
+            "once per entry: publish at least one citation on each side "
+            "before this check can compare them one claim at a time.")
+    absent, untested = state["absent"], state["untested"]
+    ids = ([f"absent:{value}" for value in absent]
+           + [f"untested:{value}" for value in untested])
+    # D8's shape, wired here even though `--acknowledge` itself is a later
+    # slice: `getattr` reads `None` on THIS command's own args (it takes
+    # no such flag yet), so every id starts unacknowledged.
+    acknowledged = set(getattr(args, "acknowledge", None) or [])
+    unacknowledged = [i for i in ids if i not in acknowledged]
+    if unacknowledged:
+        raise Refused(
+            "AGREEMENT_DOCUMENTS_DISAGREE",
+            f"Document 0 cites {absent!r} with nothing matching in the "
+            f"target document, and the target declares {untested!r} with "
+            f"no citation anywhere in document 0. Unacknowledged: "
+            f"{unacknowledged!r}.")
+    return {"command": "agree", "target": str(target), "revision": args.revision,
+            "status": "agreed", "crossed": crossed, "declared": declared}
+
+
 def admissibility_record(target: Path, revision: str | None) -> dict:
     """The verdict on file, and whether it still applies to the bound
     revision(s).
@@ -16446,8 +16497,18 @@ def cmd_materialize(args: argparse.Namespace) -> dict:
 #: make impossible. It is also the only place `POSITION_RUNG_SKIPPED` can be
 #: raised: the rung is decided where the header is sealed, not where a later
 #: command reads it back.
+#: `the-agreement-nothing-computes` (Slice D, design.md D9): `agree`
+#: joins this roster too -- it refuses on the crossing between two
+#: documents, and can stop a session dead the identical way `position`'s
+#: own criterion states. `cmd_agree` stays a plain module-level function
+#: regardless of `COMMANDS`'s own conditional registration, so this tuple
+#: names it unconditionally -- `reachable_refusal_codes()` must see its
+#: two codes under EVERY profile, single document included, or the
+#: roster's own reverse lock (nothing classified that cannot fire) would
+#: refuse the classification below the moment a single-document profile
+#: ran it.
 GATING_COMMANDS = ("apply", "admit", "gate", "offer", "close", "step",
-                   "settle", "materialize", "position")
+                   "settle", "materialize", "position", "agree")
 
 #: The caller typed something the caller can retype. The detail already names
 #: the flag, the token or the mutual exclusion, so nothing is published beside
@@ -16749,6 +16810,14 @@ GATING_REFUSALS: dict[str, str] = {
     "STEP_NOT_CALLABLE": WORK_STATE,
     # The process died without a verdict. Nothing typed here makes it write one.
     "STEP_RUNNER_SILENT": WORK_STATE,
+
+    # --- agree ---------------------------------------------------------------
+    # `the-agreement-nothing-computes` (Slice D, design.md D7): the crossing
+    # check's own two codes, both work states -- nothing the caller can
+    # retype clears a documents disagreement or an undeclared crossing;
+    # somebody has to change one of the two documents.
+    "AGREEMENT_CROSSING_UNDECLARED": WORK_STATE,
+    "AGREEMENT_DOCUMENTS_DISAGREE": WORK_STATE,
 }
 
 
@@ -17523,6 +17592,18 @@ _WORK_STATE_RESOLUTIONS = {
               "so nothing here can say whether the step ran (the refusal "
               "detail names how it ended); find what kills it and make it "
               "write one, or record why the step cannot run, and why?"),
+
+    # --- agree (`the-agreement-nothing-computes`, Slice D, design.md D7) ----
+    "AGREEMENT_CROSSING_UNDECLARED": lambda args: _refusal_question(
+        args, "document 0 declares no crossing into the target document at "
+              "all (the refusal detail names which side is silent); read "
+              "both documents and decide together which one needs a "
+              "citation or a declaration, and why?"),
+    "AGREEMENT_DOCUMENTS_DISAGREE": lambda args: _refusal_question(
+        args, "document 0 and the target document disagree about which "
+              "claims are tested (the refusal detail names each discrepancy "
+              "by id); read both documents together and decide which one "
+              "needs to change, and why?"),
 }
 
 
@@ -17713,7 +17794,12 @@ COMMANDS = {"walk": cmd_walk,
             "step": cmd_step,
             "settle": cmd_settle,
             "defect": cmd_defect,
-            "materialize": cmd_materialize}
+            "materialize": cmd_materialize,
+            # `the-agreement-nothing-computes` (Slice D, design.md D9):
+            # registered only where a crossing could exist at all -- under
+            # one document the sibling's `COMMANDS`/`cases.json` roster
+            # stays byte-identical (M8), proven by Z10 deleting this gate.
+            **({"agree": cmd_agree} if len(DOCUMENTS) > 1 else {})}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17938,6 +18024,18 @@ def main(argv: list[str] | None = None) -> int:
                                 "in the plan's own boundTo key and re-read "
                                 "from there by apply and materialize -- "
                                 "never re-typed on either command")
+        if name == "agree":
+            # `the-agreement-nothing-computes` (Slice D, design.md D9):
+            # agree's own site, mirroring plan's -- the shared eight-name
+            # set above never carries this flag, so widening it would give
+            # every one of those commands a flag they do not read and move
+            # the sibling's digests.
+            p.add_argument("--revision", default=None,
+                           help="document 0's revision to check for a "
+                                "crossing; agree discovers nothing for "
+                                "THIS argument's own document -- omit it "
+                                "or name one that does not read and it "
+                                "refuses REVISION_UNREADABLE")
         if name == "walk":
             p.add_argument("--session", required=True,
                            help="the session driving this walk, stamped on "

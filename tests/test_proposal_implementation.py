@@ -28326,6 +28326,13 @@ _ENGLISH_COUNTS = {
     # work-state code, `DOCUMENT_REVISION_UNREADABLE` -- measured here, never
     # predicted, exactly as 113 itself was.
     114: "One hundred and fourteen",
+    # `the-agreement-nothing-computes`, Phase 3, D3: `agree` joins
+    # `GATING_COMMANDS` unconditionally, so the roster grows to ten gating
+    # commands (was nine) and two new work-state codes join the sixty-five
+    # already there, giving sixty-seven -- both measured, never predicted
+    # (design.md guessed 117; the real delta off 114 is +2, not +3).
+    67: "Sixty-seven",
+    116: "One hundred and sixteen",
 }
 
 
@@ -28706,8 +28713,18 @@ class GatingRefusalRosterTests(unittest.TestCase):
         (`each-document-names-its-own-revision`, D3) is that reading plus
         `DOCUMENT_REVISION_UNREADABLE`, raised inside
         `_extra_document_revisions` -- measured here, never predicted.
+        One hundred and sixteen (`the-agreement-nothing-computes`, D3) is
+        that reading plus `AGREEMENT_CROSSING_UNDECLARED` and
+        `AGREEMENT_DOCUMENTS_DISAGREE`, both raised inside `cmd_agree` --
+        `agree` joins `GATING_COMMANDS` unconditionally (design.md D9), so
+        both are reachable under every profile regardless of whether
+        `agree` is itself registered in `COMMANDS`. Measured at exactly
+        +2, correcting design.md's own prediction of 117 (114 + 2 is 116,
+        not 117 -- the design's arithmetic assumed D1's OWN prediction of
+        115 as this phase's starting point, but D1 measured 114, unmoved;
+        this phase's own delta is +2, not +3).
         """
-        self.assertEqual(len(reachable_refusal_codes()), 114)
+        self.assertEqual(len(reachable_refusal_codes()), 116)
 
     def test_agree_joins_gating_commands_unconditionally_never_this_profiles_own_commands(self):
         """`the-agreement-nothing-computes` (Slice D, design.md D9, tasks.md
@@ -28800,9 +28817,15 @@ class GatingRefusalRosterTests(unittest.TestCase):
                             if value == kind)
                   for kind in (impl.INVOCATION_DEFECT, impl.WORK_STATE)}
         skill = " ".join(SKILL_MD.read_text(encoding="utf-8").split())
+        # `the-agreement-nothing-computes` (D3): the gating-command count
+        # is now READ off `GATING_COMMANDS` rather than hardcoded as
+        # "nine" -- `agree` joined it unconditionally (design.md D9), so a
+        # literal "nine" here would go stale the moment a tenth command
+        # joined, exactly the drift this test's own docstring warns against.
+        gating_count = _english_count(len(impl.GATING_COMMANDS)).lower()
         self.assertIn(
             f"{_english_count(len(impl.GATING_REFUSALS))} distinct codes are "
-            "reachable from the nine gating commands", skill)
+            f"reachable from the {gating_count} gating commands", skill)
         self.assertIn(
             f"an *invocation* defect** ({counts[impl.INVOCATION_DEFECT]} "
             "codes)", skill)
