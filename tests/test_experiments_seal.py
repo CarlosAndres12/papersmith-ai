@@ -342,6 +342,89 @@ class AgreementCheckTests(unittest.TestCase):
             self.assertNotIn(banned, detail)
 
 
+class AcknowledgmentTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D4, design.md D8, tasks.md
+    4.1/4.2/4.3): `--acknowledge <id>`, repeatable, clearing only ids
+    echoed back exactly. Reuses `agree-disagree`'s own reaching
+    configuration (`trial-crossing-disagree.md` against the crossing
+    target) -- the two-discrepancy case the spec's own note requires
+    (absent=['5'], untested=['9']), so the two named ids are exactly
+    `absent:5` and `untested:9`.
+
+    Written RED against the shipped engine, which registers `agree`'s
+    parser with `--revision` alone: passing `--acknowledge` here is an
+    argparse-unrecognized-argument failure (exit 2, empty stdout, no
+    JSON at all) -- red for the same reason 3.1's PRESENT half was red
+    (the flag does not exist yet), never an authored assertion mismatch.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.mkdtemp(prefix="acknowledge-corpus-")
+        cls.roots = ec.build(Path(cls._tmp) / "corpus")
+        cls._scratch_root = FORGE / "implementations" / f"_acknowledge_{os.getpid()}"
+        cls._scratch_root.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls._scratch_root, ignore_errors=True)
+        shutil.rmtree(cls._tmp, ignore_errors=True)
+
+    def _payload(self, case: dict) -> tuple[dict, int]:
+        with eh.cli_invocation():
+            result = eh.run_case_here(case, self.roots, scratch_root=self._scratch_root)
+        return json.loads(result.stdout_text), result.exit_status
+
+    def _case(self, case_id: str, acknowledge: list[str] | None = None) -> dict:
+        argv = ["--target", "<TARGET>", "--name", "Trial",
+                "--revision", "trial-crossing-disagree.md"]
+        for value in acknowledge or []:
+            argv += ["--acknowledge", value]
+        return {"id": case_id, "command": "agree", "fixture": "A",
+                "proposals": True, "crossingTarget": True, "argv": argv}
+
+    def test_one_of_two_acknowledged_the_other_still_blocks(self):
+        """4.1 (spec 'Two discrepancies, one acknowledged, one still
+        blocks'): acknowledging `absent:5` alone leaves `untested:9`
+        refusing, named alone in `unacknowledged`."""
+        case = self._case("acknowledge-one-red", acknowledge=["absent:5"])
+        payload, status = self._payload(case)
+        self.assertEqual(status, 2)
+        self.assertEqual(payload["code"], "AGREEMENT_DOCUMENTS_DISAGREE")
+        self.assertIn("untested:9", payload["detail"])
+        self.assertNotIn("absent:5", payload["detail"].split("Unacknowledged:")[1])
+
+    def test_both_acknowledged_both_clear(self):
+        """4.2 (spec 'Both acknowledged, both clear'): naming both exact
+        ids clears the refusal entirely -- `agree` reports `agreed`."""
+        case = self._case("acknowledge-both-red",
+                           acknowledge=["absent:5", "untested:9"])
+        payload, status = self._payload(case)
+        self.assertEqual(status, 0, payload)
+        self.assertEqual(payload["status"], "agreed")
+
+    def test_a_general_continue_with_no_ids_clears_nothing(self):
+        """4.3 (spec 'A general continue with no ids clears nothing'):
+        no `--acknowledge` at all still names both ids; naming an id
+        that does not exist clears nothing either, since it matches
+        neither outstanding id."""
+        with self.subTest(form="omitted entirely"):
+            case = self._case("acknowledge-none-red")
+            payload, status = self._payload(case)
+            self.assertEqual(status, 2)
+            self.assertEqual(payload["code"], "AGREEMENT_DOCUMENTS_DISAGREE")
+            self.assertIn("absent:5", payload["detail"])
+            self.assertIn("untested:9", payload["detail"])
+        with self.subTest(form="an id that does not exist"):
+            case = self._case("acknowledge-unknown-id-red",
+                               acknowledge=["absent:999"])
+            payload, status = self._payload(case)
+            self.assertEqual(status, 2)
+            self.assertEqual(payload["code"], "AGREEMENT_DOCUMENTS_DISAGREE")
+            self.assertIn("absent:5", payload["detail"])
+            self.assertIn("untested:9", payload["detail"])
+
+
 class AgreementDisagreeZ7MutationTests(unittest.TestCase):
     """`the-agreement-nothing-computes` (Slice D, design.md Mutation plan,
     tasks.md 3.13): Z7 -- fire `AGREEMENT_DOCUMENTS_DISAGREE` per
