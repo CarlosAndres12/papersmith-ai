@@ -1,6 +1,6 @@
 ---
 name: experimental-implementation
-description: "Trigger: turn the latest experiments protocol into working Python against a target repository, run its declared measurements, and verify an existing implementation's layout and revision fidelity against that same protocol. Isolated venv, keyless, fail-closed. The second host on the shared implementation engine (change `the-second-skill-the-seam-was-for`) -- change A, single document, zero engine bytes."
+description: "Trigger: turn the latest experiments protocol into working Python against a target repository, run its declared measurements, and verify an existing implementation's layout and revision fidelity against both the experiments protocol and the mathematical proposal it answers to. Isolated venv, keyless, fail-closed. The second host on the shared implementation engine (change `the-second-skill-the-seam-was-for`, slice A; change `the-second-document-verified-on-its-own-terms`, slice C) -- two declared documents, each verified on its own claim vocabulary, zero engine bytes."
 ---
 
 # Experimental Implementation
@@ -9,7 +9,7 @@ Turn the current experiments revision (`experiments/experiments-<slug>-vNN.md`)
 into Python that runs, in a target repository, and prove it: complete runs whose
 own record agrees with what the protocol says.
 
-## Scope: change A only, and what that means in practice
+## Scope: two documents, each verified on its own terms
 
 This skill is the SECOND host built on the shared implementation engine
 (`_core/implementation/engine/implementation_engine.py`) -- the same engine
@@ -18,33 +18,59 @@ domain. Everything here is a profile
 (`.claude/skills/experimental-implementation/impl_profile.py`), a byte-identical
 launcher copy, this doctrine, two agents, and this skill's own sealed corpus.
 
-**One declared document.** `documents[0]` is `experiments/`, label `experiments`
--- the experiments document this skill verifies. There is no second document
-yet: cross-document agreement against the mathematical proposal, a claim
-vocabulary per document, and a successor composer are follow-on changes (B, C,
-D), not built here. Consequence, recorded honestly rather than discovered
-later: after this change, this skill does what `proposal-implementation`
-already does, against a different document. New capability -- cross-document
-agreement, a submission through Flow B -- arrives at change C/D, not here.
+**Two declared documents, each with its own claim vocabulary.** `documents[0]`
+is `experiments/`, label `experiments` -- the experiments document this skill
+originally verified alone (change `the-second-skill-the-seam-was-for`, slice
+A). `documents[1]` is `proposals/`, label `proposal` -- the mathematical
+proposal this protocol answers to, added by change
+`the-second-document-verified-on-its-own-terms` (slice C). Document 0 declares
+no per-document overlay and keeps resolving from the top-level scalars below,
+byte-identical to slice A; document 1 declares its own complete overlay (all
+five leaves: `claim_key`, `locus_key`, `remedy_locus_key`, `notation_keys`,
+`citation_pattern`), matching `proposal-implementation`'s own established
+`equations` vocabulary for this domain -- never inheriting document 0's
+`experiments` vocabulary by omission.
+
+`verify`'s `fidelity.fidelityByDocument` now reports one independent status per
+document, each derived from that document's own claim-key module scope: a
+module implementing document 0's claims can drift while document 1 stays
+clean, and the reverse. A finding may name either or both documents
+(`"document": "experiments"`, `"document": ["experiments", "proposal"]`, ...);
+each named document's citations are matched against that document's OWN
+`citation_pattern`, never a pattern shared across both. Cross-document
+agreement (a single verdict combining both documents) and a successor composer
+remain follow-on changes (B, D), not built here.
 
 ## This domain's own claim vocabulary
 
-Where `proposal-implementation` reads `equations`/`ecuación`/`formulation`, this
-skill reads its own words, declared in its own profile:
+Where `proposal-implementation` reads `equations`/`ecuación`/`formulation` at
+its own single document, this skill reads its own words for document 0, and
+`proposal-implementation`'s own `equations` vocabulary again for document 1
+(declared as document 1's own overlay, not inherited):
+
+| Profile leaf | Document 0 (`experiments`) | Document 1 (`proposal`) |
+| --- | --- | --- |
+| `claim_key` / `locus_key` | `experiments` | `equations` |
+| `remedy_locus_key` | `remedy_experiments` | `remedy_equations` |
+| `notation_keys.locus` / `.remedyLocus` / `.unknown` | `experiments` / `remedyExperiments` / `unknownExperiments` | `equations` / `remedyEquations` / `unknownEquations` |
+| `citation_pattern` | `Exps?`/`Experiment`/`Experimentos?` syntax | `Ecs?`/`Eq`/`Ecuaciones?` syntax |
+| `documents[N].directory` / `.label` | `experiments/` / `experiments` | `proposals/` / `proposal` |
+
+The top-level `vocabulary.*` leaves below stay document 0's own -- they are
+resolver-tier subject words, not per-document claim vocabulary:
 
 | Profile leaf | This domain's value |
 | --- | --- |
-| `provenance.claim_key` / `findings.locus_key` | `experiments` |
-| `findings.remedy_locus_key` | `remedy_experiments` |
 | `vocabulary.subject_singular` / `_plural` | `experiment` / `experiments` |
 | `vocabulary.subject_singular_es` / `_plural_es` | `experimento` / `experimentos` |
 | `vocabulary.subject_collective` / `_collective_es` | `experimentation` / `experimentación` |
 | `vocabulary.artifact_noun` | `protocol` |
-| `documents[0].directory` / `.label` | `experiments/` / `experiments` |
 
-A module's own `__provenance__` here declares an `"experiments"` key (never
-`"equations"`), and every invariant listed there needs a matching test under
-`tests/`, exactly as the sibling's own doctrine requires for its own claim key.
+A module's own `__provenance__` declares a non-empty list under whichever
+document's claim key it implements (`"experiments"` for document 0,
+`"equations"` for document 1) -- a module may declare both -- and every
+invariant listed there needs a matching test under `tests/`, exactly as the
+sibling's own doctrine requires for its own claim key.
 
 ## The objective flow
 

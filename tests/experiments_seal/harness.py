@@ -42,18 +42,46 @@ ALLOWED_ENV_KEYS = seal_harness.ALLOWED_ENV_KEYS
 
 _LAUNCHER_INVOCATION = f"{sys.executable} {LAUNCHER}"
 
+#: Captured once, before this module ever reassigns `seal_harness.
+#: build_env` -- the wrapper below calls THIS reference, never the module
+#: attribute (which becomes the wrapper itself once assigned; calling
+#: through the attribute would recurse into itself forever). Mirrors
+#: `test_implementation_pair.py`'s own `_build_env_with_profile_override`
+#: pattern.
+_ORIGINAL_BUILD_ENV = seal_harness.build_env
+
+
+def _build_env_with_document_one(case: dict, roots) -> dict:
+    """`seal_harness.build_env` only ever sets `IMPLEMENTATION_PROPOSALS`
+    (document 0's own override) -- Slice C (design.md task 4.6): this
+    corpus's own `Roots.proposals_1` is a real, readable revision root for
+    `documents[1]`, so a case marked `proposals: true` also gets
+    `IMPLEMENTATION_PROPOSALS_1` here, never inside `tests/seal/
+    harness.py` itself (that file stays unedited -- `git diff --exit-code
+    tests/seal/` holds)."""
+    env = _ORIGINAL_BUILD_ENV(case, roots)
+    if case.get("proposals") and getattr(roots, "proposals_1", None) is not None:
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(roots.proposals_1)
+    return env
+
 
 @contextlib.contextmanager
 def cli_invocation():
     """Wrap `seal_harness.impl.CLI_INVOCATION` for the duration of the
     block -- this skill's own launcher, not the sibling's -- and restore
-    the original value on exit, success or failure alike."""
-    original = seal_harness.impl.CLI_INVOCATION
+    the original value on exit, success or failure alike. Also wraps
+    `seal_harness.build_env` (design.md task 4.6) to add
+    `IMPLEMENTATION_PROPOSALS_1`, the same duration and restoration
+    discipline."""
+    original_invocation = seal_harness.impl.CLI_INVOCATION
+    original_build_env = seal_harness.build_env
     seal_harness.impl.CLI_INVOCATION = _LAUNCHER_INVOCATION
+    seal_harness.build_env = _build_env_with_document_one
     try:
         yield
     finally:
-        seal_harness.impl.CLI_INVOCATION = original
+        seal_harness.impl.CLI_INVOCATION = original_invocation
+        seal_harness.build_env = original_build_env
 
 
 def run_case_here(case: dict, roots, *, scratch_root):

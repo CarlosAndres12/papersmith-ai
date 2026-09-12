@@ -12,13 +12,26 @@ the sibling's own launcher (design.md D4/M4): every path in it is
 self-anchored off `Path(__file__).resolve()`, so the same 24 bytes placed
 here resolve to THIS skill's own profile, never the sibling's.
 
-**Scope (design.md, proposal.md): change A only.** A single declared
-document -- `documents[0]` is the `experiments/` directory, label
-`experiments` (design.md D1). The mathematical proposal document, cross-
-document agreement, and the successor composer are follow-on changes (B, C,
-D) and are not built here. This profile's `documents` list has exactly ONE
-entry, held to that shape by `tests/test_implementation_domain_lock.py`'s
-single-document guard (design.md D10), which C's first act deletes.
+**Scope, Slice A (design.md, proposal.md): change A only.** A single
+declared document -- `documents[0]` is the `experiments/` directory,
+label `experiments` (design.md D1). The mathematical proposal document,
+cross-document agreement, and the successor composer were follow-on
+changes (B, C, D), not built at Slice A. This profile's `documents` list
+held exactly ONE entry, to that shape held by
+`tests/test_implementation_domain_lock.py`'s single-document guard
+(design.md D10).
+
+**Scope, Slice C (`the-second-document-verified-on-its-own-terms`,
+design.md D8/M2): `documents[1]` now declares the mathematical proposal**
+-- its own complete per-document vocabulary overlay (`claim_key`
+`"equations"`, matching `proposal-implementation`'s own established
+vocabulary for this domain), landed as this change's LAST write, after
+the per-document fold and per-document citation matching it depends on
+were already proven against a fixture the shipped fold could not pass
+(design.md D8's own ordering argument). The single-document guard this
+scope note used to name is deleted; `tests/test_implementation_domain_
+lock.py`'s `TwoDocumentReadProvenTests` replaces it, proving the
+per-document READ rather than merely counting two entries.
 
 **`vocabulary.names` (design.md D6, the M1 finding).**
 `LockADiscoveryTests.test_every_declared_name_really_is_that_domain_speaking`
@@ -174,13 +187,38 @@ PROFILE = {
             "experimentation", "experimentación",
         ],
     },
-    # Exactly ONE entry (design.md D10's single-document guard): the
-    # experiments document, `documents[0]`. C adds the mathematical
-    # proposal as `documents[1]`.
+    # Slice C (`the-second-document-verified-on-its-own-terms`, design.md
+    # M2/D8): the experiments document (`documents[0]`, unchanged from
+    # Slice A -- no per-document overlay, so it keeps resolving from the
+    # top-level `provenance.*`/`findings.*` scalars above), and the
+    # mathematical proposal (`documents[1]`), landed here as this
+    # change's LAST write -- after the per-document fold (C2a) and the
+    # per-document citation matching (C2b) both already read it against a
+    # fixture the shipped fold could not pass. `documents[1]` declares its
+    # OWN complete per-document vocabulary overlay (all five leaves,
+    # design.md D1's all-or-nothing rule), matching `proposal-
+    # implementation`'s own established "equations" vocabulary for this
+    # exact domain -- never inheriting document 0's "experiments" values
+    # by omission passing silently as agreement.
     "documents": [
         {
             "directory": _FORGE_ROOT / "experiments",
             "label": "experiments",
+        },
+        {
+            "directory": _FORGE_ROOT / "proposals",
+            "label": "proposal",
+            "claim_key": "equations",
+            "locus_key": "equations",
+            "remedy_locus_key": "remedy_equations",
+            "notation_keys": {
+                "locus": "equations",
+                "remedyLocus": "remedyEquations",
+                "unknown": "unknownEquations",
+            },
+            "citation_pattern": (
+                r"Ecs?\.?\s*\(?(\d+)\)?|Eq\.?\s*\(?(\d+)\)?|"
+                r"Ecuaciones?\s*\((\d+)\)"),
         },
     ],
 }

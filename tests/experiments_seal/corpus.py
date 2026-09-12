@@ -46,11 +46,41 @@ REVISION_TEXT = (
     "Throughout, the recorded outcome is written E[x].\n"
     "\n"
     "The corrected form now reads g = h + k.\n"
+    "\n"
+    "This document's own citation syntax cites Exp.(9) once, and again "
+    "Exp.(9) a second time.\n"
+)
+
+#: Document 1's own revision text (Slice C, design.md task 4.6) --
+#: `documents[1]`'s own root, cited in its OWN citation syntax ("Ec."/
+#: "Eq."), never document 0's ("Exp."). Cites the SAME locus
+#: (`"9"`, `both-documents-citation`'s own `remedy_experiments`) three
+#: times, so the captured `impact.class` genuinely differs from what
+#: document 0's own two citations would produce if cross-applied.
+PROPOSAL_REVISION_TEXT = (
+    "## 1\n"
+    "\n"
+    "The mathematical proposal states its own identity.\n"
+    "\n"
+    "This document's own citation syntax cites Ec.(9) once, Eq.(9) again, "
+    "and Ecuaciones(9) a third time.\n"
 )
 
 #: `tests/findings.py`'s content: `experiments`/`remedy_experiments` --
 #: THIS domain's own `locus_key`/`remedy_locus_key`, never `equations`/
-#: `remedy_equations`.
+#: `remedy_equations`. Slice C (`the-second-document-verified-on-its-own-
+#: terms`, design.md task 4.6): every finding now carries a `document`
+#: field -- REQUIRED once `documents[1]` exists (`read_findings`'s own
+#: `require_document` gate, unchanged from Cut 3). The first three keep
+#: their original text and `document: "experiments"` (document 0 alone);
+#: a fourth, `both-documents-citation`, names BOTH documents and is the
+#: one this task exists for -- spec `implementation-cli-seal`
+#: Requirement "A Declared Second Document's Own Vocabulary Is Exercised,
+#: Not Only Its Directory And Label": its locus (`"9"`) is cited multiple
+#: times in EACH document's own revision text, in EACH document's own
+#: citation syntax ("Exp.(9)" for document 0, "Ec.(9)" for document 1) --
+#: proving the captured `impact.class` mapping reads each document's own
+#: `citation_pattern`, not one shared across both.
 FINDINGS_SOURCE = '''FINDINGS = [
     {
         "id": "adopted-run",
@@ -59,6 +89,7 @@ FINDINGS_SOURCE = '''FINDINGS = [
         "rate": "always",
         "statement": "Step one's outcome omits a correction term.",
         "remedy": "Re-run step one with the corrected seed.",
+        "document": "experiments",
         "experiments": ["T1"],
         "remedy_experiments": ["T1"],
         "uses": ["E[x]"],
@@ -74,6 +105,7 @@ FINDINGS_SOURCE = '''FINDINGS = [
         "rate": "always",
         "statement": "Step two's outcome is recorded without its correction.",
         "remedy": "Re-run step two with the corrected form.",
+        "document": "experiments",
         "experiments": ["T2"],
         "remedy_experiments": ["T2"],
         "uses": ["E[x]"],
@@ -87,11 +119,28 @@ FINDINGS_SOURCE = '''FINDINGS = [
         "rate": "always",
         "statement": "Step three needs a measurement this protocol has never defined.",
         "remedy": "Introduce a new measurement and re-run step three.",
+        "document": "experiments",
         "experiments": ["T3"],
         "remedy_experiments": ["T3"],
         "uses": ["E[x]"],
         "introduces": ["Theta-op"],
         "adoption": {"absent": "e = f", "expect": ["e = Theta-op"]},
+    },
+    {
+        "id": "both-documents-citation",
+        "kind": "gap",
+        "status": "measured",
+        "rate": "always",
+        "statement": "Both declared documents cite the same locus, each in "
+                      "its own notation.",
+        "remedy": "No change to either document; this finding exists only "
+                   "to prove per-document citation matching against the "
+                   "shipped two-document profile.",
+        "document": ["experiments", "proposal"],
+        "experiments": ["T1"],
+        "remedy_experiments": ["9"],
+        "uses": [],
+        "introduces": [],
     },
 ]
 '''
@@ -144,6 +193,11 @@ class Roots:
     #: to `fixture_b` rather than a separate build, since it is never read.
     fixture_t: Path
     proposals: Path
+    #: Slice C (design.md task 4.6): `documents[1]`'s own root -- the
+    #: mathematical proposal's revision text, never document 0's. Named
+    #: `proposals_1` to match `IMPLEMENTATION_PROPOSALS_1`, the env
+    #: variable `proposals_root(1)` reads.
+    proposals_1: Path
     plan_template: dict
 
 
@@ -200,6 +254,17 @@ def _build_documents(root: Path) -> Path:
     return documents
 
 
+def _build_document_one(root: Path) -> Path:
+    """Slice C (design.md task 4.6): `documents[1]`'s own root -- the
+    mathematical proposal, hand-authored, never document 0's own
+    `_build_documents` fixture."""
+    documents = root / "P"
+    documents.mkdir(parents=True)
+    (documents / "trial-plan-v01.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + PROPOSAL_REVISION_TEXT.encode("utf-8"))
+    return documents
+
+
 def build(root: Path) -> Roots:
     root.mkdir(parents=True, exist_ok=True)
     fixture_a = root / "A"
@@ -210,6 +275,7 @@ def build(root: Path) -> Roots:
     _write_common_package(fixture_a, with_data=True)
     _write_common_package(fixture_b, with_data=False)
     documents = _build_documents(root)
+    document_one = _build_document_one(root)
 
     plan_template = {
         "name": "Trial", "renames": [], "moves": [], "createDirs": [],
@@ -218,7 +284,7 @@ def build(root: Path) -> Roots:
 
     return Roots(root=root, fixture_a=fixture_a, fixture_b=fixture_b,
                 fixture_t=fixture_b, proposals=documents,
-                plan_template=plan_template)
+                proposals_1=document_one, plan_template=plan_template)
 
 
 #: Digested into `digests.json` under `"__corpus_fingerprint__"`, the same

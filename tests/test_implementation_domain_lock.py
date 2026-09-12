@@ -575,79 +575,22 @@ class CampaignProposalExclusionTests(unittest.TestCase):
 # baseline this cut is not allowed to move.
 
 
-# --- D10: the single-document guarantee -------------------------------------
-#
-# `CLAIM_KEY`/`LOCUS_KEY`/`REMEDY_LOCUS_KEY`/`NOTATION_KEYS`/`CITATION_RE` are
-# module-level scalars read from `PROFILE[...]`, and
-# `_extra_document_fidelity_status` folds four conditions its own docstring
-# calls document-count-invariant. A `documents[1]` declared before change C
-# therefore yields a fidelity status that reads green having measured
-# nothing -- change C's whole first act is deleting this guard (design.md
-# D10). Deliberately a SHIPPED-SURFACE lock, never a `_resolve()` refusal:
-# `tests/fixtures/two_documents/impl_profile.py` and the whole `tests/pair/`
-# suite depend on a two-document profile still resolving, and refusing
-# `len(documents) > 1` inside the resolver would take them down.
-# `discover_profiles()` globs `.claude/skills/*/impl_profile.py` only, so
-# that fixture under `tests/` stays invisible to this lock, by the same
-# reasoning the resolver's own module docstring already records.
-
-class SingleDocumentGuaranteeTests(unittest.TestCase):
-    """Task 4.8 (design.md D10). Mutation X8 (task 4.9): add a second
-    `documents` entry to a SCRATCH COPY of this skill's own profile,
-    confirm this lock fails, restore -- proven inline below, never against
-    the shipped profile."""
-
-    def test_every_discovered_profile_declares_exactly_one_document(self):
-        profiles = discover_profiles()
-        self.assertGreaterEqual(
-            len(profiles), 1,
-            "expected at least one profile on disk; this check would "
-            "otherwise be vacuous")
-        for entry in profiles:
-            with self.subTest(skill=entry["skill_name"]):
-                documents = entry["profile"].get("documents")
-                self.assertEqual(
-                    isinstance(documents, (list, tuple)) and len(documents), 1,
-                    f"{entry['skill_name']} declares "
-                    f"{len(documents) if isinstance(documents, (list, tuple)) else 'a non-list'} "
-                    "documents entries -- a second entry (documents[1]) "
-                    "yields a fidelity status that reads green having "
-                    "measured nothing until change C lands its own "
-                    "per-document fidelity fold; this guard is change C's "
-                    "first deletion")
-
-    def test_x8_a_second_documents_entry_on_a_scratch_copy_fails_this_lock(self):
-        """Mutation X8: add a second `documents` entry to a SCRATCH COPY of
-        this skill's own profile (never the shipped one), confirm the
-        single-document assertion above -- reapplied directly to the
-        mutated profile dict -- fails; the shipped profile is untouched."""
-        real_entry = next(
-            entry for entry in discover_profiles()
-            if entry["skill_name"] == "experimental-implementation")
-        real_documents = real_entry["profile"]["documents"]
-        self.assertEqual(len(real_documents), 1)
-
-        mutated_documents = list(real_documents) + [
-            {"directory": Path("/scratch/second-document"), "label": "second"}]
-        self.assertEqual(len(mutated_documents), 2)
-
-        # The lock's own assertion, applied directly to the mutated
-        # (in-memory only) documents list: it must now fail.
-        with self.assertRaises(AssertionError):
-            self.assertEqual(
-                isinstance(mutated_documents, (list, tuple)) and len(mutated_documents), 1)
-
-
 # --- C3: the replacement lock, proven by reading, not by counting --------
 #
-# Task 4.2 (design.md D10, spec `experimental-implementation-skill`
-# Requirement "A Two-Document Guarantee Is Proven By Reading, Not By
-# Counting"): written BEFORE task 4.3 declares `documents[1]` in the
-# shipped profile, so it is confirmed red here for the honest reason that
-# there is no second document yet -- `fidelityByDocument` is absent from
-# `verify`'s own JSON entirely under one document. It replaces
-# `SingleDocumentGuaranteeTests` (deleted, task 4.4), which proved the
-# COUNT never changes; this proves the READ actually happens.
+# D10's single-document guarantee (Cut 3 slice A, `SingleDocumentGuarantee
+# Tests`) is DELETED here (task 4.4, spec `experimental-implementation-
+# skill` Requirement "A Two-Document Guarantee Is Proven By Reading, Not
+# By Counting"): it proved only that `documents` stayed length 1 --
+# necessary while `_extra_document_fidelity_status` fed every index the
+# SAME four shared, document-count-invariant conditions (a `documents[1]`
+# declared before this slice would have yielded a fidelity status that
+# read green having measured nothing). Now that the fold genuinely reads
+# each document's own claim-key scope (C2a) and its own citation pattern
+# (C2b), a documents-count check alone is no longer the property that
+# matters -- `TwoDocumentReadProvenTests` below replaces it, proving the
+# per-document READ against the shipped skill's own two now-declared
+# documents, and catching a reversion of that read even though the count
+# stays two throughout.
 
 SHIPPED_LAUNCHER = (
     SKILLS_DIR / "experimental-implementation" / "scripts" / "implementation_cli.py")
@@ -776,12 +719,6 @@ class TwoDocumentReadProvenTests(unittest.TestCase):
             clean_by_doc["proposal"]["status"], "drift",
             "the reverted fold should have reported document 1 as drift "
             "under this mutation, even with two documents still declared")
-
-        # The shipped profile file itself was never touched.
-        shipped_source = (
-            SKILLS_DIR / "experimental-implementation" / "impl_profile.py"
-        ).read_text(encoding="utf-8")
-        self.assertEqual(shipped_source.count('"directory":'), 1)
 
 
 if __name__ == "__main__":
