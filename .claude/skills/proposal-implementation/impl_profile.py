@@ -226,6 +226,18 @@ PROFILE = {
             # opens a file for a `None` entry (D1 property 1), so this
             # sibling's 28 sealed digests stay byte-identical.
             "dataset_marker": None,
+            # `the-agreement-nothing-computes` (Slice D, task 1.7):
+            # TODAY'S EXACT HARDCODED BYTES, written down rather than
+            # inherited from the engine -- the whole reason this leaf is a
+            # zero-delta edit against `tests/seal/`'s 28 digests, asserted
+            # in `tests.seal`, never inferred. `(?s)` carries `DISPLAY_BLOCK_
+            # RE`'s own `re.DOTALL` flag inline, so the resolver compiles
+            # every pattern flag-free.
+            "block_locator": {
+                "pattern": r"\\tag\{([^}]+)\}",
+                "block_pattern": r"(?s)\$\$.*?\$\$",
+                "identity": "\\tag{{{value}}}",
+            },
         },
     ],
 }

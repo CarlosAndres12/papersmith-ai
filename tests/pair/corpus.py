@@ -38,16 +38,27 @@ _SKILL_ANCHOR = "_SKILL = Path(__file__).resolve().parent"
 #: by its own indexed path, never the bare field name.
 #: `a-data-directory-somebody-can-owe` (B1): the template's second entry
 #: gained a required `dataset_marker` leaf (a fixture edit, not the
-#: reaching configuration -- `None` here), so this anchor's text and its
-#: mutated counterpart both grew by that one line, keeping the same
-#: "directory removed, everything else kept" shape the resolver's
-#: per-index refusal branch depends on.
+#: reaching configuration -- `None` here). `the-agreement-nothing-computes`
+#: (Slice D) grew it again with a required `block_locator` leaf. Both
+#: anchors below and their mutated counterparts grew with the template,
+#: keeping the same "directory removed, everything else kept" shape the
+#: resolver's per-index refusal branch depends on.
 _SECOND_DOCUMENT_ENTRY = (
     '{"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",\n'
-    '         "dataset_marker": None}')
+    '         "dataset_marker": None,\n'
+    '         "block_locator": {\n'
+    '             "pattern": r"\\\\tag\\{([^}]+)\\}",\n'
+    '             "block_pattern": r"(?s)\\$\\$.*?\\$\\$",\n'
+    '             "identity": "\\\\tag{{{value}}}",\n'
+    '         }}')
 _SECOND_DOCUMENT_WITHOUT_DIRECTORY = (
     '{"label": "experiments",\n'
-    '         "dataset_marker": None}')
+    '         "dataset_marker": None,\n'
+    '         "block_locator": {\n'
+    '             "pattern": r"\\\\tag\\{([^}]+)\\}",\n'
+    '             "block_pattern": r"(?s)\\$\\$.*?\\$\\$",\n'
+    '             "identity": "\\\\tag{{{value}}}",\n'
+    '         }}')
 
 
 @dataclasses.dataclass(frozen=True)

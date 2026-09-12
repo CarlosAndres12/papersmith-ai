@@ -215,6 +215,18 @@ PROFILE = {
             # exact line-leading marker or it does not, and `verify` can
             # now say which.
             "dataset_marker": "**Dataset:**",
+            # `the-agreement-nothing-computes` (Slice D, design.md D1/D3):
+            # this domain's OWN numbered-entry form -- a line-leading
+            # `## N` heading, never the mathematical proposal's LaTeX. The
+            # inline `(?m)` carries `re.MULTILINE` so a mid-document
+            # heading matches; the block form runs to (not including) the
+            # next heading or the end of the text, mirroring the LaTeX
+            # sibling's own non-greedy `$$…$$` shape.
+            "block_locator": {
+                "pattern": r"(?m)^## (\d+)$",
+                "block_pattern": r"(?s)## \d+.*?(?=\n## |\Z)",
+                "identity": "## {value}",
+            },
         },
         {
             "directory": _FORGE_ROOT / "proposals",
@@ -222,6 +234,15 @@ PROFILE = {
             # This document never owes a dataset -- stays `None`
             # permanently (design.md D10).
             "dataset_marker": None,
+            # `the-agreement-nothing-computes` (Slice D, design.md D1):
+            # the mathematical proposal's own LaTeX form -- today's exact
+            # engine bytes, the same declaration `proposal-implementation`
+            # makes for its own single document.
+            "block_locator": {
+                "pattern": r"\\tag\{([^}]+)\}",
+                "block_pattern": r"(?s)\$\$.*?\$\$",
+                "identity": "\\tag{{{value}}}",
+            },
             "claim_key": "equations",
             "locus_key": "equations",
             "remedy_locus_key": "remedy_equations",

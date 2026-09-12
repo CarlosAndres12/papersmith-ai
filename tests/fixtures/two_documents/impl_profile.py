@@ -100,9 +100,24 @@ PROFILE = {
          # `a-data-directory-somebody-can-owe` (B1, design.md D10): a
          # fixture edit, not the reaching configuration -- required,
          # `None` here.
-         "dataset_marker": None},
+         "dataset_marker": None,
+         # `the-agreement-nothing-computes` (Slice D, task 2.7/tasks.md
+         # "the two new required leaves; invisible to `discover_profiles()`",
+         # this file lives under `tests/`, not `.claude/skills/*/`):
+         # syntactically complete, real content is irrelevant, exactly this
+         # module's own docstring convention.
+         "block_locator": {
+             "pattern": r"\\tag\{([^}]+)\}",
+             "block_pattern": r"(?s)\$\$.*?\$\$",
+             "identity": "\\tag{{{value}}}",
+         }},
         {"directory": _FIXTURE_ROOT / "experiments", "label": "experiments",
-         "dataset_marker": None},
+         "dataset_marker": None,
+         "block_locator": {
+             "pattern": r"\\tag\{([^}]+)\}",
+             "block_pattern": r"(?s)\$\$.*?\$\$",
+             "identity": "\\tag{{{value}}}",
+         }},
     ],
 }
 
