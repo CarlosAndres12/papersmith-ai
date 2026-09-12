@@ -78,7 +78,8 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'names': ['equation', 'equations', 'ecuación', 'ecuaciones', "
         "'mathematics', 'matemática', 'formulation']}, "
         f"'documents': [{{'directory': Path({str(documents_dir)!r}), "
-        "'label': 'proposal', 'dataset_marker': None}]")
+        "'label': 'proposal', 'dataset_marker': None, "
+        f"'block_locator': {_block_locator()!r}}}]")
 
 
 _counter = itertools.count()
@@ -491,6 +492,11 @@ _CUT2_LEAVES: tuple[str, ...] = (
     # `label` so this generic per-leaf walk also proves index 0's own case;
     # `DatasetMarkerLeafOwnTierTests` below proves the OTHER index.
     "documents[0].dataset_marker",
+    # `the-agreement-nothing-computes` (Slice D, design.md D1/R2): its own
+    # required, non-nullable tier -- appended after `dataset_marker` so
+    # this generic per-leaf walk also proves index 0's own whole-leaf case;
+    # `BlockLocatorLeafOwnTierTests` below proves the sub-key shape.
+    "documents[0].block_locator",
 )
 
 #: `vocabulary.names` is declared at S13 (design.md D7), not S2 -- so a
@@ -498,6 +504,18 @@ _CUT2_LEAVES: tuple[str, ...] = (
 #: exercise, and one WITH it is what S13 onward exercises.
 _CITATION_PATTERN_SRC = (
     r"Ecs?\.?\s*\(?(\d+)\)?|Eq\.?\s*\(?(\d+)\)?|Ecuaciones?\s*\((\d+)\)")
+
+#: `the-agreement-nothing-computes` (Slice D, design.md D1/R2): every
+#: `documents[N]` entry this file constructs now needs a complete, valid
+#: `block_locator` -- required and non-nullable. A fresh literal at each
+#: construction site (never one shared mutable reference), matching this
+#: file's own convention.
+def _block_locator() -> dict:
+    return {
+        "pattern": r"\\tag\{([^}]+)\}",
+        "block_pattern": r"(?s)\$\$.*?\$\$",
+        "identity": "\\tag{{{value}}}",
+    }
 
 
 def _cut2_profile(tmp_dir: Path, *, with_names: bool = True) -> dict:
@@ -547,7 +565,10 @@ def _cut2_profile(tmp_dir: Path, *, with_names: bool = True) -> dict:
              # B1 (`a-data-directory-somebody-can-owe`, design.md D1):
              # required, own tier, nullable -- `None` here since this
              # fixture's own tests are not testing the dataset demand.
-             "dataset_marker": None},
+             "dataset_marker": None,
+             # `the-agreement-nothing-computes` (Slice D, design.md D1/R2):
+             # required, own tier, non-nullable.
+             "block_locator": _block_locator()},
         ],
     }
     if with_names:
@@ -575,7 +596,7 @@ def _to_profile_source(value) -> str:
 
 
 _INDEXED_LEAF_RE = re.compile(
-    r"^documents\[(\d+)\]\.(directory|label|dataset_marker)$")
+    r"^documents\[(\d+)\]\.(directory|label|dataset_marker|block_locator)$")
 
 
 def _without_leaf(profile: dict, dotted: str) -> dict:
@@ -731,6 +752,169 @@ class DatasetMarkerLeafOwnTierTests(unittest.TestCase):
             module.PROFILE["documents"][0]["dataset_marker"], "**Dataset:**")
 
 
+class BlockLocatorLeafOwnTierTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D1, R2 resolved
+    5d42dd7, tasks.md 1.1/1.3): `documents[N].block_locator` is its OWN
+    required, non-nullable tier, appended right after `dataset_marker` --
+    a missing LEAF refuses naming `documents[N].block_locator` alone; a
+    missing SUB-KEY refuses at its own exact indexed sub-path
+    (`documents[1].block_locator.identity`), never the bare parent leaf.
+    Exercised against a SYNTHETIC scratch profile (never a shipped one --
+    both shipped profiles declare a complete `block_locator` on every
+    entry, so neither can exercise an omission), one entry complete, the
+    sibling entry omitting exactly one sub-key at a time -- proving the
+    omitting entry borrows neither the other entry's locator nor falls
+    back to the engine's `TAG_RE`/`DISPLAY_BLOCK_RE` constants (spec
+    `implementation-per-document-vocabulary`, scenario "A missing sub-key
+    refuses at its exact indexed path")."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-block-locator-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_a_missing_leaf_refuses_naming_the_bare_leaf(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        del full["documents"][0]["block_locator"]
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[0].block_locator", message)
+
+    def test_a_missing_subkey_refuses_at_its_exact_indexed_subpath(self):
+        for sub_key in ("pattern", "block_pattern", "identity"):
+            with self.subTest(sub_key=sub_key):
+                tmp_dir = self._tmp_dir()
+                full = _two_document_profile(tmp_dir)
+                del full["documents"][1]["block_locator"][sub_key]
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+                self.assertIn(f"documents[1].block_locator.{sub_key}", message)
+                # Neither borrows the sibling entry's locator nor falls
+                # back silently: the resolver refuses outright, so no
+                # value for the omitting entry is ever produced at all.
+                self.assertNotIn("documents[0].block_locator", message)
+
+    def test_a_complete_locator_passes_and_is_returned_verbatim(self):
+        """The positive control every refusal case above is a mutation OF."""
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(
+            module.PROFILE["documents"][0]["block_locator"], _block_locator())
+
+
+#: A pattern with 0, 2, or 3 capturing groups -- the block locator's own
+#: reader takes exactly one value, so all three counts must refuse,
+#: including 3 (the case existing so nobody copies `citation_pattern`'s
+#: own three-group rule here by habit).
+_ZERO_GROUP_PATTERN = r"\\tag\{[^}]+\}"
+_TWO_GROUP_PATTERN = r"\\tag\{([^}]+)\}-(\d+)"
+_THREE_GROUP_PATTERN = r"\\tag\{([^}]+)\}-(\d+)-(\d+)"
+
+
+class BlockLocatorShapeValidationTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D1, tasks.md
+    1.4/1.5): the locator's own shape, validated at resolve time --
+    `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR`, naming the
+    exact indexed sub-path, for an uncompilable `pattern`, a `pattern`
+    with other than exactly one capturing group (0, 2, or 3 -- 3
+    deliberately included so `citation_pattern`'s own rule is not copied
+    here), and an `identity` whose `string.Formatter().parse` yields
+    other than exactly one field named `value`."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-block-shape-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _profile_with_locator(self, tmp_dir: Path, locator: dict) -> dict:
+        full = _cut2_profile(tmp_dir)
+        full["documents"][0]["block_locator"] = locator
+        return full
+
+    def test_an_uncompilable_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        locator = {**_block_locator(), "pattern": r"\\tag\{([^}]+"}  # unbalanced paren
+        full = self._profile_with_locator(tmp_dir, locator)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+        self.assertIn("documents[0].block_locator.pattern", message)
+
+    def test_pattern_group_counts_other_than_one_refuse_by_name(self):
+        for count, pattern in (
+            (0, _ZERO_GROUP_PATTERN), (2, _TWO_GROUP_PATTERN),
+            (3, _THREE_GROUP_PATTERN),
+        ):
+            with self.subTest(group_count=count):
+                tmp_dir = self._tmp_dir()
+                locator = {**_block_locator(), "pattern": pattern}
+                full = self._profile_with_locator(tmp_dir, locator)
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn(
+                    "IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+                self.assertIn("documents[0].block_locator.pattern", message)
+                self.assertIn(str(count), message)
+
+    def test_an_uncompilable_block_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        locator = {**_block_locator(), "block_pattern": r"(?s)\$\$.*?\$\$("}
+        full = self._profile_with_locator(tmp_dir, locator)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+        self.assertIn("documents[0].block_locator.block_pattern", message)
+
+    def test_identity_with_zero_fields_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        locator = {**_block_locator(), "identity": "no fields at all"}
+        full = self._profile_with_locator(tmp_dir, locator)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+        self.assertIn("documents[0].block_locator.identity", message)
+
+    def test_identity_with_two_fields_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        locator = {**_block_locator(), "identity": "{value}{other}"}
+        full = self._profile_with_locator(tmp_dir, locator)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+        self.assertIn("documents[0].block_locator.identity", message)
+
+    def test_identity_with_a_field_not_named_value_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        locator = {**_block_locator(), "identity": "{}"}
+        full = self._profile_with_locator(tmp_dir, locator)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR", message)
+        self.assertIn("documents[0].block_locator.identity", message)
+
+
 class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
     """Threat-matrix RED test (design.md, Environment-variable routing,
     task 9.2): `IMPLEMENTATION_PROPOSALS` must still win over
@@ -815,7 +999,7 @@ def _two_document_profile(tmp_dir: Path, *, document_one_overlay: dict | None = 
     overlay."""
     profile = _cut2_profile(tmp_dir)
     entry: dict = {"directory": tmp_dir / "documents-1", "label": "document-one",
-                   "dataset_marker": None}
+                   "dataset_marker": None, "block_locator": _block_locator()}
     if document_one_overlay is not None:
         entry.update(document_one_overlay)
     profile["documents"].append(entry)
@@ -887,7 +1071,7 @@ class DocumentVocabularyOverlayTests(unittest.TestCase):
         full["documents"][0].update(_document_one_overlay())
         full["documents"].append(
             {"directory": tmp_dir / "documents-1", "label": "document-one",
-             "dataset_marker": None})
+             "dataset_marker": None, "block_locator": _block_locator()})
         (tmp_dir / "proposals").mkdir()
         profile_file = _write_profile(tmp_dir, full)
         module = _fresh_resolver_load(str(profile_file))
