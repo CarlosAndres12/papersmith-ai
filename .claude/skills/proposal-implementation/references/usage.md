@@ -2213,7 +2213,12 @@ Every refusal leaves the CLI through one handler and prints the same JSON:
 `status`, `code`, `detail`, exit `2`, nothing appended anywhere. Refusals a call
 to one of the ten **gating** commands can reach — `apply`, `admit`, `gate`,
 `offer`, `close`, `step`, `settle`, `materialize`, `position`, `agree` — carry
-one more thing, and which ones carry it is itself the answer to a question:
+one more thing. `agree` is on that roster but not on this skill's command line:
+it is registered only for a profile declaring more than one document, and this
+one declares a single document. Its codes are reachable here in the sense the
+roster means — derivable from a module-level function — and unreachable in the
+sense a reader cares about, which is that no invocation of this skill raises
+them. Which refusals carry the extra key is itself the answer to a question:
 
 > Can the caller clear this by changing the invocation alone, without touching
 > the repository?
