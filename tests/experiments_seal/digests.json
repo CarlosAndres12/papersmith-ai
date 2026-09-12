@@ -1,6 +1,6 @@
 {
   "__corpus_fingerprint__": {
-    "sha256": "3ac7e7ae7d6f01fd3f7770f87ad56b921ed4d669924cd60ba2a343bb1cef6ba2"
+    "sha256": "1ef201bfa24164e45e6efacda5c2ab4574f3394a8840aaf3bf99cd5545ac9c6d"
   },
   "apply": {
     "bytes": 280,
@@ -57,6 +57,11 @@
     "exit": 0,
     "sha256": "269689d3efb05766c0a57efbf6b0269b1eed33b96a84c7f012cc2d0c8331da9f"
   },
+  "plan-b-declared": {
+    "bytes": 1160,
+    "exit": 0,
+    "sha256": "5254b3054a6038a0b960b80b4ef351ebfa7a2a6816ddeb139d549c6f106253c0"
+  },
   "position-e0": {
     "bytes": 2329,
     "exit": 2,
@@ -92,10 +97,25 @@
     "exit": 0,
     "sha256": "e7587be77f3214c2266149e05f83d7f1be791535f08cfc172e4dce022be9ea44"
   },
+  "verify-a-declared": {
+    "bytes": 21964,
+    "exit": 0,
+    "sha256": "2a17a16eac32b7c57a771fe0d558779776b388a6352816042a19b620cc348bad"
+  },
   "verify-b": {
     "bytes": 20743,
     "exit": 0,
     "sha256": "e7587be77f3214c2266149e05f83d7f1be791535f08cfc172e4dce022be9ea44"
+  },
+  "verify-b-declared": {
+    "bytes": 21988,
+    "exit": 0,
+    "sha256": "1f48199edbee143b739e58b72b389a8bc0e19d202c378f0183aecf7ef11cd0a3"
+  },
+  "verify-b-undeclared": {
+    "bytes": 21964,
+    "exit": 0,
+    "sha256": "7135c7b92cb9e33fe7d645ffdab799835e58621992ce52dc07c6ffd2521c5c62"
   },
   "walk": {
     "bytes": 814,

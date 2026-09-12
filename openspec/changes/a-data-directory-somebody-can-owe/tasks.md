@@ -83,9 +83,9 @@ Chain strategy: stacked-to-main
 
 ## Phase 9: Corpus second axis (B2, D9)
 
-- [ ] 9.1 `tests/experiments_seal/corpus.py` — author `dataset-0.md`/`dataset-1.md`, byte-identical except one `**Dataset:**` line, outside the discovered `trial-(\d+)\.md` family.
-- [ ] 9.2 `tests/experiments_seal/cases.json` — add `verify-b-declared`, `verify-a-declared`, `verify-b-undeclared`, `plan-b-declared`.
-- [ ] 9.3 RED then GREEN: regenerate `digests.json`; assert **zero** of the existing 20 cases move, only `__corpus_fingerprint__` plus the 4 new entries; read each new digest by hand before accepting (never bulk-regenerate).
+- [x] 9.1 `tests/experiments_seal/corpus.py` — author `dataset-0.md`/`dataset-1.md`, byte-identical except one `**Dataset:**` line, outside the discovered `trial-(\d+)\.md` family.
+- [x] 9.2 `tests/experiments_seal/cases.json` — add `verify-b-declared`, `verify-a-declared`, `verify-b-undeclared`, `plan-b-declared`.
+- [x] 9.3 RED then GREEN: regenerate `digests.json`. **Measured**: zero of the existing 20 cases moved (`propose` excluded from comparison as always, unregenerated); only `__corpus_fingerprint__` (`3ac7e7a...` → `1ef201b...`) plus the 4 new entries. Each new case's JSON payload was read by hand before writing the golden: `verify-b-declared` → `missingDirs: ["Trial/Data"]`, `status: "drift"`; `verify-a-declared` → `missingDirs: []`; `verify-b-undeclared` → `missingDirs: []`; `plan-b-declared` → `createDirs: ["Trial/Data"]`, `boundTo.revision: "dataset-1.md"`, `boundTo.documents[0].declaresDataset: true`.
 
 ## Phase 10: New neutrality lock (B2)
 

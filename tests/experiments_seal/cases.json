@@ -8,6 +8,18 @@
   {"id": "verify-b", "command": "verify", "fixture": "B", "proposals": true,
    "argv": ["--target", "<TARGET>", "--name", "Trial"]},
 
+  {"id": "verify-b-declared", "command": "verify", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
+  {"id": "verify-a-declared", "command": "verify", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
+  {"id": "verify-b-undeclared", "command": "verify", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-0.md"]},
+
+  {"id": "plan-b-declared", "command": "plan", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
   {"id": "probe", "command": "probe", "fixture": "A", "proposals": true,
    "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md"]},
 

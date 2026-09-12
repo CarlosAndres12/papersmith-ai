@@ -51,6 +51,26 @@ REVISION_TEXT = (
     "Exp.(9) a second time.\n"
 )
 
+#: `a-data-directory-somebody-can-owe` (B2, design.md D9): document 0's
+#: second axis -- a dataset declaration, or its absence. `dataset-0.md`/
+#: `dataset-1.md` sit outside the discovered `trial-(\d+)\.md` family
+#: (M7's own naming), so neither existing case's discovery changes and
+#: no existing revision's bytes change; only these two files are new.
+#: Byte-identical except for the ONE trailing `**Dataset:**` line
+#: `dataset-1.md` carries and `dataset-0.md` does not -- the smallest
+#: difference that could move `with_data` and nothing else.
+_DATASET_AXIS_BASE_TEXT = (
+    "## 1\n"
+    "\n"
+    "This revision names no dataset at all.\n"
+)
+DATASET_UNDECLARED_TEXT = _DATASET_AXIS_BASE_TEXT
+DATASET_DECLARED_TEXT = (
+    _DATASET_AXIS_BASE_TEXT
+    + "\n"
+    "**Dataset:** a synthetic corpus authored for this case\n"
+)
+
 #: Document 1's own revision text (Slice C, design.md task 4.6) --
 #: `documents[1]`'s own root, cited in its OWN citation syntax ("Ec."/
 #: "Eq."), never document 0's ("Exp."). Cites the SAME locus
@@ -251,6 +271,14 @@ def _build_documents(root: Path) -> Path:
         _MANAGED_ARTIFACT_MARKER + REVISION_TEXT.encode("utf-8"))
     (documents / "trial-2.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + REVISION_TEXT.encode("utf-8"))
+    # B2 (design.md D9): the dataset-declaration axis, named outside the
+    # `trial-(\d+)\.md` family on purpose (M7) -- neither file is a
+    # candidate for this corpus's own seedless/family discovery, so
+    # every existing case's discovered name is unaffected.
+    (documents / "dataset-0.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + DATASET_UNDECLARED_TEXT.encode("utf-8"))
+    (documents / "dataset-1.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + DATASET_DECLARED_TEXT.encode("utf-8"))
     return documents
 
 
