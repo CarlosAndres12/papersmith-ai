@@ -188,7 +188,37 @@ the spec to the invariant that actually survived measurement.)
 - THEN a `skipped` count other than 6 fails the assertion, distinct from
   `Ran` growing, which is expected and unasserted
 
+#### Scenario: Shipping the second skill moves nothing in the existing 28
+- GIVEN `experimental-implementation` is added under `.claude/skills/`
+- WHEN `proposal-implementation`'s existing 28-case seal is re-compared to its
+  committed goldens
+- THEN every digest and exit status is byte-identical to its pre-addition golden
+
 ## ADDED Requirements
+
+### Requirement: The Second Skill Ships Its Own Seal, Added Beside The Existing One
+
+`experimental-implementation` MUST have its own committed stdout-characterization
+seal, capturing digest and exit status for its own single-document corpus, added
+beside `tests/seal/` rather than inside it. The existing 28-case corpus and its
+goldens MUST remain untouched by this addition.
+
+#### Scenario: The existing corpus is provably untouched
+- GIVEN the second skill's own seal is added
+- WHEN `git diff --exit-code tests/seal/` runs
+- THEN it exits 0, both before and after the addition
+
+#### Scenario: The second skill's own corpus is captured and digested
+- GIVEN `experimental-implementation`'s single-document fixture profile and its own
+  corpus
+- WHEN its seal is captured
+- THEN each case has a digest and exit status, or is in an explicit unsealed set
+  with a reason
+
+#### Scenario: A one-byte change in the second skill's seal is caught
+- GIVEN a stored golden from the second skill's own seal
+- WHEN one byte of its captured stdout is mutated and compared
+- THEN the comparison goes red
 
 ### Requirement: The Two-Document Branch Is Sealed By Its Own Corpus, Separate From The Existing 28
 
