@@ -11,9 +11,13 @@ this lock itself would then have to scan and clear.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, Mapping
@@ -632,6 +636,146 @@ class SingleDocumentGuaranteeTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assertEqual(
                 isinstance(mutated_documents, (list, tuple)) and len(mutated_documents), 1)
+
+
+# --- C3: the replacement lock, proven by reading, not by counting --------
+#
+# Task 4.2 (design.md D10, spec `experimental-implementation-skill`
+# Requirement "A Two-Document Guarantee Is Proven By Reading, Not By
+# Counting"): written BEFORE task 4.3 declares `documents[1]` in the
+# shipped profile, so it is confirmed red here for the honest reason that
+# there is no second document yet -- `fidelityByDocument` is absent from
+# `verify`'s own JSON entirely under one document. It replaces
+# `SingleDocumentGuaranteeTests` (deleted, task 4.4), which proved the
+# COUNT never changes; this proves the READ actually happens.
+
+SHIPPED_LAUNCHER = (
+    SKILLS_DIR / "experimental-implementation" / "scripts" / "implementation_cli.py")
+
+
+class TwoDocumentReadProvenTests(unittest.TestCase):
+    """Real subprocesses against the SHIPPED `experimental-implementation`
+    launcher and its own profile (never a synthetic fixture profile, and
+    never the shipped file mutated on disk) -- proves `documents[1]`'s own
+    text genuinely drives its own `fidelityByDocument` entry, and that a
+    documents-count check alone could not have told a correct fold from a
+    reverted one."""
+
+    PACKAGE = "TwoDocumentRead"
+    DOC0_REVISION = "lock-doc0-r01.md"
+    DOC1_OLD_REVISION = "lock-doc1-plan-v00.md"
+    DOC1_NEW_REVISION = "lock-doc1-plan-v01.md"
+
+    def setUp(self):
+        self.doc0 = Path(tempfile.mkdtemp(prefix="lock-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.DOC0_REVISION).write_text(
+            "## 1\nexperiments document text.\n", encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="lock-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.DOC1_OLD_REVISION).write_text(
+            "the mathematical proposal, an older version.\n", encoding="utf-8")
+        (self.doc1 / self.DOC1_NEW_REVISION).write_text(
+            "the mathematical proposal, the current version.\n", encoding="utf-8")
+
+    def _build_box(self, *, doc1_revision: str, suffix: str = ""):
+        box = FORGE / "implementations" / f"_lock_read_{os.getpid()}_{id(self)}{suffix}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "lock-read"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "lock-read@example.invalid"
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "src" / self.PACKAGE / "doc0_module.py").write_text(
+            "__provenance__ = {\n"
+            f"    'revision': {self.DOC0_REVISION!r}, 'sections': ['1'],\n"
+            "    'experiments': ['T1'], 'invariants': [],\n"
+            "}\n", encoding="utf-8")
+        (box / "src" / self.PACKAGE / "doc1_module.py").write_text(
+            "__provenance__ = {\n"
+            f"    'revision': {doc1_revision!r}, 'sections': ['1'],\n"
+            "    'equations': ['1'], 'invariants': [],\n"
+            "}\n", encoding="utf-8")
+        (box / self.PACKAGE).mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        return box
+
+    def _verify(self, box: Path) -> dict:
+        env = dict(os.environ)
+        env.pop("IMPLEMENTATION_DOMAIN_PROFILE", None)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        proc = subprocess.run(
+            [sys.executable, str(SHIPPED_LAUNCHER), "verify", "--target", str(box),
+             "--name", self.PACKAGE, "--revision", self.DOC0_REVISION],
+            capture_output=True, text=True, cwd=FORGE, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_document_one_status_changes_independently_of_document_zero(self):
+        """Spec scenario: document 1's own text/module changes while
+        document 0 stays clean -- document 1's status alone reflects it."""
+        stale_box = self._build_box(
+            doc1_revision=self.DOC1_OLD_REVISION, suffix="_stale")
+        stale = self._verify(stale_box)
+        stale_by_doc = {e["label"]: e for e in stale["fidelity"]["fidelityByDocument"]}
+        self.assertEqual(stale_by_doc["experiments"]["status"], "ok")
+        self.assertEqual(stale_by_doc["proposal"]["status"], "drift")
+
+        clean_box = self._build_box(
+            doc1_revision=self.DOC1_NEW_REVISION, suffix="_clean")
+        clean = self._verify(clean_box)
+        clean_by_doc = {e["label"]: e for e in clean["fidelity"]["fidelityByDocument"]}
+        self.assertEqual(clean_by_doc["experiments"]["status"], "ok")
+        self.assertNotEqual(
+            clean_by_doc["proposal"]["status"], "drift",
+            "document 1's own status did not change when its own text did, "
+            "with document 0 held constant -- the fold did not read the index")
+
+    def test_a_reverted_fold_is_caught_even_with_two_documents_declared(self):
+        """The count-only failure mode this lock replaces: revert the
+        per-document derivation on the REAL engine (Y5's own mutation) --
+        `documents` still has two entries, but this lock still catches the
+        reversion, because it demonstrates the READ, not the count."""
+        engine = (SKILLS_DIR / "_core" / "implementation" / "engine"
+                 / "implementation_engine.py")
+        old = "doc_revision_n = document_names[index]"
+        new = "doc_revision_n = revision"
+        original = engine.read_text(encoding="utf-8")
+        self.assertEqual(original.count(old), 1)
+        self.assertEqual(original.count(new), 0)
+        mutated = original.replace(old, new, 1)
+        engine.write_text(mutated, encoding="utf-8")
+
+        def restore():
+            engine.write_text(original, encoding="utf-8")
+            self.assertEqual(engine.read_text(encoding="utf-8"), original)
+        self.addCleanup(restore)
+
+        clean_box = self._build_box(
+            doc1_revision=self.DOC1_NEW_REVISION, suffix="_mutated")
+        clean = self._verify(clean_box)
+        clean_by_doc = {e["label"]: e for e in clean["fidelity"]["fidelityByDocument"]}
+        # Under the mutation, document 1's own current revision is
+        # compared against document 0's `revision` instead of its own
+        # discovered name -- reads `drift` even though document 1's text
+        # never changed. This is exactly what the deleted count-only lock
+        # (`SingleDocumentGuaranteeTests`) could never have caught: the
+        # document count is still two throughout.
+        self.assertEqual(
+            clean_by_doc["proposal"]["status"], "drift",
+            "the reverted fold should have reported document 1 as drift "
+            "under this mutation, even with two documents still declared")
 
         # The shipped profile file itself was never touched.
         shipped_source = (
