@@ -237,6 +237,12 @@ Two experiments declaring the same identifier are a duplicate and fail the uniqu
 
 Put the declaration in the experiment's own heading. An experiment headed `## Experiment [exp:E1] — …` resolves from a `RESOLVE_TARGET` query of `E1` (measured), which makes the identifier a usable locus handle as well as a citation target. `reference-experimental.ts` declares under the core's own `tag` kind rather than a domain word for the same reason: that is the half of the core's label/tag split that feeds the resolver's aliases and lets a citation resolve instead of reporting as dangling.
 
+### A second, unrelated citation form: `[claims:N]`
+
+An experiment may also cite a claim the mathematical proposal declares, as `[claims:9]` — this document sustaining `\tag{9}` in the proposal's own numbered form. This is **not** a reference-integrity citation and `cites()` never recognizes it: `[claims:N]` is resolved by an entirely different engine, `_core/implementation/`'s own `crossing_state` (`the-agreement-nothing-computes`), against the proposal's own declared claims — never against anything `reference-experimental.ts` declares or cites. Adding it to `cites()` "for completeness" would make every crossing an unresolved reference in this document's own reference-integrity check, since `checkReferenceIntegrity` resolves `cited` against `declared` in the **same** document — the exact cost the operator's own citation-key ruling paid to avoid.
+
+The check this form feeds — a citation to a claim the proposal no longer declares, or a declared claim no experiment cites — is `implementation-cross-document-agreement`'s, run through `agree`, not through anything in this skill. It refuses and names the discrepancy; it computes no verdict over which document is right, exactly `implementation-cross-document-agreement`'s own boundary.
+
 ## The bound on claims
 
 The data paper is declared as this domain's `sourceAuthority`, at **advisory** severity. What it asserts, always, is that this document plans work rather than reports it — so the detectable conflict is an **achieved result**.

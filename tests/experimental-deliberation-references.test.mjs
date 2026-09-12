@@ -69,6 +69,18 @@ Second.
 
 const NEITHER = '# Experiments\n\nTraining runs use a learning rate of 3e-4 over 5 seeds.\n';
 
+// `the-agreement-nothing-computes` (Slice D, design.md M6, tasks.md 2.11):
+// the new cross-document `[claims:N]` form, which resolves against the
+// mathematical proposal's own declared claims -- an entirely different
+// engine (`_core/implementation/`), never this deliberation core's own
+// `cites()`. This document carries the form and nothing this domain's own
+// `cites()` recognizes at all, so `cites()` must answer `[]` for it --
+// the guard against a later agent adding `[claims:N]` to `cites()` "for
+// completeness" (which would make every crossing an unresolved reference
+// in ITS OWN document, per `checkReferenceIntegrity`'s `known =
+// declaredValues(source)` reading the SAME document's declarations).
+const CLAIMS_CROSSING_ONLY = '# Experiments\n\nSustains claim [claims:39].\n';
+
 const HARNESS = `import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 const piRoot = ${JSON.stringify(piRoot)};
@@ -104,7 +116,10 @@ async function loaded() {
         DELIBERATION_DOMAIN_PROFILE: profilePath,
         ENGINE_DIR: engineDir,
         REFERENCES_MODULE: path.join(skillDir, 'reference-experimental.ts'),
-        DOCUMENTS: JSON.stringify({ RESOLVED, CLAIM_WITHOUT_EXPERIMENT, EXPERIMENT_WITHOUT_CLAIM, DUPLICATE, NEITHER }),
+        DOCUMENTS: JSON.stringify({
+            RESOLVED, CLAIM_WITHOUT_EXPERIMENT, EXPERIMENT_WITHOUT_CLAIM, DUPLICATE, NEITHER,
+            CLAIMS_CROSSING_ONLY,
+        }),
     };
     const { stdout } = await execFileAsync('node', [harnessPath], { env });
     cached = JSON.parse(stdout.trim().split('\n').pop());
@@ -156,4 +171,15 @@ test('a document declaring and citing nothing reports not applicable, never a va
     assert.deepEqual(result.declares, []);
     assert.deepEqual(result.cites, []);
     assert.equal(result.integrity.applicable, false);
+});
+
+test('the cross-document [claims:N] form is not a citation this domain resolves', async () => {
+    // M6 (design.md): a negative control, asserted against the CURRENT,
+    // unedited reference-experimental.ts -- not a RED test waiting for a
+    // GREEN. `[claims:N]` resolves against the mathematical proposal
+    // through `_core/implementation/`'s own crossing_state, an entirely
+    // different engine; this deliberation core's own `cites()` must never
+    // recognize it.
+    const { CLAIMS_CROSSING_ONLY: result } = await loaded();
+    assert.deepEqual(result.cites, []);
 });
