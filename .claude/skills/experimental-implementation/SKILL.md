@@ -72,6 +72,33 @@ document's claim key it implements (`"experiments"` for document 0,
 invariant listed there needs a matching test under `tests/`, exactly as the
 sibling's own doctrine requires for its own claim key.
 
+## `Data/` is demandable, per product folder
+
+`documents[0]`'s own `dataset_marker` leaf (`**Dataset:**`) makes a
+declared dataset demandable: when the bound experiments revision carries
+a line-leading `**Dataset:** ...` declaration -- the same marker
+`experimental-deliberation`'s own preservation rule already enforces on
+this domain's documents -- `verify` reports `{Name}/Data` in
+`missingDirs` until that folder exists, exactly as it already does for
+`Notebooks/`, `Results/` and `Models/`. Presence only: which files
+constitute the dataset is out of scope, matching the other three
+categories.
+
+The demand is **per product folder, never at the repository root**, for
+three reasons:
+
+1. A run binds to **one method** -- `--name` already carries that
+   binding, and the data is the data that method's own experiments use.
+2. The same repository's data may not apply to a **different method**
+   living beside it under the same clone.
+3. A later paper may move the repository to a **different area
+   entirely**, whose data is not this one's.
+
+A document declaring no dataset (`dataset_marker: None`, as `documents[1]`
+-- the mathematical proposal -- always does) changes nothing: `Data/`
+stays undemanded for that document, exactly as before this capability
+existed.
+
 ## The objective flow
 
 **Why this skill was invoked, and where it has to arrive.** Declared here and in

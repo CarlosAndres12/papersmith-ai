@@ -204,11 +204,17 @@ PROFILE = {
         {
             "directory": _FORGE_ROOT / "experiments",
             "label": "experiments",
-            # `a-data-directory-somebody-can-owe` (B1, design.md D1):
-            # required leaf, own tier. `None` here in B1 -- declared last,
-            # in B2, only after the fixture-proven detector (D10); B2's
-            # own commit changes this `None` to the real marker.
-            "dataset_marker": None,
+            # `a-data-directory-somebody-can-owe` (B2, design.md D1/D10):
+            # the REAL marker, declared last -- only after B1 proved the
+            # detector against a fixture. Matches the exact literal
+            # `experimental-deliberation` already enforces on this same
+            # domain's own documents (`preservation-experimental.ts`'s
+            # `DATASET = DECLARATION("Dataset")`, spec `experimental-
+            # plan-declarations`'s own `**Dataset:** ...` line): a
+            # revision this domain publishes either already carries this
+            # exact line-leading marker or it does not, and `verify` can
+            # now say which.
+            "dataset_marker": "**Dataset:**",
         },
         {
             "directory": _FORGE_ROOT / "proposals",

@@ -78,8 +78,8 @@ Chain strategy: stacked-to-main
 
 ## Phase 8: Shipped declaration (B2)
 
-- [ ] 8.1 `.claude/skills/experimental-implementation/impl_profile.py` — declare `documents[0]`'s real `dataset_marker` (last write of the change; `documents[1]` stays `None` permanently).
-- [ ] 8.2 `.claude/skills/experimental-implementation/SKILL.md` — state the per-product-folder `Data/` demand and its three reasons.
+- [x] 8.1 `.claude/skills/experimental-implementation/impl_profile.py` — declare `documents[0]`'s real `dataset_marker` (last write of the change; `documents[1]` stays `None` permanently). Declared `"**Dataset:**"`, matching the exact literal `experimental-deliberation` already enforces on this domain's own documents.
+- [x] 8.2 `.claude/skills/experimental-implementation/SKILL.md` — state the per-product-folder `Data/` demand and its three reasons. Measured green after: `test_experimental_implementation.py` (19/19), `test_implementation_domain_lock.py` (24/24), `test_implementation_domain_mutation.py` (12/12); `tests/seal/` and `tests/experiments_seal/` both git-diff-clean.
 
 ## Phase 9: Corpus second axis (B2, D9)
 
