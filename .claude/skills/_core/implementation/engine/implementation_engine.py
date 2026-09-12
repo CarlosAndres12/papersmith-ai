@@ -4946,6 +4946,52 @@ def latest_revision(like: str | None, index: int = 0) -> str | None:
     return revision_discovery(like, index)["revision"]
 
 
+def _document_declares_dataset(index: int, revision_name: str | None) -> bool:
+    """Whether document `index`'s own resolved revision, if any, declares
+    its own `dataset_marker` at the start of a line
+    (`a-data-directory-somebody-can-owe`, design.md D1).
+
+    A `None` marker never opens the document (design.md's property 1,
+    spec `implementation-data-demandability`): the branch is structural,
+    not merely a runtime allowance for a missing read. The match itself
+    is a literal `lstrip().startswith(marker)`, never a substring test
+    and never a regex -- a document that only DISCUSSES its own format
+    ("every protocol needs a `**Dataset:**` line") must not satisfy a
+    substring test while declaring nothing, and a regex-metacharacter
+    marker must match only its own literal text (threat-matrix row:
+    host-supplied text matched, literal only, into file bytes).
+    """
+    marker = DOCUMENTS[index].get("dataset_marker")
+    if marker is None or revision_name is None:
+        return False
+    source = revision_source(revision_name, index)
+    if source is None:
+        return False
+    return any(line.lstrip().startswith(marker) for line in source.splitlines())
+
+
+def declares_dataset(revision: str | None) -> bool:
+    """Does the run bound to `revision` declare a dataset in ANY declared
+    document (`a-data-directory-somebody-can-owe`, design.md D2)?
+
+    Or-folded across every `documents[N]`: document 0's name is
+    `revision` itself; every index beyond it discovers its own, through
+    `document_revision_names` -- Slice C's machinery, unedited. A `None`
+    `revision` (no `--revision` given) returns false WITHOUT calling
+    `document_revision_names` at all -- design.md's property 2: `plan`
+    consults a document only when `--revision` is given, no discovery
+    ever otherwise, since `document_revision_names` would itself discover
+    every document beyond index 0 regardless of what `revision` names.
+    Reads through `revision_source`, never a second path-join site (the
+    threat-matrix row this capability must not widen).
+    """
+    if revision is None:
+        return False
+    names = document_revision_names(revision)
+    return any(_document_declares_dataset(index, name)
+               for index, name in enumerate(names))
+
+
 # How a paper labels a locus, and the only place this skill decides it.
 # A tag is whatever the author put between the braces: `3.1`, `A.2`, `B.10`.
 # Every reader — `admit`, this compatibility audit, `compose` and `handoff` —
