@@ -8437,9 +8437,11 @@ def cmd_agree(args: argparse.Namespace) -> dict:
     absent, untested = state["absent"], state["untested"]
     ids = ([f"absent:{value}" for value in absent]
            + [f"untested:{value}" for value in untested])
-    # D8's shape, wired here even though `--acknowledge` itself is a later
-    # slice: `getattr` reads `None` on THIS command's own args (it takes
-    # no such flag yet), so every id starts unacknowledged.
+    # D8: request-scoped, never persisted -- `--acknowledge` is THIS
+    # call's own argv alone, so a discrepancy cleared here still blocks
+    # the next call unless it is named again. `getattr` keeps reading
+    # `None` safely for every OTHER command that reaches this function
+    # by mistake (none do today; the guard costs nothing to keep).
     acknowledged = set(getattr(args, "acknowledge", None) or [])
     unacknowledged = [i for i in ids if i not in acknowledged]
     if unacknowledged:
@@ -18036,6 +18038,21 @@ def main(argv: list[str] | None = None) -> int:
                                 "THIS argument's own document -- omit it "
                                 "or name one that does not read and it "
                                 "refuses REVISION_UNREADABLE")
+            # design.md D8 (Slice D4): request-scoped, never persisted.
+            # Clears only the exact ids echoed back; every other
+            # outstanding id keeps refusing and stays named in the
+            # refusal's own `unacknowledged` list.
+            p.add_argument("--acknowledge", dest="acknowledge", action="append",
+                           default=None,
+                           help="repeatable: an exact discrepancy id "
+                                "(`absent:<value>` or `untested:<value>`, "
+                                "read off a prior AGREEMENT_DOCUMENTS_"
+                                "DISAGREE refusal) to clear for THIS call "
+                                "alone. Nothing is written to disk -- name "
+                                "it again on the next call or it blocks "
+                                "again. An id naming nothing outstanding "
+                                "clears nothing; omitting the flag entirely "
+                                "clears nothing")
         if name == "walk":
             p.add_argument("--session", required=True,
                            help="the session driving this walk, stamped on "
