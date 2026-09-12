@@ -1,0 +1,226 @@
+"""This skill's own second sealed corpus (design.md D7, change
+`the-second-skill-the-seam-was-for`, slice A2). Mirrors `tests/seal/corpus.py`'s
+own idiom -- a package fixture with and without a `Data/` directory, a
+findings module, a documents root -- rewritten with THIS domain's own
+vocabulary (`claim_key`/`locus_key`/`remedy_locus_key` = `experiments`,
+never `equations`). `tests/seal/` itself is never imported by this module
+for its FIXTURE CONTENT (only `tests/seal/harness.py`'s generic
+argv/env-building machinery is reused, per design.md D7) -- this corpus
+authors its own bytes from nothing, exactly as `proposals/`/`experiments/`
+hold only `.gitkeep` on disk.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import os
+import subprocess
+from pathlib import Path
+
+_GIT_AUTHOR_DATE = "2026-01-01T00:00:00"
+_GIT_COMMITTER_DATE = "2026-01-01T00:00:00"
+_GIT_IDENTITY_NAME = "experiments-seal-corpus"
+_GIT_IDENTITY_EMAIL = "experiments-seal-corpus@example.invalid"
+
+#: `MANAGED_ARTIFACT_MARKER`, read back exactly as `tests/seal/corpus.py`
+#: reads it.
+_MANAGED_ARTIFACT_MARKER = b"<!-- proposal-workspace:artifact:v1 -->\n"
+
+#: This domain's own revision text -- no `\tag{}` blocks at all: TAG_RE is a
+#: fixed engine-wide LaTeX pattern this domain's own documents never carry
+#: (design.md D11 -- `compose`/`admit`/the audit block, the only readers
+#: that need it, are excluded from this domain's available surface, D8).
+REVISION_TEXT = (
+    "## 1\n"
+    "\n"
+    "The protocol runs step one against a fixed seed.\n"
+    "\n"
+    "## 2\n"
+    "\n"
+    "The protocol runs step two and records the outcome.\n"
+    "\n"
+    "## 3\n"
+    "\n"
+    "The protocol runs step three and reports.\n"
+    "\n"
+    "Throughout, the recorded outcome is written E[x].\n"
+    "\n"
+    "The corrected form now reads g = h + k.\n"
+)
+
+#: `tests/findings.py`'s content: `experiments`/`remedy_experiments` --
+#: THIS domain's own `locus_key`/`remedy_locus_key`, never `equations`/
+#: `remedy_equations`.
+FINDINGS_SOURCE = '''FINDINGS = [
+    {
+        "id": "adopted-run",
+        "kind": "inconsistency",
+        "status": "measured",
+        "rate": "always",
+        "statement": "Step one's outcome omits a correction term.",
+        "remedy": "Re-run step one with the corrected seed.",
+        "experiments": ["T1"],
+        "remedy_experiments": ["T1"],
+        "uses": ["E[x]"],
+        "introduces": [],
+        "adoption": {"absent": "UNPATCHED_ARTIFACT_MARKER_1",
+                      "expect": ["g = h + k"]},
+        "becomes_invariant": "identity_one_holds",
+    },
+    {
+        "id": "inline-run",
+        "kind": "gap",
+        "status": "measured",
+        "rate": "always",
+        "statement": "Step two's outcome is recorded without its correction.",
+        "remedy": "Re-run step two with the corrected form.",
+        "experiments": ["T2"],
+        "remedy_experiments": ["T2"],
+        "uses": ["E[x]"],
+        "introduces": [],
+        "adoption": {"absent": "c = d", "expect": ["c = D_corrected"]},
+    },
+    {
+        "id": "structural-run",
+        "kind": "gap",
+        "status": "measured",
+        "rate": "always",
+        "statement": "Step three needs a measurement this protocol has never defined.",
+        "remedy": "Introduce a new measurement and re-run step three.",
+        "experiments": ["T3"],
+        "remedy_experiments": ["T3"],
+        "uses": ["E[x]"],
+        "introduces": ["Theta-op"],
+        "adoption": {"absent": "e = f", "expect": ["e = Theta-op"]},
+    },
+]
+'''
+
+_MODULE_SOURCE = (
+    '__provenance__ = {\n'
+    '    "revision": "trial-1.md", "sections": ["1", "2", "3"],\n'
+    '    "experiments": ["T1", "T2", "T3"], "invariants": ["identity_one_holds"],\n'
+    '}\n\n\n'
+    'def run_once():\n'
+    '    return True\n'
+)
+
+_BENCHMARK_INIT_SOURCE = (
+    "__benchmark__ = {\n"
+    "    'revision': 'trial-1.md',\n"
+    "    'premises': {},\n"
+    "    'arms': {'floor': {'sections': ['1']}, 'full': {'sections': ['1', '2', '3']}},\n"
+    "    'search': {},\n"
+    "    'report': {},\n"
+    "    'distribution': {},\n"
+    "    'entry': {'module': 'Trial_Benchmark.steps', 'function': 'run'},\n"
+    "}\n"
+    "__steps__ = {\n"
+    "    'measure': {'module': 'Trial_Benchmark.steps', 'function': 'run'},\n"
+    "}\n"
+)
+
+_STEPS_MODULE_SOURCE = "def run(*a, **k):\n    return {}\n"
+
+_AGREED_SOURCE = "# Agreed\n\n## Ladder\n\n- [ ] First measurable claim.\n"
+
+
+@dataclasses.dataclass(frozen=True)
+class Roots:
+    """Duck-typed against `seal.corpus.Roots` (design.md D7): `run_case`/
+    `resolve_argv`/`build_env` reach `.proposals` unconditionally -- the
+    engine-wide override variable is literally `IMPLEMENTATION_PROPOSALS`
+    for every domain (Cut 2/3 never parameterised its name), so this
+    attribute is named `proposals` even though it holds THIS domain's own
+    `experiments`-labelled documents root."""
+
+    root: Path
+    fixture_a: Path
+    fixture_b: Path
+    #: `seal.harness._fixture_path`'s own dict literal evaluates all three
+    #: keys ("A"/"B"/"T") unconditionally, even when only "A" or "B" is
+    #: looked up -- so this attribute must resolve to SOMETHING even though
+    #: no case in this corpus's own roster ever names fixture "T". Aliased
+    #: to `fixture_b` rather than a separate build, since it is never read.
+    fixture_t: Path
+    proposals: Path
+    plan_template: dict
+
+
+def _git_env() -> dict:
+    env = dict(os.environ)
+    env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = _GIT_IDENTITY_NAME
+    env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = _GIT_IDENTITY_EMAIL
+    env["GIT_AUTHOR_DATE"] = env["GIT_COMMITTER_DATE"] = _GIT_AUTHOR_DATE
+    env["GIT_CONFIG_GLOBAL"] = env["GIT_CONFIG_SYSTEM"] = "/dev/null"
+    return env
+
+
+def _git_commit(target: Path) -> None:
+    env = _git_env()
+    subprocess.run(["git", "init", "-q", str(target)], check=True, capture_output=True)
+    subprocess.run(["git", "add", "-A"], cwd=target, env=env, check=True,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=target, env=env,
+                   check=True, capture_output=True)
+
+
+def _write_common_package(target: Path, *, with_data: bool) -> None:
+    (target / "src" / "Trial").mkdir(parents=True)
+    (target / "src" / "Trial_Benchmark").mkdir(parents=True)
+    (target / "tests").mkdir(parents=True)
+    (target / "Trial" / "Notebooks").mkdir(parents=True)
+    (target / "Trial" / "Results").mkdir(parents=True)
+    (target / "Trial" / "Models").mkdir(parents=True)
+    if with_data:
+        (target / "Trial" / "Data").mkdir(parents=True)
+
+    (target / "src" / "Trial" / "__init__.py").write_text("__all__ = []\n", encoding="utf-8")
+    (target / "src" / "Trial" / "kernels.py").write_text(_MODULE_SOURCE, encoding="utf-8")
+    (target / "src" / "Trial_Benchmark" / "__init__.py").write_text(
+        _BENCHMARK_INIT_SOURCE, encoding="utf-8")
+    (target / "src" / "Trial_Benchmark" / "steps.py").write_text(
+        _STEPS_MODULE_SOURCE, encoding="utf-8")
+    (target / "tests" / "findings.py").write_text(FINDINGS_SOURCE, encoding="utf-8")
+    (target / "tests" / "__init__.py").write_text("", encoding="utf-8")
+    (target / "Trial" / "AGREED.md").write_text(_AGREED_SOURCE, encoding="utf-8")
+    _git_commit(target)
+
+
+def _build_documents(root: Path) -> Path:
+    """This domain's own documents root -- unmarked, hand-authored files,
+    never `tests/seal/`'s own `proposals/` fixture (this corpus authors its
+    own bytes from nothing, design.md D7/tasks.md 2.3)."""
+    documents = root / "E"
+    documents.mkdir(parents=True)
+    (documents / "trial-1.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + REVISION_TEXT.encode("utf-8"))
+    (documents / "trial-2.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + REVISION_TEXT.encode("utf-8"))
+    return documents
+
+
+def build(root: Path) -> Roots:
+    root.mkdir(parents=True, exist_ok=True)
+    fixture_a = root / "A"
+    fixture_b = root / "B"
+    fixture_a.mkdir(parents=True)
+    fixture_b.mkdir(parents=True)
+
+    _write_common_package(fixture_a, with_data=True)
+    _write_common_package(fixture_b, with_data=False)
+    documents = _build_documents(root)
+
+    plan_template = {
+        "name": "Trial", "renames": [], "moves": [], "createDirs": [],
+        "referenceUpdates": [],
+    }
+
+    return Roots(root=root, fixture_a=fixture_a, fixture_b=fixture_b,
+                fixture_t=fixture_b, proposals=documents,
+                plan_template=plan_template)
+
+
+#: Digested into `digests.json` under `"__corpus_fingerprint__"`, the same
+#: anti-trim guard `tests/seal/`'s own corpus uses.
+CORPUS_FINGERPRINT_SOURCE = Path(__file__)
