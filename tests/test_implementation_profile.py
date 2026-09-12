@@ -715,6 +715,221 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
             "documents.directory was read instead")
 
 
+#: Cut 3 slice C (design.md D1): the five per-document claim-vocabulary
+#: leaves a `documents[N]` entry may declare, overlaying the top-level
+#: `provenance.*`/`findings.*` scalars. All-or-nothing per entry.
+_DOCUMENT_VOCAB_LEAVES: tuple[str, ...] = (
+    "claim_key", "locus_key", "remedy_locus_key", "notation_keys",
+    "citation_pattern",
+)
+
+_TWO_GROUP_CITATION_PATTERN = r"Foo\((\d+)\)|Bar(\d+)"
+_FOUR_GROUP_CITATION_PATTERN = r"Foo\((\d+)\)|Bar(\d+)|Baz(\d+)|Qux(\d+)"
+
+
+def _document_one_overlay() -> dict:
+    """A complete, per-document vocabulary overlay, deliberately distinct
+    from `_cut2_profile`'s document-0 top-level values (design.md D1/D6)."""
+    return {
+        "claim_key": "propositions",
+        "locus_key": "propositions",
+        "remedy_locus_key": "remedy_propositions",
+        "notation_keys": {
+            "locus": "propositions",
+            "remedyLocus": "remedyPropositions",
+            "unknown": "unknownPropositions",
+        },
+        "citation_pattern": (
+            r"Props?\.?\s*\(?(\d+)\)?|Prop\.?\s*\(?(\d+)\)?|"
+            r"Propositions?\s*\((\d+)\)"),
+    }
+
+
+def _two_document_profile(tmp_dir: Path, *, document_one_overlay: dict | None = None) -> dict:
+    """`_cut2_profile`'s single-document profile, with a second entry
+    appended -- optionally carrying its own per-document vocabulary
+    overlay."""
+    profile = _cut2_profile(tmp_dir)
+    entry: dict = {"directory": tmp_dir / "documents-1", "label": "document-one"}
+    if document_one_overlay is not None:
+        entry.update(document_one_overlay)
+    profile["documents"].append(entry)
+    return profile
+
+
+class DocumentVocabularyOverlayTests(unittest.TestCase):
+    """Phase 1, C1 (design.md D1/D3): the resolver's all-or-nothing
+    per-entry overlay tier -- an entry declaring ANY of the five leaves
+    must declare ALL five, or the partial overlay is refused naming each
+    missing leaf by its exact indexed path (spec
+    `implementation-per-document-vocabulary`)."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-doc-vocab-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_declaring_only_one_leaf_refuses_incomplete_naming_it(self):
+        for leaf in _DOCUMENT_VOCAB_LEAVES:
+            with self.subTest(leaf=leaf):
+                tmp_dir = self._tmp_dir()
+                overlay = _document_one_overlay()
+                full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
+                for other in _DOCUMENT_VOCAB_LEAVES:
+                    if other != leaf:
+                        del full["documents"][1][other]
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+                self.assertIn(f"documents[1].{leaf}", message)
+
+    def test_declaring_none_of_the_five_resolves_without_refusal(self):
+        """Spec 'A Per-Document Vocabulary Leaf Overlays, Never Replaces,
+        The Top-Level One': a document declaring none of the five leaves
+        resolves unchanged, no `provenance.*`/`findings.*` edit required."""
+        tmp_dir = self._tmp_dir()
+        full = _two_document_profile(tmp_dir)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(len(module.PROFILE["documents"]), 2)
+        for leaf in _DOCUMENT_VOCAB_LEAVES:
+            self.assertNotIn(leaf, module.PROFILE["documents"][1])
+
+    def test_a_complete_overlay_resolves_with_its_own_values(self):
+        tmp_dir = self._tmp_dir()
+        overlay = _document_one_overlay()
+        full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(module.PROFILE["documents"][1]["claim_key"], "propositions")
+        self.assertEqual(
+            module.PROFILE["documents"][1]["notation_keys"]["remedyLocus"],
+            "remedyPropositions")
+
+    def test_document_one_missing_override_does_not_borrow_document_zeros(self):
+        """Spec 'No Document's Vocabulary Is Inferred From Another
+        Document's': document 0 declares its own overlay, document 1
+        declares none -- document 1's entry carries none of the five
+        leaves at all, so nothing could be read off it but the top-level
+        fallback."""
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        full["documents"][0].update(_document_one_overlay())
+        full["documents"].append(
+            {"directory": tmp_dir / "documents-1", "label": "document-one"})
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(module.PROFILE["documents"][0]["claim_key"], "propositions")
+        for leaf in _DOCUMENT_VOCAB_LEAVES:
+            self.assertNotIn(leaf, module.PROFILE["documents"][1])
+
+
+class NotationKeysShapeOverlayTests(unittest.TestCase):
+    """Phase 1, C1 (design.md D3, tier 2): a declared `notation_keys`
+    overlay must carry all three engine-read sub-keys, refused by its
+    exact indexed sub-path when incomplete."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-notation-shape-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_missing_notation_subkey_refuses_naming_it(self):
+        for sub_key in ("locus", "remedyLocus", "unknown"):
+            with self.subTest(sub_key=sub_key):
+                tmp_dir = self._tmp_dir()
+                overlay = _document_one_overlay()
+                del overlay["notation_keys"][sub_key]
+                full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+                self.assertIn(f"documents[1].notation_keys.{sub_key}", message)
+
+
+class CitationPatternGroupCountTests(unittest.TestCase):
+    """Phase 1, C1 (design.md D3, tier 3): `citation_pattern`'s group count
+    is validated at resolve time, wherever it resolves -- the top-level
+    fallback AND every declared overlay (spec
+    `implementation-per-document-vocabulary`)."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-citation-count-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_top_level_two_group_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        full["findings"]["citation_pattern"] = _TWO_GROUP_CITATION_PATTERN
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN", message)
+        self.assertIn("findings.citation_pattern", message)
+        self.assertIn("2", message)
+
+    def test_top_level_four_group_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        full["findings"]["citation_pattern"] = _FOUR_GROUP_CITATION_PATTERN
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN", message)
+        self.assertIn("findings.citation_pattern", message)
+        self.assertIn("4", message)
+
+    def test_overlay_two_group_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        overlay = _document_one_overlay()
+        overlay["citation_pattern"] = _TWO_GROUP_CITATION_PATTERN
+        full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN", message)
+        self.assertIn("documents[1].citation_pattern", message)
+        self.assertIn("2", message)
+
+    def test_overlay_four_group_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        overlay = _document_one_overlay()
+        overlay["citation_pattern"] = _FOUR_GROUP_CITATION_PATTERN
+        full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN", message)
+        self.assertIn("documents[1].citation_pattern", message)
+        self.assertIn("4", message)
+
+    def test_a_three_group_pattern_passes(self):
+        """The positive control every refusal case above is a mutation OF."""
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(
+            module.PROFILE["findings"]["citation_pattern"], _CITATION_PATTERN_SRC)
+
+
 class IndexedDocumentsLeafRefusalTests(unittest.TestCase):
     """Cut 3 (`a-revision-is-two-documents`, Phase 1, tasks.md 1.1): `documents`
     becomes a list, validated per index (design.md D4) -- a missing or
