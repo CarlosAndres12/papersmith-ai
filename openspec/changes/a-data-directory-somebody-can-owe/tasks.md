@@ -93,6 +93,6 @@ Chain strategy: stacked-to-main
 
 ## Phase 11: B2 acceptance gate
 
-- [ ] 11.1 Capture `verify-b-declared`: `missingDirs` contains `Trial/Data`, `structure.status: drift`. Capture both controls (`verify-a-declared` present → empty; `verify-b-undeclared` → empty, byte-identical elsewhere).
-- [ ] 11.2 `git diff --exit-code tests/seal/` exits 0 again.
-- [ ] 11.3 Full suite re-run: `npm test` 595/595; Python `OK (skipped=6)` unmoved.
+- [x] 11.1 Capture `verify-b-declared`: `missingDirs` contains `Trial/Data`, `structure.status: drift`. Capture both controls (`verify-a-declared` present → empty; `verify-b-undeclared` → empty). **Measured**: `verify-b-declared` → `missingDirs: ["Trial/Data"]`, `status: "drift"`; `verify-a-declared` → `missingDirs: []`; `verify-b-undeclared` → `missingDirs: []`. Comparing `verify-b-declared` against `verify-b-undeclared` directly (same fixture B, both explicit `--revision`), the only differing fields are `structure.missingDirs`/`structure.status` and the revision-name echoes (`fidelity.latestRevision`, `fidelity.fidelityByDocument`) that necessarily differ because the two cases name different revisions (`dataset-1.md` vs `dataset-0.md`) — not a second, unexplained delta.
+- [x] 11.2 `git diff --exit-code tests/seal/` exits 0 again. Measured: exit 0, sha256 unchanged.
+- [x] 11.3 Full suite re-run: `npm test` 595/595; Python `OK (skipped=6)` unmoved. Measured: `npm test` 595/595; Python `Ran 2998 tests ... OK (skipped=6)`.
