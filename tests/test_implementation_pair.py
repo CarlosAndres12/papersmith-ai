@@ -307,7 +307,8 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
     three-call proof of all four sites C2 itself owns, isolated from the
     rest of the lifecycle."""
 
-    REVISION = "pair-position-r1.md"
+    REVISION = "pair-position-r01.md"
+    REVISION_1 = "pair-position-plan-v01.md"
     REVISION_TEXT = "## 1\ntexto.\n"
     PACKAGE = "PositionOnly"
 
@@ -322,7 +323,7 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
 
         self.doc1 = Path(tempfile.mkdtemp(prefix="pair-position-doc1-"))
         self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
-        (self.doc1 / self.REVISION).write_text(
+        (self.doc1 / self.REVISION_1).write_text(
             "Document 1's own position-only text -- a real, independently "
             "readable file at DOCUMENTS[1]'s own directory.\n",
             encoding="utf-8")
@@ -358,7 +359,7 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
                               capture_output=True, text=True, cwd=FORGE, env=env)
 
     def _doc1_sha256(self) -> str:
-        return hashlib.sha256((self.doc1 / self.REVISION).read_bytes()).hexdigest()
+        return hashlib.sha256((self.doc1 / self.REVISION_1).read_bytes()).hexdigest()
 
     def test_absent_install_then_unchanged_all_carry_the_documents_group(self):
         # L10771 (cmd_position's own "nothing to refresh" branch): no
@@ -446,7 +447,8 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
     could never see.
     """
 
-    REVISION = "pair-lifecycle-r1.md"
+    REVISION = "pair-lifecycle-r01.md"
+    REVISION_1 = "pair-lifecycle-plan-v01.md"
     REVISION_TEXT = (
         "## 1\n\n$$\na = b \\tag{1.1}\n$$\n\n"
         "Throughout, the estimator is written E[x].\n\n"
@@ -467,7 +469,7 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
 
         self.doc1 = Path(tempfile.mkdtemp(prefix="pair-lifecycle-doc1-"))
         self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
-        (self.doc1 / self.REVISION).write_text(
+        (self.doc1 / self.REVISION_1).write_text(
             "Document 1's own text -- a real, independently readable file "
             "at DOCUMENTS[1]'s own directory, never document 0's copy.\n",
             encoding="utf-8")
@@ -476,7 +478,7 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         self.box, self.commit = self._build_box()
 
     def _doc1_sha256(self) -> str:
-        return hashlib.sha256((self.doc1 / self.REVISION).read_bytes()).hexdigest()
+        return hashlib.sha256((self.doc1 / self.REVISION_1).read_bytes()).hexdigest()
 
     def _child_env(self):
         env = dict(os.environ)
