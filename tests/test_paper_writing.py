@@ -2271,6 +2271,94 @@ class ReadOnlyTests(unittest.TestCase):
             with self.subTest(module=name):
                 self.assertEqual(self._forbidden_write_calls(SKILL_SCRIPTS / name), [])
 
+    #: The only imports `paper_verify.py` has ever needed -- a closed
+    #: ALLOWlist, not a hand-picked list of banned function names. The
+    #: distinction matters: a denylist of forbidden calls is complete only
+    #: by whoever remembered to add to it (this build's own repeated
+    #: objection); a default-deny allowlist forecloses the ENTIRE universe
+    #: of disk/network/process-capable stdlib modules in one shot --
+    #: `pathlib`, `os`, `io`, `shutil`, `tempfile`, `sqlite3`, `socket`,
+    #: `subprocess`, `ctypes`, and everything else never named here -- by
+    #: construction, not by enumeration. Growing this set is a deliberate,
+    #: visible test edit; nothing shrinks it silently.
+    _PAPER_VERIFY_ALLOWED_IMPORTS = frozenset({"re"})
+    _PAPER_VERIFY_ALLOWED_IMPORT_FROM_MODULES = frozenset({"__future__"})
+
+    def _forbidden_reads(self, source_path: Path) -> list:
+        """The read-side half of the disk-access lock. Two constructions,
+        neither a hand-picked list of banned function names:
+
+        1. A default-deny IMPORT allowlist (`_PAPER_VERIFY_ALLOWED_IMPORTS`
+           / `_..._IMPORT_FROM_MODULES`, above). Any import beyond `re`
+           (and `__future__`) is forbidden outright, and so is routing
+           around the allowlist via dynamic import (`__import__(...)`,
+           `importlib.import_module(...)`).
+        2. Every `Evidence` field actually typed `Path`, read live off
+           `paper_coupling_evidence.Evidence`'s own dataclass fields via
+           `dataclasses.fields` -- never hand-typed here. Today that is
+           `paper_dir`/`sections_dir`, kept on the object, per that
+           dataclass's own docstring, only so `verify`'s report can name
+           where evidence came from -- never so a check could re-open a
+           file `gather()` already read. Touching either attribute at all,
+           from any expression, is forbidden: a pure check has no
+           legitimate reason to reach for either one.
+
+        This is meaningful only for `paper_verify.py` -- `paper_coupling_
+        evidence.py`'s entire job is reading, so this exact check would
+        flag its own legitimate imports and parameters
+        (`test_the_read_lock_would_flag_coupling_evidence_if_misapplied`,
+        below proves it, rather than leaving the asymmetry asserted only in
+        prose).
+        """
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        path_field_names = {
+            f.name for f in dataclasses.fields(paper_coupling_evidence.Evidence)
+            if f.type == "Path"
+        }
+        hits: list = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name not in self._PAPER_VERIFY_ALLOWED_IMPORTS:
+                        hits.append(f"import {alias.name}")
+            if isinstance(node, ast.ImportFrom):
+                if node.module not in self._PAPER_VERIFY_ALLOWED_IMPORT_FROM_MODULES:
+                    hits.append(f"from {node.module} import ...")
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id == "__import__":
+                    hits.append("__import__(...)")
+                if isinstance(func, ast.Attribute) and func.attr == "import_module":
+                    hits.append("importlib.import_module(...)")
+            if isinstance(node, ast.Attribute) and node.attr in path_field_names:
+                hits.append(f"evidence.{node.attr}")
+        return hits
+
+    def test_ast_lock_finds_no_disk_read_in_paper_verify(self) -> None:
+        self.assertEqual(self._forbidden_reads(SKILL_SCRIPTS / "paper_verify.py"), [])
+
+    def test_the_read_lock_would_flag_coupling_evidence_if_misapplied(self) -> None:
+        # Proof the scoping to paper_verify.py alone is doing real work,
+        # not silently vacuous: paper_coupling_evidence.py's own legitimate
+        # `json`/`sys`/`pathlib` imports and its own `paper_dir`/
+        # `sections_dir` parameters would trip this exact lock if it were
+        # ever pointed at the reader by mistake -- the two files are
+        # asymmetric by measurement, never by omission.
+        hits = self._forbidden_reads(SKILL_SCRIPTS / "paper_coupling_evidence.py")
+        self.assertTrue(hits, "expected the read lock to flag the reader's own legitimate imports")
+
+    def test_coupling_evidence_legitimate_reads_still_pass(self) -> None:
+        # A lock that forbade reads everywhere would break the reader whose
+        # entire job is reading -- confirm `gather()` still performs its
+        # real disk reads end to end, unaffected by the lock above (which
+        # is never applied to this module).
+        _build_coupling_paper(self.paper_dir, self.sections_dir)
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+        self.assertEqual(evidence.paper_dir, self.paper_dir)
+        self.assertEqual(evidence.sections_dir, self.sections_dir)
+        self.assertTrue(evidence.main_tex_bytes)
+        self.assertTrue(evidence.record)
+
     def test_content_manifest_unchanged_by_a_real_verify_run(self) -> None:
         _build_coupling_paper(self.paper_dir, self.sections_dir)
 
