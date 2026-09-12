@@ -481,6 +481,24 @@ def _bound_to(revision: str | None, source: str | None,
     return "current" if block_sha256 == current_sha else "stale"
 
 
+def _document_extra_sources(revision: str | None) -> list[str | None] | None:
+    """`extra_sources` for `position_state` (D7): document 1's, 2's, ...
+    own already-resolved text, parallel to `source` (document 0's, always
+    handed separately). `None` under one document, or when no `revision`
+    was given at all -- the ordinary `probe`/`gate`/`offer`/`close`/
+    `verify` shape with nothing bound yet, where every document's own
+    `boundTo` reads `unknown` regardless of whether this list is supplied.
+    Left dead until this change, `position_state`'s own multi branch was
+    decoration nine call sites over (M4): declared, defaulted, and passed
+    by none of them.
+    """
+    if not revision or len(DOCUMENTS) <= 1:
+        return None
+    names = document_revision_names(revision)
+    return [revision_source(names[index], index) if names[index] else None
+            for index in range(1, len(DOCUMENTS))]
+
+
 def position_state(target: Path, name: str, evidence: dict,
                    revision: str | None, source: str | None,
                    extra_sources: list[str | None] | None = None) -> dict:
@@ -650,8 +668,24 @@ def position_state(target: Path, name: str, evidence: dict,
                             if extra_sources and index - 1 < len(extra_sources)
                             else None)
             entry = header_documents.get(label)
-            entry_sha = entry.get("revisionSha256") if entry else None
-            bound_to[label] = _bound_to(revision, extra_source, entry_sha)
+            # `each-document-names-its-own-revision` (D7): a document with
+            # NO recorded entry at all -- the additive `documents=` group
+            # is optional, and a header written before a `position` call
+            # ever bound this document (or before Cut 3 landed) carries
+            # none -- reads `unknown`, never `stale`. `_bound_to` alone
+            # cannot tell "never recorded" from "recorded, now mismatched"
+            # apart: both would otherwise reach it as `block_sha256=None`,
+            # and a real, resolved `extra_source` would then read as a
+            # mismatch against nothing ever written. This distinction was
+            # unreachable before this change wired `extra_sources` in at
+            # all -- `extra_source` was always `None` too, so `_bound_to`
+            # answered `unknown` regardless of `entry`, and the gap behind
+            # it was invisible.
+            if entry is None:
+                bound_to[label] = "unknown"
+                continue
+            bound_to[label] = _bound_to(
+                revision, extra_source, entry.get("revisionSha256"))
     else:
         bound_to = _bound_to(revision, source, block["revisionSha256"])
 
@@ -3540,7 +3574,8 @@ def cmd_probe(args) -> dict:
     # only the order in which this function builds it is.
     position = position_state(
         target, name, probe_evidence, args.revision,
-        revision_source(args.revision) if args.revision else None)
+        revision_source(args.revision) if args.revision else None,
+        _document_extra_sources(args.revision))
     # Resolved once and handed to both readers, the identical restraint
     # `probe_evidence` itself keeps: two reads of one declaration in one
     # command is how the two come to disagree about what the target declared.
@@ -4542,13 +4577,17 @@ MANAGED_ARTIFACT_MARKER = b"<!-- proposal-workspace:artifact:v1 -->\n"
 
 
 def revision_source(revision: str | None, index: int = 0) -> str | None:
-    """The bound revision's text, read from the proposals directory at
-    `index` (document 0 by default -- byte-identical to this function's
-    pre-Cut-3 shape). One revision NAME resolves against every declared
-    document's own directory: `a-revision-is-two-documents` (Cut 3) means
-    exactly that -- a revision is the pair of files that name shares
-    across `DOCUMENTS[0]`'s and `DOCUMENTS[1]`'s roots, not two
-    independently-named artifacts.
+    """The text of the file NAMED `revision`, read from document `index`'s
+    own directory (document 0 by default -- byte-identical to this
+    function's pre-`each-document-names-its-own-revision` shape). A dumb
+    per-index reader, nothing more: it performs no discovery, so the
+    defect this change fixes cannot return inside it. Which name belongs
+    to which index is the CALLER's question, answered by
+    `document_revision_names` -- never this function's own claim, which
+    used to be that one name resolves identically against every declared
+    document's root (`a-revision-is-two-documents`, Cut 3). That claim was
+    the defect: the two real publishers never share a filename convention,
+    so it could never hold outside a fixture written to satisfy it.
     """
     if not revision:
         return None
@@ -4563,18 +4602,29 @@ def _extra_document_revisions(revision: str | None) -> list[dict]:
     document 0 (Cut 3, D1b) -- additive, meaningful only when a caller has
     already confirmed `len(DOCUMENTS) > 1`; this helper does not re-check
     that guard itself, mirroring `_authorization_binding`'s own division of
-    labour with its caller. `sha256` is `None` for a document whose
-    revision file is not (yet) readable at that index -- the identical
+    labour with its caller.
+
+    `each-document-names-its-own-revision` (D1/D2): each entry's own
+    `revision` is no longer the SAME string handed to document 0 -- it is
+    document `index`'s own name, discovered independently inside its own
+    directory (`document_revision_names`, memoized per process so two
+    calls in one command agree). `sha256` is `None` for a document whose
+    resolved name is not (yet) readable at that index -- the identical
     "reported, never refused" tolerance `revision_source` itself already
-    keeps for document 0, extended per-index rather than special-cased.
+    keeps for document 0, extended per-index rather than special-cased;
+    the refusal a genuinely unreadable declared document earns
+    (`DOCUMENT_REVISION_UNREADABLE`) is this change's Phase 3, layered on
+    top of this same loop without moving it again.
     """
+    names = document_revision_names(revision)
     entries = []
     for index in range(1, len(DOCUMENTS)):
-        source = revision_source(revision, index)
+        name = names[index]
+        source = revision_source(name, index) if name else None
         sha256 = (hashlib.sha256(source.encode("utf-8")).hexdigest()
                   if source is not None else None)
         entries.append({
-            "label": DOCUMENTS[index]["label"], "revision": revision,
+            "label": DOCUMENTS[index]["label"], "revision": name,
             "sha256": sha256,
         })
     return entries
@@ -4624,8 +4674,108 @@ def is_managed_artifact(path: Path) -> bool:
         return False
 
 
-def revision_discovery(like: str | None) -> dict:
+def discover_document_revision(index: int) -> dict:
+    """The newest revision found by SEEDLESS discovery inside document
+    `index`'s own root (`each-document-names-its-own-revision`, D1) --
+    never document 0, which always carries a seed (`--revision`, or a
+    bench's own declared revision/module provenance, `revision_discovery`'s
+    own domain). No name is asserted from outside that directory's own
+    contents, and no naming convention is compiled in here: candidates are
+    grouped by their OWN digit-elided family key (`revision_discovery`'s
+    identical elision, applied to each candidate instead of matching one
+    fixed seed), and exactly one family resolves by the same digit-tuple
+    `max`/`tied` rule. More than one family is ambiguous -- two
+    conventions in one directory is not a choice this side may make (D3);
+    this function only reports that, in `families`, and the caller turns
+    it into a refusal.
+
+    Same not-a-directory and marker-filter shape `revision_discovery`
+    already applies (verbatim, so the two stay one rule read twice): if
+    the directory is marker-owned, only marked candidates are eligible and
+    the rest are named in `nonManaged`.
+    """
+    empty = {"revision": None, "markerOwned": False, "nonManaged": [],
+             "tied": [], "families": []}
+    root = proposals_root(index)
+    if not root.is_dir():
+        return empty
+
+    candidates = [candidate for candidate in sorted(root.iterdir())
+                 if candidate.is_file() and re.search(r"\d", candidate.name)]
+    marker_owned = any(is_managed_artifact(candidate) for candidate in candidates)
+    eligible = ([candidate for candidate in candidates if is_managed_artifact(candidate)]
+               if marker_owned else candidates)
+    non_managed = sorted(candidate.name for candidate in candidates
+                         if marker_owned and not is_managed_artifact(candidate))
+    if not eligible:
+        return {**empty, "markerOwned": marker_owned, "nonManaged": non_managed}
+
+    families: dict[str, list[tuple[tuple[int, ...], str]]] = {}
+    for candidate in eligible:
+        key = re.sub(r"\d+", "#", candidate.name)
+        digits = tuple(int(group) for group in re.findall(r"\d+", candidate.name))
+        families.setdefault(key, []).append((digits, candidate.name))
+
+    if len(families) > 1:
+        return {**empty, "markerOwned": marker_owned, "nonManaged": non_managed,
+                "families": sorted(families)}
+
+    (members,) = families.values()
+    best = max(key for key, _ in members)
+    # Insertion order is `sorted(root.iterdir())`, mirrored into `members`
+    # above, so the first of a tie is the same one a strictly-greater
+    # comparison would keep -- `revision_discovery`'s identical property.
+    tied = [name for key, name in members if key == best]
+    return {
+        "revision": tied[0], "markerOwned": marker_owned,
+        "nonManaged": non_managed,
+        "tied": tied if len(tied) > 1 else [], "families": [],
+    }
+
+
+#: One name per declared document, memoized per process
+#: (`each-document-names-its-own-revision`, D2). Keyed on `(revision, *every
+#: declared document's own root)`, never `revision` alone: two calls inside
+#: one command must agree (`cmd_gate` resolves the pair twice), and keying
+#: on the roots too is what keeps an in-process test that re-points
+#: `IMPLEMENTATION_PROPOSALS`/`_1` between two calls from reading a stale
+#: answer. `functools.lru_cache` cannot carry that composite key on a
+#: bare-argument function without changing the signature every caller
+#: reads, so this is a plain module-level dict instead -- `functools` is
+#: not otherwise imported here, and a decorator import for one function
+#: buys nothing this dict does not already do.
+_DOCUMENT_NAME_CACHE: dict[tuple, tuple[str | None, ...]] = {}
+
+
+def document_revision_names(revision: str | None) -> tuple[str | None, ...]:
+    """One name per declared document. Index 0 is `revision`, exactly as
+    given -- it always carries a seed and this function never re-derives
+    it. Every index beyond it is DISCOVERED in its own root (D1,
+    `discover_document_revision`), independently of whatever `revision`
+    names or whether it names anything at all: nothing in `--revision`'s
+    own text is a naming convention document N could borrow.
+    """
+    key = (revision, *(str(proposals_root(index)) for index in range(len(DOCUMENTS))))
+    cached = _DOCUMENT_NAME_CACHE.get(key)
+    if cached is not None:
+        return cached
+    names = [revision]
+    for index in range(1, len(DOCUMENTS)):
+        names.append(discover_document_revision(index)["revision"])
+    result = tuple(names)
+    _DOCUMENT_NAME_CACHE[key] = result
+    return result
+
+
+def revision_discovery(like: str | None, index: int = 0) -> dict:
     """The newest revision of the same family as `like`, and what was passed over.
+
+    `index` (`each-document-names-its-own-revision`): document 0 by
+    default, byte-identical to this function's pre-existing shape. This
+    function's own algorithm -- match every candidate against the ONE
+    family a seed (`like`) names -- stays document 0's; document N beyond
+    it uses SEEDLESS discovery instead (`discover_document_revision`, D1),
+    never this function with a borrowed seed.
 
     Everything else here compares a bench against a revision somebody typed at
     the command line. That check is only armed when the caller happens to type
@@ -4682,7 +4832,7 @@ def revision_discovery(like: str | None) -> dict:
     # matched whole, never as a substring of a longer name.
     stem = re.sub(r"\d+", r"(\\d+)", re.escape(name))
     family = re.compile("^" + stem + "$")
-    root = proposals_root()
+    root = proposals_root(index)
     if not root.is_dir():
         return empty
 
@@ -4715,9 +4865,9 @@ def revision_discovery(like: str | None) -> dict:
     }
 
 
-def latest_revision(like: str | None) -> str | None:
+def latest_revision(like: str | None, index: int = 0) -> str | None:
     """The discovered revision alone, for the readers that only want the name."""
-    return revision_discovery(like)["revision"]
+    return revision_discovery(like, index)["revision"]
 
 
 # How a paper labels a locus, and the only place this skill decides it.
@@ -4771,8 +4921,21 @@ def remedy_compatibility(findings: list[dict], revision: str | None,
             labels = named if isinstance(named, list) else [named] if named else []
             texts = [sources_by_document[label] for label in labels
                     if label in sources_by_document]
-            if texts:
-                finding_source = "\n".join(texts)
+            # A named label whose document has no readable source resolves
+            # to `None` in `sources_by_document` (`each-document-names-its-
+            # own-revision`: a document's own name may fail to discover or
+            # to read, independently of document 0's). `None` filtered out
+            # here rather than joined -- joining it crashed this function
+            # outright, a defect this change's own fixture reshape exposed
+            # (it was never reachable while every document shared one
+            # filename). Every named label unreadable reads as no text at
+            # all for this finding -- unknown, not silently re-checked
+            # against document 0's -- never a crash.
+            resolved_texts = [text for text in texts if text is not None]
+            if texts and not resolved_texts:
+                finding_source, finding_tags = "", set()
+            elif resolved_texts:
+                finding_source = "\n".join(resolved_texts)
                 finding_tags = set(TAG_RE.findall(finding_source))
         for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
             missing = [e for e in finding.get(field, []) if e not in finding_tags]
@@ -7795,10 +7958,15 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     # on a module-level document count read internally.
     sources_by_document = None
     if len(DOCUMENTS) > 1:
+        # `each-document-names-its-own-revision`: each document beyond 0
+        # resolves its OWN name (`document_revision_names`, D1/D2), never
+        # `args.revision` -- document 0's pinned name -- read into another
+        # document's own directory.
+        names = document_revision_names(args.revision)
         sources_by_document = {DOCUMENTS[0]["label"]: source}
         for index in range(1, len(DOCUMENTS)):
-            sources_by_document[DOCUMENTS[index]["label"]] = revision_source(
-                args.revision, index)
+            sources_by_document[DOCUMENTS[index]["label"]] = (
+                revision_source(names[index], index) if names[index] else None)
 
     verdicts = {}
     for finding in findings:
@@ -7898,8 +8066,24 @@ def admissibility_record(target: Path, revision: str | None) -> dict:
         if len(DOCUMENTS) > 1:
             extra = record.get("documents")
             if isinstance(extra, list):
-                for index, entry in enumerate(extra, start=1):
-                    extra_source = revision_source(revision, index)
+                # `each-document-names-its-own-revision` (D8): paired by
+                # `entry["label"]`, the identical key `position_state`'s own
+                # `header_documents` mapping already pairs its carrier by --
+                # never `enumerate(extra, start=1)`'s positional match, which
+                # silently compares document 1's recorded sha against
+                # document 2's file the moment a document is added, removed
+                # or reordered. Each label resolves its OWN name via
+                # `document_revision_names`, never the scalar `revision`
+                # (document 0's) read into another document's directory.
+                by_label = {entry.get("label"): entry for entry in extra}
+                names = document_revision_names(revision)
+                for index in range(1, len(DOCUMENTS)):
+                    label = DOCUMENTS[index]["label"]
+                    entry = by_label.get(label)
+                    if entry is None:
+                        continue
+                    extra_source = (revision_source(names[index], index)
+                                    if names[index] else None)
                     if extra_source is None:
                         continue
                     extra_current = hashlib.sha256(
@@ -11613,7 +11797,8 @@ def cmd_discuss(args: argparse.Namespace) -> dict:
             "pass at most one of them as -.")
 
     evidence = _position_write_evidence(target, name)
-    position = position_state(target, name, evidence, None, None)
+    position = position_state(target, name, evidence, None, None,
+                              _document_extra_sources(None))
     about = _resolve_discuss_about(args.about, position)
 
     question = sys.stdin.read() if args.question == "-" else args.question
@@ -12522,7 +12707,8 @@ def cmd_settle(args: argparse.Namespace) -> dict:
     about = None
     if not attach and not remove and not reverse and not done:
         evidence = _position_write_evidence(target, name)
-        position = position_state(target, name, evidence, None, None)
+        position = position_state(target, name, evidence, None, None,
+                              _document_extra_sources(None))
         about = _resolve_discuss_about(args.about, position)
 
         discussed = _settle_discussed_events(target, name, about)
@@ -13324,7 +13510,8 @@ def cmd_gate(args: argparse.Namespace) -> dict:
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
     evidence = _position_write_evidence(target, name)
-    position = position_state(target, name, evidence, args.revision, source)
+    position = position_state(target, name, evidence, args.revision, source,
+                              _document_extra_sources(args.revision))
     smoke_ready = evidence["smokeReady"]
     verdict = impl_availability.launch_available(
         status=position["status"], unbacked=position["unbacked"],
@@ -13886,7 +14073,8 @@ def cmd_offer(args: argparse.Namespace) -> dict:
     events = impl_position.read_events(ledger_path)
 
     evidence = _position_write_evidence(target, name)
-    position = position_state(target, name, evidence, args.revision, source)
+    position = position_state(target, name, evidence, args.revision, source,
+                              _document_extra_sources(args.revision))
     rcli = _load_remote_execution_cli()
 
     actions = []
@@ -14063,7 +14251,8 @@ def cmd_close(args: argparse.Namespace) -> dict:
     revision_sha256 = hashlib.sha256(source.encode("utf-8")).hexdigest()
 
     evidence = _position_write_evidence(target, name)
-    before = position_state(target, name, evidence, args.revision, source)
+    before = position_state(target, name, evidence, args.revision, source,
+                            _document_extra_sources(args.revision))
     honesty = impl_availability.position_honest(
         status=before["status"], unbacked=before["unbacked"],
         disagreements=before["disagreements"],
@@ -14164,7 +14353,8 @@ def cmd_close(args: argparse.Namespace) -> dict:
     cmd_position(refresh_args)
 
     evidence = _position_write_evidence(target, name)
-    after = position_state(target, name, evidence, args.revision, source)
+    after = position_state(target, name, evidence, args.revision, source,
+                           _document_extra_sources(args.revision))
 
     position_digest = hashlib.sha256(
         json.dumps(after["sequence"], sort_keys=True).encode("utf-8")).hexdigest()
@@ -14336,7 +14526,8 @@ def cmd_step(args: argparse.Namespace) -> dict:
                 f"__steps__[{args.step!r}]['advances'] must be a sequence "
                 f"ordinal, not {advances!r}.")
         evidence = _position_write_evidence(target, name)
-        position = position_state(target, name, evidence, None, None)
+        position = position_state(target, name, evidence, None, None,
+                              _document_extra_sources(None))
         if position["status"] == "absent":
             raise Refused(
                 "POSITION_ABSENT",
@@ -14632,7 +14823,7 @@ def _require_no_open_defect(target: Path, name: str) -> None:
 
 
 def _extra_document_fidelity_status(
-        revision: str | None, index: int, stale: list, missing_provenance: list,
+        doc_revision: str | None, index: int, stale: list, missing_provenance: list,
         untested: list, unreached: list, benchmark_undeclared: bool) -> str:
     """One document BEYOND document 0's own `fidelity_status` (Cut 3,
     `a-revision-is-two-documents`, C8, D7) -- the SAME four shared,
@@ -14642,12 +14833,15 @@ def _extra_document_fidelity_status(
     per-document fact -- they are all about the shared source tree),
     plus the one thing that genuinely differs per document: whether THIS
     document's own revision text even resolves. Never applied to document
-    0, whose own fold is `cmd_verify`'s inline block, unedited -- this
-    function would answer differently for a `revision` that names a file
-    absent only from `index`'s own directory, which document 0's fold was
-    never asked to check.
+    0, whose own fold is `cmd_verify`'s inline block, unedited.
+
+    `doc_revision` (`each-document-names-its-own-revision`): document
+    `index`'s OWN resolved name (`document_revision_names`, D1's seedless
+    discovery) -- never document 0's `revision`, which this function used
+    to receive and read inside `index`'s own directory, exactly the M2
+    defect one call site over.
     """
-    if not revision or revision_source(revision, index) is None:
+    if not doc_revision or revision_source(doc_revision, index) is None:
         return "unknown"
     if stale or missing_provenance or untested or unreached:
         return "drift"
@@ -14835,12 +15029,20 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # says as it stands now, and answering them against a revision nobody named
     # left them permanently unknown on every ordinary invocation.
     # Cut 3 (C7/D6): additive, `None` under one document.
+    # `each-document-names-its-own-revision`: `document_names[0]` is
+    # `revision` verbatim; every index beyond it is document `index`'s own
+    # SEEDLESS discovery (D1), never `revision` -- document 0's own name --
+    # read into another document's directory. Computed once and reused
+    # below by `fidelityByDocument` too, the identical restraint this
+    # function's own `search`/`levels`/`declared_records` already keep.
+    document_names = document_revision_names(revision) if len(DOCUMENTS) > 1 else None
     verify_sources_by_document = None
     if len(DOCUMENTS) > 1:
         verify_sources_by_document = {DOCUMENTS[0]["label"]: revision_source(revision)}
         for index in range(1, len(DOCUMENTS)):
-            verify_sources_by_document[DOCUMENTS[index]["label"]] = revision_source(
-                revision, index)
+            verify_sources_by_document[DOCUMENTS[index]["label"]] = (
+                revision_source(document_names[index], index)
+                if document_names[index] else None)
     compatibility = remedy_compatibility(findings, revision, verify_sources_by_document)
     ruling = admissibility_record(target, revision)
     uncontrolled = remedies_without_control(target / "tests", package_name(name))
@@ -14991,7 +15193,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
          # reports it satisfied.
          "records": named_records_state(
              target, name, declared_records, verify_digest)},
-        revision, target_source)
+        revision, target_source, _document_extra_sources(revision))
 
     # Computed once, before the return, and reused both inside `audit`
     # (the bare id list) and at the top level (`toDiscuss`, one runnable
@@ -15089,12 +15291,20 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             # Cut 3 (C8, D7): additive, absent under one document.
             # `fidelity.status` keeps reporting document 0 -- no existing
             # key is renamed, re-nested, or made conditional.
+            # `each-document-names-its-own-revision` (D9): `revision` is
+            # additive per entry, so a reader can see which name a
+            # document's status was measured against -- document 0's is
+            # `revision` (the same value `latestRevision` above already
+            # names); every other index is its own independently
+            # discovered name, never document 0's.
             **({"fidelityByDocument": [
-                    {"label": DOCUMENTS[0]["label"], "status": fidelity_status},
+                    {"label": DOCUMENTS[0]["label"], "status": fidelity_status,
+                     "revision": revision},
                     *({"label": DOCUMENTS[index]["label"],
                        "status": _extra_document_fidelity_status(
-                           revision, index, stale, missing_provenance, untested,
-                           unreached, resolved["status"] == "undeclared")}
+                           document_names[index], index, stale, missing_provenance,
+                           untested, unreached, resolved["status"] == "undeclared"),
+                       "revision": document_names[index]}
                       for index in range(1, len(DOCUMENTS))),
                 ]} if len(DOCUMENTS) > 1 else {}),
         },
@@ -17092,13 +17302,17 @@ def main(argv: list[str] | None = None) -> int:
         if name in {"verify", "admit", "handoff", "probe", "position", "gate",
                    "offer", "close"}:
             p.add_argument("--revision", default=None,
-                           help="pin the revision to check against; "
+                           help="pin document 0's revision to check against; "
                                 "omit it and verify discovers the newest of "
                                 "the family the bench declares. admit, "
                                 "handoff, position, gate, offer and close "
-                                "discover nothing and refuse "
+                                "discover nothing for THIS argument's own "
+                                "document -- omit it there and they refuse "
                                 "REVISION_UNREADABLE if it is missing or "
-                                "unreadable")
+                                "unreadable. Every OTHER declared document "
+                                "(when more than one is declared) always "
+                                "discovers its own revision name from its "
+                                "own directory; this flag never names it")
         if name in {"position", "propose", "gate", "offer", "close", "step",
                    "settle", "defect"}:
             p.add_argument("--session", required=True,

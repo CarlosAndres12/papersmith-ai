@@ -296,6 +296,146 @@ class AuthorizationBindingKeysPresenceBranchTests(unittest.TestCase):
         self.assertEqual(set(keys), set(seal_harness.impl._AUTHORIZATION_BINDING_KEYS))
 
 
+class DiscoverDocumentRevisionTests(unittest.TestCase):
+    """`each-document-names-its-own-revision`, D1 / design.md's Testing
+    Strategy ("Unit | discover_document_revision | marker-owned /
+    hand-authored / tie / empty / ambiguous, each its own case"). A pure
+    filesystem read, driven directly by `IMPLEMENTATION_PROPOSALS_1` --
+    the identical override `ExtraDocumentFidelityStatusTests`
+    (test_proposal_implementation.py) already uses for the sibling
+    per-document function one call site over -- so no subprocess is
+    needed to exercise it. The ambiguous-family case is proven separately,
+    end to end through a real subprocess refusal
+    (`TwoDocumentAmbiguousFamilyRefusesTests`, Phase 3), since that one
+    needs the refusal's own code and detail, not only this function's
+    `families` field.
+    """
+
+    def _root(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="discover-doc-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS_1")
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(root)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS_1", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS_1"] = previous
+        self.addCleanup(restore)
+        return root
+
+    def test_an_empty_root_answers_no_revision(self):
+        self._root()
+        result = seal_harness.impl.discover_document_revision(1)
+        self.assertIsNone(result["revision"])
+        self.assertEqual(result["families"], [])
+        self.assertEqual(result["tied"], [])
+
+    def test_a_hand_authored_root_picks_the_digit_tuple_max(self):
+        root = self._root()
+        (root / "draft-1.md").write_text("one", encoding="utf-8")
+        (root / "draft-2.md").write_text("two", encoding="utf-8")
+        result = seal_harness.impl.discover_document_revision(1)
+        self.assertEqual(result["revision"], "draft-2.md")
+        self.assertFalse(result["markerOwned"])
+        self.assertEqual(result["tied"], [])
+
+    def test_a_real_tie_on_the_digit_tuple_is_reported(self):
+        root = self._root()
+        (root / "draft-1.md").write_text("a", encoding="utf-8")
+        (root / "draft-01.md").write_text("b", encoding="utf-8")
+        result = seal_harness.impl.discover_document_revision(1)
+        self.assertEqual(sorted(result["tied"]), ["draft-01.md", "draft-1.md"])
+
+    def test_a_marker_owned_root_excludes_unmarked_candidates(self):
+        root = self._root()
+        (root / "draft-1.md").write_text("plain, unmarked", encoding="utf-8")
+        (root / "draft-2.md").write_bytes(
+            seal_harness.impl.MANAGED_ARTIFACT_MARKER + b"managed\n")
+        result = seal_harness.impl.discover_document_revision(1)
+        self.assertEqual(result["revision"], "draft-2.md")
+        self.assertTrue(result["markerOwned"])
+        self.assertEqual(result["nonManaged"], ["draft-1.md"])
+
+    def test_not_a_directory_answers_the_identical_empty_shape(self):
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(
+            Path(tempfile.mkdtemp(prefix="discover-doc-missing-")) / "absent")
+        self.addCleanup(os.environ.pop, "IMPLEMENTATION_PROPOSALS_1", None)
+        result = seal_harness.impl.discover_document_revision(1)
+        self.assertEqual(
+            result,
+            {"revision": None, "markerOwned": False, "nonManaged": [],
+             "tied": [], "families": []})
+
+
+class DocumentRevisionNamesMemoTests(unittest.TestCase):
+    """design.md D2: the memo's cache key carries `(revision, *roots)`,
+    never `revision` alone. Re-pointing `IMPLEMENTATION_PROPOSALS_1`
+    between two calls in the same process, with the SAME `revision`
+    argument both times, must change the second call's answer -- a bare-
+    argument cache (e.g. a naive `functools.lru_cache`) would instead
+    return the first call's now-stale answer."""
+
+    def test_repointing_the_root_between_two_calls_changes_the_answer(self):
+        # `document_revision_names` loops `range(1, len(DOCUMENTS))`, and
+        # this test process's own `IMPLEMENTATION_DOMAIN_PROFILE` (set at
+        # module import, above) declares exactly one document -- the real
+        # skill's shipped profile every other file in this suite shares.
+        # `DOCUMENTS` is reassigned here, in-process, to a genuine
+        # two-entry list purely so the memo's OWN loop runs a second
+        # iteration; this never touches a subprocess (which always reads
+        # its own environment's real profile), so the recorded scar
+        # ("monkeypatching a module attribute has ZERO effect on a
+        # subprocess") does not apply -- nothing here is reached by one.
+        impl = seal_harness.impl
+        original_documents = impl.DOCUMENTS
+        original_cache = dict(impl._DOCUMENT_NAME_CACHE)
+        impl._DOCUMENT_NAME_CACHE.clear()
+        impl.DOCUMENTS = [
+            {"directory": original_documents[0]["directory"], "label": "proposal"},
+            {"directory": Path("/nonexistent/memo-doc1"), "label": "experiments"},
+        ]
+
+        def restore():
+            impl.DOCUMENTS = original_documents
+            impl._DOCUMENT_NAME_CACHE.clear()
+            impl._DOCUMENT_NAME_CACHE.update(original_cache)
+        self.addCleanup(restore)
+
+        root_a = Path(tempfile.mkdtemp(prefix="memo-root-a-"))
+        self.addCleanup(shutil.rmtree, root_a, ignore_errors=True)
+        (root_a / "draft-1.md").write_text("a", encoding="utf-8")
+
+        root_b = Path(tempfile.mkdtemp(prefix="memo-root-b-"))
+        self.addCleanup(shutil.rmtree, root_b, ignore_errors=True)
+        (root_b / "draft-9.md").write_text("b", encoding="utf-8")
+
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS_1")
+
+        def restore_env():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS_1", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS_1"] = previous
+        self.addCleanup(restore_env)
+
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(root_a)
+        first = impl.document_revision_names("r1.md")
+
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(root_b)
+        second = impl.document_revision_names("r1.md")
+
+        self.assertEqual(first[1], "draft-1.md")
+        self.assertEqual(second[1], "draft-9.md")
+        self.assertNotEqual(
+            first[1], second[1],
+            "the SAME revision argument against two different roots must "
+            "resolve to two different document-1 names -- a cache keyed "
+            "on revision alone would instead serve the first root's "
+            "now-stale answer")
+
+
 class TwoDocumentPositionWriteTests(unittest.TestCase):
     """Corrective apply, Cut 3 (verify FAIL, CRITICAL finding): `cmd_
     position`'s own four `len(DOCUMENTS) > 1` sites (C2), each reached by a
@@ -374,7 +514,7 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
         self.assertIn("documents", absent_result)
         self.assertEqual(
             absent_result["documents"],
-            [{"label": "experiments", "revision": self.REVISION,
+            [{"label": "experiments", "revision": self.REVISION_1,
               "revisionSha256": self._doc1_sha256()}])
 
         # L10836 (header gains the group) / L10946 (ledger event) / L10956
@@ -390,7 +530,7 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
         self.assertIn("documents", install_result)
         self.assertEqual(
             install_result["documents"],
-            [{"label": "experiments", "revision": self.REVISION,
+            [{"label": "experiments", "revision": self.REVISION_1,
               "revisionSha256": self._doc1_sha256()}])
         agreed = (self.box / self.PACKAGE / "AGREED.md").read_text(encoding="utf-8")
         self.assertIn("documents=", agreed)
@@ -415,6 +555,91 @@ class TwoDocumentPositionWriteTests(unittest.TestCase):
         self.assertEqual(
             len(events_after_refresh), 1,
             "an unchanged refresh must append no second ledger event")
+
+
+class DocumentOneBoundToTests(unittest.TestCase):
+    """design.md D7 / M4: `boundTo["experiments"]` (`position_state`'s
+    multi branch) reports `current`, then `stale` after document 1's own
+    file changes -- the value M4 measured as unreachable before
+    `extra_sources` was ever wired to a real call site. A real subprocess
+    `position --sequence` install records document 1's sha into the
+    header's own `documents=` group first (the group must exist before
+    `current`/`stale` is even a meaningful question -- see
+    `position_state`'s own "never recorded" branch); `probe` then reads
+    `current` against the unchanged file, and `stale` after the file's
+    own bytes are rewritten underneath it, with no second `position` call
+    in between."""
+
+    REVISION = "pair-boundto-r01.md"
+    REVISION_1 = "pair-boundto-plan-v01.md"
+    REVISION_TEXT = "## 1\ntexto.\n"
+    PACKAGE = "BoundToOnly"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-boundto-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-boundto-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text(self.REVISION_TEXT, encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-boundto-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.REVISION_1).write_text(
+            "Document 1's own bound-to text, version one.\n", encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_pair_boundto_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-boundto"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-boundto@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / self.PACKAGE).mkdir(parents=True)
+        (self.box / self.PACKAGE / "AGREED.md").write_text(
+            "# Agreed\n\n## Ladder\n\n- [ ] First measurable claim.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, *args):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_current_then_stale_after_document_one_changes(self):
+        sequence = json.dumps([{"text": "First step.", "witness": {"kind": "record"}}])
+        install = self.run_cli(
+            "position", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, "--session", "s1",
+            "--sequence", sequence, "--target-level", "final")
+        self.assertEqual(install.returncode, 0, install.stdout + install.stderr)
+
+        probe_current = self.run_cli(
+            "probe", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(probe_current.returncode, 0,
+                         probe_current.stdout + probe_current.stderr)
+        bound_to_current = json.loads(probe_current.stdout)["position"]["boundTo"]
+        self.assertEqual(bound_to_current["experiments"], "current")
+
+        (self.doc1 / self.REVISION_1).write_text(
+            "Document 1's own bound-to text, version TWO -- changed after "
+            "the position was recorded.\n", encoding="utf-8")
+
+        probe_stale = self.run_cli(
+            "probe", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(probe_stale.returncode, 0,
+                         probe_stale.stdout + probe_stale.stderr)
+        bound_to_stale = json.loads(probe_stale.stdout)["position"]["boundTo"]
+        self.assertEqual(bound_to_stale["experiments"], "stale")
 
 
 class TwoDocumentLifecycleTests(unittest.TestCase):
@@ -670,7 +895,7 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         self.assertIn("documentRevisions", offer_result)
         self.assertEqual(
             offer_result["documentRevisions"],
-            [{"label": "experiments", "revision": self.REVISION,
+            [{"label": "experiments", "revision": self.REVISION_1,
               "sha256": self._doc1_sha256()}])
         launch = next(a for a in offer_result["actions"] if a["id"] == "launch")
         token = launch["binding"]["authorization"]
@@ -701,7 +926,7 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         self.assertIn("documentRevisions", gate_result)
         self.assertEqual(
             gate_result["documentRevisions"],
-            [{"label": "experiments", "revision": self.REVISION,
+            [{"label": "experiments", "revision": self.REVISION_1,
               "sha256": self._doc1_sha256()}])
         ledger_events_after_gate = [
             json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
@@ -757,7 +982,7 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         self.assertIn("documents", record)
         self.assertEqual(
             record["documents"],
-            [{"label": "experiments", "revision": self.REVISION,
+            [{"label": "experiments", "revision": self.REVISION_1,
               "revisionSha256": self._doc1_sha256()}])
         # Re-verify (Cut 3, second correction) WARNING 1: C7's
         # `sources_by_document` construction (L7797) is reached by the
