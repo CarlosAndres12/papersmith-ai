@@ -194,6 +194,61 @@ the spec to the invariant that actually survived measurement.)
   committed goldens
 - THEN every digest and exit status is byte-identical to its pre-addition golden
 
+### Requirement: The Per-Document Vocabulary Fold Is Sealed By A Drift-Control Fixture
+
+A committed two-document corpus fixture, where document 0's own claim
+vocabulary and text are clean while document 1's own claim vocabulary names
+a genuinely drifted module, MUST be captured and proven by real-subprocess
+assertion, demonstrating that `fidelityByDocument`'s fold reflects only its
+own document's four conditions. The inverse arrangement (document 0 drifted,
+document 1 clean) MUST also be captured as the control proving the fold is
+not merely reporting document 0's status twice. The existing 28-case corpus
+under `tests/seal/` MUST remain untouched by this addition.
+
+(Correction after verify: the original requirement text said "captured and
+digested", implying a digest artifact. What was built proves the same
+property via real-subprocess assertion in `TwoDocumentDriftControlTests`,
+which is the mechanism design.md classifies as Integration. The distinction
+matters: a digest proves *these exact bytes did not move*; an assertion
+proves *this document's status differs from that one's*. The drift control
+needs the assertion: its whole point is that document 0 stays clean while
+document 1 drifts, and a digest of that pair would freeze a difference
+rather than demonstrate one.)
+
+#### Scenario: A clean document 0 beside a drifted document 1 is proven independent
+- GIVEN the drift-control fixture with document 0 clean and document 1
+  drifted under its own claim vocabulary
+- WHEN the real-subprocess assertion runs
+- THEN document 0's fidelity status is unaffected and document 1's reports
+  drift, both independently computed
+
+#### Scenario: The inverse control is proven
+- GIVEN the same fixture family with document 0 drifted and document 1
+  clean under their own vocabularies
+- WHEN the real-subprocess assertion runs
+- THEN document 0's fidelity status reports drift and document 1's is
+  unaffected, both independently computed
+
+#### Scenario: The existing 28 remain untouched
+- GIVEN the drift-control fixture added alongside `tests/seal/`
+- WHEN `git diff --exit-code tests/seal/` runs
+- THEN it exits 0
+
+### Requirement: A Declared Second Document's Own Vocabulary Is Exercised, Not Only Its Directory And Label
+
+At least one sealed two-document case MUST exercise a document declaring
+its own per-document `claim_key`/`locus_key`/`remedy_locus_key`/
+`notation_keys`/`citation_pattern`, distinct from the other document's, so
+the seal proves the declared vocabulary is read and threaded — not merely
+that a second `documents` entry with its own directory and label resolves.
+
+#### Scenario: A per-document vocabulary difference is observable in the captured output
+- GIVEN a two-document fixture where document 1 declares its own citation
+  pattern and notation keys, different from document 0's
+- WHEN a case touching a citation or notation payload is captured
+- THEN the captured output reflects document 1's own declared values for
+  document 1, and document 0's own for document 0
+
 ## ADDED Requirements
 
 ### Requirement: The Second Skill Ships Its Own Seal, Added Beside The Existing One
