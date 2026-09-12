@@ -4979,11 +4979,14 @@ def _document_declares_dataset(index: int, revision_name: str | None) -> bool:
     spec `implementation-data-demandability`): the branch is structural,
     not merely a runtime allowance for a missing read. The match itself
     is a literal `lstrip().startswith(marker)`, never a substring test
-    and never a regex -- a document that only DISCUSSES its own format
-    ("every protocol needs a `**Dataset:**` line") must not satisfy a
+    and never a regex -- a document that only DISCUSSES its own marker
+    convention in passing prose, mid-sentence, must not satisfy a
     substring test while declaring nothing, and a regex-metacharacter
     marker must match only its own literal text (threat-matrix row:
-    host-supplied text matched, literal only, into file bytes).
+    host-supplied text matched, literal only, into file bytes). No
+    domain's own marker text is ever spelled here -- it is read off the
+    profile by construction (spec `implementation-data-demandability`,
+    `LockCDeclaredMarkerTests`).
     """
     marker = DOCUMENTS[index].get("dataset_marker")
     if marker is None or revision_name is None:

@@ -89,7 +89,7 @@ Chain strategy: stacked-to-main
 
 ## Phase 10: New neutrality lock (B2)
 
-- [ ] 10.1 `tests/test_implementation_domain_lock.py` — `LockCDeclaredMarkerTests`: for every profile `discover_profiles()` finds, for every non-`None` `documents[N].dataset_marker`, assert the literal appears in no file under `ENGINE_DIR`; assert `len(markers) > 0` (non-vacuity, only true after 8.1).
+- [x] 10.1 `tests/test_implementation_domain_lock.py` — `LockCDeclaredMarkerTests`: for every profile `discover_profiles()` finds, for every non-`None` `documents[N].dataset_marker`, assert the literal appears in no file under `ENGINE_DIR`; assert `len(markers) > 0` (non-vacuity, only true after 8.1). **Found and fixed a real leak while writing this**: `_document_declares_dataset`'s own docstring spelled the literal `**Dataset:**` as an illustrative example, which this lock correctly caught; reworded to describe the shape without spelling the value.
 
 ## Phase 11: B2 acceptance gate
 

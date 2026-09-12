@@ -196,6 +196,53 @@ class LockBEngineNeutralityTests(unittest.TestCase):
             "them: " + "; ".join(leaks))
 
 
+class LockCDeclaredMarkerTests(unittest.TestCase):
+    """Lock C (`a-data-directory-somebody-can-owe`, B2, design.md D7): the
+    dataset detector must read the marker off the profile, never spell
+    it as an engine literal (spec `implementation-data-demandability`).
+    For every profile `discover_profiles()` finds, for every non-`None`
+    `documents[N].dataset_marker`, the literal appears in no file under
+    `ENGINE_DIR`.
+
+    Vacuous until a shipped profile declares a marker (D7's own note) --
+    non-vacuity is asserted directly (`assertGreater(len(markers), 0)`),
+    true only after task 8.1 declares `experimental-implementation`'s
+    real one. By M4 (design.md), this is a lock over the declared VALUE,
+    never the English word `dataset` -- `classify` already returns that
+    word as a reason string, so a lock phrased over the word itself
+    would be red at HEAD."""
+
+    def _declared_markers(self) -> list[tuple[str, int, str]]:
+        markers = []
+        for entry in discover_profiles():
+            for index, document in enumerate(entry["profile"].get("documents", [])):
+                marker = document.get("dataset_marker")
+                if marker is not None:
+                    markers.append((entry["skill_name"], index, marker))
+        return markers
+
+    def test_at_least_one_declared_marker_exists(self):
+        markers = self._declared_markers()
+        self.assertGreater(
+            len(markers), 0,
+            "no profile declares a non-None dataset_marker -- every "
+            "assertion below would pass vacuously")
+
+    def test_no_declared_marker_appears_in_the_engine(self):
+        markers = self._declared_markers()
+        leaks = []
+        for rel, source in _read_all(_engine_files()):
+            for skill_name, index, marker in markers:
+                if marker in source:
+                    leaks.append(
+                        f"{rel} spells {skill_name}'s documents[{index}]"
+                        f".dataset_marker literal {marker!r}")
+        self.assertEqual(
+            leaks, [],
+            "the engine must read a declared dataset_marker off the "
+            "profile, never spell it: " + "; ".join(leaks))
+
+
 # --- M5: the derived denylist (TS C-3), now landable ------------------------
 #
 # Deferred at Cut 2 (`the-domain-crosses-the-seam`): with one implementation
