@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, plan, resolve, bib build, validate, write, render, place, verify. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -13,11 +13,13 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Sixteen verbs, wired into one front door (`scripts/paper_cli.py`):
+Seventeen verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
-`the-contract-is-data-not-code`), `declare`, `plan` (the paper's own
-decisions — `the-paper-carries-its-own-decisions`), `resolve`,
+`the-contract-is-data-not-code`), `declare`, `observe` (validates an
+`insumos-observer` report against the observable-fact schema before a human
+runs `declare` against it), `plan` (the paper's own decisions —
+`the-paper-carries-its-own-decisions`), `resolve`,
 `bib build`, `validate` (citation resolution, a sourced bibliography, and
 the verdict/placement gate — `no-claim-without-a-source-that-holds-it`),
 `write` (evidence-bound drafting, contract audit and the style-leak proof —
@@ -361,7 +363,20 @@ exactly what that asks for; under `none`, no citation is allowed at all.
 facts an outside observer can check against evidence (`formulation`,
 `dataset`, `experimental-design`, `implementation`, `results`), this skill
 delegates to the `insumos-observer` agent — it reports satisfaction and
-evidence, never a value, and never calls `declare` itself.
+evidence, never a value, and never calls `declare` itself. Its JSON report
+is shuttled to a file and read back through `observe`, which validates it
+against the observable-fact schema before a human runs `declare` against
+it — the same shuttle shape `write --draft <path>` already establishes for
+the redactor's account, never trusting an agent's account unjudged.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py observe \
+    --report insumos-observer-report.json
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `observe --report <path>` | Read-only: validates an `insumos-observer` report against the ten observable facts and the `implementation`/`results` evidence-conflation guard; writes nothing and never calls `declare` | `OBSERVATION_REPORT_UNREADABLE`, `NOT_AN_OBSERVABLE_FACT`, `EVIDENCE_CONFLATED` |
 
 **Measure this before delegating:** confirm `proposals/`, `experiments/`
 and the target implementation repository are readable; an agent asked to

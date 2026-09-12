@@ -799,6 +799,55 @@ class CLIWiringTests(unittest.TestCase):
         payload = json.loads(proc.stdout)
         self.assertEqual(payload["code"], "OPEN_POSITION_CONFLICT")
 
+    def test_observe_validates_an_insumos_observer_report_and_writes_nothing(self) -> None:
+        """`observe` wires `paper_declarations.validate_observation_report`
+        to a real CLI caller -- the same shuttle shape `write --draft
+        <path>` already establishes for the redactor's account."""
+        self._scaffold()
+        report_path = self.paper_dir.parent / "observation_report.json"
+        report_path.write_text(json.dumps({
+            "formulation": {"satisfied": True, "evidence": [["proposals/x.md", "the model is..."]]},
+            "implementation": {"satisfied": True, "evidence": [["repo/code.py", "q1"]]},
+            "results": {"satisfied": True, "evidence": [["repo/results.json", "q2"]]},
+        }), encoding="utf-8")
+        before = report_path.read_bytes()
+
+        proc = self._run("observe", "--report", str(report_path))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertTrue(payload["validated"])
+        self.assertEqual(payload["satisfied"], ["formulation", "implementation", "results"])
+        self.assertEqual(report_path.read_bytes(), before)
+
+    def test_observe_refuses_an_id_outside_the_observable_facts(self) -> None:
+        self._scaffold()
+        report_path = self.paper_dir.parent / "observation_report.json"
+        report_path.write_text(json.dumps({
+            "contributions": {"satisfied": True, "evidence": [["x", "y"]]},
+        }), encoding="utf-8")
+
+        proc = self._run("observe", "--report", str(report_path))
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "NOT_AN_OBSERVABLE_FACT")
+
+    def test_observe_refuses_conflated_implementation_and_results_evidence(self) -> None:
+        self._scaffold()
+        report_path = self.paper_dir.parent / "observation_report.json"
+        report_path.write_text(json.dumps({
+            "implementation": {"satisfied": True, "evidence": [["repo/code.py", "q1"]]},
+            "results": {"satisfied": True, "evidence": [["repo/code.py", "q2"]]},
+        }), encoding="utf-8")
+
+        proc = self._run("observe", "--report", str(report_path))
+
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "EVIDENCE_CONFLATED")
+
 
 class MutationProofTests(unittest.TestCase):
     """Independent byte-identity verification, executed rather than
@@ -3469,12 +3518,18 @@ class RefusalRosterTests(unittest.TestCase):
         UNRESOLVED` and `COMPONENTS_FACT_NOT_A_LIST` -- reachable the
         moment `_check_obligations` calls it, no new module import needed
         since both live in the already-scanned `paper_cli.py`. Moved from
-        96 to 94 in the zero-production-caller corrective: `paper_contract.
+        96 to 95 in the zero-production-caller corrective: `paper_contract.
         install_header` (`HEADER_PRESENT`, `BODY_MUTATED`) is deleted --
         its one-shot migration over the ten shipped contracts already ran
         and nothing promises a "create a new section contract" workflow
-        anywhere in SKILL.md, a spec, or a registered agent."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 94)
+        anywhere in SKILL.md, a spec, or a registered agent -- and `observe`
+        is wired as `validate_observation_report`'s real caller, adding
+        `OBSERVATION_REPORT_UNREADABLE` (this file's own shuttle-file read,
+        the same shape `CONTRACT_UNREADABLE` already establishes). Net
+        -2 + 1 = -1. `classify_guidance_child` (`paper_evidence.py`) is also
+        deleted in the same corrective but raises no `Refused` of its own,
+        so it moves this count by zero."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 95)
 
 
 if __name__ == "__main__":

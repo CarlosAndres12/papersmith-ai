@@ -158,12 +158,15 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # write itself is paper_provenance.py) -------------------------------
     "CONTRACT_UNREADABLE": WORK_STATE,
     "PROVENANCE_HAND_EDITED": WORK_STATE,
-    # --- observation report validation (paper_declarations.py; consumed by
-    # a human reading `insumos-observer`'s report, never called from a
-    # cmd_* root here, but reachable through the whole-module scan the
-    # roster derivation already performs on every imported module) ------
+    # --- observation report validation (paper_declarations.py, wired to a
+    # real caller via cmd_observe; formerly reachable only through the
+    # whole-module scan, with no cmd_* root calling it -- closed by
+    # wiring `observe`, the shuttle verb for `insumos-observer`'s report) -
     "NOT_AN_OBSERVABLE_FACT": INVOCATION_DEFECT,
     "EVIDENCE_CONFLATED": INVOCATION_DEFECT,
+    # --- observe's own file/JSON read (this file; same shape
+    # CONTRACT_UNREADABLE already establishes for a shuttled file) --------
+    "OBSERVATION_REPORT_UNREADABLE": WORK_STATE,
     # --- verdict vocabulary (paper_vocabulary.py; no-claim-without-a-
     # source-that-holds-it Phase 1) --------------------------------------
     "UNKNOWN_VERDICT": WORK_STATE,
@@ -360,6 +363,36 @@ def cmd_declare(args: argparse.Namespace) -> dict:
     if args.declaration:
         return paper_declarations.set_declaration(paper_dir, args.declaration, args.value)
     return paper_declarations.set_fact(paper_dir, args.fact, args.value)
+
+
+def cmd_observe(args: argparse.Namespace) -> dict:
+    """`observe`: validates an already-produced `insumos-observer` report
+    against the observable-fact schema and the `implementation`/`results`
+    evidence-conflation guard, read-only — the Schema enforcement layer
+    `design.md`'s "`insumos-observer` cannot decide, by schema and by
+    capability" names, wired to a real caller. `insumos-observer` itself has
+    no `Write`/`Edit`/`Bash` and never runs `declare`; its JSON account is
+    shuttled to a file exactly like the redactor/contract-auditor/
+    style-sampler accounts `write` already consumes, and this verb is what
+    reads it back before a human runs `declare` against it themselves. Never
+    calls `declare`, never writes anything.
+    """
+    report_path = _resolve_repo_path(args.report)
+    try:
+        raw = report_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise Refused("OBSERVATION_REPORT_UNREADABLE", f"{report_path}: {exc}")
+    try:
+        report = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise Refused("OBSERVATION_REPORT_UNREADABLE", f"{report_path}: invalid JSON: {exc.msg}")
+    if not isinstance(report, dict):
+        raise Refused("OBSERVATION_REPORT_UNREADABLE", f"{report_path}: must be a JSON object")
+    paper_declarations.validate_observation_report(report)
+    satisfied = sorted(
+        fact for fact, entry in report.items() if isinstance(entry, dict) and entry.get("satisfied")
+    )
+    return {"validated": True, "facts": sorted(report.keys()), "satisfied": satisfied}
 
 
 def cmd_resolve(args: argparse.Namespace) -> dict:
@@ -862,6 +895,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="the value (--declaration) or resolution (--fact) to record",
     )
 
+    p_observe = sub.add_parser(
+        "observe",
+        help="validate an insumos-observer report against the observable-fact schema, read-only",
+    )
+    p_observe.add_argument(
+        "--report", required=True,
+        help="path to the insumos-observer JSON report to validate; must resolve inside the repository root",
+    )
+
     p_resolve = sub.add_parser(
         "resolve",
         help="resolve one identifier's metadata through a named connector, keyless",
@@ -1042,8 +1084,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = (
-    "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "plan",
-    "resolve", "bib", "validate", "write", "render", "place", "verify",
+    "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "observe",
+    "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1054,6 +1096,7 @@ _COMMANDS = {
     "readiness": cmd_readiness,
     "order": cmd_order,
     "declare": cmd_declare,
+    "observe": cmd_observe,
     "plan": cmd_plan,
     "resolve": cmd_resolve,
     "bib": cmd_bib,
