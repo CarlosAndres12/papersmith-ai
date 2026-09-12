@@ -1,0 +1,97 @@
+# Tasks: A `Data/` directory somebody can owe — Slice B
+
+> Budget note: over 530 words, on the precedent this change's own proposal/
+> design set. Every threat-matrix `Yes` row and every X1–X5 mutation needs its
+> own named RED task (strict_tdd); eliding one would hide a case design priced.
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | 510-800 (B1 340-520, B2 170-280) |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | B1 → B2 (sequential, B2 depends on B1) |
+| Delivery strategy | auto-chain |
+| Chain strategy | stacked-to-main |
+
+Decision needed before apply: No
+Chained PRs recommended: Yes
+Chain strategy: stacked-to-main
+400-line budget risk: High
+
+### Suggested Work Units
+
+| Unit | Goal | Likely PR | Focused test command | Runtime harness | Rollback boundary |
+|------|------|-----------|----------------------|-----------------|-------------------|
+| 1 (B1) | Leaf + detector + `--revision` on `plan` + `build_plan`'s 3rd param at all 3 call sites + `cmd_verify` reorder + F5 finish + mutation proof | PR 1 | `python3.12 -m unittest tests.test_experimental_implementation tests.test_implementation_profile tests.test_implementation_domain_mutation tests.test_implementation_core` | Real subprocess `plan --revision X` → approve → `apply`, and `materialize --stage` | Revert commits; `dataset_marker` stays required so a bare key removal alone is not a rollback |
+| 2 (B2) | Declare `documents[0].dataset_marker`; `experiments_seal` 2nd axis (D9); `LockCDeclaredMarkerTests`; `SKILL.md` | PR 2 | `python3.12 -m unittest tests.test_implementation_domain_lock` + `tests/experiments_seal` harness | `verify --revision dataset-1.md` against fixture B, captured | Revert B2 commits; restore pre-change `tests/experiments_seal/digests.json` as part of the revert |
+
+## Phase 1: Profile leaf (B1)
+
+- [ ] 1.1 RED: `tests/test_implementation_profile.py` — per-index case: a `documents[N]` entry missing `dataset_marker` raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[N].dataset_marker` exactly.
+- [ ] 1.2 GREEN: `.claude/skills/_core/implementation/impl_domain_profile.py` `_resolve()` — append a `dataset_marker` required-key check to the per-entry walk, right after the existing `label` check; NOT added to `_DOCUMENT_VOCABULARY_LEAVES`.
+- [ ] 1.3 `tests/fixtures/two_documents/impl_profile.py` — add two `"dataset_marker": None` lines (fixture edit, not the reaching configuration).
+- [ ] 1.4 `.claude/skills/proposal-implementation/impl_profile.py` — add the one sanctioned sibling line, `"dataset_marker": None,`.
+
+## Phase 2: Detector (B1)
+
+- [ ] 2.1 RED: `tests/test_experimental_implementation.py` — `None` marker never opens a file (revision points at a missing file, detector still returns `False`, no raise).
+- [ ] 2.2 RED: same file — line-leading match: `lstrip().startswith(marker)` true only when the marker starts the line; a **mid-sentence-only** occurrence answers `False` (the X3 strength case).
+- [ ] 2.3 RED: same file — a marker containing regex metacharacters (e.g. `.*`) matches only literally (host-supplied-text threat row).
+- [ ] 2.4 RED: same file — or-fold: a two-document fixture where only index 1 declares still answers demand `True` (kills "read index 0 always").
+- [ ] 2.5 GREEN: `.claude/skills/_core/implementation/engine/implementation_engine.py` — add the detector, reading each declared document via `revision_source`/`document_revision_names` (no new path-join site), or-folded across `documents[N]`.
+
+## Phase 3: Thread `--revision` through `build_plan` (B1)
+
+- [ ] 3.1 RED: `tests/test_experimental_implementation.py` — `plan` with no `--revision` on a target with no documents root exits 0, stdout byte-identical to today (reading-at-plan-time threat row).
+- [ ] 3.2 RED: same file — the `PLAN_STALE` agreement test: real subprocesses, `plan --revision X` → approve → `apply` exits 0 and `createDirs` contains the declared `Data/`; repeat through `materialize --stage`.
+- [ ] 3.3 RED: same file — an approved `plan.json` with no `"boundTo"` key still applies (pre-existing-plans data-integrity row).
+- [ ] 3.4 GREEN: engine `main()` parser registration — add `--revision` on `plan` alone (joins the eight-name set as its own registration, mirroring `walk`'s separate one).
+- [ ] 3.5 GREEN: `build_plan` gains a third parameter; new disjunct `declared or <existing two>`; `plan["boundTo"]` emitted only when `revision is not None`.
+- [ ] 3.6 GREEN: `cmd_plan` passes `args.revision`; `cmd_apply` and `_materialize_plan_gate` read the seed from `approved["boundTo"]["revision"]` (never compared in `cmd_apply`'s four-key check) and pass the same seed to `build_plan`.
+
+## Phase 4: `cmd_verify` reorder (B1)
+
+- [ ] 4.1 GREEN: `cmd_verify` — move `with_data`, `missing_dirs`, `structure_ok` below `revision = args.revision or discovered` (D5, three statements, no restructure).
+- [ ] 4.2 GREEN: `with_data` becomes `declared or (target / name / "Data").is_dir()`.
+
+## Phase 5: Finish F5 (B1)
+
+- [ ] 5.1 GREEN: replace the 3 remaining bare `"Data"` sites (`classify`, `build_plan`'s two-occurrence expression, `cmd_verify`) with `PRODUCT_DATA`.
+- [ ] 5.2 RED+GREEN: `tests/test_implementation_core.py` — `ZeroBareDataLiteralTests`: `PRODUCT_DATA` taken off the CLI, asserted to appear quoted exactly once in engine source (the `PRODUCT_DIRS` tuple).
+
+## Phase 6: Mutation proof (B1)
+
+- [ ] 6.1 RED: X1 — delete `dataset_marker` from one `documents[N]`; assert `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` names that exact index.
+- [ ] 6.2 RED: X2 — `tests/test_implementation_domain_mutation.py`: `MUTATIONS["documents.dataset_marker"] = ('"dataset_marker": None,', '"dataset_marker": "## 2",')`; run against the sibling's real corpus; measure and record movers in `MEASURED_MOVERS` (predicted `verify-b`, possibly `verify-t`) — `pop` `impl_domain_profile` from `sys.modules`, clear `__pycache__`, anchor-count both endpoints.
+- [ ] 6.3 RED: X4 — in the fold, `dataset_marker(index)` → `dataset_marker(0)`; assert the document-1-only fixture (2.4) now fails and `tests/seal/` still survives.
+- [ ] 6.4 RED: X5 — `cmd_apply` passes `None` instead of the `approved["boundTo"]` seed; assert the 3.2 agreement test catches it; repeat for `_materialize_plan_gate`.
+
+## Phase 7: B1 non-interference gate
+
+- [ ] 7.1 `git diff --exit-code tests/seal/` exits 0.
+- [ ] 7.2 Full suite: `npm test` 595/595; Python `OK (skipped=6)` with `Ran` grown, `skipped=6` unmoved, no `skipTest` added.
+- [ ] 7.3 Assert `reachable_refusal_codes()`'s derived roster unchanged (zero new refusal codes).
+- [ ] 7.4 Assert `tests/experiments_seal/digests.json` unmoved (B1 touches zero of its 20 cases).
+
+## Phase 8: Shipped declaration (B2)
+
+- [ ] 8.1 `.claude/skills/experimental-implementation/impl_profile.py` — declare `documents[0]`'s real `dataset_marker` (last write of the change; `documents[1]` stays `None` permanently).
+- [ ] 8.2 `.claude/skills/experimental-implementation/SKILL.md` — state the per-product-folder `Data/` demand and its three reasons.
+
+## Phase 9: Corpus second axis (B2, D9)
+
+- [ ] 9.1 `tests/experiments_seal/corpus.py` — author `dataset-0.md`/`dataset-1.md`, byte-identical except one `**Dataset:**` line, outside the discovered `trial-(\d+)\.md` family.
+- [ ] 9.2 `tests/experiments_seal/cases.json` — add `verify-b-declared`, `verify-a-declared`, `verify-b-undeclared`, `plan-b-declared`.
+- [ ] 9.3 RED then GREEN: regenerate `digests.json`; assert **zero** of the existing 20 cases move, only `__corpus_fingerprint__` plus the 4 new entries; read each new digest by hand before accepting (never bulk-regenerate).
+
+## Phase 10: New neutrality lock (B2)
+
+- [ ] 10.1 `tests/test_implementation_domain_lock.py` — `LockCDeclaredMarkerTests`: for every profile `discover_profiles()` finds, for every non-`None` `documents[N].dataset_marker`, assert the literal appears in no file under `ENGINE_DIR`; assert `len(markers) > 0` (non-vacuity, only true after 8.1).
+
+## Phase 11: B2 acceptance gate
+
+- [ ] 11.1 Capture `verify-b-declared`: `missingDirs` contains `Trial/Data`, `structure.status: drift`. Capture both controls (`verify-a-declared` present → empty; `verify-b-undeclared` → empty, byte-identical elsewhere).
+- [ ] 11.2 `git diff --exit-code tests/seal/` exits 0 again.
+- [ ] 11.3 Full suite re-run: `npm test` 595/595; Python `OK (skipped=6)` unmoved.
