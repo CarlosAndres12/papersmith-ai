@@ -70,14 +70,24 @@ class RosterAndUnsealedCoverageTests(unittest.TestCase):
         ids = [case["id"] for case in CASES]
         self.assertEqual(len(ids), len(set(ids)))
 
-    def test_compose_admit_materialize_are_recorded_excluded(self):
-        for excluded in ("compose", "admit", "materialize"):
+    def test_materialize_is_recorded_excluded(self):
+        for excluded in ("materialize",):
             with self.subTest(command=excluded):
                 self.assertIn(excluded, UNSEALED)
                 self.assertNotIn(
                     excluded, {case["command"] for case in CASES},
                     f"{excluded} is recorded excluded in unsealed.json AND "
                     "appears in the roster -- contradiction")
+
+    def test_compose_and_admit_are_no_longer_in_the_unsealed_set(self):
+        """`the-agreement-nothing-computes` (Slice D, spec
+        `implementation-cli-seal`, "`compose` and `admit` are no longer in
+        the unsealed set"): the block locator un-excludes both, and each
+        is now a sealed case (`compose-t`, `admit-t`)."""
+        for now_sealed in ("compose", "admit"):
+            with self.subTest(command=now_sealed):
+                self.assertNotIn(now_sealed, UNSEALED)
+                self.assertIn(now_sealed, {case["command"] for case in CASES})
 
     def test_the_real_roster_passes_validation(self):
         eh.validate_roster(CASES)

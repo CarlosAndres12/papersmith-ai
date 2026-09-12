@@ -1,6 +1,11 @@
 {
   "__corpus_fingerprint__": {
-    "sha256": "1ef201bfa24164e45e6efacda5c2ab4574f3394a8840aaf3bf99cd5545ac9c6d"
+    "sha256": "cedf38237de27d706805b913b15dee0959dae894f75286665c55e50337b0cd43"
+  },
+  "admit-t": {
+    "bytes": 310,
+    "exit": 0,
+    "sha256": "d8422ea7e393bf81f8d81ae7ed6fddf2cb7220f3e0dd036f4d3e4454efdf7ea1"
   },
   "apply": {
     "bytes": 280,
@@ -11,6 +16,11 @@
     "bytes": 3393,
     "exit": 2,
     "sha256": "efb051ada931ba6cb0c3c5913e492d7aa5ae17c59c42c39da5c8670f6169e500"
+  },
+  "compose-t": {
+    "bytes": 182,
+    "exit": 0,
+    "sha256": "bfb12a355126c611fdf94ba36fbd568123241e254efe75fe9854f37156d3a0f8"
   },
   "defect": {
     "bytes": 284,
@@ -80,7 +90,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "34b819e7a5722304dc6a474e5dac713eaba7c0738aa5ab97d9c22ea0a991dd2b"
+    "sha256": "dab5e2b9a625add7d9c78a46790e5426de6db0b9f65e101b3856fef794fdedbd"
   },
   "settle": {
     "bytes": 2826,
@@ -116,6 +126,11 @@
     "bytes": 21964,
     "exit": 0,
     "sha256": "7135c7b92cb9e33fe7d645ffdab799835e58621992ce52dc07c6ffd2521c5c62"
+  },
+  "verify-t": {
+    "bytes": 18561,
+    "exit": 0,
+    "sha256": "a59f9f13ca644602714f1a54e7c07ed48b8767a247143cc21df417fdc457f33c"
   },
   "walk": {
     "bytes": 814,

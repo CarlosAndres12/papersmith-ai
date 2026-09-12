@@ -165,6 +165,44 @@ FINDINGS_SOURCE = '''FINDINGS = [
 ]
 '''
 
+#: `the-agreement-nothing-computes` (Slice D, design.md D13, tasks.md
+#: 1.21): fixture T's OWN revision text, spelled in this domain's own
+#: heading form -- a NEW file under the shared documents root
+#: (`trial-t.md`), never an edit to `REVISION_TEXT`/`_DATASET_AXIS_BASE_
+#: TEXT`/`PROPOSAL_REVISION_TEXT` above, which is what keeps M3's
+#: zero-movement prediction for the 24 pre-existing cases true.
+FIXTURE_T_REVISION_TEXT = (
+    "## 1\n"
+    "\n"
+    "The protocol's first step currently yields h = k.\n"
+)
+
+#: Fixture T's own `tests/findings.py` (design.md D13): its own package,
+#: never `fixture_b`'s aliased one. One finding whose locus (`"1"`) IS
+#: declared in `FIXTURE_T_REVISION_TEXT` above -- the first case in this
+#: corpus where a locus is NOT unknown -- and whose `remedy_block` is
+#: written in this domain's own heading block form (`"## 1\n\n..."`),
+#: substitutable by `compose`.
+FIXTURE_T_FINDINGS_SOURCE = '''FINDINGS = [
+    {
+        "id": "heading-fix",
+        "kind": "inconsistency",
+        "status": "measured",
+        "rate": "always",
+        "statement": "The first step's outcome still carries its "
+                      "uncorrected value.",
+        "remedy": "Replace the first entry with its corrected form.",
+        "document": "experiments",
+        "experiments": ["1"],
+        "remedy_experiments": ["1"],
+        "uses": ["h = k"],
+        "introduces": [],
+        "adoption": {"absent": "h = k", "expect": ["h = corrected"]},
+        "remedy_block": "## 1\\n\\nThe corrected first entry: h = corrected.\\n",
+    },
+]
+'''
+
 _MODULE_SOURCE = (
     '__provenance__ = {\n'
     '    "revision": "trial-1.md", "sections": ["1", "2", "3"],\n'
@@ -206,11 +244,10 @@ class Roots:
     root: Path
     fixture_a: Path
     fixture_b: Path
-    #: `seal.harness._fixture_path`'s own dict literal evaluates all three
-    #: keys ("A"/"B"/"T") unconditionally, even when only "A" or "B" is
-    #: looked up -- so this attribute must resolve to SOMETHING even though
-    #: no case in this corpus's own roster ever names fixture "T". Aliased
-    #: to `fixture_b` rather than a separate build, since it is never read.
+    #: `the-agreement-nothing-computes` (Slice D, design.md D13): its own
+    #: real package, carrying its own `tests/findings.py`
+    #: (`FIXTURE_T_FINDINGS_SOURCE`) -- no longer aliased to `fixture_b`
+    #: now that `compose-t`/`admit-t`/`verify-t` name it.
     fixture_t: Path
     proposals: Path
     #: Slice C (design.md task 4.6): `documents[1]`'s own root -- the
@@ -239,7 +276,8 @@ def _git_commit(target: Path) -> None:
                    check=True, capture_output=True)
 
 
-def _write_common_package(target: Path, *, with_data: bool) -> None:
+def _write_common_package(target: Path, *, with_data: bool,
+                          findings_source: str = FINDINGS_SOURCE) -> None:
     (target / "src" / "Trial").mkdir(parents=True)
     (target / "src" / "Trial_Benchmark").mkdir(parents=True)
     (target / "tests").mkdir(parents=True)
@@ -255,7 +293,7 @@ def _write_common_package(target: Path, *, with_data: bool) -> None:
         _BENCHMARK_INIT_SOURCE, encoding="utf-8")
     (target / "src" / "Trial_Benchmark" / "steps.py").write_text(
         _STEPS_MODULE_SOURCE, encoding="utf-8")
-    (target / "tests" / "findings.py").write_text(FINDINGS_SOURCE, encoding="utf-8")
+    (target / "tests" / "findings.py").write_text(findings_source, encoding="utf-8")
     (target / "tests" / "__init__.py").write_text("", encoding="utf-8")
     (target / "Trial" / "AGREED.md").write_text(_AGREED_SOURCE, encoding="utf-8")
     _git_commit(target)
@@ -279,6 +317,12 @@ def _build_documents(root: Path) -> Path:
         _MANAGED_ARTIFACT_MARKER + DATASET_UNDECLARED_TEXT.encode("utf-8"))
     (documents / "dataset-1.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + DATASET_DECLARED_TEXT.encode("utf-8"))
+    # `the-agreement-nothing-computes` (Slice D, design.md D13): fixture
+    # T's own revision -- a NEW file, named outside the `trial-(\d+)\.md`
+    # family the same way `dataset-0.md`/`dataset-1.md` are (M7's own
+    # naming), so no existing case's discovery changes.
+    (documents / "trial-t.md").write_bytes(
+        _MANAGED_ARTIFACT_MARKER + FIXTURE_T_REVISION_TEXT.encode("utf-8"))
     return documents
 
 
@@ -297,11 +341,19 @@ def build(root: Path) -> Roots:
     root.mkdir(parents=True, exist_ok=True)
     fixture_a = root / "A"
     fixture_b = root / "B"
+    fixture_t = root / "T"
     fixture_a.mkdir(parents=True)
     fixture_b.mkdir(parents=True)
+    fixture_t.mkdir(parents=True)
 
     _write_common_package(fixture_a, with_data=True)
     _write_common_package(fixture_b, with_data=False)
+    # `the-agreement-nothing-computes` (Slice D, design.md D13, task 1.21):
+    # fixture T's own `findings.py`, never `fixture_b`'s aliased one -- the
+    # aliasing comment named the reason ("no case names it"); that changes
+    # here.
+    _write_common_package(
+        fixture_t, with_data=False, findings_source=FIXTURE_T_FINDINGS_SOURCE)
     documents = _build_documents(root)
     document_one = _build_document_one(root)
 
@@ -311,7 +363,7 @@ def build(root: Path) -> Roots:
     }
 
     return Roots(root=root, fixture_a=fixture_a, fixture_b=fixture_b,
-                fixture_t=fixture_b, proposals=documents,
+                fixture_t=fixture_t, proposals=documents,
                 proposals_1=document_one, plan_template=plan_template)
 
 

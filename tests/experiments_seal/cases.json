@@ -84,5 +84,15 @@
             "--session", "s1"]},
 
   {"id": "handoff-e1", "command": "handoff", "fixture": "A", "proposals": true,
-   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md"]}
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md"]},
+
+  {"id": "verify-t", "command": "verify", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-t.md"]},
+
+  {"id": "admit-t", "command": "admit", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-t.md"]},
+
+  {"id": "compose-t", "command": "compose", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--finding", "heading-fix", "--entry-text",
+            "## 1\n\nOld first entry text.\n\n## 2\n\nSecond entry text.\n"]}
 ]
