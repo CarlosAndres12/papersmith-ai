@@ -1,0 +1,186 @@
+"""This skill's own domain profile for the shared implementation engine
+(`_core/implementation/engine/implementation_engine.py`), the SECOND host
+built on the seam Cut 1/2/3 cut for it (change
+`the-second-skill-the-seam-was-for`, slice A).
+
+Every value here is computed from THIS file's own location, mirroring
+`proposal-implementation/impl_profile.py` exactly (design.md D1/D2) --
+`kit.root` and `cli.path` are structurally identical in shape (both derived
+from `Path(__file__).resolve().parent`), never from the engine's location.
+The launcher (`scripts/implementation_cli.py`) is a byte-identical copy of
+the sibling's own launcher (design.md D4/M4): every path in it is
+self-anchored off `Path(__file__).resolve()`, so the same 24 bytes placed
+here resolve to THIS skill's own profile, never the sibling's.
+
+**Scope (design.md, proposal.md): change A only.** A single declared
+document -- `documents[0]` is the `experiments/` directory, label
+`experiments` (design.md D1). The mathematical proposal document, cross-
+document agreement, and the successor composer are follow-on changes (B, C,
+D) and are not built here. This profile's `documents` list has exactly ONE
+entry, held to that shape by `tests/test_implementation_domain_lock.py`'s
+single-document guard (design.md D10), which C's first act deletes.
+
+**`vocabulary.names` (design.md D6, the M1 finding).**
+`LockADiscoveryTests.test_every_declared_name_really_is_that_domain_speaking`
+was vacuous for every profile, this skill's included, because it searched
+`entry["source"]` -- the profile file's own text, which trivially contains
+every literal in its own `names` list. The lock itself changes (design.md
+D6): the haystack becomes the profile's declared VALUES (every leaf other
+than `vocabulary.names` itself, rendered as text), so a declared name must
+actually equal some OTHER leaf's real value to be found -- never merely
+exist as a literal in this file's source.
+
+Declared here: the namespace word `experimental-implementation` (found via
+`kit.root`'s own path text, the same reason `experimental-deliberation`
+records for its own namespace word), plus every subject-vocabulary value
+measured ABSENT (`\\bword\\b == 0`, case-insensitive) from
+`implementation_engine.py` -- admitting a word the engine already spells as
+general machinery would immediately redden `LockBEngineNeutralityTests`.
+Measured this session, word-boundary, case-insensitive, whole-word
+occurrence counts (never line counts -- see the-second-skill-the-seam-
+was-for's apply-progress record for the line-count figures 89/30/28, which
+answer a different question):
+
+    experiment            24   -- EXCLUDED (general engine vocabulary)
+    experiments             6   -- EXCLUDED (general engine vocabulary)
+    experimento             0   -- admitted
+    experimentos            0   -- admitted
+    experimentation         0   -- admitted
+    experimentación    0   -- admitted
+    protocol                 1   -- EXCLUDED (one comment, "the protocol")
+
+So `names` is the namespace word plus the four measured-absent forms --
+never `experiment`/`experiments`/`protocol`, which the engine already
+spells for reasons that have nothing to do with this domain.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+_SKILL = Path(__file__).resolve().parent
+_FORGE_ROOT = _SKILL.parents[2]
+
+#: WHY THIS SKILL WAS INVOKED, AND WHERE IT HAS TO ARRIVE.
+#:
+#: This domain's own north (design.md D3): five stages, a different arrival
+#: from the sibling's six -- `standing` -> `binding` -> `instrumentation` ->
+#: `rehearsal` -> `full-scale`. No `behindWhen` here matches
+#: `UNMEASURABLE` (`nothing here measures it|the user said so`); this domain
+#: declares no such stage.
+#:
+#: Discovered by `tests/test_agents.py::_python_objective` as a module-level
+#: literal named exactly `OBJECTIVE_FLOW` -- never wrap this in a function
+#: call or a derived expression, or that AST-literal walk stops finding it.
+OBJECTIVE_FLOW = {
+    "purpose": (
+        "carry the declared experiments protocol as far as complete runs "
+        "whose own record agrees with what the protocol says -- not a "
+        "green verification, not a passing rehearsal"),
+    "stages": [
+        {"stage": "standing",
+         "establishes": "a repository set up the way this skill expects, "
+                        "with an interpreter of its own and the protocol's "
+                        "declared steps laid out as runnable commands",
+         "behindWhen": "`structure` reports no scaffold gaps and the "
+                       "protocol the run answers to is named and readable"},
+        {"stage": "binding",
+         "establishes": "the code that runs says what the bound "
+                        "experiments revision says, every declared step "
+                        "traced to a runnable command",
+         "behindWhen": "`fidelity` is clean against the bound experiments "
+                       "revision and the target's own suite is green under "
+                       "its own interpreter"},
+        {"stage": "instrumentation",
+         "establishes": "every measurement the protocol declares has a "
+                        "place to land -- a metric, a record, a check that "
+                        "can fail",
+         "behindWhen": "every declared measurement resolves to something "
+                       "that can actually be run and read back"},
+        {"stage": "rehearsal",
+         "establishes": "the declared flow runs end to end at a small "
+                        "scale, and the record it leaves agrees with the "
+                        "document a person reads",
+         "behindWhen": "the rehearsal is complete and its own report is "
+                       "`ok`"},
+        {"stage": "full-scale",
+         "establishes": "every step routed to where it was decided to run, "
+                        "and executed there at the scale the protocol "
+                        "declares",
+         "behindWhen": "this is the arrival; it is behind nobody"},
+    ],
+    "arrival": (
+        "complete runs at the protocol's declared scale, with a record "
+        "checkable against the experiments revision"),
+    # Said here because a blocked agent needs it most: some stops are not
+    # defects and must not be repaired.
+    "humanStops": [
+        "authorizing that code be written at all, which nothing below the "
+        "gate may start without",
+        "approving the map from the protocol's declared steps to runnable "
+        "commands",
+        "publishing the commit a worker would clone",
+        "authorizing a launch, which is hours of somebody's quota",
+    ],
+}
+
+PROFILE = {
+    # Structurally identical to the sibling (design.md D2): both leaves are
+    # derived from this file's own location, never the engine's.
+    "kit": {"root": _SKILL},
+    "cli": {"path": _SKILL / "scripts" / "implementation_cli.py"},
+    "objective": OBJECTIVE_FLOW,
+    "provenance": {
+        "claim_key": "experiments",
+        "authored_init_sentence": (
+            "Each module declares the sections and experiments it "
+            "implements in\n"
+            "`__provenance__`, and every invariant listed there has a "
+            "matching\n"
+            "test under tests/.\n"),
+    },
+    "findings": {
+        "locus_key": "experiments",
+        "remedy_locus_key": "remedy_experiments",
+        "notation_keys": {
+            "locus": "experiments",
+            "remedyLocus": "remedyExperiments",
+            "unknown": "unknownExperiments",
+        },
+        # M2 (design.md), task 1.4: bilingual, exactly THREE capturing
+        # groups -- `_impact_class` reads `match.group(1) or match.group(2)
+        # or match.group(3)`, so a fourth or a second group is a live
+        # defect, not a style choice. Asserted directly in
+        # `tests/test_experimental_implementation.py`.
+        "citation_pattern": (
+            r"Exps?\.?\s*\(?(\d+)\)?|Experiment\.?\s*\(?(\d+)\)?|"
+            r"Experimentos?\s*\((\d+)\)"),
+    },
+    "vocabulary": {
+        "subject_singular": "experiment",
+        "subject_plural": "experiments",
+        "subject_singular_es": "experimento",
+        "subject_plural_es": "experimentos",
+        "subject_collective": "experimentation",
+        "subject_collective_es": "experimentación",
+        "artifact_noun": "protocol",
+        # D6: the namespace word (found via `kit.root`'s own path text)
+        # plus every subject-vocabulary value measured ABSENT from the
+        # engine -- see this module's own docstring for the measured
+        # counts. Deliberately excludes "experiment"/"experiments"/
+        # "protocol", which the engine already spells as general machinery.
+        "names": [
+            "experimental-implementation",
+            "experimento", "experimentos",
+            "experimentation", "experimentación",
+        ],
+    },
+    # Exactly ONE entry (design.md D10's single-document guard): the
+    # experiments document, `documents[0]`. C adds the mathematical
+    # proposal as `documents[1]`.
+    "documents": [
+        {
+            "directory": _FORGE_ROOT / "experiments",
+            "label": "experiments",
+        },
+    ],
+}
