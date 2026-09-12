@@ -39,6 +39,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import string
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -122,6 +123,20 @@ _DOCUMENT_VOCABULARY_LEAVES: tuple[str, ...] = (
 #: carry, mirroring `findings.notation_keys`'s own three engine-read keys
 #: (`NOTATION_KEYS["locus"]`/`["remedyLocus"]`/`["unknown"]`).
 _NOTATION_KEYS_REQUIRED: tuple[str, ...] = ("locus", "remedyLocus", "unknown")
+
+#: `the-agreement-nothing-computes` (Slice D, design.md D1/R2): the three
+#: sub-keys a declared `documents[N].block_locator` must carry -- `pattern`
+#: (how this document spells a declared numbered entry, one capturing
+#: group), `block_pattern` (the enclosing substitutable block), and
+#: `identity` (a `str.format` template with exactly one field, `value`).
+#: Required and non-nullable on EVERY entry, ruled onto `dataset_marker`'s
+#: own required tier (5d42dd7) rather than the five-leaf all-or-nothing
+#: overlay: a silent `block_locator` falls back to the engine's own
+#: `TAG_RE`/`DISPLAY_BLOCK_RE`, and that silent fallback is the live defect
+#: this leaf exists to close, never a tolerable absence the way the
+#: five-leaf tier's silence is (its own fallback is the HOST's own
+#: top-level `provenance.*`/`findings.*` values).
+_BLOCK_LOCATOR_REQUIRED: tuple[str, ...] = ("pattern", "block_pattern", "identity")
 
 #: `domain-profile.ts`'s own `OBJECTIVE_REQUIRED` mirrored exactly: the four
 #: top-level keys a declared north must carry.
@@ -238,6 +253,22 @@ def _resolve() -> Mapping[str, Any]:
             # rather than silently absent.
             if not entry_is_mapping or "dataset_marker" not in entry:
                 missing.append(f"documents[{index}].dataset_marker")
+            # `the-agreement-nothing-computes` (Slice D, design.md D1,
+            # R2 resolved 5d42dd7): its own required, non-nullable tier,
+            # appended right after `dataset_marker` -- a missing LEAF names
+            # `documents[N].block_locator` alone; a leaf present but missing
+            # a sub-key names that sub-key's own indexed path. No entry may
+            # borrow another entry's locator and none may fall back to the
+            # engine's own constants (spec `implementation-per-document-
+            # vocabulary`).
+            if not entry_is_mapping or "block_locator" not in entry:
+                missing.append(f"documents[{index}].block_locator")
+            elif entry_is_mapping:
+                locator = entry["block_locator"]
+                for sub_key in _BLOCK_LOCATOR_REQUIRED:
+                    if not isinstance(locator, Mapping) or sub_key not in locator:
+                        missing.append(
+                            f"documents[{index}].block_locator.{sub_key}")
             if entry_is_mapping:
                 # Cut 3 slice C (design.md D1): all-or-nothing per entry.
                 # An entry declaring none of the five vocabulary leaves is
@@ -301,6 +332,50 @@ def _resolve() -> Mapping[str, Any]:
                 f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN: "
                 f"{configured} declares {leaf_name} with {group_count} "
                 "capturing group(s); exactly 3 are required.")
+
+    # `the-agreement-nothing-computes` (Slice D, design.md D1): every
+    # `documents[N].block_locator`'s own shape, validated at resolve time --
+    # `documents` is guaranteed a non-empty list of entries each carrying a
+    # complete `block_locator` here; the missing-leaf/sub-key check above
+    # already raised otherwise. Exactly ONE capturing group in `pattern`,
+    # never `citation_pattern`'s three -- `_impact_class` reads
+    # `group(1) or group(2) or group(3)`, but the locator's own reader
+    # takes a single value, so copying the three-group rule would enforce a
+    # count nothing reads. `identity` validated via `string.Formatter().
+    # parse`: exactly one field, named `value` -- never `eval`, never `%`,
+    # never an f-string construction (threat-matrix row).
+    for index, entry in enumerate(documents):
+        locator = entry["block_locator"]
+        try:
+            pattern_groups = re.compile(locator["pattern"]).groups
+        except re.error as exc:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR: "
+                f"{configured} declares documents[{index}].block_locator."
+                f"pattern that does not compile: {exc}.") from exc
+        if pattern_groups != 1:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR: "
+                f"{configured} declares documents[{index}].block_locator."
+                f"pattern with {pattern_groups} capturing group(s); exactly "
+                "1 is required.")
+        try:
+            re.compile(locator["block_pattern"])
+        except re.error as exc:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR: "
+                f"{configured} declares documents[{index}].block_locator."
+                f"block_pattern that does not compile: {exc}.") from exc
+        identity_fields = [
+            field_name for _, field_name, _, _ in
+            string.Formatter().parse(locator["identity"])
+            if field_name is not None]
+        if identity_fields != ["value"]:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR: "
+                f"{configured} declares documents[{index}].block_locator."
+                f"identity with field(s) {identity_fields}; exactly one "
+                "field named 'value' is required.")
 
     # `stages` presence alone (the loop above) does not rule out `stages: []`
     # -- domain-profile.ts's own `stagesIncomplete` lesson. Every element
