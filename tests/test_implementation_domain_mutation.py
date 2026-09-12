@@ -383,7 +383,11 @@ class OrFoldIndexHardcodeMutationTests(unittest.TestCase):
             "        },\n"
             f"        {{'directory': Path({str(doc1_dir)!r}), 'label': 'extra',\n"
             "         'dataset_marker': '**Dataset:**',\n"
-            f"         'block_locator': {extra_block_locator_repr}}},\n"
+            f"         'block_locator': {extra_block_locator_repr},\n"
+            # `the-agreement-nothing-computes` (Slice D, design.md D5/R1):
+            # required, own tier, NULLABLE -- `None` here, real content
+            # irrelevant to what X4 exists to prove.
+            "         'cross_citation': None},\n"
             "    ],\n}"
         )
         two_doc_profile_src = REAL_PROFILE_SRC.replace(
