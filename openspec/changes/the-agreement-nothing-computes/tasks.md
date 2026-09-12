@@ -981,43 +981,168 @@ the `len(DOCUMENTS) > 1` gate is deleted. Estimate 600–950.
 **Gate at the end:** a case with **two** discrepancies: one acknowledged
 clears one. Estimate 300–500.
 
-- [ ] 4.1 RED: two discrepancies present (one `absent`, one `untested`, or
+- [x] 4.1 RED: two discrepancies present (one `absent`, one `untested`, or
       two of the same kind); acknowledge one by its exact id; assert the
       refusal persists, naming **only** the still-unacknowledged one in
       `unacknowledged` (spec "Two discrepancies, one acknowledged, one
       still blocks" — the case a single-discrepancy fixture cannot prove,
       per D8's own note).
-- [ ] 4.2 RED: both acknowledged by their exact ids; assert neither blocks
+      **Measured.** `AcknowledgmentTests.test_one_of_two_acknowledged_
+      the_other_still_blocks` in `tests/test_experiments_seal.py`, reusing
+      `agree-disagree`'s own reaching configuration
+      (`trial-crossing-disagree.md` against the crossing target —
+      absent=['5'], untested=['9']) — the two-discrepancy case already on
+      disk from Phase 3, never a new fixture. Acknowledges `absent:5`
+      alone; asserts `untested:9` remains named and `absent:5` does not
+      appear in the `Unacknowledged:` segment of the message. Commit
+      `fdb4ddb`.
+      **Measured RED, and why it errors rather than fails an assertion**:
+      `--acknowledge` is not a registered flag on `agree` yet, so passing
+      it is an argparse unrecognized-argument failure — real subprocess
+      exit 2, **empty stdout** — `json.loads("")` raises
+      `JSONDecodeError` before any assertion runs. Confirmed directly this
+      session (`json.decoder.JSONDecodeError: Expecting value: line 1
+      column 1 (char 0)`). Red for the identical reason 3.1's PRESENT half
+      was red (task 3.1's own annotation), never an authored assertion
+      mismatch.
+- [x] 4.2 RED: both acknowledged by their exact ids; assert neither blocks
       the next command (spec "Both acknowledged, both clear").
-- [ ] 4.3 RED: a call acknowledging neither by id (no `--acknowledge` flag
+      **Measured**: `test_both_acknowledged_both_clear`, same commit
+      `fdb4ddb` — RED for the identical reason as 4.1 (argparse rejects
+      the unrecognized flag before any JSON exists to assert against).
+- [x] 4.3 RED: a call acknowledging neither by id (no `--acknowledge` flag
       at all, or one naming an id that does not exist); assert both remain
       in `unacknowledged` — a general "continue" clears nothing because no
       such flag exists (spec "A general 'continue' with no ids clears
       nothing").
-- [ ] 4.4 GREEN: `--acknowledge <id>`, repeatable, on `cmd_agree`. Clears
+      **Measured, split into two subTests, and one half already passed
+      before any GREEN existed.** `test_a_general_continue_with_no_ids_
+      clears_nothing`, commit `fdb4ddb`. The "omitted entirely" half
+      (no `--acknowledge` token in argv at all) is **not RED** — it passes
+      against the shipped engine unchanged, exactly as task 3.9's own
+      annotation predicted (`getattr(args, "acknowledge", None)` already
+      read `None` safely before this flag existed, so omitting it needed
+      no later fix). Confirmed directly this session: running the class
+      before 4.4's GREEN showed this one subTest passing silently while
+      the "an id that does not exist" subTest (which DOES pass
+      `--acknowledge absent:999`) errored the same `JSONDecodeError` way
+      as 4.1/4.2 — the reaching half that is genuinely RED. Both subTests
+      pass together after 4.4.
+- [x] 4.4 GREEN: `--acknowledge <id>`, repeatable, on `cmd_agree`. Clears
       only ids echoed back exactly; the remainder still refuses.
       **Request-scoped** — nothing persists it in `position.jsonl` (D8's
       rejected alternative: a durable record would keep clearing a
       discrepancy nobody re-checked once the underlying bytes changed, the
       `POSITION_STALE` defect class one surface over). State this
       explicitly in the docstring.
-- [ ] 4.5 MUTATE (Z8): `--acknowledge` clears the **whole** unacknowledged
+      **Measured**: commit `5944766` — `p.add_argument("--acknowledge",
+      dest="acknowledge", action="append", default=None, ...)` at `agree`'s
+      own parser site (mirroring `--revision`'s precedent there, never
+      widening the shared eight-name flag set). `cmd_agree`'s own read of
+      `args.acknowledge` needed **zero** code change — it already read
+      `getattr(args, "acknowledge", None) or []` before this flag existed
+      (task 3.9's own wiring); only its explanatory comment was reworded,
+      off the "later slice" framing. All three of 4.1–4.3 green
+      immediately after this one commit.
+      **Found and fixed, beyond this task's own text**: the new help text
+      plus the reworded comment grew two already-pinned M5 denylist words
+      (`named` 169→171, `value` 227→229) — the identical hazard D2 and D3
+      each hit, caught by running `DerivedDenylistTests` immediately after
+      this commit rather than at the phase gate. Fixed in a dedicated
+      commit (`d33935b`), docstring-only, zero behavioural delta,
+      following D2's own `0e780be` precedent of a separate reword commit.
+      `DerivedDenylistTests`: 28/28 after.
+- [x] 4.5 MUTATE (Z8): `--acknowledge` clears the **whole** unacknowledged
       list rather than only the named id; confirm the two-discrepancy case
       (4.1) goes red — **the one a weaker single-discrepancy assertion
       would survive**, because a single-discrepancy case cannot distinguish
       "cleared the named id" from "cleared everything"; restore.
-- [ ] 4.6 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
+      **Measured**: `AcknowledgeZ8MutationTests` in
+      `tests/test_experiments_seal.py`, commit `d09443c` — in a scratch
+      copy of `_core/implementation/` (never the shipped engine),
+      `unacknowledged = [i for i in ids if i not in acknowledged]` →
+      `unacknowledged = [] if acknowledged else ids`. Anchor asserted 1→0
+      in the mutated source before running. Against 4.1's own case
+      (`trial-crossing-disagree.md`, only `absent:5` acknowledged), the
+      real engine still refuses naming `untested:9` (proven in 4.1's own
+      test); the mutated one reports `{"status": "agreed"}` — a false
+      clear, caught. Never mutates the shipped engine; restore is implicit
+      (the mutated source exists only in a `tempfile.mkdtemp` scratch
+      tree, cleaned up by `addCleanup`).
+- [x] 4.6 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;
       `.venv/bin/python -m unittest tests.experiments_seal` green; add the
       two-discrepancy acknowledgment case to
       `tests/experiments_seal/cases.json` as its own sealed case and read
       any moved digest individually (1.24's discipline); full suite `OK
       (skipped=6)`; `npm test` 595/595.
-- [ ] 4.7 MEASURE: `reachable_refusal_codes()` — confirm it is **unmoved**
+
+      **Measured, this apply session.**
+      - This task's own module path (`tests.experiments_seal`) names a
+        package with no test files of its own (`__init__.py`, `corpus.py`,
+        `harness.py` only) — `python -m unittest tests.experiments_seal`
+        runs **zero** tests, confirmed directly (`NO TESTS RAN`). The real
+        module, unchanged since D1/D2/D3 each ran it under the identical
+        name, is `tests.test_experiments_seal` — re-derived, not
+        inherited, per this task's own text mismatching every prior
+        phase's own working command.
+      - `git diff --exit-code tests/seal/` → exit 0.
+      - Sealed case added: `agree-acknowledge-one` (`trial-crossing-
+        disagree.md`, `--acknowledge absent:5`) — `agree-disagree`'s own
+        two-discrepancy fixture, one id acknowledged. Recaptured via
+        `tests/experiments_seal_capture.py`. **Re-derived counts: 30
+        cases, 31 keys** (25 after D2's 24 + D3's 2 + this phase's 1 =
+        30 sealed cases; matches the operator's own "29 (27+D3's two)"
+        note plus this phase's own +1). Zero of the 30 pre-existing case
+        digests moved except `propose` (already-known-nondeterministic,
+        excluded) — confirmed by direct diff of the pre- and post-capture
+        `digests.json`. **`__corpus_fingerprint__` unmoved this phase** —
+        unlike D1/D2/D3, `corpus.py` itself was not touched (only
+        `cases.json`/`digests.json`), so M9's "any edit to `corpus.py`
+        moves the fingerprint" rule correctly did not fire here.
+      - `tests.test_experiments_seal` → **24/24 `OK`** (20 pre-existing +
+        `AcknowledgmentTests` ×3 + `AcknowledgeZ8MutationTests` ×1).
+      - **`npm test` → 596/596, not 595/595** — re-derived, not repeated;
+        this task's own "595/595" text is the same inherited-count error
+        3.16/2.14 already corrected twice this change. No `.ts`/`.mjs`
+        file touched this phase; the count is D2's own negative-control
+        test, unaffected by D4.
+      - Full suite: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m
+        unittest discover -s tests -p "test_*.py"` → **`Ran 3042 tests`**,
+        **`OK (skipped=6)`** (grown from D3's 3038 by exactly 4 — the 4
+        new test methods this phase added across `AcknowledgmentTests`
+        and `AcknowledgeZ8MutationTests`; `skipped=6` unmoved, no
+        `skipTest` added anywhere).
+      - Name-collision sweep (`rg '^class \w+Tests?\(' ... | sort |
+        uniq -d`, scoped to every file this phase touched) returns
+        nothing.
+      - `git status --porcelain` clean after the full run — no leftover
+        `implementations/_*` scratch directories.
+- [x] 4.7 MEASURE: `reachable_refusal_codes()` — confirm it is **unmoved**
       at 117. D4 adds no new `Refused` code; it only adds a flag that
       clears entries in an existing refusal's payload. Report the
       unmovement explicitly rather than skipping the check because "nothing
       changed" — that is exactly the assumption this project has been
       wrong about before.
+      **Measured 116, unmoved — this task's own "117" is the design's
+      same uncorrected arithmetic 3.15 already fixed once this change.**
+      D3 measured 116 (114 + 2, not 114 + 3), not the design's predicted
+      117; D4 adds no new `Refused` code, so the pin stays at the
+      MEASURED baseline, not the predicted one. Confirmed directly this
+      session via `tests.test_proposal_implementation.
+      GatingRefusalRosterTests.test_the_derivation_finds_the_measured_
+      one_hundred_and_thirteen` → `116`, unchanged from 3.15's own
+      measurement.
+
+      **Whole-phase diff** (`git diff --stat 362df11..HEAD -- '.claude/
+      skills' 'tests'`, code and tests only, five commits `fdb4ddb`/
+      `5944766`/`d33935b`/`d09443c`/`993d9f7`): **190 insertions + 7
+      deletions across 5 files = 197 changed lines** — under this
+      phase's own 300–500 floor, the first phase this change to come in
+      under its own estimate rather than over it (D1 1,080, D2 702, D3
+      574, each measured over its own floor). Read as expected: D4's
+      whole surface is one `getattr` read already wired by D3 (task
+      3.9) plus one parser flag and one sealed case — the smallest slice
+      in the chain by design (D12).
 
 ## Phase 5: D5 — The consumer, the successor, Flow B
 
