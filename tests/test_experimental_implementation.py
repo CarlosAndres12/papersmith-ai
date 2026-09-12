@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import itertools
+import json
 import os
 import re
 import shutil
@@ -351,6 +352,177 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             calls, [],
             "declares_dataset(None) must never call document_revision_names "
             "at all -- no discovery, ever, absent an explicit revision")
+
+
+class RevisionThreadingAgreementTests(unittest.TestCase):
+    """Phase 3 (design.md D3/D4, tasks.md 3.1-3.3): `--revision` reaches
+    all three `build_plan` call sites -- `plan` (the ONLY parser
+    registration), `apply` and `materialize`'s own gate (both re-derive
+    the seed from the approved plan's own `boundTo` key, never a second
+    `--revision` flag). Real subprocesses throughout, against a SCRATCH
+    profile declaring a real marker -- never the shipped
+    experimental-implementation profile, whose own marker stays `None`
+    until B2 (design.md D10)."""
+
+    PACKAGE = "PlanRevision"
+
+    def setUp(self):
+        self.docs_dir = Path(tempfile.mkdtemp(prefix="plan-revision-docs-"))
+        self.addCleanup(shutil.rmtree, self.docs_dir, ignore_errors=True)
+        (self.docs_dir / "r1.md").write_text(
+            "**Dataset:** declared here\n", encoding="utf-8")
+        self.profile_file = self._write_profile_with_marker(self.docs_dir)
+
+    def _write_profile_with_marker(self, docs_dir: Path) -> Path:
+        profile = dict(_real_profile())
+        profile["documents"] = [
+            {"directory": docs_dir, "label": "experiments",
+             "dataset_marker": "**Dataset:**"},
+        ]
+        tmp_profile_dir = Path(tempfile.mkdtemp(prefix="plan-revision-profile-"))
+        self.addCleanup(shutil.rmtree, tmp_profile_dir, ignore_errors=True)
+        profile_file = tmp_profile_dir / "impl_profile.py"
+        profile_file.write_text(
+            "from pathlib import Path\n"
+            f"PROFILE = {_to_source(profile)}\n",
+            encoding="utf-8")
+        return profile_file
+
+    def _env(self, profile_file: Path | None = None) -> dict:
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(profile_file or self.profile_file)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "plan-revision-tests"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = (
+            "plan-revision-tests@example.invalid")
+        return env
+
+    def _box(self, suffix: str) -> Path:
+        box = FORGE / "implementations" / f"_plan_revision_{os.getpid()}_{id(self)}{suffix}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        env = self._env()
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "tests").mkdir(parents=True)
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        return box
+
+    def _run(self, *args: str, profile_file: Path | None = None):
+        return subprocess.run(
+            [sys.executable, str(LAUNCHER), *args],
+            capture_output=True, text=True, cwd=FORGE,
+            env=self._env(profile_file))
+
+    def _approved_plan_path(self, plan: dict) -> Path:
+        plan_dir = Path(tempfile.mkdtemp(prefix="plan-revision-approved-"))
+        self.addCleanup(shutil.rmtree, plan_dir, ignore_errors=True)
+        plan_path = plan_dir / "plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        return plan_path
+
+    def test_plan_with_no_revision_opens_no_document_and_stays_byte_identical(self):
+        """Property 2 (design.md), reading-at-plan-time threat row:
+        absent `--revision`, `plan`'s output must not depend on the
+        document at all. Proven by pointing the profile's own document
+        root at a NONEXISTENT directory and asserting `plan` still
+        succeeds, identically to the same command against the real one --
+        a read attempt against a missing directory would surface
+        differently were it ever made."""
+        missing_root = Path(tempfile.mkdtemp(prefix="plan-revision-missing-")) / "gone"
+        self.addCleanup(shutil.rmtree, missing_root.parent, ignore_errors=True)
+        missing_docs_profile = self._write_profile_with_marker(missing_root)
+        box = self._box("_control")
+
+        with_docs = self._run("plan", "--target", str(box), "--name", self.PACKAGE)
+        without_docs = self._run(
+            "plan", "--target", str(box), "--name", self.PACKAGE,
+            profile_file=missing_docs_profile)
+
+        self.assertEqual(with_docs.returncode, 0, with_docs.stderr)
+        self.assertEqual(without_docs.returncode, 0, without_docs.stderr)
+        self.assertEqual(with_docs.stdout, without_docs.stdout)
+        self.assertNotIn("boundTo", json.loads(with_docs.stdout))
+
+    def test_plan_approve_apply_agree_and_create_dirs_holds_the_declared_data(self):
+        box = self._box("_agreement")
+        plan_proc = self._run(
+            "plan", "--target", str(box), "--name", self.PACKAGE,
+            "--revision", "r1.md")
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stderr)
+        plan = json.loads(plan_proc.stdout)
+        self.assertIn(f"{self.PACKAGE}/Data", plan["createDirs"])
+        self.assertEqual(plan["boundTo"]["revision"], "r1.md")
+
+        apply_proc = self._run(
+            "apply", "--target", str(box), "--name", self.PACKAGE,
+            "--plan", str(self._approved_plan_path(plan)))
+        self.assertEqual(apply_proc.returncode, 0, apply_proc.stderr)
+        applied = json.loads(apply_proc.stdout)
+        self.assertIn(f"{self.PACKAGE}/Data", applied["createdDirs"])
+
+    def test_a_bare_apply_after_plan_revision_cannot_produce_plan_stale(self):
+        """D3's own risk: an operator who ran `plan --revision X` and then
+        a bare `apply` must not refuse `PLAN_STALE` -- the seed is
+        carried in the approved plan's own `boundTo` key, never
+        re-typed."""
+        box = self._box("_bare_apply")
+        plan_proc = self._run(
+            "plan", "--target", str(box), "--name", self.PACKAGE,
+            "--revision", "r1.md")
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stderr)
+        plan = json.loads(plan_proc.stdout)
+
+        apply_proc = self._run(
+            "apply", "--target", str(box), "--name", self.PACKAGE,
+            "--plan", str(self._approved_plan_path(plan)))
+        self.assertEqual(apply_proc.returncode, 0, apply_proc.stderr)
+        self.assertNotEqual(
+            json.loads(apply_proc.stdout).get("code"), "PLAN_STALE")
+
+    def test_materialize_stage_gate_refuses_plan_stale_on_the_same_drift_apply_would(self):
+        """Repeat through `materialize --stage` (tasks.md 3.2):
+        `_materialize_plan_gate` alone, proven independent of any
+        specific stage's own kit requirement (this domain ships none,
+        SKILL.md) -- the marker is removed from the SAME revision file
+        after approval, so the gate's own re-derivation of `createDirs`
+        disagrees with the approved plan and refuses before any
+        stage-specific write."""
+        box = self._box("_materialize_gate")
+        plan_proc = self._run(
+            "plan", "--target", str(box), "--name", self.PACKAGE,
+            "--revision", "r1.md")
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stderr)
+        plan_path = self._approved_plan_path(json.loads(plan_proc.stdout))
+
+        (self.docs_dir / "r1.md").write_text("no marker anymore\n", encoding="utf-8")
+
+        proc = self._run(
+            "materialize", "--target", str(box), "--name", self.PACKAGE,
+            "--stage", "scaffold", "--plan", str(plan_path), "--seed", "7")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout).get("code"), "PLAN_STALE")
+
+    def test_a_pre_existing_plan_with_no_bound_to_key_still_applies(self):
+        """Data-integrity row (design.md): an approved plan.json with no
+        `boundTo` key at all (every plan.json on disk before this
+        change) still applies --
+        `(approved.get("boundTo") or {}).get("revision")` falls back to
+        `None`, today's exact branch."""
+        box = self._box("_no_bound_to")
+        plan_proc = self._run("plan", "--target", str(box), "--name", self.PACKAGE)
+        self.assertEqual(plan_proc.returncode, 0, plan_proc.stderr)
+        plan = json.loads(plan_proc.stdout)
+        self.assertNotIn("boundTo", plan)
+
+        apply_proc = self._run(
+            "apply", "--target", str(box), "--name", self.PACKAGE,
+            "--plan", str(self._approved_plan_path(plan)))
+        self.assertEqual(apply_proc.returncode, 0, apply_proc.stderr)
 
 
 class LauncherByteEqualityTests(unittest.TestCase):
