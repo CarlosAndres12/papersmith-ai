@@ -1000,6 +1000,72 @@ class CrossingStateTests(unittest.TestCase):
         self.assertEqual(state["crossed"], ["2", "9"])
         self.assertEqual(state["absent"], ["2", "9"])
 
+    def test_z6_computing_declared_from_the_declaring_documents_own_locator_flips_to_absent(self):
+        """Z6 (design.md Mutation plan, task 2.13): replace
+        `document_block_locator(target_index)` with
+        `document_block_locator(index)` in `crossing_state`'s own
+        `declared` computation, in a SCRATCH engine copy; confirm the
+        resolving case (this class's first test) flips to `absent` -- the
+        one a weaker fixture (supplying only a resolving crossing) would
+        survive, because it never checks that `declared` came from the
+        TARGET's own locator rather than the declaring document's."""
+        real_source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        anchor = (
+            'document_block_locator(target_index)["pattern"]'
+            '.findall(target_source or "")')
+        mutated_anchor = (
+            'document_block_locator(index)["pattern"]'
+            '.findall(target_source or "")')
+        self.assertEqual(real_source.count(anchor), 1)
+        self.assertEqual(real_source.count(mutated_anchor), 0)
+        mutated_source = real_source.replace(anchor, mutated_anchor, 1)
+        self.assertEqual(mutated_source.count(anchor), 0)
+        self.assertEqual(mutated_source.count(mutated_anchor), 1)
+
+        doc0_dir = self._tmp_dir("z6-doc0-")
+        doc1_dir = self._tmp_dir("z6-doc1-")
+        (doc0_dir / "e1.md").write_text(
+            "## 1\n\nSustains the claim, citing [claims:9].\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{9}$$.\n", encoding="utf-8")
+
+        scratch_core = Path(tempfile.mkdtemp(prefix="z6-core-"))
+        self.addCleanup(shutil.rmtree, scratch_core, ignore_errors=True)
+        shutil.copytree(ENGINE_DIR.parent, scratch_core / "core",
+                        ignore=shutil.ignore_patterns("__pycache__"),
+                        dirs_exist_ok=True)
+        (scratch_core / "core" / "engine" / "implementation_engine.py").write_text(
+            mutated_source, encoding="utf-8")
+
+        env = os.environ.copy()
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(PROFILE_FILE)
+        env["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(scratch_core / 'core' / 'engine')!r})\n"
+            "import implementation_engine as impl\n"
+            "import json\n"
+            "print(json.dumps(impl.crossing_state(0, 'e1.md')))\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        mutated_state = json.loads(proc.stdout.strip())
+        # Document 0's own `block_locator` (the heading form, `## N`)
+        # finds nothing in `crossed`'s `[claims:9]`-shaped text -- so
+        # `declared` reads empty under the mutation, and the resolving
+        # crossing flips to `absent` instead of clearing.
+        self.assertEqual(mutated_state["declared"], [])
+        self.assertEqual(mutated_state["absent"], ["9"])
+
+        # `tests/seal/` is untouched: the mutation lives only in this
+        # scratch copy, never the shipped engine.
+        seal_diff = subprocess.run(
+            ["git", "diff", "--exit-code", "tests/seal/"], cwd=FORGE)
+        self.assertEqual(seal_diff.returncode, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
