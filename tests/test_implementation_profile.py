@@ -79,7 +79,12 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'mathematics', 'matemática', 'formulation']}, "
         f"'documents': [{{'directory': Path({str(documents_dir)!r}), "
         "'label': 'proposal', 'dataset_marker': None, "
-        f"'block_locator': {_block_locator()!r}}}]")
+        f"'block_locator': {_block_locator()!r}, "
+        # `the-agreement-nothing-computes` (Slice D, design.md D5, R1
+        # resolved 5d42dd7): a single-document splice has no OTHER label
+        # to cross against -- `None` here, the leaf's own legal declared
+        # absence.
+        "'cross_citation': None}]")
 
 
 _counter = itertools.count()
@@ -497,6 +502,14 @@ _CUT2_LEAVES: tuple[str, ...] = (
     # this generic per-leaf walk also proves index 0's own whole-leaf case;
     # `BlockLocatorLeafOwnTierTests` below proves the sub-key shape.
     "documents[0].block_locator",
+    # `the-agreement-nothing-computes` (Slice D, design.md D5/R1): its own
+    # required (but NULLABLE) tier, appended right after `block_locator` --
+    # `_without_leaf` deletes the KEY entirely here, never merely sets it to
+    # `None` (which is a legal declared value, not an omission); this
+    # generic per-leaf walk proves index 0's own whole-leaf-omitted case,
+    # `CrossCitationLeafOwnTierTests` below proves the sub-key shape and the
+    # `None`-is-legal positive control.
+    "documents[0].cross_citation",
 )
 
 #: `vocabulary.names` is declared at S13 (design.md D7), not S2 -- so a
@@ -515,6 +528,19 @@ def _block_locator() -> dict:
         "pattern": r"\\tag\{([^}]+)\}",
         "block_pattern": r"(?s)\$\$.*?\$\$",
         "identity": "\\tag{{{value}}}",
+    }
+
+
+#: `the-agreement-nothing-computes` (Slice D, design.md D5/R1): a
+#: `documents[N].cross_citation` mapping resolving against `target` --
+#: `target` must name ANOTHER declared entry's own `label`, never the
+#: entry's own (a self-reference refuses `..._UNKNOWN_CROSS_DOCUMENT`,
+#: `CrossCitationShapeValidationTests` below). The identifier class mirrors
+#: `reference-experimental.ts::IDENTIFIER` exactly (design.md D5).
+def _cross_citation(target: str) -> dict:
+    return {
+        "pattern": r"\[claims:([A-Za-z0-9][A-Za-z0-9._-]*)\]",
+        "resolves_against": target,
     }
 
 
@@ -568,7 +594,12 @@ def _cut2_profile(tmp_dir: Path, *, with_names: bool = True) -> dict:
              "dataset_marker": None,
              # `the-agreement-nothing-computes` (Slice D, design.md D1/R2):
              # required, own tier, non-nullable.
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(),
+             # `the-agreement-nothing-computes` (Slice D, design.md D5/R1):
+             # required, own tier, NULLABLE -- `None` here: this single-
+             # document splice has no OTHER declared label to cross
+             # against.
+             "cross_citation": None},
         ],
     }
     if with_names:
@@ -596,7 +627,8 @@ def _to_profile_source(value) -> str:
 
 
 _INDEXED_LEAF_RE = re.compile(
-    r"^documents\[(\d+)\]\.(directory|label|dataset_marker|block_locator)$")
+    r"^documents\[(\d+)\]\.(directory|label|dataset_marker|block_locator"
+    r"|cross_citation)$")
 
 
 def _without_leaf(profile: dict, dotted: str) -> dict:
@@ -915,6 +947,164 @@ class BlockLocatorShapeValidationTests(unittest.TestCase):
         self.assertIn("documents[0].block_locator.identity", message)
 
 
+class CrossCitationLeafOwnTierTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D5, R1 resolved
+    5d42dd7, tasks.md 2.2/2.5): `documents[N].cross_citation` is its OWN
+    required tier, appended right after `block_locator` -- a missing LEAF
+    refuses naming `documents[N].cross_citation` alone; a leaf DECLARED as a
+    mapping but missing a sub-key refuses at its own exact indexed sub-path
+    (`documents[1].cross_citation.resolves_against`), never the bare parent
+    leaf. Unlike `block_locator`, the leaf's own VALUE may be the literal
+    `None` -- a real declared state, not an omission (spec
+    `implementation-per-document-vocabulary`, "An explicit `None` is
+    accepted and crosses nothing")."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-cross-citation-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_a_missing_leaf_refuses_naming_the_bare_leaf(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        del full["documents"][0]["cross_citation"]
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[0].cross_citation", message)
+
+    def test_a_missing_subkey_refuses_at_its_exact_indexed_subpath(self):
+        for sub_key in ("pattern", "resolves_against"):
+            with self.subTest(sub_key=sub_key):
+                tmp_dir = self._tmp_dir()
+                full = _two_document_profile(tmp_dir)
+                del full["documents"][1]["cross_citation"][sub_key]
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+                self.assertIn(f"documents[1].cross_citation.{sub_key}", message)
+                self.assertNotIn("documents[0].cross_citation", message)
+
+    def test_none_is_a_valid_declaration_and_passes(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        self.assertIsNone(full["documents"][0]["cross_citation"])
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertIsNone(module.PROFILE["documents"][0]["cross_citation"])
+
+    def test_a_complete_crossing_passes_and_is_returned_verbatim(self):
+        """The positive control every refusal case above is a mutation OF."""
+        tmp_dir = self._tmp_dir()
+        full = _two_document_profile(tmp_dir)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(
+            module.PROFILE["documents"][1]["cross_citation"],
+            _cross_citation("proposal"))
+
+
+#: A pattern with 0 or 2 capturing groups -- the crossing's own reader
+#: takes exactly one value (design.md D5, same reasoning as `block_locator`'s
+#: own group-count rule).
+_ZERO_GROUP_CROSSING_PATTERN = r"\[claims:[A-Za-z0-9]+\]"
+_TWO_GROUP_CROSSING_PATTERN = r"\[claims:([A-Za-z0-9]+)\]-(\d+)"
+
+
+class CrossCitationShapeValidationTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D5, tasks.md
+    2.3/2.4): the crossing's own shape, validated at resolve time --
+    `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN` for an
+    uncompilable `pattern` or one with other than exactly one capturing
+    group, `IMPLEMENTATION_DOMAIN_PROFILE_UNKNOWN_CROSS_DOCUMENT` for a
+    `resolves_against` naming no declared label or naming its own entry.
+    Exercised against a two-document profile: `documents[0]` (label
+    `"proposal"`) is the one under test here, `documents[1]` (label
+    `"document-one"`) supplies the OTHER declared label a crossing can
+    legally resolve against."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-cross-shape-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _profile_with_crossing(self, tmp_dir: Path, crossing: dict) -> dict:
+        full = _two_document_profile(tmp_dir)
+        full["documents"][0]["cross_citation"] = crossing
+        return full
+
+    def test_an_uncompilable_pattern_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        crossing = {**_cross_citation("document-one"),
+                    "pattern": r"\[claims:([A-Za-z0-9"}  # unbalanced bracket
+        full = self._profile_with_crossing(tmp_dir, crossing)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn(
+            "IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN", message)
+        self.assertIn("documents[0].cross_citation.pattern", message)
+
+    def test_pattern_group_counts_other_than_one_refuse_by_name(self):
+        for count, pattern in (
+            (0, _ZERO_GROUP_CROSSING_PATTERN), (2, _TWO_GROUP_CROSSING_PATTERN),
+        ):
+            with self.subTest(group_count=count):
+                tmp_dir = self._tmp_dir()
+                crossing = {**_cross_citation("document-one"), "pattern": pattern}
+                full = self._profile_with_crossing(tmp_dir, crossing)
+                profile_file = _write_profile(tmp_dir, full)
+                with self.assertRaises(RuntimeError) as ctx:
+                    _fresh_resolver_load(str(profile_file))
+                message = str(ctx.exception)
+                self.assertIn(
+                    "IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN",
+                    message)
+                self.assertIn("documents[0].cross_citation.pattern", message)
+                self.assertIn(str(count), message)
+
+    def test_resolves_against_naming_an_undeclared_label_refuses_by_name(self):
+        tmp_dir = self._tmp_dir()
+        crossing = _cross_citation("no-such-label")
+        full = self._profile_with_crossing(tmp_dir, crossing)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_UNKNOWN_CROSS_DOCUMENT", message)
+        self.assertIn("documents[0].cross_citation.resolves_against", message)
+
+    def test_resolves_against_naming_its_own_entry_refuses_by_name(self):
+        """`documents[0]`'s own label is `"proposal"` -- a crossing naming
+        that same label resolves against itself, which crosses nothing."""
+        tmp_dir = self._tmp_dir()
+        crossing = _cross_citation("proposal")
+        full = self._profile_with_crossing(tmp_dir, crossing)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_UNKNOWN_CROSS_DOCUMENT", message)
+        self.assertIn("documents[0].cross_citation.resolves_against", message)
+
+    def test_a_valid_crossing_resolves_and_is_used(self):
+        """The positive control every refusal case above is a mutation OF."""
+        tmp_dir = self._tmp_dir()
+        crossing = _cross_citation("document-one")
+        full = self._profile_with_crossing(tmp_dir, crossing)
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(module.PROFILE["documents"][0]["cross_citation"], crossing)
+
+
 class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
     """Threat-matrix RED test (design.md, Environment-variable routing,
     task 9.2): `IMPLEMENTATION_PROPOSALS` must still win over
@@ -996,10 +1186,16 @@ def _document_one_overlay() -> dict:
 def _two_document_profile(tmp_dir: Path, *, document_one_overlay: dict | None = None) -> dict:
     """`_cut2_profile`'s single-document profile, with a second entry
     appended -- optionally carrying its own per-document vocabulary
-    overlay."""
+    overlay. The appended entry declares a real, valid crossing back at
+    document 0's own label (`"proposal"`) -- design.md D5/R1's own
+    required tier -- so every existing test built on this helper that is
+    not itself exercising `cross_citation` stays a mutation of a COMPLETE
+    profile, never one that happens to pass because the leaf was silently
+    absent."""
     profile = _cut2_profile(tmp_dir)
     entry: dict = {"directory": tmp_dir / "documents-1", "label": "document-one",
-                   "dataset_marker": None, "block_locator": _block_locator()}
+                   "dataset_marker": None, "block_locator": _block_locator(),
+                   "cross_citation": _cross_citation("proposal")}
     if document_one_overlay is not None:
         entry.update(document_one_overlay)
     profile["documents"].append(entry)
@@ -1071,7 +1267,8 @@ class DocumentVocabularyOverlayTests(unittest.TestCase):
         full["documents"][0].update(_document_one_overlay())
         full["documents"].append(
             {"directory": tmp_dir / "documents-1", "label": "document-one",
-             "dataset_marker": None, "block_locator": _block_locator()})
+             "dataset_marker": None, "block_locator": _block_locator(),
+             "cross_citation": _cross_citation("proposal")})
         (tmp_dir / "proposals").mkdir()
         profile_file = _write_profile(tmp_dir, full)
         module = _fresh_resolver_load(str(profile_file))
