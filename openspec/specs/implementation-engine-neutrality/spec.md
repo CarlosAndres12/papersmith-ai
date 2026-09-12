@@ -161,6 +161,41 @@ own named sealed digest(s) when changed. A field satisfying neither MUST NOT exi
 | `vocabulary.names` | both locks below, nothing else | lock goes red |
 | `documents[i].directory` | `proposals_root()`, 5 refusals, validated per index | index 0: `admit-e0`, `close-e0`, `gate-e0`, `offer-e0`, `position-e0` — unchanged from the measured set |
 | `documents[i].label` | `undeclared_arms_note` only, validated per index | **none — zero-mover**, any index |
+| `documents[i].dataset_marker` | the dataset detector; `cmd_verify`'s `with_data`; `plan`'s conditional document-name key | measured only after real subprocess verification, never forecast — entered here as a passing scenario's exact result, mirroring this table's own correction history below |
+
+**This table was corrected after verification and is now the measured truth, not a
+prediction.** Its first version was written from design.md's forecast and diverged
+from `MEASURED_MOVERS` in at least six rows. The most consequential: it claimed
+`documents.label` moves "the same 5 refusals" as `documents.directory`. It does
+not. `DOCUMENTS_LABEL` is read at exactly ONE call site (`undeclared_arms_note`,
+inside `ARMS_UNDECLARED_CONSEQUENCE`'s `.format()`), gated on `declaration.get(
+"arms")` being falsy AND at least one module declaring `sections` — a condition
+**none of the 28 sealed cases hits**.
+
+**Seven of the fifteen pre-existing leaves are zero-movers**, and that is a
+recorded state, not a gap to hunt a stronger test for. A zero-mover is still read
+— its removal raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming its exact
+dotted (or indexed) leaf — it is simply not observable in the sealed stdout of
+these particular fixtures. The removal-refusal plus the two neutrality locks are
+its whole instrument, and saying so is the honest outcome. `documents[i]
+.dataset_marker`'s own zero-mover-or-real-mover status MUST be measured, not
+assumed, before this row's third column is treated as final — repeating that
+measurement discipline is this table's own established correction pattern, not a
+new one invented for this leaf.
+
+Verification established this was **not a harness artifact**. A positive control
+ran first: mutating `provenance.claim_key`, a known real mover, reproduced apply's
+recorded set byte for byte, proving the profile genuinely reaches the seal's child
+process. Only then were three zero-movers re-tested, and all three held.
+
+Under `len(documents) > 1`, each entry is validated and refused by its own
+index: removing `documents[1].directory` MUST raise
+`IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[1].directory`
+exactly, never the bare `documents.directory`. The identical rule now applies
+to `documents[1].dataset_marker`.
+(Previously: the table held fifteen leaves, with no `dataset_marker` row; a
+`documents[N]` entry could omit any dataset declaration silently, since no
+leaf named it as required.)
 
 **This table was corrected after verification and is now the measured truth, not a
 prediction.** Its first version was written from design.md's forecast and diverged
@@ -214,6 +249,13 @@ index-0 behavior is unchanged.)
 - WHEN the resolver validates it
 - THEN it raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming
   `documents[1].directory`, not `documents.directory`
+
+#### Scenario: A missing `dataset_marker` refuses by its indexed name
+- GIVEN a `documents[N]` entry omitting `dataset_marker`
+- WHEN the resolver validates the profile
+- THEN it raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming
+  `documents[N].dataset_marker` exactly, and `documents[N].dataset_marker`
+  set to `None` passes with no refusal
 ### Requirement: The Coarse Provenance Key Stays Shared, Never Profile-Supplied
 
 `"sections"` MUST stay a hardcoded literal in the engine and every kit asset. The
@@ -347,6 +389,27 @@ mirroring `discoverProfiles` in `tests/proposal-deliberation-domain-profile-lock
 - GIVEN a hypothetical third skill's `impl_profile.py` declaring empty `vocabulary.names`
 - WHEN the lock runs
 - THEN it fails on that skill with zero edits to the lock file itself
+
+### Requirement: A New Core File Naming A `PRODUCT_DIRS` Member Stays Reachable By `CoreNamesNoDomainTests`
+
+`CoreNamesNoDomainTests` scans `CORE.glob("*.py")` non-recursively and fails
+any core-level file whose text names a `PRODUCT_DIRS`/`SOURCE_ROOTS` member.
+Any new file this capability adds that names `PRODUCT_DATA` or `"Data"`
+MUST live under `_core/implementation/engine/`, which that non-recursive
+glob does not reach, or MUST be added to the existing engine module rather
+than a new flat `_core/implementation/*.py` file.
+
+#### Scenario: A flat detector file reddens the guard
+- GIVEN a hypothetical detector module placed directly under
+  `_core/implementation/`, naming `PRODUCT_DATA`
+- WHEN `CoreNamesNoDomainTests` runs
+- THEN it fails, naming that file
+
+#### Scenario: The same code under `engine/` does not
+- GIVEN the identical detector code added to
+  `_core/implementation/engine/implementation_engine.py` instead
+- WHEN `CoreNamesNoDomainTests` runs
+- THEN it passes, unaffected
 
 ## Reconciliation note (orchestrator, after design landed)
 
