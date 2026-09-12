@@ -636,5 +636,219 @@ class DoctrineVocabularyLeakTests(unittest.TestCase):
                 self.assertEqual(leaks, [], f"{document.name} spells {leaks}")
 
 
+class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D4/M4, tasks.md
+    1.16-1.20, 1.29-1.30): `remedy_compatibility`'s per-document field
+    loop, proven against THIS skill's own shipped two-document profile --
+    `documents[0]` (`experiments`, heading locator) and `documents[1]`
+    (`proposal`, LaTeX locator, `claim_key: "equations"`).
+
+    Pure function, no CLI dispatch: an in-process fresh-engine import is
+    not the "monkeypatch has zero effect on a subprocess" scar (that scar
+    is about a DIFFERENT process reading a patched attribute; this is the
+    SAME process calling a freshly-imported module's own function),
+    mirroring `DatasetDeclaredDetectorTests`'s own standing rule.
+    """
+
+    def _tmp_dir(self, prefix: str) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _engine_with_proposals_override(self, doc0_dir: Path, doc1_dir: Path):
+        """The real, unmodified two-document profile, with both documents'
+        proposals roots overridden via the engine's own supported env
+        vars (`proposals_root`'s own `setdefault`-independent override) --
+        never a `directory` edit, which would exercise a different code
+        path than what ships."""
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        had_0 = "IMPLEMENTATION_PROPOSALS" in os.environ
+        original_0 = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        had_1 = "IMPLEMENTATION_PROPOSALS_1" in os.environ
+        original_1 = os.environ.get("IMPLEMENTATION_PROPOSALS_1")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+
+        def _restore():
+            if had_0:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = original_0
+            else:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            if had_1:
+                os.environ["IMPLEMENTATION_PROPOSALS_1"] = original_1
+            else:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS_1", None)
+
+        self.addCleanup(_restore)
+        return module
+
+    def test_a_finding_naming_document_one_alone_is_checked_against_its_own_keys(self):
+        """The M4 control (task 1.16): a finding whose `document` is
+        `["proposal"]` alone, declaring `remedy_equations` (document 1's
+        own `remedy_locus_key`) naming a locus absent from document 1's
+        text. Reported as an unmet locus -- where before this capability
+        `finding.get("remedy_experiments", [])` was `[]` and the finding
+        read compatible (spec `implementation-block-locator`, "A finding
+        naming a second document is checked against its own keys")."""
+        doc0_dir = self._tmp_dir("m4-doc0-")
+        doc1_dir = self._tmp_dir("m4-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nnothing relevant.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{1}$$ only.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+
+        finding = {
+            "id": "doc1-only", "document": ["proposal"],
+            "remedy_equations": ["99"], "uses": ["a = b"], "introduces": [],
+        }
+        result = module.remedy_compatibility(
+            [finding], "e1.md",
+            sources_by_document={"experiments": module.revision_source("e1.md", 0),
+                                 "proposal": module.revision_source("p1.md", 1)})
+        unknown = result[module.NOTATION_KEYS["unknown"]]
+        self.assertEqual(unknown, ["doc1-only.remedy_equations: ['99']"])
+        self.assertEqual(result["status"], "incompatible")
+
+    def test_a_finding_naming_document_one_with_a_declared_locus_is_compatible(self):
+        """Positive control: the identical shape, but the locus IS declared
+        in document 1's own text."""
+        doc0_dir = self._tmp_dir("m4-pos-doc0-")
+        doc1_dir = self._tmp_dir("m4-pos-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nnothing relevant.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{99}$$.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+
+        finding = {
+            "id": "doc1-declared", "document": ["proposal"],
+            "remedy_equations": ["99"], "uses": ["a = b"], "introduces": [],
+        }
+        result = module.remedy_compatibility(
+            [finding], "e1.md",
+            sources_by_document={"experiments": module.revision_source("e1.md", 0),
+                                 "proposal": module.revision_source("p1.md", 1)})
+        self.assertEqual(result[module.NOTATION_KEYS["unknown"]], [])
+
+    def test_z4_reverting_to_the_bare_module_scalar_reads_compatible_again(self):
+        """Z4 (design.md Mutation plan, task 1.29): replace
+        `vocab["locus_key"]`/`vocab["remedy_locus_key"]` with the bare
+        `LOCUS_KEY`/`REMEDY_LOCUS_KEY` module scalars in a SCRATCH copy of
+        the engine; confirm the M4 case above goes red (reads compatible
+        again); confirm `tests/seal/` survives (the branch is unreachable
+        under one document -- proven separately by the sibling's own
+        suite, unaffected by this scratch copy)."""
+        real_source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        anchor = (
+            "for field in (vocab[\"locus_key\"], vocab[\"remedy_locus_key\"]):")
+        # `cmd_admit` (index 0, unchanged per D3) already spells the bare
+        # `LOCUS_KEY, REMEDY_LOCUS_KEY` pair at its own, unrelated site --
+        # so the replacement text is not a fresh spelling engine-wide, only
+        # a fresh spelling AT THIS anchor. `anchor`'s own count (1, both
+        # directions) is what proves this specific mutation ran.
+        mutated_anchor = "for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):"
+        self.assertEqual(real_source.count(anchor), 1)
+        mutated_source = real_source.replace(anchor, mutated_anchor, 1)
+        self.assertEqual(mutated_source.count(anchor), 0)
+
+        doc0_dir = self._tmp_dir("z4-doc0-")
+        doc1_dir = self._tmp_dir("z4-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nnothing relevant.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{1}$$ only.\n", encoding="utf-8")
+
+        scratch_core = Path(tempfile.mkdtemp(prefix="z4-core-"))
+        self.addCleanup(shutil.rmtree, scratch_core, ignore_errors=True)
+        shutil.copytree(ENGINE_DIR.parent, scratch_core / "core",
+                        ignore=shutil.ignore_patterns("__pycache__"),
+                        dirs_exist_ok=True)
+        (scratch_core / "core" / "engine" / "implementation_engine.py").write_text(
+            mutated_source, encoding="utf-8")
+
+        env = os.environ.copy()
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(PROFILE_FILE)
+        env["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(scratch_core / 'core' / 'engine')!r})\n"
+            "import implementation_engine as impl\n"
+            "finding = {'id': 'doc1-only', 'document': ['proposal'], "
+            "'remedy_equations': ['99'], 'uses': ['a = b'], 'introduces': []}\n"
+            "result = impl.remedy_compatibility([finding], 'e1.md', "
+            "sources_by_document={'experiments': impl.revision_source('e1.md', 0), "
+            "'proposal': impl.revision_source('p1.md', 1)})\n"
+            "print(result['status'])\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # The mutation reverts to document 0's own scalar keys
+        # ("experiments"/"remedy_experiments"), under which this finding's
+        # "remedy_equations" field is never read at all -- so it reads
+        # compatible again, exactly the pre-capability defect.
+        self.assertEqual(proc.stdout.strip(), "ok")
+
+    def test_z5_reverting_finding_tags_to_index_zero_desyncs_the_both_documents_case(self):
+        """Z5 (design.md Mutation plan, task 1.30): replace
+        `finding_tags[index]`-equivalent per-index tag computation with
+        document 0's own tags for every index, in a SCRATCH engine copy;
+        confirm the both-documents case (a locus declared only in document
+        1's text) goes red."""
+        real_source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        anchor = (
+            "index_tags = (set(document_block_locator(label_index)[\"pattern\"]\n"
+            "                              .findall(index_text)) if index_text is not None\n"
+            "                          else set())")
+        mutated_anchor = (
+            "index_tags = (set(document_block_locator(0)[\"pattern\"]\n"
+            "                              .findall(index_text)) if index_text is not None\n"
+            "                          else set())")
+        self.assertEqual(real_source.count(anchor), 1)
+        self.assertEqual(real_source.count(mutated_anchor), 0)
+        mutated_source = real_source.replace(anchor, mutated_anchor, 1)
+        self.assertEqual(mutated_source.count(anchor), 0)
+        self.assertEqual(mutated_source.count(mutated_anchor), 1)
+
+        doc0_dir = self._tmp_dir("z5-doc0-")
+        doc1_dir = self._tmp_dir("z5-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nnothing relevant.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{99}$$.\n", encoding="utf-8")
+
+        scratch_core = Path(tempfile.mkdtemp(prefix="z5-core-"))
+        self.addCleanup(shutil.rmtree, scratch_core, ignore_errors=True)
+        shutil.copytree(ENGINE_DIR.parent, scratch_core / "core",
+                        ignore=shutil.ignore_patterns("__pycache__"),
+                        dirs_exist_ok=True)
+        (scratch_core / "core" / "engine" / "implementation_engine.py").write_text(
+            mutated_source, encoding="utf-8")
+
+        env = os.environ.copy()
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(PROFILE_FILE)
+        env["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(scratch_core / 'core' / 'engine')!r})\n"
+            "import implementation_engine as impl\n"
+            # Same shape as the M4 positive control above -- document 1's
+            # own text DOES declare the locus. Under the mutation, every
+            # index reads document 0's (empty) tags, so this locus is
+            # reported unknown -- the desync.
+            "finding = {'id': 'doc1-declared', 'document': ['proposal'], "
+            "'remedy_equations': ['99'], 'uses': ['a = b'], 'introduces': []}\n"
+            "result = impl.remedy_compatibility([finding], 'e1.md', "
+            "sources_by_document={'experiments': impl.revision_source('e1.md', 0), "
+            "'proposal': impl.revision_source('p1.md', 1)})\n"
+            "print(result['status'])\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", code],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "incompatible")
+
+
 if __name__ == "__main__":
     unittest.main()
