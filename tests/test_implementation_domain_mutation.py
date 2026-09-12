@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import unittest
@@ -250,6 +251,95 @@ class PerLeafChangeMutationTests(unittest.TestCase):
                     "new measurement, never assumed")
 
 
+class LockAHonestyTests(unittest.TestCase):
+    """Task 4.1 (design.md D6, the M1 finding): `LockADiscoveryTests
+    .test_every_declared_name_really_is_that_domain_speaking` searched
+    `entry["source"]` -- the profile FILE's own text -- which trivially
+    contains every literal in its own `names` list, since that list's
+    declaration lives in the same file. Mutation X4: plant
+    `"zzz-nothing"` into a scratch profile's `names`. Proven BOTH ways,
+    the control this strengthening needs: the OLD check (searching the raw
+    source) must be shown SURVIVING it first -- never merely asserted --
+    and only then must the NEW check (`profile_values_text`, `vocabulary.
+    names` excluded) be shown catching it."""
+
+    #: A minimal, self-contained profile SOURCE -- real enough to exercise
+    #: both checks, never the shipped file (which this test does not touch).
+    _SCRATCH_PROFILE_SRC = (
+        "PROFILE = {\n"
+        "    'kit': {'root': '/scratch/skill'},\n"
+        "    'vocabulary': {\n"
+        "        'subject_singular': 'widget',\n"
+        "        'names': ['widget', 'zzz-nothing'],\n"
+        "    },\n"
+        "}\n"
+    )
+
+    @staticmethod
+    def _old_check(source: str, names: list[str]) -> list[str]:
+        """The check as it stood before D6: searches the profile FILE's own
+        source text -- the vacuous shape M1 found."""
+        lower_source = source.lower()
+        return [n for n in names if n.lower() not in lower_source]
+
+    @staticmethod
+    def _new_check(profile: dict, names: list[str]) -> list[str]:
+        """The strengthened check (design.md D6): searches the profile's
+        declared VALUES, `vocabulary.names` itself excluded -- reimplemented
+        inline here rather than imported from
+        `test_implementation_domain_lock.py`, mirroring
+        `LockBHonestyTests`'s own established precedent of duplicating the
+        scan rather than importing across test files."""
+        parts: list[str] = []
+
+        def walk(value, path):
+            if path == ("vocabulary", "names"):
+                return
+            if isinstance(value, dict):
+                for key, val in value.items():
+                    walk(val, path + (key,))
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    walk(item, path)
+            else:
+                parts.append(str(value))
+
+        walk(profile, ())
+        haystack = " ".join(parts).lower()
+        return [n for n in names if n.lower() not in haystack]
+
+    def test_the_old_check_survives_a_planted_name_and_the_new_check_catches_it(self):
+        names = ["widget", "zzz-nothing"]
+        profile = {
+            "kit": {"root": "/scratch/skill"},
+            "vocabulary": {"subject_singular": "widget",
+                          "names": list(names)},
+        }
+
+        # X4: `"zzz-nothing"` is planted into `names` with no other profile
+        # leaf carrying it. The OLD check, searching the FILE'S OWN source,
+        # finds it trivially -- it is written right there, in the `names`
+        # list literal -- and SURVIVES: this is the control proving the
+        # strengthening did something, per task 4.1's own acceptance
+        # condition.
+        old_unused = self._old_check(self._SCRATCH_PROFILE_SRC, names)
+        self.assertEqual(
+            old_unused, [],
+            "the OLD check did not survive the planted name -- the control "
+            "is invalid: it should have found 'zzz-nothing' vacuously "
+            "present in the file's own source and reported nothing unused")
+
+        # The NEW check, searching declared VALUES with `vocabulary.names`
+        # excluded, catches it: "zzz-nothing" is not `subject_singular`'s
+        # value, not `kit.root`'s, not anything but its own declaration.
+        new_unused = self._new_check(profile, names)
+        self.assertEqual(
+            new_unused, ["zzz-nothing"],
+            "the strengthened check did not catch the planted name -- it "
+            "should report 'zzz-nothing' as unused by any OTHER profile "
+            "value")
+
+
 class LockBHonestyTests(unittest.TestCase):
     """14.5: plant a declared `vocabulary.names` word anywhere in `engine/`
     (including a comment); Lock B must redden, naming the file and word;
@@ -342,6 +432,105 @@ class SealCorpusUntouchedTests(unittest.TestCase):
         self.assertEqual(
             proc.returncode, 0,
             f"tests/seal/ has uncommitted changes:\n{proc.stdout}")
+
+
+import test_implementation_domain_lock as domain_lock  # noqa: E402  (path set above)
+
+
+class M5MutationTests(unittest.TestCase):
+    """Task 4.7 (design.md D9): X5/X6/X7, each against a SCRATCH COPY of
+    the engine only -- never the real engine -- the same mechanism
+    `test_implementation_domain_mutation.py` already has for its own
+    per-leaf change mutations. Reuses `domain_lock.build_denylist`/
+    `discover_profiles` directly (both Python, both this same suite --
+    unlike `LockBHonestyTests`'s inline duplication, which exists
+    specifically to avoid a shared import between the TS lock and this
+    one)."""
+
+    @staticmethod
+    def _scratch_engine_dir(real_source: str) -> Path:
+        tmp = tempfile.mkdtemp(prefix="m5-scratch-engine-")
+        scratch_dir = Path(tmp) / "engine"
+        scratch_dir.mkdir()
+        (scratch_dir / "implementation_engine.py").write_text(
+            real_source, encoding="utf-8")
+        return scratch_dir
+
+    def test_x5_a_planted_denylist_word_reddens_test_2(self):
+        """Plant a denylist word into a scratch engine copy; the scan
+        `test_2_no_unpinned_denylist_word_appears_in_the_engine` performs
+        must find it, naming the file and word."""
+        real_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        denylist = domain_lock.build_denylist(domain_lock.discover_profiles())
+        # An unpinned word: present in the denylist, absent from
+        # `M5_PINNED_RESIDUE` -- one of the five genuinely-absent words.
+        unpinned = [w for w in denylist
+                   if w not in domain_lock.M5_PINNED_RESIDUE]
+        self.assertGreater(len(unpinned), 0, "no unpinned denylist word to plant")
+        planted_word = unpinned[0]
+        self.assertNotIn(planted_word, real_source.lower())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scratch_dir = Path(tmp) / "engine"
+            scratch_dir.mkdir()
+            planted_source = real_source + f"\n# a planted {planted_word} comment\n"
+            (scratch_dir / "implementation_engine.py").write_text(
+                planted_source, encoding="utf-8")
+
+            leaks = []
+            for path in sorted(scratch_dir.rglob("*.py")):
+                source = path.read_text(encoding="utf-8")
+                if re.search(rf"\b{planted_word}\b", source, re.IGNORECASE):
+                    leaks.append(path.name)
+            self.assertEqual(leaks, ["implementation_engine.py"])
+
+    def test_x6_deleting_a_pinned_occurrence_reddens_test_3(self):
+        """Delete one occurrence of a pinned residue word from a scratch
+        engine copy; the count `test_3` measures against that scratch copy
+        must disagree with the real pin."""
+        real_source = (ENGINE_DIR / "implementation_engine.py").read_text(
+            encoding="utf-8")
+        word = "materialized"
+        pinned_count = domain_lock.M5_PINNED_RESIDUE[word]
+        real_count = len(re.findall(rf"\b{word}\b", real_source, re.IGNORECASE))
+        self.assertEqual(real_count, pinned_count)
+
+        pattern = re.compile(rf"\b{word}\b", re.IGNORECASE)
+        mutated_source = pattern.sub("REMOVED", real_source, count=1)
+        mutated_count = len(re.findall(rf"\b{word}\b", mutated_source, re.IGNORECASE))
+        self.assertEqual(mutated_count, pinned_count - 1)
+
+    def test_x7_copying_the_siblings_purpose_over_this_norths_empties_the_denylist(self):
+        """Copy the sibling's `purpose` text over this north's own; the
+        vacuity guard (`test_1`) must fail: with both norths sharing the
+        SAME purpose text, every word in it becomes common to both and can
+        no longer be a single-owner subject word."""
+        profiles = domain_lock.discover_profiles()
+        by_name = {entry["skill_name"]: entry["profile"] for entry in profiles}
+        sibling = by_name["proposal-implementation"]
+        this_skill = by_name["experimental-implementation"]
+
+        mutated_this_skill = dict(this_skill)
+        mutated_objective = dict(this_skill["objective"])
+        mutated_objective["purpose"] = sibling["objective"]["purpose"]
+        mutated_this_skill["objective"] = mutated_objective
+
+        mutated_profiles = [
+            {"skill_name": "experimental-implementation",
+             "profile": mutated_this_skill},
+            {"skill_name": "proposal-implementation", "profile": sibling},
+        ]
+        denylist = domain_lock.build_denylist(mutated_profiles)
+        shared_purpose_words = domain_lock.north_words(
+            {"objective": {"purpose": sibling["objective"]["purpose"],
+                          "arrival": "", "humanStops": [], "stages": []}})
+        self.assertTrue(shared_purpose_words, "no >=5-letter word in the shared purpose")
+        for word in shared_purpose_words:
+            self.assertNotIn(
+                word, denylist,
+                f"{word!r} is shared between both norths' purpose text now "
+                "and must not remain single-owner")
 
 
 if __name__ == "__main__":
