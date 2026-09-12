@@ -96,12 +96,52 @@ CLI_PATH = PROFILE["cli"]["path"]
 # D2 locates by name. Landed ONE constant per S-step (D7's landing order:
 # S3-S9), never all at once, so a seal movement attributes to exactly the
 # field just landed.
-CLAIM_KEY = PROFILE["provenance"]["claim_key"]  # S3
+def document_vocabulary(index: int) -> dict:
+    """Document `index`'s five values -- `claim_key`, `locus_key`,
+    `remedy_locus_key`, `notation_keys`, `citation_pattern` (Cut 3 slice C,
+    `the-second-document-verified-on-its-own-terms`, design.md D1/D2). An
+    entry declaring none of them inherits all five from
+    `provenance.*`/`findings.*`, byte-identical to every profile on disk
+    prior to this function's existence -- the resolver's own all-or-nothing
+    rule (`impl_domain_profile._resolve`) guarantees a declared entry has
+    all five or none, so `"claim_key" in entry` alone tells which case
+    this is; there is no partial case left to reconcile here.
+
+    Reads `PROFILE["documents"][index]` directly, never the file-level
+    `DOCUMENTS` alias below -- the same list, just not yet bound when this
+    function's own call sites (immediately below) first run.
+    """
+    entry = PROFILE["documents"][index]
+    if "claim_key" in entry:
+        return {
+            "claim_key": entry["claim_key"],
+            "locus_key": entry["locus_key"],
+            "remedy_locus_key": entry["remedy_locus_key"],
+            "notation_keys": entry["notation_keys"],
+            "citation_pattern": entry["citation_pattern"],
+        }
+    return {
+        "claim_key": PROFILE["provenance"]["claim_key"],
+        "locus_key": PROFILE["findings"]["locus_key"],
+        "remedy_locus_key": PROFILE["findings"]["remedy_locus_key"],
+        "notation_keys": PROFILE["findings"]["notation_keys"],
+        "citation_pattern": PROFILE["findings"]["citation_pattern"],
+    }
+
+
+# Re-derived through `document_vocabulary(0)` (D2), not left as direct
+# `PROFILE[...]` reads: keeping both would be a second copy of the same
+# rule drifting alongside the accessor -- the exact defect `_impact_class`'s
+# own docstring says it was extracted to prevent. With no overlay declared
+# on `documents[0]` (every profile on disk today), these four values are
+# byte-identical to their pre-D2 `PROFILE[...]` reads -- asserted directly
+# in `tests/test_implementation_profile.py`, never inferred.
+CLAIM_KEY = document_vocabulary(0)["claim_key"]  # S3
 AUTHORED_INIT_SENTENCE = PROFILE["provenance"]["authored_init_sentence"]  # S4
 ARTIFACT_NOUN = PROFILE["vocabulary"]["artifact_noun"]  # S4
-LOCUS_KEY = PROFILE["findings"]["locus_key"]  # S5
-REMEDY_LOCUS_KEY = PROFILE["findings"]["remedy_locus_key"]  # S6
-NOTATION_KEYS = PROFILE["findings"]["notation_keys"]  # S7
+LOCUS_KEY = document_vocabulary(0)["locus_key"]  # S5
+REMEDY_LOCUS_KEY = document_vocabulary(0)["remedy_locus_key"]  # S6
+NOTATION_KEYS = document_vocabulary(0)["notation_keys"]  # S7
 CITATION_PATTERN = PROFILE["findings"]["citation_pattern"]  # S8
 # Cut 3 (`a-revision-is-two-documents`, design.md D4): `documents` is a LIST.
 # `DOCUMENTS_DIRECTORY`/`DOCUMENTS_LABEL` keep their S9 spellings, now
@@ -7630,7 +7670,10 @@ def migrate(target: Path, current: dict) -> None:
         f"chore(structure): normalize repository layout for {current['name']}")
 
 
-CITATION_RE = re.compile(CITATION_PATTERN)
+# Re-derived through `document_vocabulary(0)` (D2), not `CITATION_PATTERN`
+# directly -- see `CLAIM_KEY`'s own comment above; zero-delta with no
+# overlay declared, asserted in `tests/test_implementation_profile.py`.
+CITATION_RE = re.compile(document_vocabulary(0)["citation_pattern"])
 
 
 def _impact_class(remedy_loci: list, introduces: int, source: str) -> tuple[str, int]:

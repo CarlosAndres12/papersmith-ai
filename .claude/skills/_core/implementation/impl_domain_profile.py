@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -103,6 +104,24 @@ _REQUIRED_PRESENCE: tuple[tuple[str, str], ...] = (
 #: refused `..._INCOMPLETE` naming `documents[0]`, mirroring
 #: `_STAGE_REQUIRED`'s own `stages: []` lesson: presence of the list alone
 #: does not rule out zero entries.
+
+#: Cut 3 slice C (`the-second-document-verified-on-its-own-terms`, design.md
+#: D1): the five claim-vocabulary leaves a `documents[N]` entry may declare,
+#: overlaying the top-level `provenance.*`/`findings.*` scalars
+#: (`document_vocabulary`, the engine's own accessor, reads these exact five
+#: names). All-or-nothing per entry: an entry declaring ANY of them must
+#: declare ALL of them, or the partial overlay is refused naming each
+#: missing leaf by its own indexed path -- never a per-leaf fallback, which
+#: would make deleting one leaf a zero-mover (design.md D1's own rationale).
+_DOCUMENT_VOCABULARY_LEAVES: tuple[str, ...] = (
+    "claim_key", "locus_key", "remedy_locus_key", "notation_keys",
+    "citation_pattern",
+)
+
+#: The three sub-keys a declared `documents[N].notation_keys` overlay must
+#: carry, mirroring `findings.notation_keys`'s own three engine-read keys
+#: (`NOTATION_KEYS["locus"]`/`["remedyLocus"]`/`["unknown"]`).
+_NOTATION_KEYS_REQUIRED: tuple[str, ...] = ("locus", "remedyLocus", "unknown")
 
 #: `domain-profile.ts`'s own `OBJECTIVE_REQUIRED` mirrored exactly: the four
 #: top-level keys a declared north must carry.
@@ -210,6 +229,28 @@ def _resolve() -> Mapping[str, Any]:
                 missing.append(f"documents[{index}].directory")
             if not entry_is_mapping or "label" not in entry:
                 missing.append(f"documents[{index}].label")
+            if entry_is_mapping:
+                # Cut 3 slice C (design.md D1): all-or-nothing per entry.
+                # An entry declaring none of the five vocabulary leaves is
+                # silent, not incomplete (the pre-existing-profile rule) --
+                # this only fires once at least one is present.
+                declared_vocab = [leaf for leaf in _DOCUMENT_VOCABULARY_LEAVES
+                                  if leaf in entry]
+                if declared_vocab and len(declared_vocab) < len(_DOCUMENT_VOCABULARY_LEAVES):
+                    for leaf in _DOCUMENT_VOCABULARY_LEAVES:
+                        if leaf not in entry:
+                            missing.append(f"documents[{index}].{leaf}")
+                # Cut 3 slice C (design.md D3, tier 2): a declared
+                # `notation_keys` overlay must carry all three engine-read
+                # sub-keys -- checked whenever the leaf is present, even
+                # inside an otherwise-partial overlay already caught above,
+                # so its own missing sub-key is named too.
+                if "notation_keys" in entry:
+                    notation = entry["notation_keys"]
+                    for sub_key in _NOTATION_KEYS_REQUIRED:
+                        if not isinstance(notation, Mapping) or sub_key not in notation:
+                            missing.append(
+                                f"documents[{index}].notation_keys.{sub_key}")
 
     objective = profile.get("objective")
     if not isinstance(objective, Mapping):
@@ -222,6 +263,35 @@ def _resolve() -> Mapping[str, Any]:
         raise ImplementationProfileError(
             f"IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE: {configured} is "
             f"missing {', '.join(missing)}.")
+
+    # Cut 3 slice C (design.md D3, tier 3): `citation_pattern`'s group
+    # count, validated wherever it resolves -- the top-level fallback AND
+    # every declared overlay. `_impact_class` reads `match.group(1) or
+    # match.group(2) or match.group(3)`, so a fourth or a second group is a
+    # live defect, not a style choice. Applied to the TOP-LEVEL pattern too
+    # (not only overlays): it is document 0's own pattern under the
+    # fallback, and a check that validated only overlays would leave the
+    # one pattern that ships today unvalidated.
+    citation_pattern_leaves = [
+        ("findings.citation_pattern", profile["findings"]["citation_pattern"]),
+    ]
+    for index, entry in enumerate(documents):
+        if "citation_pattern" in entry:
+            citation_pattern_leaves.append(
+                (f"documents[{index}].citation_pattern", entry["citation_pattern"]))
+    for leaf_name, pattern in citation_pattern_leaves:
+        try:
+            group_count = re.compile(pattern).groups
+        except re.error as exc:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN: "
+                f"{configured} declares {leaf_name} that does not compile: "
+                f"{exc}.") from exc
+        if group_count != 3:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN: "
+                f"{configured} declares {leaf_name} with {group_count} "
+                "capturing group(s); exactly 3 are required.")
 
     # `stages` presence alone (the loop above) does not rule out `stages: []`
     # -- domain-profile.ts's own `stagesIncomplete` lesson. Every element

@@ -62,7 +62,13 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'remedy_locus_key': 'remedy_equations', "
         "'notation_keys': {'locus': 'equations', "
         "'remedyLocus': 'remedyEquations', 'unknown': 'unknownEquations'}, "
-        "'citation_pattern': 'x'}, "
+        # Slice C (design.md D3): the resolver now validates every
+        # `citation_pattern`'s group count, top-level included -- this
+        # placeholder must carry exactly three capturing groups or every
+        # unrelated leaf test spliced with this fragment would trip the
+        # NEW `..._INVALID_CITATION_PATTERN` refusal before reaching the
+        # behaviour it actually tests.
+        "'citation_pattern': r'x(\\d+)|y(\\d+)|z(\\d+)'}, "
         "'vocabulary': {'subject_singular': 'equation', "
         "'subject_plural': 'equations', 'subject_singular_es': 'ecuación', "
         "'subject_plural_es': 'ecuaciones', "
@@ -770,14 +776,15 @@ class DocumentVocabularyOverlayTests(unittest.TestCase):
         return tmp_dir
 
     def test_declaring_only_one_leaf_refuses_incomplete_naming_it(self):
+        """Each subTest declares a COMPLETE overlay minus exactly one leaf
+        (Y1's own mutation shape: delete one leaf at a time from a declared
+        overlay) -- the refusal names that ONE missing leaf."""
         for leaf in _DOCUMENT_VOCAB_LEAVES:
             with self.subTest(leaf=leaf):
                 tmp_dir = self._tmp_dir()
                 overlay = _document_one_overlay()
+                del overlay[leaf]
                 full = _two_document_profile(tmp_dir, document_one_overlay=overlay)
-                for other in _DOCUMENT_VOCAB_LEAVES:
-                    if other != leaf:
-                        del full["documents"][1][other]
                 profile_file = _write_profile(tmp_dir, full)
                 with self.assertRaises(RuntimeError) as ctx:
                     _fresh_resolver_load(str(profile_file))
@@ -985,6 +992,86 @@ class IndexedDocumentsLeafRefusalTests(unittest.TestCase):
         message = str(ctx.exception)
         self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
         self.assertIn("documents[0]", message)
+
+
+class DocumentVocabularyZeroDeltaTests(unittest.TestCase):
+    """Task 1.5 (design.md D2): with no overlay declared, the four module-
+    level scalars re-derived through `document_vocabulary(0)`, plus
+    `CITATION_RE`, must be byte-identical to the pre-re-derivation
+    `PROFILE[...]` reads -- asserted directly against the real, no-overlay
+    shipped profile (`proposal-implementation`), never inferred."""
+
+    @staticmethod
+    def _engine_module():
+        engine_dir = FORGE / ".claude/skills/_core/implementation/engine"
+        real_profile = FORGE / ".claude/skills/proposal-implementation/impl_profile.py"
+        os.environ.setdefault("IMPLEMENTATION_DOMAIN_PROFILE", str(real_profile))
+        if str(engine_dir) not in sys.path:
+            sys.path.insert(0, str(engine_dir))
+        spec = importlib.util.spec_from_file_location(
+            "impl_engine_zero_delta_probe", engine_dir / "implementation_engine.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_five_scalars_equal_the_top_level_profile_values(self):
+        engine = self._engine_module()
+        self.assertNotIn("claim_key", engine.DOCUMENTS[0])
+        self.assertEqual(engine.CLAIM_KEY, engine.PROFILE["provenance"]["claim_key"])
+        self.assertEqual(engine.LOCUS_KEY, engine.PROFILE["findings"]["locus_key"])
+        self.assertEqual(
+            engine.REMEDY_LOCUS_KEY, engine.PROFILE["findings"]["remedy_locus_key"])
+        self.assertEqual(engine.NOTATION_KEYS, engine.PROFILE["findings"]["notation_keys"])
+        self.assertEqual(
+            engine.CITATION_RE.pattern, engine.PROFILE["findings"]["citation_pattern"])
+
+
+class DocumentVocabularyIndependenceTests(unittest.TestCase):
+    """Task 1.10/1.11 (spec `implementation-per-document-vocabulary`,
+    Requirement "No Document's Vocabulary Is Inferred From Another
+    Document's"): `document_vocabulary(index)` never reads another index's
+    own entry -- proven by an in-process `PROFILE` substitution and a
+    direct call, never a subprocess (this exercises the function's own
+    arithmetic, not a CLI dispatch, so an in-process substitution is not
+    the "monkeypatch has zero effect on a subprocess" scar)."""
+
+    @staticmethod
+    def _engine_module():
+        engine_dir = FORGE / ".claude/skills/_core/implementation/engine"
+        real_profile = FORGE / ".claude/skills/proposal-implementation/impl_profile.py"
+        os.environ.setdefault("IMPLEMENTATION_DOMAIN_PROFILE", str(real_profile))
+        if str(engine_dir) not in sys.path:
+            sys.path.insert(0, str(engine_dir))
+        spec = importlib.util.spec_from_file_location(
+            "impl_engine_doc_vocab_independence_probe",
+            engine_dir / "implementation_engine.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_document_one_with_no_overlay_never_reads_document_zeros(self):
+        engine = self._engine_module()
+        original_profile = engine.PROFILE
+        try:
+            engine.PROFILE = {
+                **original_profile,
+                "documents": [
+                    {**original_profile["documents"][0],
+                     "claim_key": "claims-zero", "locus_key": "loci-zero",
+                     "remedy_locus_key": "remedy-loci-zero",
+                     "notation_keys": {"locus": "l", "remedyLocus": "r", "unknown": "u"},
+                     "citation_pattern": r"Z\((\d+)\)|Z(\d+)|Zz(\d+)"},
+                    {"directory": Path("/scratch/doc1"), "label": "doc1"},
+                ],
+                "provenance": {**original_profile["provenance"],
+                              "claim_key": "top-level-claim"},
+            }
+            self.assertEqual(
+                engine.document_vocabulary(1)["claim_key"], "top-level-claim",
+                "document 1 with no overlay must resolve to the top-level "
+                "fallback, never document 0's own declared overlay")
+        finally:
+            engine.PROFILE = original_profile
 
 
 if __name__ == "__main__":

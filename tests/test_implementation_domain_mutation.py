@@ -123,7 +123,22 @@ MEASURED_MOVERS: dict[str, tuple[str, ...]] = {
     "findings.locus_key": ("handoff-e1", "verify-a", "verify-b"),
     "findings.remedy_locus_key": ("handoff-e1", "verify-a", "verify-b"),
     "findings.notation_keys": ("handoff-e1", "verify-a", "verify-b"),
-    "findings.citation_pattern": (),  # ZERO-MOVER
+    # Re-measured, Cut 3 slice C (`the-second-document-verified-on-its-own-
+    # terms`, design.md D3): this leaf's mutated value
+    # (`r"NOMATCHPATTERN_\d+"`) has ZERO capturing groups. Before C1's
+    # resolver-side group-count validation this was a genuine zero-mover
+    # (a pattern that never matches still resolves; it just cites nothing).
+    # C1 now refuses `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CITATION_PATTERN`
+    # at import for ANY resolved `citation_pattern` without exactly three
+    # groups, so every command that needs the profile to resolve at all
+    # now fails the same way -- every sealed case except the one already
+    # excluded as non-deterministic moves.
+    "findings.citation_pattern": (
+        "admit-e0", "admit-e1", "apply", "close-e0", "close-e1", "compose",
+        "defect", "discuss", "gate-e0", "gate-e1", "handoff-e0", "handoff-e1",
+        "materialize", "name", "offer-e0", "offer-e1", "plan-a", "plan-b",
+        "position-e0", "position-e1", "probe", "settle", "step", "verify-a",
+        "verify-b", "verify-t", "walk"),
     "vocabulary.subject_singular": ("compose",),
     "vocabulary.subject_plural": (),  # ZERO-MOVER
     "vocabulary.subject_singular_es": ("handoff-e1",),
