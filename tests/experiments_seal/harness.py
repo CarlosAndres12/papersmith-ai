@@ -58,10 +58,20 @@ def _build_env_with_document_one(case: dict, roots) -> dict:
     `documents[1]`, so a case marked `proposals: true` also gets
     `IMPLEMENTATION_PROPOSALS_1` here, never inside `tests/seal/
     harness.py` itself (that file stays unedited -- `git diff --exit-code
-    tests/seal/` holds)."""
+    tests/seal/` holds).
+
+    `the-agreement-nothing-computes` (Slice D): a case marked
+    `crossingTarget: true` gets `roots.proposals_1_crossing` instead --
+    the crossing axis's own isolated document-1 root (`corpus.py::
+    _build_crossing_target`), never the shared `proposals_1` every OTHER
+    two-document case's default discovery depends on unmoved."""
     env = _ORIGINAL_BUILD_ENV(case, roots)
-    if case.get("proposals") and getattr(roots, "proposals_1", None) is not None:
-        env["IMPLEMENTATION_PROPOSALS_1"] = str(roots.proposals_1)
+    if case.get("proposals"):
+        if (case.get("crossingTarget")
+                and getattr(roots, "proposals_1_crossing", None) is not None):
+            env["IMPLEMENTATION_PROPOSALS_1"] = str(roots.proposals_1_crossing)
+        elif getattr(roots, "proposals_1", None) is not None:
+            env["IMPLEMENTATION_PROPOSALS_1"] = str(roots.proposals_1)
     return env
 
 

@@ -28709,6 +28709,19 @@ class GatingRefusalRosterTests(unittest.TestCase):
         """
         self.assertEqual(len(reachable_refusal_codes()), 114)
 
+    def test_agree_joins_gating_commands_unconditionally_never_this_profiles_own_commands(self):
+        """`the-agreement-nothing-computes` (Slice D, design.md D9, tasks.md
+        3.1): the reaching case for the ABSENT half is this file's own
+        already-loaded single-document profile. `agree` must NOT be a
+        parser choice here (`COMMANDS` stays byte-identical to today,
+        M8) -- but `cmd_agree`'s two codes must still be derivable by
+        `reachable_refusal_codes()` under this same profile, which is
+        possible only if `GATING_COMMANDS` names it UNCONDITIONALLY
+        (D9's own reverse-lock requirement, the same shape
+        `COMPOSE_AMBIGUOUS_DOCUMENT` failed and was reverted for)."""
+        self.assertNotIn("agree", impl.COMMANDS)
+        self.assertIn("agree", impl.GATING_COMMANDS)
+
     def test_the_roster_classifies_nothing_a_gating_command_cannot_raise(self):
         """The reverse direction, and the half the forward lock cannot give.
         A roster that grows entries nothing raises is a roster nobody can trust

@@ -286,6 +286,12 @@ class Roots:
     #: `proposals_1` to match `IMPLEMENTATION_PROPOSALS_1`, the env
     #: variable `proposals_root(1)` reads.
     proposals_1: Path
+    #: `the-agreement-nothing-computes` (Slice D, corrected this phase):
+    #: the crossing axis's own isolated target root (`_build_crossing_
+    #: target`) -- never `proposals_1` itself, which stays the default
+    #: `trial-plan-v01.md` discovery every OTHER two-document case relies
+    #: on unmoved.
+    proposals_1_crossing: Path
     plan_template: dict
 
 
@@ -373,11 +379,36 @@ def _build_document_one(root: Path) -> Path:
     documents.mkdir(parents=True)
     (documents / "trial-plan-v01.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + PROPOSAL_REVISION_TEXT.encode("utf-8"))
-    # `the-agreement-nothing-computes` (Slice D, design.md D5/D6, tasks.md
-    # 2.10): the crossing axis's own target -- the ONE document 1 revision
-    # both `CROSSING_RESOLVED_TEXT` and `CROSSING_DISAGREEMENT_TEXT`
-    # resolve against.
-    (documents / "trial-plan-crossing.md").write_bytes(
+    return documents
+
+
+def _build_crossing_target(root: Path) -> Path:
+    """`the-agreement-nothing-computes` (Slice D, design.md D5/D6, tasks.md
+    2.10 -- corrected this phase): the crossing axis's own target,
+    ISOLATED from `_build_document_one`'s shared root.
+
+    Measured this phase, not assumed: the file this fixture originally
+    wrote alongside `trial-plan-v01.md` (`trial-plan-crossing.md`) carries
+    no digit in its own name, so `discover_document_revision`'s own
+    candidate filter (`re.search(r"\\d", candidate.name)`) never selected
+    it as a candidate at all -- a fixture the corpus committed but no
+    command could ever reach; `crossing_state(0, "trial-crossing-
+    resolved.md")` measured `declared: []` against it directly. Naming it
+    WITH a digit inside the SAME shared root would not have fixed this:
+    two digit-bearing names in one directory become two families
+    (`re.sub(r"\\d+", "#", name)` differs for `trial-plan-v#.md` and a
+    hypothetical `trial-plan-crossing-#.md`), and `discover_document_
+    revision` refuses ambiguity across GATE-e1/OFFER-e1/CLOSE-e1/HANDOFF-
+    e1/ADMIT-t -- every one of which discovers document 1 for its own
+    unrelated reason and would start refusing `DOCUMENT_REVISION_
+    UNREADABLE`. So the crossing target gets its OWN root, its own
+    digit-bearing name, resolved only when a case asks for it
+    (`crossingTarget`, `harness.py`) -- never the default a bare
+    `--revision` on document 0 discovers.
+    """
+    documents = root / "Pc"
+    documents.mkdir(parents=True)
+    (documents / "trial-plan-9.md").write_bytes(
         _MANAGED_ARTIFACT_MARKER + PROPOSAL_CROSSING_TEXT.encode("utf-8"))
     return documents
 
@@ -401,6 +432,7 @@ def build(root: Path) -> Roots:
         fixture_t, with_data=False, findings_source=FIXTURE_T_FINDINGS_SOURCE)
     documents = _build_documents(root)
     document_one = _build_document_one(root)
+    crossing_target = _build_crossing_target(root)
 
     plan_template = {
         "name": "Trial", "renames": [], "moves": [], "createDirs": [],
@@ -409,7 +441,9 @@ def build(root: Path) -> Roots:
 
     return Roots(root=root, fixture_a=fixture_a, fixture_b=fixture_b,
                 fixture_t=fixture_t, proposals=documents,
-                proposals_1=document_one, plan_template=plan_template)
+                proposals_1=document_one,
+                proposals_1_crossing=crossing_target,
+                plan_template=plan_template)
 
 
 #: Digested into `digests.json` under `"__corpus_fingerprint__"`, the same
