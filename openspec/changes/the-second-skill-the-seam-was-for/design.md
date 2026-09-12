@@ -483,3 +483,41 @@ never by line and never inherited**: `SKILL_ROOT`, `CLI_PATH`,
 (`impl_layout.py`). Two inherited counts were re-measured and **corrected**:
 the engine's subject-word occurrences are 89/30/28, not the brief's 88/23/20;
 and the `names` check's vacuity is total, not limited to a namespace word (M1).
+
+---
+
+## D1 revisited: the ruling that flipped, and the orchestrator error behind it
+
+D1 above ruled `documents[0]` = the **experiments** document. Mid-flight the
+operator ruled the opposite — the mathematical proposal — and that ruling was
+relayed into the tasks brief and the apply brief **without anyone noticing it
+contradicted this design.** That was the orchestrator's error, and it is recorded
+here rather than quietly reconciled.
+
+**The apply agent followed this design, not the contradicting brief.** That was
+the correct call: the design is the authoritative artifact, and a brief that
+contradicts it is a defect in the brief.
+
+**Why the operator's ruling was sound and still yielded the wrong answer.** Their
+argument was the dependency direction: the experiments document exists to test
+claims from the proposal, so verifying downstream while upstream is broken
+measures against a false reference. That reasoning is correct and it now governs
+C's ordering.
+
+It reached the wrong conclusion here because the orchestrator framed the choice
+as *"which of the two verifications do you want, if you can only have one"*.
+**That question was wrong.** The operator was not choosing which to have — the
+mathematical verification already exists and keeps running in
+`proposal-implementation`. They were choosing what the NEW skill adds.
+
+And the framing omitted this design's own decisive argument: with `proposals/`,
+the profile becomes the sibling's vocabulary byte for byte and **no leaf is
+mutation-provable as this domain's**. That is the same shape as a profile field
+nothing reads — the rule seven cycles have been enforcing — applied sixteen times
+at once.
+
+Re-put with both facts, the operator confirmed the experiments document.
+
+**What the operator's concern buys anyway**: nothing is lost. The mathematical
+proposal keeps being verified by the sibling skill from the day A lands until C
+merges both documents into one invocation. The two run side by side.
