@@ -391,6 +391,17 @@ def doctrine_scaffold(case, name="Example-Method", seed="7",
     return box
 
 
+import orphan_sweep
+
+
+def setUpModule() -> None:
+    """This suite materializes fixtures inside the live repository, because
+    the code under test resolves its workspace from `FORGE_ROOT` and offers
+    no override. Its own `addCleanup` handles the normal exit; nothing
+    handles a killed process. Sweeping first means a previous run's corpse
+    cannot be read as this run's evidence -- which has produced failures
+    pointing at entirely the wrong defect."""
+    orphan_sweep.sweep_and_report()
 class NormalizeNameTests(unittest.TestCase):
     def assertPair(self, raw, directory, package):
         resolved = impl.normalize_name(raw)
