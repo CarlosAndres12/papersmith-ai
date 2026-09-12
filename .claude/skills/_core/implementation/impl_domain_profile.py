@@ -138,6 +138,19 @@ _NOTATION_KEYS_REQUIRED: tuple[str, ...] = ("locus", "remedyLocus", "unknown")
 #: top-level `provenance.*`/`findings.*` values).
 _BLOCK_LOCATOR_REQUIRED: tuple[str, ...] = ("pattern", "block_pattern", "identity")
 
+#: `the-agreement-nothing-computes` (Slice D, design.md D5/R1): the two
+#: sub-keys a declared `documents[N].cross_citation` mapping must carry --
+#: `pattern` (the form this document uses to cite another document's
+#: declared entries, one capturing group) and `resolves_against` (the
+#: `label` of the document those citations resolve against). Required per
+#: entry, on `dataset_marker`'s own tier, but -- unlike `block_locator` --
+#: the LEAF itself is nullable: `None` states out loud that this document
+#: cites no other document, a real declared state
+#: `implementation-cross-document-agreement` must be able to tell apart
+#: from "the profile author forgot to say". Only when the leaf is declared
+#: as a mapping do these two sub-keys become required.
+_CROSS_CITATION_REQUIRED: tuple[str, ...] = ("pattern", "resolves_against")
+
 #: `domain-profile.ts`'s own `OBJECTIVE_REQUIRED` mirrored exactly: the four
 #: top-level keys a declared north must carry.
 _OBJECTIVE_REQUIRED: tuple[str, ...] = ("purpose", "stages", "arrival", "humanStops")
@@ -269,6 +282,25 @@ def _resolve() -> Mapping[str, Any]:
                     if not isinstance(locator, Mapping) or sub_key not in locator:
                         missing.append(
                             f"documents[{index}].block_locator.{sub_key}")
+            # `the-agreement-nothing-computes` (Slice D, design.md D5,
+            # R1 resolved 5d42dd7): its own required tier, appended right
+            # after `block_locator` -- a missing LEAF names
+            # `documents[N].cross_citation` alone; a leaf DECLARED as a
+            # mapping but missing a sub-key names that sub-key's own
+            # indexed path. Unlike `block_locator`, the leaf's own value
+            # may be the literal `None` -- checked here only for KEY
+            # presence, never for its value, so `None` passes this tier
+            # untouched (spec `implementation-per-document-vocabulary`,
+            # "Omitting the leaf refuses by its own indexed name" /
+            # "An explicit `None` is accepted and crosses nothing").
+            if not entry_is_mapping or "cross_citation" not in entry:
+                missing.append(f"documents[{index}].cross_citation")
+            elif entry_is_mapping and entry["cross_citation"] is not None:
+                crossing = entry["cross_citation"]
+                for sub_key in _CROSS_CITATION_REQUIRED:
+                    if not isinstance(crossing, Mapping) or sub_key not in crossing:
+                        missing.append(
+                            f"documents[{index}].cross_citation.{sub_key}")
             if entry_is_mapping:
                 # Cut 3 slice C (design.md D1): all-or-nothing per entry.
                 # An entry declaring none of the five vocabulary leaves is
@@ -376,6 +408,45 @@ def _resolve() -> Mapping[str, Any]:
                 f"{configured} declares documents[{index}].block_locator."
                 f"identity with field(s) {identity_fields}; exactly one "
                 "field named 'value' is required.")
+
+    # `the-agreement-nothing-computes` (Slice D, design.md D5): every
+    # `documents[N].cross_citation`'s own shape, validated at resolve
+    # time -- guaranteed either the literal `None` or a complete two-key
+    # mapping here; the missing-leaf/sub-key check above already raised
+    # otherwise. Exactly ONE capturing group in `pattern`, the same
+    # reasoning as `block_locator`'s own: the reader this leaf serves
+    # takes a single value, so copying `citation_pattern`'s three-group
+    # rule would enforce a count nothing reads. `resolves_against` must
+    # name a document label another `documents[N]` entry actually
+    # declares, and never its OWN entry's label -- a crossing that
+    # resolves against itself crosses nothing, the same failure a
+    # positional `index + 1` scheme could not even express as an error
+    # (design.md D5's own rejected options).
+    declared_labels = {entry["label"] for entry in documents}
+    for index, entry in enumerate(documents):
+        crossing = entry["cross_citation"]
+        if crossing is None:
+            continue
+        try:
+            crossing_groups = re.compile(crossing["pattern"]).groups
+        except re.error as exc:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN: "
+                f"{configured} declares documents[{index}].cross_citation."
+                f"pattern that does not compile: {exc}.") from exc
+        if crossing_groups != 1:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_INVALID_CROSS_CITATION_PATTERN: "
+                f"{configured} declares documents[{index}].cross_citation."
+                f"pattern with {crossing_groups} capturing group(s); exactly "
+                "1 is required.")
+        target = crossing["resolves_against"]
+        if target not in declared_labels or target == entry["label"]:
+            raise ImplementationProfileError(
+                f"IMPLEMENTATION_DOMAIN_PROFILE_UNKNOWN_CROSS_DOCUMENT: "
+                f"{configured} declares documents[{index}].cross_citation."
+                f"resolves_against={target!r}, which names no OTHER "
+                "declared document label.")
 
     # `stages` presence alone (the loop above) does not rule out `stages: []`
     # -- domain-profile.ts's own `stagesIncomplete` lesson. Every element
