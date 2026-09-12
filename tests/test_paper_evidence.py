@@ -604,13 +604,68 @@ class LiteratureSearchAbsenceTests(unittest.TestCase):
                 offenders.append(name)
         self.assertEqual(offenders, [], f"query-construction function(s): {offenders}")
 
+    @staticmethod
+    def _resolver_carrying_attributes(module) -> dict:
+        """Every module-level attribute that could carry a resolver's name:
+        any `tuple`/`list`/`set`/`frozenset`/`dict` bound directly on
+        `module`'s own namespace (excluding dunder attributes such as
+        `__annotations__`, which are about the module, not about it).
+        `_ENDPOINT_BUILDERS` carries resolver names as dict KEYS, so
+        membership (`in`) is checked the same way for every container here
+        -- keys for a mapping, elements for the rest -- rather than reading
+        one shape and assuming the others match it.
+
+        Derived by walking the live module, exactly like
+        `test_no_skill_script_references_an_mcp_config` (glob) and
+        `test_no_free_text_query_construction_function_exists` (`inspect`)
+        already derive their own surfaces in this same class -- so a fourth
+        resolver-carrying attribute added tomorrow is picked up the moment
+        it exists, never by someone remembering to extend a hand-typed list
+        of three names."""
+        return {
+            name: value
+            for name, value in vars(module).items()
+            if not (name.startswith("__") and name.endswith("__"))
+            and isinstance(value, (tuple, list, set, frozenset, dict))
+        }
+
     def test_consensus_is_not_a_resolver(self) -> None:
         # "Consensus cannot supply a verdict": no Consensus connector exists
-        # anywhere in this codebase. Checked directly against the running
-        # module's own closed resolver surface, not a string search.
-        self.assertNotIn("consensus", paper_resolve.RESOLVERS)
-        self.assertNotIn("consensus", paper_resolve.ROLES)
-        self.assertNotIn("consensus", paper_resolve._ENDPOINT_BUILDERS)
+        # anywhere in this codebase. Checked against every container this
+        # module's own namespace currently holds, derived at run time -- not
+        # a hand-picked list of the three attributes that happen to be the
+        # whole surface today.
+        offenders = [
+            name
+            for name, value in self._resolver_carrying_attributes(paper_resolve).items()
+            if "consensus" in value
+        ]
+        self.assertEqual(offenders, [], f"'consensus' appears in: {offenders}")
+
+    def test_a_fourth_resolver_carrying_attribute_naming_consensus_is_caught(self) -> None:
+        # Proof the derivation above is real, not cosmetic: a hand-listed
+        # version naming only `RESOLVERS`/`ROLES`/`_ENDPOINT_BUILDERS` cannot
+        # see an attribute it was never told about. This installs a fourth
+        # one directly on the live module, confirms the derived check catches
+        # a "consensus" entry inside it, then removes it and confirms the
+        # module -- and the check -- are back to green.
+        self.assertNotIn("_FULLTEXT_PROVIDERS", vars(paper_resolve))
+        paper_resolve._FULLTEXT_PROVIDERS = ("openalex", "consensus")
+        try:
+            offenders = [
+                name
+                for name, value in self._resolver_carrying_attributes(paper_resolve).items()
+                if "consensus" in value
+            ]
+            self.assertEqual(offenders, ["_FULLTEXT_PROVIDERS"], offenders)
+        finally:
+            del paper_resolve._FULLTEXT_PROVIDERS
+        clean_offenders = [
+            name
+            for name, value in self._resolver_carrying_attributes(paper_resolve).items()
+            if "consensus" in value
+        ]
+        self.assertEqual(clean_offenders, [])
 
 
 def _cite_record(cite_key: str, *, resolver: str = "", metadata_digest: str = "") -> dict:
