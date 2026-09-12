@@ -397,6 +397,10 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: 146->150, `claim` 34->35, `command` 266->268, `commands` 16->19,
 #: `declaration` 190->191, `module` 184->186, `readable` 23->24, `refuses`
 #: 89->91, `value` 223->227.
+#: `the-agreement-nothing-computes` (Slice D4): two more grew -- the
+#: `--acknowledge` flag's own help text and `cmd_agree`'s reworded
+#: comment about it read naturally with two words this pin already
+#: exempts. `named` 169->171, `value` 227->229.
 M5_PINNED_RESIDUE: dict[str, int] = {
     "actually": 75, "admissible": 3, "after": 79, "against": 184,
     "agreed": 24, "answered": 71, "answers": 98, "approved": 29,
@@ -407,14 +411,14 @@ M5_PINNED_RESIDUE: dict[str, int] = {
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 31,
     "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 140, "measurement": 43, "module": 186, "named": 169,
+    "measured": 140, "measurement": 43, "module": 186, "named": 171,
     "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
     "place": 50, "premises": 7, "produces": 44, "rather": 331,
     "readable": 24, "recorded": 76, "refuses": 91, "remedy": 48,
     "remote": 55, "reported": 142, "resolves": 32, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
     "something": 67, "stage": 82, "steps": 133, "sweep": 7,
-    "validated": 7, "value": 227, "whose": 142, "write": 106, "wrong": 51,
+    "validated": 7, "value": 229, "whose": 142, "write": 106, "wrong": 51,
 }
 
 
