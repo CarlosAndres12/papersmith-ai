@@ -5019,13 +5019,70 @@ def declares_dataset(revision: str | None) -> bool:
                for index, name in enumerate(names))
 
 
+# `the-agreement-nothing-computes` (Slice D, design.md D1/D2/M1): a locus
+# stops being LaTeX and becomes a per-document declaration. Every
+# `documents[N].block_locator` compiled ONCE at import, per index -- never
+# per finding, never per call -- `DOCUMENTS` is already bound (S9, above),
+# so this cache can build here, well before `document_block_locator`'s own
+# first reader (immediately below).
+_BLOCK_LOCATORS: tuple[dict, ...] = tuple(
+    {
+        "pattern": re.compile(DOCUMENTS[index]["block_locator"]["pattern"]),
+        "block_pattern": re.compile(DOCUMENTS[index]["block_locator"]["block_pattern"]),
+        "identity": DOCUMENTS[index]["block_locator"]["identity"],
+    }
+    for index in range(len(DOCUMENTS))
+)
+
+
+def document_block_locator(index: int) -> dict:
+    """Document `index`'s compiled locus matcher, block matcher and identity
+    template. Compiled ONCE at import, per index -- never per finding."""
+    return _BLOCK_LOCATORS[index]
+
+
+def finding_document_indices(finding: dict) -> list[int]:
+    """The document indices a finding names, `[0]` when it names none --
+    `document` may be a single label, a list of labels, or absent entirely.
+    A label absent from `DOCUMENT_INDEX_BY_LABEL` is dropped, mirroring
+    `finding_impact`'s own standing rule: this function stays a reader,
+    never a gate."""
+    named = finding.get("document")
+    labels = named if isinstance(named, list) else [named] if named else []
+    indices = [DOCUMENT_INDEX_BY_LABEL[label] for label in labels
+               if label in DOCUMENT_INDEX_BY_LABEL]
+    return indices if indices else [0]
+
+
+def _single_named_document_index(finding: dict) -> int:
+    """The ONE document index a finding names, for the locator sites that
+    write into a single document's own syntax (`cmd_compose`, `cmd_handoff`'s
+    `selectedEntryId`). A finding naming BOTH documents cannot be composed
+    or rendered against either one alone: refused by name, gated on
+    `len(DOCUMENTS) > 1` so the sibling's `COMMANDS`/refusal surface is
+    structurally untouched under one document (design.md D3)."""
+    indices = finding_document_indices(finding)
+    if len(DOCUMENTS) > 1 and len(indices) > 1:
+        raise Refused(
+            "COMPOSE_AMBIGUOUS_DOCUMENT",
+            f"{finding.get('id')} names more than one document "
+            f"({finding.get('document')!r}); composing a replacement or "
+            "rendering a single-document selector requires exactly one.")
+    return indices[0]
+
+
 # How a paper labels a locus, and the only place this skill decides it.
 # A tag is whatever the author put between the braces: `3.1`, `A.2`, `B.10`.
 # Every reader — `admit`, this compatibility audit, `compose` and `handoff` —
 # reads it through this one pattern. Two of them used to carry a digits-only
 # copy of their own, which ruled a citation absent from a document that
 # carries it, and gave that false reason to whoever was reading.
-TAG_RE = re.compile(r"\\tag\{([^}]+)\}")
+#
+# Re-derived through `document_block_locator(0)` (design.md D2), not a
+# hardcoded `re.compile` literal: both identifiers survive, unchanged value
+# under the sibling's own profile, which declares today's exact bytes --
+# asserted on its 28 sealed digests, never inferred.
+TAG_RE = document_block_locator(0)["pattern"]
 
 
 def remedy_compatibility(findings: list[dict], revision: str | None,
@@ -5086,10 +5143,29 @@ def remedy_compatibility(findings: list[dict], revision: str | None,
             elif resolved_texts:
                 finding_source = "\n".join(resolved_texts)
                 finding_tags = set(TAG_RE.findall(finding_source))
-        for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
-            missing = [e for e in finding.get(field, []) if e not in finding_tags]
-            if missing:
-                unknown_loci.append(f"{finding['id']}.{field}: {missing}")
+        # `the-agreement-nothing-computes` (Slice D, design.md D4, defect 2):
+        # per-`finding_document_indices(finding)` loop, `[0]` when the
+        # finding names none -- each index's OWN `locus_key`/
+        # `remedy_locus_key` (`document_vocabulary(label_index)`), matched
+        # against tags built with THAT index's own `block_locator.pattern`
+        # against THAT index's own text. Never document 0's module-level
+        # `LOCUS_KEY`/`REMEDY_LOCUS_KEY` scalars applied to a finding naming
+        # a different document -- the exact defect where a `documents[1]`
+        # finding's fields were looked up under document 0's keys, found
+        # nothing, and read as compatible.
+        for label_index in finding_document_indices(finding):
+            vocab = document_vocabulary(label_index)
+            if sources_by_document:
+                index_text = sources_by_document.get(DOCUMENTS[label_index]["label"])
+            else:
+                index_text = source if label_index == 0 else None
+            index_tags = (set(document_block_locator(label_index)["pattern"]
+                              .findall(index_text)) if index_text is not None
+                          else set())
+            for field in (vocab["locus_key"], vocab["remedy_locus_key"]):
+                missing = [e for e in finding.get(field, []) if e not in index_tags]
+                if missing:
+                    unknown_loci.append(f"{finding['id']}.{field}: {missing}")
         absent = [s for s in finding.get("uses", []) if s not in finding_source]
         if absent:
             undefined_notation.append(f"{finding['id']}: {absent}")
@@ -7996,9 +8072,17 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             # The corrected text is not attached here. It has to be substituted
             # into whatever entry the resolver returns, which only the caller
             # knows; `compose` does that once the entry is in hand.
+            # `the-agreement-nothing-computes` (Slice D, design.md M1/D3):
+            # the SEVENTH locator site, and a RENDERER, never a reader --
+            # `document_block_locator(N)["identity"]`, the declared
+            # `str.format` template, never a hardcoded `\tag{...}` literal.
+            # A finding naming BOTH documents cannot render a single
+            # selector: refuses `COMPOSE_AMBIGUOUS_DOCUMENT` by name.
+            locator = document_block_locator(_single_named_document_index(finding))
             item["deliberation"] = {
                 "instruction": finding.get("remedy"),
-                "selectedEntryId": f"\\tag{{{finding[REMEDY_LOCUS_KEY][0]}}}",
+                "selectedEntryId": locator["identity"].format(
+                    value=finding[REMEDY_LOCUS_KEY][0]),
                 "compose": {"command": "compose", "finding": finding["id"],
                             "entryTextFrom": "RESOLVE_TARGET.text"},
             }
@@ -8072,7 +8156,13 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
     }
 
 
-DISPLAY_BLOCK_RE = re.compile(r"\$\$.*?\$\$", re.DOTALL)
+# Re-derived through `document_block_locator(0)` (design.md D2), not a
+# hardcoded `re.compile(..., re.DOTALL)` literal -- the sibling's own
+# declared value carries the `(?s)` flag inline, so the resolver compiles
+# every pattern flag-free. Unchanged value under a profile that declares
+# today's exact bytes -- asserted on the sibling's 28 sealed digests, never
+# inferred.
+DISPLAY_BLOCK_RE = document_block_locator(0)["block_pattern"]
 
 
 def cmd_compose(args: argparse.Namespace) -> dict:
@@ -8104,14 +8194,22 @@ def cmd_compose(args: argparse.Namespace) -> dict:
     if not entry.strip():
         raise Refused("EMPTY_ENTRY", "The resolved entry text is empty.")
 
-    tags = TAG_RE.findall(block)
+    # `the-agreement-nothing-computes` (Slice D, design.md D3): the SINGLE
+    # document the finding names -- composing a replacement requires
+    # knowing whose syntax to write. Refuses `COMPOSE_AMBIGUOUS_DOCUMENT`
+    # if the finding names more than one. Under one document this is
+    # always index 0, and `document_block_locator(0)` is `TAG_RE`/
+    # `DISPLAY_BLOCK_RE`'s own re-derivation -- byte-unchanged.
+    locator = document_block_locator(_single_named_document_index(finding))
+    tags = locator["pattern"].findall(block)
     if len(set(tags)) != 1:
         raise Refused("AMBIGUOUS_REMEDY_TAG",
                       f"remedy_block must carry exactly one {SUBJECT_SINGULAR} tag, "
                       f"found {tags}.")
     tag = tags[0]
 
-    matches = [m for m in DISPLAY_BLOCK_RE.finditer(entry) if tag in TAG_RE.findall(m.group(0))]
+    matches = [m for m in locator["block_pattern"].finditer(entry)
+              if tag in locator["pattern"].findall(m.group(0))]
     if len(matches) != 1:
         raise Refused("TAG_NOT_UNIQUE_IN_ENTRY",
                       f"{SUBJECT_SINGULAR} ({tag}) appears in {len(matches)} display "
