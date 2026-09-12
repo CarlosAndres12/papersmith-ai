@@ -252,7 +252,6 @@ def _block_locator() -> dict:
         "identity": "## {value}",
     }
 
-
 class DatasetDeclaredDetectorTests(unittest.TestCase):
     """B1 (`a-data-directory-somebody-can-owe`, design.md D1/D2, tasks.md
     Phase 2): the dataset-declared detector, proven directly -- pure
@@ -276,7 +275,7 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         docs_dir = self._tmp_docs_dir()
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments", "dataset_marker": None,
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(), "cross_citation": None},
         ])
         calls = []
         original = engine.revision_source
@@ -299,7 +298,7 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
              "dataset_marker": "**Dataset:**",
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(), "cross_citation": None},
         ])
         self.assertTrue(engine.declares_dataset("r1.md"))
 
@@ -315,7 +314,7 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
              "dataset_marker": "**Dataset:**",
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(), "cross_citation": None},
         ])
         self.assertFalse(engine.declares_dataset("r1.md"))
 
@@ -332,7 +331,8 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "Dazzzztaset: this is not the literal marker\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": docs_dir, "label": "experiments",
-             "dataset_marker": marker, "block_locator": _block_locator()},
+             "dataset_marker": marker, "block_locator": _block_locator(),
+             "cross_citation": None},
         ])
         self.assertFalse(engine.declares_dataset("r1.md"))
 
@@ -352,9 +352,10 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "**Dataset:** declared only here\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": doc0_dir, "label": "experiments", "dataset_marker": None,
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(), "cross_citation": None},
             {"directory": doc1_dir, "label": "proposal",
-             "dataset_marker": "**Dataset:**", "block_locator": _block_locator()},
+             "dataset_marker": "**Dataset:**", "block_locator": _block_locator(),
+             "cross_citation": None},
         ])
         self.assertTrue(engine.declares_dataset("r1.md"))
 
@@ -369,9 +370,10 @@ class DatasetDeclaredDetectorTests(unittest.TestCase):
             "**Dataset:** would be found if discovery ran\n", encoding="utf-8")
         engine, _ = _engine_with_documents([
             {"directory": doc0_dir, "label": "experiments", "dataset_marker": None,
-             "block_locator": _block_locator()},
+             "block_locator": _block_locator(), "cross_citation": None},
             {"directory": doc1_dir, "label": "proposal",
-             "dataset_marker": "**Dataset:**", "block_locator": _block_locator()},
+             "dataset_marker": "**Dataset:**", "block_locator": _block_locator(),
+             "cross_citation": None},
         ])
         calls = []
         original = engine.document_revision_names
@@ -418,7 +420,12 @@ class RevisionThreadingAgreementTests(unittest.TestCase):
                  "pattern": r"(?m)^## (\d+)$",
                  "block_pattern": r"(?s)## \d+.*?(?=\n## |\Z)",
                  "identity": "## {value}",
-             }},
+             },
+             # `the-agreement-nothing-computes` (Slice D, design.md D5/R1):
+             # required, own tier, NULLABLE -- this scratch profile is
+             # single-document, so there is no other declared label to
+             # cross against.
+             "cross_citation": None},
         ]
         tmp_profile_dir = Path(tempfile.mkdtemp(prefix="plan-revision-profile-"))
         self.addCleanup(shutil.rmtree, tmp_profile_dir, ignore_errors=True)
@@ -872,6 +879,126 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
                               capture_output=True, text=True, env=env)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(proc.stdout.strip(), "incompatible")
+
+
+class CrossingStateTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D6, tasks.md
+    2.8): `crossing_state`'s own four-membership unit matrix, proven
+    against THIS skill's own shipped two-document profile -- `documents[0]`
+    (`experiments`) declares `cross_citation` resolving against
+    `documents[1]`'s (`proposal`) own `block_locator.pattern`.
+
+    Pure function, no CLI dispatch: an in-process fresh-engine import is
+    not the "monkeypatch has zero effect on a subprocess" scar, mirroring
+    `RemedyCompatibilityPerDocumentTests`'s own standing rule."""
+
+    def _tmp_dir(self, prefix: str) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _engine_with_proposals_override(self, doc0_dir: Path, doc1_dir: Path):
+        """The real, unmodified two-document profile, both documents'
+        proposals roots overridden via the engine's own supported env
+        vars -- identical mechanism to
+        `RemedyCompatibilityPerDocumentTests`'s own helper, not shared by
+        import since each test class owns its fixture lifecycle."""
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        had_0 = "IMPLEMENTATION_PROPOSALS" in os.environ
+        original_0 = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        had_1 = "IMPLEMENTATION_PROPOSALS_1" in os.environ
+        original_1 = os.environ.get("IMPLEMENTATION_PROPOSALS_1")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+
+        def _restore():
+            if had_0:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = original_0
+            else:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            if had_1:
+                os.environ["IMPLEMENTATION_PROPOSALS_1"] = original_1
+            else:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS_1", None)
+
+        self.addCleanup(_restore)
+        return module
+
+    def test_a_crossing_that_resolves_both_ways_reports_no_discrepancy(self):
+        doc0_dir = self._tmp_dir("crossing-both-doc0-")
+        doc1_dir = self._tmp_dir("crossing-both-doc1-")
+        (doc0_dir / "e1.md").write_text(
+            "## 1\n\nSustains the claim, citing [claims:9].\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{9}$$.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(0, "e1.md")
+        self.assertEqual(
+            state, {"crossed": ["9"], "declared": ["9"], "absent": [], "untested": []})
+
+    def test_absent_only_a_cited_claim_the_target_no_longer_declares(self):
+        """Kind 1: the experiments document cites a claim the proposal's
+        current revision does not declare."""
+        doc0_dir = self._tmp_dir("crossing-absent-doc0-")
+        doc1_dir = self._tmp_dir("crossing-absent-doc1-")
+        (doc0_dir / "e1.md").write_text(
+            "## 1\n\nCiting a claim the proposal dropped: [claims:9].\n",
+            encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares nothing matching that claim.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(0, "e1.md")
+        self.assertEqual(
+            state, {"crossed": ["9"], "declared": [], "absent": ["9"], "untested": []})
+
+    def test_untested_only_a_declared_claim_no_experiment_cites(self):
+        """Kind 2: the proposal declares a claim no experiment cites."""
+        doc0_dir = self._tmp_dir("crossing-untested-doc0-")
+        doc1_dir = self._tmp_dir("crossing-untested-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nCites nothing at all.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{9}$$.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(0, "e1.md")
+        self.assertEqual(
+            state, {"crossed": [], "declared": ["9"], "absent": [], "untested": ["9"]})
+
+    def test_both_non_empty_at_once(self):
+        doc0_dir = self._tmp_dir("crossing-both-nonempty-doc0-")
+        doc1_dir = self._tmp_dir("crossing-both-nonempty-doc1-")
+        (doc0_dir / "e1.md").write_text(
+            "## 1\n\nCites a dropped claim: [claims:9].\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{7}$$, untested.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(0, "e1.md")
+        self.assertEqual(
+            state, {"crossed": ["9"], "declared": ["7"], "absent": ["9"], "untested": ["7"]})
+
+    def test_none_cross_citation_answers_every_membership_empty(self):
+        """`documents[1]` (the proposal) declares `cross_citation: None` --
+        every membership empty, no discrepancy possible in either
+        direction (design.md's own Open Question, ruled)."""
+        doc0_dir = self._tmp_dir("crossing-none-doc0-")
+        doc1_dir = self._tmp_dir("crossing-none-doc1-")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(1, "p1.md")
+        self.assertEqual(
+            state, {"crossed": [], "declared": [], "absent": [], "untested": []})
+
+    def test_sorted_and_deduplicated_a_repeated_crossing_is_one_discrepancy(self):
+        """A crossing repeated twice is one discrepancy, not two (design.md
+        D6)."""
+        doc0_dir = self._tmp_dir("crossing-dedup-doc0-")
+        doc1_dir = self._tmp_dir("crossing-dedup-doc1-")
+        (doc0_dir / "e1.md").write_text(
+            "## 1\n\n[claims:9] and again [claims:9], and [claims:2].\n",
+            encoding="utf-8")
+        (doc1_dir / "p1.md").write_text("Nothing declared here.\n", encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        state = module.crossing_state(0, "e1.md")
+        self.assertEqual(state["crossed"], ["2", "9"])
+        self.assertEqual(state["absent"], ["2", "9"])
 
 
 if __name__ == "__main__":
