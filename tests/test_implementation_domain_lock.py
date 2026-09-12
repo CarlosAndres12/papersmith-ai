@@ -243,6 +243,59 @@ class LockCDeclaredMarkerTests(unittest.TestCase):
             "profile, never spell it: " + "; ".join(leaks))
 
 
+class LockDDeclaredLocatorTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md M1/D1, tasks.md
+    1.8): Lock C's shape, stronger. For every profile `discover_profiles()`
+    finds, for every `documents[N].block_locator`, each of the THREE
+    declared literals (`pattern`, `block_pattern`, `identity`) appears in
+    no file under `ENGINE_DIR`. Non-vacuity asserted explicitly -- both
+    shipped profiles declare a non-null locator on every entry, so this is
+    non-vacuous the day it lands, unlike Lock C which had to wait for a
+    second profile to declare a marker. This is the lock M1 says a
+    matcher-only leaf (option 2 of design.md D1) would have let pass: a
+    lock over the declared MATCHER alone would stay silent while
+    `cmd_handoff`'s renderer still spelled the hardcoded `\\tag{` template
+    -- the exact "protected half reads as proof of the whole" scar, one
+    level up.
+    """
+
+    def _declared_locators(self) -> list[tuple[str, int, str, str]]:
+        """`(skill_name, index, sub_key, literal)` for every declared
+        `block_locator` sub-key across every discovered profile."""
+        locators = []
+        for entry in discover_profiles():
+            for index, document in enumerate(entry["profile"].get("documents", [])):
+                locator = document.get("block_locator")
+                if not isinstance(locator, Mapping):
+                    continue
+                for sub_key in ("pattern", "block_pattern", "identity"):
+                    value = locator.get(sub_key)
+                    if value:
+                        locators.append((entry["skill_name"], index, sub_key, value))
+        return locators
+
+    def test_at_least_one_declared_locator_exists(self):
+        locators = self._declared_locators()
+        self.assertGreater(
+            len(locators), 0,
+            "no profile declares a block_locator -- every assertion below "
+            "would pass vacuously")
+
+    def test_no_declared_locator_literal_appears_in_the_engine(self):
+        locators = self._declared_locators()
+        leaks = []
+        for rel, source in _read_all(_engine_files()):
+            for skill_name, index, sub_key, literal in locators:
+                if literal in source:
+                    leaks.append(
+                        f"{rel} spells {skill_name}'s documents[{index}]"
+                        f".block_locator.{sub_key} literal {literal!r}")
+        self.assertEqual(
+            leaks, [],
+            "the engine must read a declared block_locator off the "
+            "profile, never spell it: " + "; ".join(leaks))
+
+
 # --- M5: the derived denylist (TS C-3), now landable ------------------------
 #
 # Deferred at Cut 2 (`the-domain-crosses-the-seam`): with one implementation
@@ -328,24 +381,32 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: `before` 223->224, `beside` 91->92, `check` 145->146, `command`
 #: 263->266, `materialize` 29->31, `rather` 330->331, `recorded` 75->76,
 #: `refuses` 86->87.
+#: `the-agreement-nothing-computes` (Slice D, D1): eleven more grew, the
+#: identical deliberate, measured shape -- `document_block_locator`,
+#: `finding_document_indices`, `_single_named_document_index` and the
+#: per-document `remedy_compatibility` loop's own prose reads naturally
+#: with ordinary English words this pin already exempts. `against`
+#: 181->184, `before` 224->225, `carries` 176->177, `commands` 15->16,
+#: `declaration` 189->191, `module` 183->184, `named` 164->169, `refuses`
+#: 87->89, `value` 219->223, `whose` 141->142, `write` 104->106.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 75, "admissible": 3, "after": 79, "against": 181,
+    "actually": 75, "admissible": 3, "after": 79, "against": 184,
     "agreed": 23, "answered": 71, "answers": 98, "approved": 29,
-    "audit": 15, "before": 224, "benchmark": 91, "beside": 92,
-    "carries": 176, "check": 146, "checkable": 3, "claim": 34,
-    "command": 266, "commands": 15, "compares": 23, "declaration": 189,
+    "audit": 15, "before": 225, "benchmark": 91, "beside": 92,
+    "carries": 177, "check": 146, "checkable": 3, "claim": 34,
+    "command": 266, "commands": 16, "compares": 23, "declaration": 191,
     "destinations": 37, "empty": 111, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 31,
     "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 140, "measurement": 43, "module": 183, "named": 164,
+    "measured": 140, "measurement": 43, "module": 184, "named": 169,
     "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
     "place": 50, "premises": 7, "produces": 44, "rather": 331,
-    "readable": 23, "recorded": 76, "refuses": 87, "remedy": 48,
+    "readable": 23, "recorded": 76, "refuses": 89, "remedy": 48,
     "remote": 55, "reported": 142, "resolves": 32, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
     "something": 67, "stage": 82, "steps": 133, "sweep": 7,
-    "validated": 7, "value": 219, "whose": 141, "write": 104, "wrong": 51,
+    "validated": 7, "value": 223, "whose": 142, "write": 106, "wrong": 51,
 }
 
 

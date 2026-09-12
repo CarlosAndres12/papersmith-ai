@@ -119,6 +119,16 @@ MUTATIONS: dict[str, tuple[str, str]] = {
     # the detector answer true against REAL document bytes nobody wrote
     # for this guard, never a fixture built to satisfy it.
     "documents.dataset_marker": ('"dataset_marker": None,', '"dataset_marker": "## 2",'),
+    # `the-agreement-nothing-computes` (Slice D, design.md Mutation plan
+    # Z2/Z3, tasks 1.27/1.28): the locator's matcher half and its renderer
+    # half, each its own leaf -- the wiring proof: if either moves nothing,
+    # the leaf is not wired and D1 has proven nothing.
+    "documents.block_locator.pattern": (
+        r'"pattern": r"\\tag\{([^}]+)\}",',
+        r'"pattern": r"(?m)^## (\d+)$",'),
+    "documents.block_locator.identity": (
+        r'"identity": "\\tag{{{value}}}",',
+        r'"identity": "[exp:{value}]",'),
 }
 
 #: Measured (this apply session, real subprocess runs, every one of the 28
@@ -167,6 +177,16 @@ MEASURED_MOVERS: dict[str, tuple[str, ...]] = {
     # A, `Data/` already present) stays put -- never a fixture written to
     # make this true, the sibling's own pre-existing corpus.
     "documents.dataset_marker": ("verify-b", "verify-t"),
+    # `the-agreement-nothing-computes` (Slice D, design.md Mutation plan
+    # Z2/Z3, tasks 1.27/1.28): MEASURED, this apply session, real
+    # subprocess runs over all 28 sealed cases -- and a correction of the
+    # design's own prediction (`admit-e0`/`verify-t`/`handoff-e0` do NOT
+    # move; `admit-e1`/`handoff-e1` do), never assumed. Non-empty for both,
+    # so the leaf is proven wired either way (a null result would be a
+    # blocker, per the design's own instruction).
+    "documents.block_locator.pattern": (
+        "admit-e1", "compose", "verify-a", "verify-b"),
+    "documents.block_locator.identity": ("handoff-e1",),
 }
 
 
@@ -349,10 +369,21 @@ class OrFoldIndexHardcodeMutationTests(unittest.TestCase):
             "**Dataset:** declared only here\n", encoding="utf-8")
         documents_close_anchor = "        },\n    ],\n}"
         self.assertEqual(REAL_PROFILE_SRC.count(documents_close_anchor), 1)
+        # `the-agreement-nothing-computes` (Slice D, design.md D1/R2):
+        # required, own tier, non-nullable -- this second entry needs one
+        # too, real content irrelevant to what X4 exists to prove. Built
+        # via `repr()`, never hand-escaped, so the written source's own
+        # backslashes are correct by construction.
+        extra_block_locator_repr = repr({
+            "pattern": r"\\tag\{([^}]+)\}",
+            "block_pattern": r"(?s)\$\$.*?\$\$",
+            "identity": "\\tag{{{value}}}",
+        })
         two_doc_close = (
             "        },\n"
             f"        {{'directory': Path({str(doc1_dir)!r}), 'label': 'extra',\n"
-            "         'dataset_marker': '**Dataset:**'},\n"
+            "         'dataset_marker': '**Dataset:**',\n"
+            f"         'block_locator': {extra_block_locator_repr}}},\n"
             "    ],\n}"
         )
         two_doc_profile_src = REAL_PROFILE_SRC.replace(
