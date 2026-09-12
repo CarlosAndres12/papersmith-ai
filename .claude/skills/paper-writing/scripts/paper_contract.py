@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -87,6 +88,20 @@ _SOURCE_REQUIRED = ("file", "quote")
 #: below rather than a second copy of the same three checks.
 _MODE_REQUIRED = ("value", "source")
 
+#: The transcription lock's own emphasis strip — a closed, enumerated pair
+#: of markdown constructs, never a bare-character removal (corrective:
+#: "the emphasis strip is positionally blind"). `**bold**` is matched
+#: first, on two whole delimiter pairs with no `*` inside either span, so a
+#: bold run is never mistaken for two adjacent italic runs. `*italic*` is
+#: matched second, requiring its opening delimiter to be followed by a
+#: non-whitespace, non-`*` character and its content to carry no further
+#: `*` — this is what makes `func*tions` (one bare `*`, no closing partner
+#: anywhere) survive with its `*` intact rather than silently vanishing:
+#: a single stray delimiter is not a pair, so nothing here ever strips it,
+#: and the comparison below correctly still fails against `functions`.
+_BOLD_EMPHASIS_RE = re.compile(r"\*\*([^*]+?)\*\*")
+_ITALIC_EMPHASIS_RE = re.compile(r"\*([^\s*][^*]*)\*")
+
 
 @dataclass(frozen=True)
 class ContractHeader:
@@ -134,6 +149,36 @@ def _split_front_matter(data: bytes) -> tuple[str, bytes]:
     except UnicodeDecodeError as exc:
         raise Refused("MALFORMED_HEADER", f"header bytes are not valid utf-8: {exc}")
     return json_text, body
+
+
+def strip_markdown_emphasis(text: str) -> str:
+    """Strips `**bold**` and `*italic*` markup by matching PAIRED
+    delimiters only — never a bare `*` removed wherever it appears. Word
+    content is untouched, so a paraphrase or an unrelated sentence still
+    fails a substring check after stripping: this is character-pair
+    removal, never a fuzzy or similarity match. Bold pairs are resolved
+    before italic pairs so `**word**` is read as one bold span, not two
+    adjacent italic delimiters."""
+    text = _BOLD_EMPHASIS_RE.sub(r"\1", text)
+    text = _ITALIC_EMPHASIS_RE.sub(r"\1", text)
+    return text
+
+
+def quote_in_body(body: bytes, quote: str) -> bool:
+    """The transcription lock's own check, shared by every caller that
+    verifies a transcribed `{file, quote}` pair against a contract's own
+    prose: whitespace-collapsed and markdown-emphasis-stripped
+    (`strip_markdown_emphasis`), `quote` against `body` — never the raw
+    file, whose header JSON always re-serializes whatever `quote` a
+    `source` entry holds, verbatim. `mode` (self-sourced; verified in
+    `parse()` below, against the same file's own body) and `after` (may
+    name a different contract; verified in `paper_graph.assemble_corpus`,
+    against whichever file's body `source.file` names) both call this one
+    function — two disciplines diverging here would be worse than either
+    alone (`sdd-apply` launch context, defect 1)."""
+    collapsed_body = strip_markdown_emphasis(" ".join(body.decode("utf-8").split()))
+    collapsed_quote = strip_markdown_emphasis(" ".join(quote.split()))
+    return collapsed_quote in collapsed_body
 
 
 def _validate_source(source, owner: str) -> dict:
@@ -374,12 +419,53 @@ def resolve_mode(header: ContractHeader, block: dict) -> dict | None:
     return header.mode
 
 
+def _verify_mode_transcription(header: ContractHeader, body: bytes) -> None:
+    """`mode.source.quote` MUST be a literal (whitespace-collapsed,
+    markdown-emphasis-stripped) substring of THIS file's own parsed prose
+    body — checked here, once the header/body split has already happened,
+    never inside `_validate_mode_object` (which runs during header
+    validation, before any body exists to check against) and never
+    against the raw file bytes, whose header JSON always re-serializes
+    whatever `quote` a `mode.source` entry holds, verbatim (the exact
+    vacuity a whole-file check would have for the shipped corpus, where
+    every declared `mode` sources its own file). Walks both the
+    section-level `mode` and every block-level `mode`, so a fabricated
+    quote at either level refuses (`SPAN_NOT_IN_SOURCE`) before this
+    module ever hands the header back to a caller."""
+    entries = []
+    if header.mode is not None:
+        entries.append((header.section, header.mode))
+    for raw_block in header.blocks:
+        block_mode = raw_block.get("mode")
+        if block_mode is not None:
+            entries.append((f"{header.section}.{raw_block['id']}", block_mode))
+
+    for owner, mode in entries:
+        source = mode["source"]
+        if not quote_in_body(body, source["quote"]):
+            raise Refused(
+                "SPAN_NOT_IN_SOURCE",
+                f"{owner}: mode.source.quote {source['quote']!r} not found verbatim "
+                f"(whitespace-collapsed, markdown-emphasis-stripped) in "
+                f"{source['file']}'s prose body",
+            )
+
+
 def parse(data: bytes) -> tuple[ContractHeader, bytes]:
     """The whole-file entry point: split the fence, `json.loads` the
     middle, validate the result. `json.loads` is all-or-nothing, so a
     malformed body never produces a partial header -- the caller gets a
     `Refused` and nothing else (`MALFORMED_HEADER`, carrying the
-    `JSONDecodeError`'s own line/column rather than a bare "invalid")."""
+    `JSONDecodeError`'s own line/column rather than a bare "invalid").
+
+    Also verifies every declared `mode`'s own transcription against the
+    body this same call just split off (`_verify_mode_transcription`) —
+    the one half of the transcription discipline checkable with no
+    further disk I/O, because `mode` is always sourced from the file
+    being parsed. The `after`-edge half of the same discipline may need a
+    DIFFERENT file's bytes and is verified in
+    `paper_graph.assemble_corpus` instead — never here.
+    """
     json_text, body = _split_front_matter(data)
     try:
         raw_header = json.loads(json_text)
@@ -389,6 +475,7 @@ def parse(data: bytes) -> tuple[ContractHeader, bytes]:
             f"invalid JSON in header at line {exc.lineno} column {exc.colno}: {exc.msg}",
         )
     header = parse_header(raw_header)
+    _verify_mode_transcription(header, body)
     return header, body
 
 

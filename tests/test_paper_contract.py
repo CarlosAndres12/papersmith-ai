@@ -515,34 +515,22 @@ def _quote_source(file: str, quote: str) -> dict:
     return {"file": file, "quote": quote}
 
 
-def _strip_markdown_emphasis(text: str) -> str:
-    """Strips markdown emphasis markup -- a closed, enumerated whitelist of
-    exactly one character, `*` (`**bold**` and `*italic*` are the only
-    emphasis markup this corpus uses; `Six **argumentative functions**, in
-    fixed order...` in `06-introduction.md` is the shipped example that
-    forced this). This is character removal, never a fuzzy or similarity
-    match: word content is untouched, so a paraphrase or an unrelated
-    sentence still fails the substring check after stripping
-    (`ModeTranscriptionTests.test_a_paraphrased_quote_and_an_unrelated_sentence_both_still_fail`
-    proves both) -- two genuinely different sentences can never compare
-    equal just because both happen to contain asterisks."""
-    return text.replace("*", "")
-
-
 def _quote_in_body(file_path: Path, quote: str) -> bool:
-    """The transcription lock's own check (`GraphTests`,
-    `test_every_transcribed_afters_quote_is_a_substring_of_its_named_file`;
-    `ModeTranscriptionTests`, the same lock reused for `mode`):
-    whitespace-collapsed and markdown-emphasis-stripped
-    (`_strip_markdown_emphasis`), against `paper_contract.parse`'s own
-    parsed prose BODY only -- never the raw file, whose header JSON always
-    re-serializes whatever `quote` a `source` entry holds, verbatim. One
-    discipline shared by both `after` and `mode` transcription, on purpose
-    -- two different disciplines in one file would be worse than either."""
+    """Thin pass-through to the PRODUCTION lock, `paper_contract.quote_in_body`
+    -- kept here, rather than deleted, only because most of this file's
+    callers pass a file PATH while the production function (called from
+    both `paper_contract.parse` and `paper_graph.assemble_corpus`, which
+    read bodies off two different disk shapes) takes body BYTES directly.
+    No algorithm lives in this file any more: a second copy of the
+    whitespace-collapse/emphasis-strip logic, next to the one now load-
+    bearing in production, is exactly the "two enforcement paths that can
+    disagree" risk this corrective was written to close (defect 1). Note
+    this now runs `paper_contract.parse` on `file_path`, which since this
+    same corrective also refuses `SPAN_NOT_IN_SOURCE` if THAT file's own
+    `mode` transcription is dishonest -- never an issue for the real,
+    honestly-transcribed corpus this helper is used against."""
     _header, body = paper_contract.parse(file_path.read_bytes())
-    collapsed_body = _strip_markdown_emphasis(" ".join(body.decode("utf-8").split()))
-    collapsed_quote = _strip_markdown_emphasis(" ".join(quote.split()))
-    return collapsed_quote in collapsed_body
+    return paper_contract.quote_in_body(body, quote)
 
 
 class GraphTests(unittest.TestCase):
@@ -594,7 +582,7 @@ class GraphTests(unittest.TestCase):
         })
         _write_section(self.sections_dir, "02-b.md", {
             "section": "b", "position": 2,
-            "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "irrelevant")}],
+            "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "Prose.")}],
             "blocks": [_block("only")],
         })
 
@@ -623,6 +611,18 @@ class GraphTests(unittest.TestCase):
 
     def _real_corpus(self):
         return paper_graph.assemble_corpus(SECTIONS_DIR)
+
+    def test_the_real_corpus_assembles_cleanly_under_the_production_transcription_lock(self) -> None:
+        """This corrective's own requirement: moving the transcription lock
+        off the test suite and into `paper_contract.parse` (`mode`) and
+        `paper_graph.assemble_corpus` (`after`) must refuse NONE of the ten
+        shipped contracts or their real `after` edges -- both checks run as
+        a side effect of the one call below (`assemble_corpus` parses every
+        file, which enforces `mode`; it then enforces `after` itself). A
+        refusal here would mean the operator's own prose is wrong, to be
+        reported back, never patched around by loosening this check."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertEqual(len(corpus.sections), 10, "expected exactly the ten shipped sections")
 
     def test_every_transcribed_afters_quote_is_a_substring_of_its_named_file(self) -> None:
         # Reads the parsed BODY only, via `paper_contract.parse`'s own
@@ -696,25 +696,39 @@ class GraphTests(unittest.TestCase):
         }
         tampered_bytes = _header_bytes(tampered_header) + body
 
+        # OLD lock shape: raw-whole-file substring check. It finds the
+        # fabrication -- not in the prose, but in the header's own JSON,
+        # which the tamper just wrote into that same file. This is exactly
+        # the vacuity `verify-report.md`'s Finding W1 proved.
+        raw_text = " ".join(tampered_bytes.decode("utf-8").split())
+        self.assertIn(
+            fabricated_quote, raw_text,
+            "fixture assumption: the tampered header still re-serializes the fabrication verbatim",
+        )
+
+        # NEW lock shape (this corrective's fix, defect 1): drive the REAL
+        # production entrypoint, `paper_graph.assemble_corpus`, on a temp
+        # copy of the WHOLE shipped corpus (never the tracked file) with
+        # only `06-introduction.md` swapped for the tampered bytes -- the
+        # rest of the corpus stays real so `related-work`, this edge's own
+        # `target`, still resolves exactly as it does in the real
+        # repository. A single-file fixture would make that target
+        # dangling and this corrective's own narrowing (dangling targets
+        # are not quote-checked) would silently skip the exact case this
+        # test exists to prove.
         with tempfile.TemporaryDirectory() as tmp:
-            tampered_path = Path(tmp) / "06-introduction.md"
-            tampered_path.write_bytes(tampered_bytes)
+            temp_sections = Path(tmp) / "sections"
+            temp_sections.mkdir()
+            for path in SECTIONS_DIR.glob("*.md"):
+                (temp_sections / path.name).write_bytes(path.read_bytes())
+            (temp_sections / "06-introduction.md").write_bytes(tampered_bytes)
 
-            # OLD lock shape: raw-whole-file substring check. It finds the
-            # fabrication -- not in the prose, but in the header's own JSON,
-            # which the tamper just wrote into that same file. This is
-            # exactly the vacuity `verify-report.md`'s Finding W1 proved.
-            raw_text = " ".join(tampered_path.read_text(encoding="utf-8").split())
-            self.assertIn(
-                fabricated_quote, raw_text,
-                "fixture assumption: the tampered header still re-serializes the fabrication verbatim",
-            )
+            with self.assertRaises(Refused) as ctx:
+                paper_graph.assemble_corpus(temp_sections)
 
-            # NEW lock shape (this test's fix): body-only. It does not.
-            self.assertFalse(
-                _quote_in_body(tampered_path, fabricated_quote),
-                "the body-only check reported a prose-absent, fabricated quote as found -- still vacuous",
-            )
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("06-introduction.md", ctx.exception.detail)
+        self.assertIn("Purple elephants", ctx.exception.detail)
 
     # --- exactly two literal cross-section edges, derived not hand-listed --
 
@@ -937,11 +951,18 @@ class ModeTranscriptionTests(unittest.TestCase):
                 "fixture assumption: the tampered header still re-serializes the fabrication verbatim",
             )
 
-            # NEW lock shape (this corrective's fix): body-only.
-            self.assertFalse(
-                _quote_in_body(tampered_path, fabricated_quote),
-                "the body-only check reported a prose-absent, fabricated mode quote as found",
-            )
+            # NEW lock shape (this corrective's fix, defect 1): the REAL
+            # production entrypoint -- `paper_contract.parse` itself, not a
+            # test-only helper reporting a bare `False` -- refuses on its
+            # own, before this header is ever handed back to any caller
+            # (`paper_graph.assemble_corpus`, `write`, `render`, `place`,
+            # every CLI verb that reads a section contract).
+            with self.assertRaises(Refused) as ctx:
+                paper_contract.parse(tampered_path.read_bytes())
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("introduction", ctx.exception.detail)
+        self.assertIn("Purple elephants", ctx.exception.detail)
 
     def test_a_paraphrased_quote_and_an_unrelated_sentence_both_still_fail(self) -> None:
         """The trap named in this corrective's own brief: normalizing
@@ -971,6 +992,30 @@ class ModeTranscriptionTests(unittest.TestCase):
         quote = header.mode["source"]["quote"]
 
         self.assertTrue(_quote_in_body(real_path, quote))
+
+
+class EmphasisStripTests(unittest.TestCase):
+    """Defect 2: the emphasis strip must be PAIR-aware, never a bare-
+    character removal. Two properties, each its own test rather than one
+    combined assertion, so either can fail independently and name exactly
+    which property broke."""
+
+    def test_a_bold_pair_still_matches_once_stripped(self) -> None:
+        """The property the strip exists for in the first place: a
+        `**bold**` pair must still match a quote written without the
+        markup -- this is why `06-introduction.md` needed no prose edit
+        when its own mode quote was first transcribed."""
+        body = b"This sentence carries **bold words** inside it.\n"
+        self.assertTrue(paper_contract.quote_in_body(body, "bold words"))
+
+    def test_an_unpaired_asterisk_inside_a_word_does_not_falsely_match(self) -> None:
+        """The exact hole named in this corrective's brief: `func*tions`
+        (one bare `*`, no closing partner anywhere in the text) must NOT
+        match a quote written `functions` -- a single stray delimiter is
+        not a pair, so nothing strips it, and the literal `*` survives
+        into the comparison, correctly breaking the match."""
+        body = b"This sentence carries func*tions inside it.\n"
+        self.assertFalse(paper_contract.quote_in_body(body, "functions"))
 
 
 class OrderTests(unittest.TestCase):
@@ -1088,13 +1133,13 @@ class OrderTests(unittest.TestCase):
             _write_section(sections_dir, "01-a.md", {
                 "section": "a", "position": 1,
                 "blocks": [_block(
-                    "x", after=[{"target": "b.y", "source": _quote_source("sections/01-a.md", "irrelevant")}]
+                    "x", after=[{"target": "b.y", "source": _quote_source("sections/01-a.md", "Prose.")}]
                 )],
             })
             _write_section(sections_dir, "02-b.md", {
                 "section": "b", "position": 2,
                 "blocks": [_block(
-                    "y", after=[{"target": "a.x", "source": _quote_source("sections/02-b.md", "irrelevant")}]
+                    "y", after=[{"target": "a.x", "source": _quote_source("sections/02-b.md", "Prose.")}]
                 )],
             })
 
@@ -1117,7 +1162,7 @@ class OrderTests(unittest.TestCase):
             })
             _write_section(sections_dir, "02-b.md", {
                 "section": "b", "position": 2,
-                "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "x")}],
+                "after": [{"target": "a", "source": _quote_source("sections/01-a.md", "Prose.")}],
                 "blocks": [_block("only")],
             })
 

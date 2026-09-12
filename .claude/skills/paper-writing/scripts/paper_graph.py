@@ -71,12 +71,23 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     block id equals any section id anywhere in the corpus — the one flat
     namespace design.md's `one flat id namespace; after admits section and
     block ids` decision requires.
+
+    Also verifies every transcribed `after` edge's own `source.quote`
+    against `source.file`'s prose body (`_verify_after_transcription`) —
+    the half of the transcription discipline `paper_contract.parse` cannot
+    check by itself, because `source.file` may name a DIFFERENT contract
+    than the one declaring the edge (the shipped `abstract` -> `conclusions`
+    edge is sourced in `sections/07-conclusions.md`, not its own
+    `08-abstract.md`). Every file this function reads is already read
+    exactly once, in the loop below — this adds no second disk pass.
     """
     sections: dict = {}
+    bodies: dict = {}
     for path in sorted(sections_dir.glob("*.md")):
         data = path.read_bytes()
-        header, _body = paper_contract.parse(data)
+        header, body = paper_contract.parse(data)
         sections[header.section] = header
+        bodies[f"{sections_dir.name}/{path.name}"] = body
 
     section_ids = set(sections)
     blocks: dict = {}
@@ -104,7 +115,46 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
             )
             order_by_section[section_id].append(qualified_id)
 
-    return Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
+    corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
+    _verify_after_transcription(corpus, bodies)
+    return corpus
+
+
+def _verify_after_transcription(corpus: Corpus, bodies: dict) -> None:
+    """Enforces, for every transcribed `after` entry whose OWN `target`
+    resolves to something real in this corpus (`_resolve_target` below —
+    reused rather than re-derived), the same transcription discipline
+    `paper_contract.parse` already enforces for `mode`: the entry's
+    `source.quote` must be a literal (whitespace-collapsed, markdown-
+    emphasis-stripped) substring of `source.file`'s own prose body —
+    `paper_contract.quote_in_body`, the one shared check, never a second
+    copy of it.
+
+    Skipped for a DANGLING target on purpose: `design.md`'s own "An
+    absent after target is reported, never refused" already treats a
+    dangling target as a legitimate, reportable state (deleting a
+    contract mid-edit is explicitly in scope) — refusing on the quote of
+    an edge that already names nothing would conflate two independent
+    failures under one refusal. Every shipped `after` edge resolves, so
+    this narrowing costs the real corpus nothing.
+    """
+    for section_id, header in corpus.sections.items():
+        entries = list(header.after)
+        for raw_block in header.blocks:
+            entries += raw_block["after"]
+
+        for entry in entries:
+            if _resolve_target(corpus, entry["target"]) is None:
+                continue
+            source = entry["source"]
+            body = bodies.get(source["file"])
+            if body is None or not paper_contract.quote_in_body(body, source["quote"]):
+                raise Refused(
+                    "SPAN_NOT_IN_SOURCE",
+                    f"{section_id}: after-edge quote {source['quote']!r} not found verbatim "
+                    f"(whitespace-collapsed, markdown-emphasis-stripped) in "
+                    f"{source['file']}'s prose body",
+                )
 
 
 def _resolve_target(corpus: Corpus, target_id: str) -> list | None:
