@@ -14,7 +14,9 @@ from __future__ import annotations
 import copy
 import importlib.util
 import itertools
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -179,6 +181,176 @@ class CitationPatternGroupCountTests(unittest.TestCase):
         pattern = _real_profile()["findings"]["citation_pattern"]
         compiled = re.compile(pattern)
         self.assertEqual(compiled.groups, 3)
+
+
+#: `a-data-directory-somebody-can-owe` (B1). The engine's shared
+#: `impl_domain_profile` import is a plain `from impl_domain_profile import
+#: PROFILE` (fixed module name), cached process-wide in `sys.modules` --
+#: every fresh engine re-import below must `pop` it first, or a later call
+#: silently reads an earlier test's already-resolved profile (the exact
+#: scar `test_implementation_domain_mutation.py` records for its own
+#: mutation harness).
+ENGINE_DIR = FORGE / ".claude" / "skills" / "_core" / "implementation" / "engine"
+
+
+def _engine_with_documents(documents: list[dict]):
+    """A fresh engine import whose ONLY difference from the real,
+    resolving `experimental-implementation` profile is its `documents`
+    list -- every other leaf is untouched, so the resolver's other checks
+    stay satisfied and only the detector's own behaviour is exercised."""
+    profile = dict(_real_profile())
+    profile["documents"] = documents
+    tmp_dir = Path(tempfile.mkdtemp(prefix="dataset-marker-detector-"))
+    profile_file = tmp_dir / "impl_profile.py"
+    profile_file.write_text(
+        "from pathlib import Path\n"
+        f"PROFILE = {_to_source(profile)}\n",
+        encoding="utf-8")
+
+    os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = str(profile_file)
+    sys.modules.pop("impl_domain_profile", None)
+    if str(ENGINE_DIR) not in sys.path:
+        sys.path.insert(0, str(ENGINE_DIR))
+    name = f"experimental_impl_engine_probe_{next(_counter)}"
+    spec = importlib.util.spec_from_file_location(
+        name, ENGINE_DIR / "implementation_engine.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(name, None)
+    return module, tmp_dir
+
+
+class DatasetDeclaredDetectorTests(unittest.TestCase):
+    """B1 (`a-data-directory-somebody-can-owe`, design.md D1/D2, tasks.md
+    Phase 2): the dataset-declared detector, proven directly -- pure
+    function, no CLI dispatch, so an in-process fresh-engine import is not
+    the "monkeypatch has zero effect on a subprocess" scar (that scar is
+    about a DIFFERENT process reading a patched attribute; this is the
+    SAME process calling a freshly-imported module's own function)."""
+
+    def _tmp_docs_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="dataset-marker-docs-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_a_none_marker_never_opens_the_document(self):
+        """The revision names a file that does not exist at all -- proving
+        only that a missing file does not raise would be true of ANY
+        marker (`revision_source` already tolerates absence); the
+        property under test is that a `None`-marked entry never attempts
+        the read in the first place, proven by a spy on `revision_source`
+        itself."""
+        docs_dir = self._tmp_docs_dir()
+        engine, _ = _engine_with_documents([
+            {"directory": docs_dir, "label": "experiments", "dataset_marker": None},
+        ])
+        calls = []
+        original = engine.revision_source
+
+        def _spy(revision, index=0):
+            calls.append((revision, index))
+            return original(revision, index)
+
+        engine.revision_source = _spy
+        self.assertFalse(engine.declares_dataset("does-not-exist.md"))
+        self.assertEqual(
+            calls, [],
+            "a None-marked document must never open a file at all, and this "
+            "spy proves revision_source was never called for it")
+
+    def test_a_declared_marker_present_at_line_start_answers_true(self):
+        docs_dir = self._tmp_docs_dir()
+        (docs_dir / "r1.md").write_text(
+            "intro line\n**Dataset:** the corpus\nmore text\n", encoding="utf-8")
+        engine, _ = _engine_with_documents([
+            {"directory": docs_dir, "label": "experiments",
+             "dataset_marker": "**Dataset:**"},
+        ])
+        self.assertTrue(engine.declares_dataset("r1.md"))
+
+    def test_a_mid_sentence_only_occurrence_answers_false(self):
+        """X3's own strength case: `lstrip().startswith(marker)`, never a
+        bare substring test -- a document that only DISCUSSES its own
+        format ("every protocol needs a **Dataset:** line") must not
+        satisfy a substring test while declaring nothing (design.md D1)."""
+        docs_dir = self._tmp_docs_dir()
+        (docs_dir / "r1.md").write_text(
+            "every protocol needs a **Dataset:** line somewhere\n"
+            "but this one never puts it first\n", encoding="utf-8")
+        engine, _ = _engine_with_documents([
+            {"directory": docs_dir, "label": "experiments",
+             "dataset_marker": "**Dataset:**"},
+        ])
+        self.assertFalse(engine.declares_dataset("r1.md"))
+
+    def test_a_marker_with_regex_metacharacters_matches_only_literally(self):
+        """Threat-matrix row (host-supplied text matched against file
+        bytes): the marker is a literal, never a regex -- a document
+        carrying unrelated text a regex interpretation of the marker
+        WOULD match must still answer false."""
+        docs_dir = self._tmp_docs_dir()
+        marker = "Da.*taset:"
+        (docs_dir / "r1.md").write_text(
+            # A regex built from `marker` would match this line (any char
+            # for `.`, zero-or-more `a` for `*`); a literal match must not.
+            "Dazzzztaset: this is not the literal marker\n", encoding="utf-8")
+        engine, _ = _engine_with_documents([
+            {"directory": docs_dir, "label": "experiments",
+             "dataset_marker": marker},
+        ])
+        self.assertFalse(engine.declares_dataset("r1.md"))
+
+        (docs_dir / "r2.md").write_text(f"{marker} literally, at line start\n",
+                                        encoding="utf-8")
+        self.assertTrue(engine.declares_dataset("r2.md"))
+
+    def test_or_fold_only_index_one_declares_and_the_demand_still_holds(self):
+        """Kills "read index 0 always" (design.md D2): index 0 declares
+        `None`, index 1 declares a real marker present in ITS OWN
+        discovered revision -- the demand must still answer true,
+        or-folded across every declared document."""
+        doc0_dir = self._tmp_docs_dir()
+        (doc0_dir / "r1.md").write_text("no marker here\n", encoding="utf-8")
+        doc1_dir = self._tmp_docs_dir()
+        (doc1_dir / "only-candidate-9.md").write_text(
+            "**Dataset:** declared only here\n", encoding="utf-8")
+        engine, _ = _engine_with_documents([
+            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None},
+            {"directory": doc1_dir, "label": "proposal",
+             "dataset_marker": "**Dataset:**"},
+        ])
+        self.assertTrue(engine.declares_dataset("r1.md"))
+
+    def test_no_revision_at_all_answers_false_and_discovers_nothing(self):
+        """Property 2 (design.md): a `None` seed (`plan` with no
+        `--revision`) must short-circuit before EVER discovering document
+        1's own revision -- proven the same way as the None-marker case,
+        by spying on the discovery entry point."""
+        doc0_dir = self._tmp_docs_dir()
+        doc1_dir = self._tmp_docs_dir()
+        (doc1_dir / "candidate-9.md").write_text(
+            "**Dataset:** would be found if discovery ran\n", encoding="utf-8")
+        engine, _ = _engine_with_documents([
+            {"directory": doc0_dir, "label": "experiments", "dataset_marker": None},
+            {"directory": doc1_dir, "label": "proposal",
+             "dataset_marker": "**Dataset:**"},
+        ])
+        calls = []
+        original = engine.document_revision_names
+
+        def _spy(revision):
+            calls.append(revision)
+            return original(revision)
+
+        engine.document_revision_names = _spy
+        self.assertFalse(engine.declares_dataset(None))
+        self.assertEqual(
+            calls, [],
+            "declares_dataset(None) must never call document_revision_names "
+            "at all -- no discovery, ever, absent an explicit revision")
 
 
 class LauncherByteEqualityTests(unittest.TestCase):
