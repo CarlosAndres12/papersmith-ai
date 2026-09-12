@@ -3468,8 +3468,13 @@ class RefusalRosterTests(unittest.TestCase):
         helper inside `paper_cli.py` itself, raises `COMPONENTS_FACT_
         UNRESOLVED` and `COMPONENTS_FACT_NOT_A_LIST` -- reachable the
         moment `_check_obligations` calls it, no new module import needed
-        since both live in the already-scanned `paper_cli.py`."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 96)
+        since both live in the already-scanned `paper_cli.py`. Moved from
+        96 to 94 in the zero-production-caller corrective: `paper_contract.
+        install_header` (`HEADER_PRESENT`, `BODY_MUTATED`) is deleted --
+        its one-shot migration over the ten shipped contracts already ran
+        and nothing promises a "create a new section contract" workflow
+        anywhere in SKILL.md, a spec, or a registered agent."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 94)
 
 
 if __name__ == "__main__":

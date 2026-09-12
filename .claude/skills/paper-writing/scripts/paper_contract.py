@@ -1,11 +1,18 @@
-"""paper_contract: front-matter grammar, schema validation, header insertion.
+"""paper_contract: front-matter grammar and schema validation.
 
-The only module in this skill that touches disk bytes for `sections/*.md`
-(design.md, `Internal layering`). The header is JSON inside a `---` … `---`
-front-matter fence; `json.loads` is all-or-nothing by construction, so
-"never parses partially" is structural rather than a rule someone has to
-maintain. Everything below the closing fence is prose — read as bytes and
-handed back unread, never decoded for meaning.
+The header is JSON inside a `---` … `---` front-matter fence; `json.loads`
+is all-or-nothing by construction, so "never parses partially" is
+structural rather than a rule someone has to maintain. Everything below the
+closing fence is prose — read as bytes and handed back unread, never
+decoded for meaning.
+
+**`install_header` was removed** (zero-production-caller corrective): it was
+the one-shot tool that inserted front matter into the ten shipped
+`sections/*.md` files, and that migration already ran and completed --
+every shipped file carries its header today. Nothing in `SKILL.md`, a
+published spec, or a registered agent promises an ongoing "create a new
+section contract" workflow, so this module no longer touches disk bytes at
+all; it only parses what is already there.
 
 Public surface:
 
@@ -14,12 +21,9 @@ Public surface:
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -477,93 +481,6 @@ def parse(data: bytes) -> tuple[ContractHeader, bytes]:
     header = parse_header(raw_header)
     _verify_mode_transcription(header, body)
     return header, body
-
-
-def _atomic_replace(path: Path, data: bytes) -> None:
-    """Write `data` to `path` via a same-directory temp file + `os.replace`
-    (the same shape `paper_block.py`'s own `_atomic_replace` uses): a
-    process interrupted mid-write never leaves `path` torn.
-    """
-    directory = path.parent
-    fd, tmp_name = tempfile.mkstemp(dir=str(directory), prefix=path.name + ".")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def install_header(path: Path, header: dict) -> dict:
-    """Insert `header` as a `---`-fenced JSON front matter above `path`'s
-    existing bytes, one-shot and idempotent (design.md, `Header insertion
-    into the ten shipped files`).
-
-    **Follow-up, recorded rather than acted on**: this function is exercised
-    only by `tests/test_paper_contract.py::HeaderInsertionTests` (owned by
-    `the-contract-is-data-not-code`, the change that added it) and has no
-    production caller — the corpus's ten `sections/*.md` files already carry
-    their headers, inserted once. `the-writer-may-assert-only-what-it-was-
-    given`'s own corrective re-verify flagged this as the eleventh instance
-    of "correct function wired to nothing" in this build, but it is
-    pre-existing and out of scope for that corrective: deleting or wiring a
-    caller here belongs to whoever owns the header-insertion workflow this
-    function was built for, not to a change fixing an unrelated mode-
-    transcription gap.
-
-    Refuses `HEADER_PRESENT` (work-state) when `path` already opens with a
-    `---` fence -- this is what makes a second run refuse rather than
-    double-write. Refuses `BODY_MUTATED` (work-state) when the post-write
-    re-read does not carry the pre-write bytes, byte-for-byte, below the new
-    header -- and restores the original bytes first, by inverse patch
-    confirmed by content digest, never `git checkout --` (sdd-apply's own
-    hard rule: undo a mutation by proving the restore, not by trusting a
-    tool that cannot tell this write from any other).
-    """
-    # Validated BEFORE anything is read from or written to `path`: a
-    # malformed header must never reach disk, not even the disk of a file
-    # that turns out to already carry one. `parse_header`'s own refusals
-    # (`MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`,
-    # `UNKNOWN_CITATIONS_REGIME`) propagate unchanged.
-    parse_header(header)
-
-    pre = path.read_bytes()
-    if pre.startswith(b"---\n") or pre.startswith(b"---\r\n"):
-        raise Refused("HEADER_PRESENT", f"{path} already opens with a '---' front-matter fence")
-    pre_digest = hashlib.sha256(pre).hexdigest()
-
-    header_bytes = b"---\n" + json.dumps(header, indent=2).encode("utf-8") + b"\n---\n"
-    candidate = header_bytes + pre
-
-    _atomic_replace(path, candidate)
-    post = path.read_bytes()
-
-    body = post[len(header_bytes):]
-    body_ok = post[:len(header_bytes)] == header_bytes
-    post_body_digest = hashlib.sha256(body).hexdigest() if body_ok else None
-
-    if not body_ok or post_body_digest != pre_digest:
-        _atomic_replace(path, pre)
-        restored = path.read_bytes()
-        if restored != pre:
-            raise Refused(
-                "BODY_MUTATED",
-                f"{path}: body below the inserted header did not match the pre-write digest, "
-                "AND the restore itself did not reproduce the original bytes -- manual recovery required",
-            )
-        raise Refused(
-            "BODY_MUTATED",
-            f"{path}: body below the inserted header did not match the pre-write digest "
-            f"(expected sha256={pre_digest}); original bytes restored",
-        )
-
-    return {"path": str(path), "header_bytes": len(header_bytes), "body_digest": pre_digest}
 
 
 def resolve_sections_dir(sections_arg: str | None, *, forge_root: Path = paper_scaffold.FORGE_ROOT) -> Path:

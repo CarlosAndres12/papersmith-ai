@@ -120,10 +120,11 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "UNKNOWN_FACT": WORK_STATE,
     "UNKNOWN_DECLARATION": WORK_STATE,
     "UNKNOWN_CITATIONS_REGIME": WORK_STATE,
-    # --- header schema and insertion (paper_contract.py) ------------------
+    # --- header schema (paper_contract.py; `install_header` -- and its own
+    # HEADER_PRESENT/BODY_MUTATED -- deleted in the zero-production-caller
+    # corrective: its one-shot migration already ran and nothing promises
+    # an ongoing "create a new section contract" workflow) ----------------
     "MALFORMED_HEADER": WORK_STATE,
-    "HEADER_PRESENT": WORK_STATE,
-    "BODY_MUTATED": WORK_STATE,
     "SECTIONS_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
     # --- corpus assembly and order (paper_graph.py) -----------------------
     "ID_COLLISION": WORK_STATE,
