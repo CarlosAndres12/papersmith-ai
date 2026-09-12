@@ -254,9 +254,18 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: `mathematical`, `mathematics`, `statistical`, `traced` -- the first three
 #: are also members of `proposal-implementation`'s own `vocabulary.names`,
 #: so their zero count is cross-confirmed by Lock B independently. Each
-#: entry below may only SHRINK deliberately, never grow silently (test 3);
-#: a pin whose word left the denylist is a dead exemption (also test 3); a
-#: pin at zero is a defect (test 4).
+#: entry below may only move deliberately, never silently (test 3); a pin
+#: whose word left the denylist is a dead exemption (also test 3); a pin
+#: at zero is a defect (test 4).
+#:
+#: `"module"`'s pin grew from 171 to 183 in Cut 3 slice C
+#: (`the-second-document-verified-on-its-own-terms`, design.md D4/D5):
+#: the per-document fidelity fold reads the existing `{"module": rel,
+#: ...}` dict shape by that exact key, once per document index
+#: (`module["module"]`, `for module in modules`) -- the SAME pre-existing
+#: field this pin already counted heavily before this change, now read
+#: from more call sites. A deliberate, measured, recorded growth, never a
+#: silent bump.
 M5_PINNED_RESIDUE: dict[str, int] = {
     "actually": 75, "admissible": 3, "after": 78, "against": 181,
     "agreed": 23, "answered": 71, "answers": 98, "approved": 25,
@@ -267,7 +276,7 @@ M5_PINNED_RESIDUE: dict[str, int] = {
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 31,
     "longer": 46, "makes": 43, "materialize": 29, "materialized": 10,
-    "measured": 140, "measurement": 43, "module": 171, "named": 164,
+    "measured": 140, "measurement": 43, "module": 183, "named": 164,
     "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
     "place": 50, "premises": 7, "produces": 44, "rather": 330,
     "readable": 23, "recorded": 75, "refuses": 86, "remedy": 48,

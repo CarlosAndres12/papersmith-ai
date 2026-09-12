@@ -14886,27 +14886,28 @@ def _require_no_open_defect(target: Path, name: str) -> None:
 
 
 def _extra_document_fidelity_status(
-        doc_revision: str | None, index: int, stale: list, missing_provenance: list,
-        untested: list, unreached: list, benchmark_undeclared: bool) -> str:
+        doc_revision: str | None, index: int, conditions: dict,
+        benchmark_undeclared: bool) -> str:
     """One document BEYOND document 0's own `fidelity_status` (Cut 3,
-    `a-revision-is-two-documents`, C8, D7) -- the SAME four shared,
-    document-count-invariant conditions `cmd_verify`'s own fold for
-    document 0 already checks (Phase 12's own measured finding: none of
-    `stale`/`missing_provenance`/`untested`/`unreached` names a
-    per-document fact -- they are all about the shared source tree),
-    plus the one thing that genuinely differs per document: whether THIS
-    document's own revision text even resolves. Never applied to document
-    0, whose own fold is `cmd_verify`'s inline block, unedited.
+    `a-revision-is-two-documents`, C8, D7; rewritten Cut 3 slice C,
+    `the-second-document-verified-on-its-own-terms`, design.md D4/D5):
+    `conditions` is document `index`'s OWN claim_key scope, already folded
+    by the caller into `staleModules`/`missingProvenance`/
+    `invariantsWithoutTest`/`unreachedModules` (`cmd_verify`'s
+    `conditions_by_index`) -- never one list shared across every index.
+    There is no more document-count-invariant property to record here:
+    the property is gone, not softened.
 
     `doc_revision` (`each-document-names-its-own-revision`): document
-    `index`'s OWN resolved name (`document_revision_names`, D1's seedless
-    discovery) -- never document 0's `revision`, which this function used
-    to receive and read inside `index`'s own directory, exactly the M2
-    defect one call site over.
+    `index`'s OWN name as it resolves (`document_revision_names`, D1's
+    seedless discovery) -- never document 0's `revision`, which this
+    function used to receive and read inside `index`'s own directory,
+    exactly the M2 defect one call site over.
     """
     if not doc_revision or revision_source(doc_revision, index) is None:
         return "unknown"
-    if stale or missing_provenance or untested or unreached:
+    if (conditions["staleModules"] or conditions["missingProvenance"]
+            or conditions["invariantsWithoutTest"] or conditions["unreachedModules"]):
         return "drift"
     if benchmark_undeclared:
         return "undeclared"
@@ -14972,6 +14973,13 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     modules: list[dict] = []
     missing_provenance: list[str] = []
     declared_invariants: set[str] = set()
+    # Cut 3 slice C (`the-second-document-verified-on-its-own-terms`,
+    # design.md D4): rel path -> per-index lists keyed by claim_key --
+    # built ONLY under two-or-more documents, never emitted, and folded
+    # (below) into each document's own scope `M_N`. Under one document
+    # this dict stays unpopulated and every branch reading it is
+    # unreachable.
+    module_claims_by_index: dict[str, list] = {}
     for file in sorted(package.rglob("*.py")) if package.is_dir() else []:
         rel = str(file.relative_to(target))
         if file.name == "__init__.py":
@@ -14988,6 +14996,11 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             CLAIM_KEY: prov.get(CLAIM_KEY, []),
             "invariants": prov.get("invariants", []),
         })
+        if len(DOCUMENTS) > 1:
+            module_claims_by_index[rel] = [
+                prov.get(document_vocabulary(index)["claim_key"], [])
+                for index in range(len(DOCUMENTS))
+            ]
 
     # Which revision everything below is measured against. An explicit `--revision`
     # is obeyed as given — a caller pinning one is answering this question, not
@@ -15106,6 +15119,52 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             verify_sources_by_document[DOCUMENTS[index]["label"]] = (
                 revision_source(document_names[index], index)
                 if document_names[index] else None)
+
+    # Cut 3 slice C (design.md D4/D5): each document's own scope `M_N`
+    # (its members declare at least one entry under that document's
+    # claim_key), and the four conditions derived from it -- `stale`/
+    # `untested`(via those modules' OWN declared invariants)/`unreached`
+    # all split per index; `missing_provenance` stays the unchanged
+    # whole-tree list, held for EVERY index (D4: a file with no
+    # provenance that can be read is attributable to no document, never
+    # inferred onto one). Built only under two-or-more documents; under
+    # one document `fidelityByDocument` is absent entirely and this list
+    # stays `None`, unread.
+    conditions_by_index: list[dict] | None = None
+    if len(DOCUMENTS) > 1:
+        conditions_by_index = []
+        for index in range(len(DOCUMENTS)):
+            scope_paths = {
+                rel for rel, claims in module_claims_by_index.items()
+                if claims[index]
+            }
+            # `stale` (the whole-tree list, above) is measured relative to
+            # the bare `revision` argument/discovery -- document 0's OWN
+            # name, always. Reusing it here for index >= 1 would be
+            # exactly Y5's mutation: a document-1 module whose revision
+            # genuinely matches `document_names[1]` would still read
+            # stale merely because its name text differs from document
+            # 0's. Each index's own staleness is measured relative to its
+            # OWN resolved name (design.md D4's own table).
+            doc_revision_n = document_names[index]
+            stale_n = [
+                module["module"] for module in modules
+                if module["module"] in scope_paths
+                and bool(doc_revision_n) and module["revision"] != doc_revision_n
+            ]
+            invariants_n: set[str] = set()
+            for module in modules:
+                if module["module"] in scope_paths:
+                    invariants_n.update(module.get("invariants", []))
+            untested_n = sorted(i for i in invariants_n if f"test_{i}" not in tests)
+            unreached_n = [u for u in unreached if u["module"] in scope_paths]
+            conditions_by_index.append({
+                "staleModules": stale_n,
+                "missingProvenance": missing_provenance,
+                "invariantsWithoutTest": untested_n,
+                "unreachedModules": unreached_n,
+            })
+
     compatibility = remedy_compatibility(findings, revision, verify_sources_by_document)
     ruling = admissibility_record(target, revision)
     uncontrolled = remedies_without_control(target / "tests", package_name(name))
@@ -15352,23 +15411,33 @@ def cmd_verify(args: argparse.Namespace) -> dict:
             "invariantsWithoutTest": untested,
             "modules": modules,
             # Cut 3 (C8, D7): additive, absent under one document.
-            # `fidelity.status` keeps reporting document 0 -- no existing
-            # key is renamed, re-nested, or made conditional.
-            # `each-document-names-its-own-revision` (D9): `revision` is
-            # additive per entry, so a reader can see which name a
-            # document's status was measured against -- document 0's is
-            # `revision` (the same value `latestRevision` above already
-            # names); every other index is its own independently
+            # `fidelity.status` keeps reporting the whole tree's own
+            # headline -- no existing key is renamed, re-nested, or made
+            # conditional. `each-document-names-its-own-revision` (D9):
+            # `revision` is additive per entry, so a reader can see which
+            # name a document's status was checked against -- document
+            # 0's is `revision` (the same value `latestRevision` above
+            # already names, since `document_names[0]` is `revision`
+            # verbatim); every other index is its own independently
             # discovered name, never document 0's.
+            #
+            # Cut 3 slice C (design.md D5): every index, document 0
+            # included, now folds through the SAME
+            # `_extra_document_fidelity_status` call, each with its own
+            # `conditions_by_index[N]` -- one function, symmetric across
+            # every entry, instead of document 0 reading the pre-existing
+            # whole-tree `fidelity_status` while only extras got their own
+            # fold. `conditions` is additive per entry (design.md D5): the
+            # only way a reader (or a test) can see WHICH condition fired,
+            # or whether the fold read the index at all.
             **({"fidelityByDocument": [
-                    {"label": DOCUMENTS[0]["label"], "status": fidelity_status,
-                     "revision": revision},
-                    *({"label": DOCUMENTS[index]["label"],
-                       "status": _extra_document_fidelity_status(
-                           document_names[index], index, stale, missing_provenance,
-                           untested, unreached, resolved["status"] == "undeclared"),
-                       "revision": document_names[index]}
-                      for index in range(1, len(DOCUMENTS))),
+                    {"label": DOCUMENTS[index]["label"],
+                     "status": _extra_document_fidelity_status(
+                         document_names[index], index, conditions_by_index[index],
+                         resolved["status"] == "undeclared"),
+                     "revision": document_names[index],
+                     "conditions": conditions_by_index[index]}
+                    for index in range(len(DOCUMENTS))
                 ]} if len(DOCUMENTS) > 1 else {}),
         },
         "lfs": lfs_state(target),

@@ -1437,7 +1437,7 @@ class TwoDocumentDriftControlTests(unittest.TestCase):
         doc1 = self._by_label(fidelity_by_document, "experiments")
         self.assertEqual(doc0["status"], "ok", fidelity_by_document)
         self.assertEqual(doc1["status"], "drift", fidelity_by_document)
-        self.assertIn("doc1_module.py", doc1["conditions"]["staleModules"])
+        self.assertIn("src/DriftControl/doc1_module.py", doc1["conditions"]["staleModules"])
         self.assertEqual(doc0["conditions"]["staleModules"], [])
 
     def test_c_inv_document_zero_drifts_document_one_clean(self):
@@ -1460,7 +1460,7 @@ class TwoDocumentDriftControlTests(unittest.TestCase):
         doc1 = self._by_label(fidelity_by_document, "experiments")
         self.assertEqual(doc0["status"], "drift", fidelity_by_document)
         self.assertEqual(doc1["status"], "ok", fidelity_by_document)
-        self.assertIn("doc0_module.py", doc0["conditions"]["staleModules"])
+        self.assertIn("src/DriftControl/doc0_module.py", doc0["conditions"]["staleModules"])
         self.assertEqual(doc1["conditions"]["staleModules"], [])
 
     def test_c_shared_missing_provenance_reports_on_both(self):
@@ -1483,6 +1483,269 @@ class TwoDocumentDriftControlTests(unittest.TestCase):
         self.assertEqual(
             doc0["conditions"]["missingProvenance"],
             doc1["conditions"]["missingProvenance"])
+
+
+#: Y4-Y7 (design.md Mutation Plan): each mutates the REAL engine file in
+#: place, anchor discipline first (old count exactly 1, new count 0,
+#: before; the reverse after), a real subprocess exercises the mutation,
+#: `addCleanup` restores byte-identical -- the same mechanism
+#: `AmbiguousFamilyMutationProvesReachabilityTests` above already
+#: establishes for D5, reused here for D4/D5's own fold arithmetic. Never
+#: the scratch-profile mechanism (`_write_scratch_profile`): these
+#: mutations target `implementation_engine.py` itself, not a profile.
+_Y4_OLD = 'prov.get(document_vocabulary(index)["claim_key"], [])'
+#: `list()`, not the bare `[]` every OTHER `CLAIM_KEY` read in this file
+#: already spells (anchor discipline: the resulting text must not already
+#: exist elsewhere before this specific substitution runs) -- semantically
+#: an identical empty-list default.
+_Y4_MUTATED = 'prov.get(CLAIM_KEY, list())'
+
+_Y5_OLD = "doc_revision_n = document_names[index]"
+_Y5_MUTATED = "doc_revision_n = revision"
+
+_Y6_OLD = (
+    '"staleModules": stale_n,\n'
+    '                "missingProvenance": missing_provenance,')
+_Y6_MUTATED = (
+    '"staleModules": stale_n,\n'
+    '                "missingProvenance": '
+    '[m for m in missing_provenance if m in scope_paths],')
+
+_Y7_OLD = '"conditions": conditions_by_index[index]}'
+_Y7_MUTATED = (
+    '"conditions": {"staleModules": stale, "missingProvenance": missing_provenance, '
+    '"invariantsWithoutTest": untested, "unreachedModules": unreached}}')
+
+
+class DriftControlFoldMutationTests(unittest.TestCase):
+    """Y4-Y7 (design.md Mutation Plan): each breaks one specific piece of
+    the per-document fold, on the REAL `implementation_engine.py`, and
+    confirms exactly the row's own "must go red" column -- never merely
+    that SOMETHING reddens."""
+
+    PACKAGE = "DriftControl"
+    DOC0_REVISION = "pair-drift-r01.md"
+    DOC1_OLD_REVISION = "pair-drift-plan-v00.md"
+    DOC1_NEW_REVISION = "pair-drift-plan-v01.md"
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="pair-drift-mut-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="pair-drift-mut-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.DOC0_REVISION).write_text(
+            "## 1\ndocument zero's own text.\n", encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="pair-drift-mut-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.DOC1_OLD_REVISION).write_text(
+            "document one's own text, an older version.\n", encoding="utf-8")
+        (self.doc1 / self.DOC1_NEW_REVISION).write_text(
+            "document one's own text, the current version.\n", encoding="utf-8")
+
+    def _child_env(self):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(self.doc1)
+        return env
+
+    def _build_box(self, *, doc0_revision: str, doc1_revision: str,
+                   omit_provenance: bool = False, suffix: str = ""):
+        box = FORGE / "implementations" / f"_pair_drift_mut_{os.getpid()}_{id(self)}{suffix}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "pair-drift-mut"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "pair-drift-mut@example.invalid"
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+
+        (box / "src" / self.PACKAGE).mkdir(parents=True)
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
+            "__all__ = []\n", encoding="utf-8")
+        (box / "src" / self.PACKAGE / "doc0_module.py").write_text(
+            "__provenance__ = {\n"
+            f"    'revision': {doc0_revision!r}, 'sections': ['1'],\n"
+            "    'equations': ['1.1'], 'invariants': [],\n"
+            "}\n", encoding="utf-8")
+        if omit_provenance:
+            (box / "src" / self.PACKAGE / "doc1_module.py").write_text(
+                "# no __provenance__ at all -- lands in missing_provenance\n",
+                encoding="utf-8")
+        else:
+            (box / "src" / self.PACKAGE / "doc1_module.py").write_text(
+                "__provenance__ = {\n"
+                f"    'revision': {doc1_revision!r}, 'sections': ['1'],\n"
+                "    'experiments': ['T1'], 'invariants': [],\n"
+                "}\n", encoding="utf-8")
+        (box / self.PACKAGE).mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
+                       check=True, capture_output=True)
+        return box
+
+    def _verify(self, box: Path) -> dict:
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "verify", "--target", str(box),
+             "--name", self.PACKAGE, "--revision", self.DOC0_REVISION],
+            capture_output=True, text=True, cwd=FORGE, env=self._child_env())
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return json.loads(proc.stdout)
+
+    def _by_label(self, fidelity_by_document: list, label: str) -> dict:
+        return next(e for e in fidelity_by_document if e["label"] == label)
+
+    def _apply_mutation(self, old: str, mutated: str):
+        original = ENGINE.read_text(encoding="utf-8")
+        self.assertEqual(
+            original.count(old), 1,
+            f"anchor {old!r} does not occur exactly once -- an ambiguous "
+            "anchor is not a mutation that can run unambiguously")
+        self.assertEqual(
+            original.count(mutated), 0,
+            f"the mutated spelling {mutated!r} already appears before "
+            "any mutation -- anchor invalid")
+        new_source = original.replace(old, mutated, 1)
+        self.assertEqual(new_source.count(old), 0)
+        self.assertEqual(new_source.count(mutated), 1)
+        ENGINE.write_text(new_source, encoding="utf-8")
+
+        def restore():
+            ENGINE.write_text(original, encoding="utf-8")
+            restored = ENGINE.read_text(encoding="utf-8")
+            self.assertEqual(restored, original,
+                             "the engine file was not restored byte-identical")
+            self.assertEqual(restored.count(old), 1)
+            self.assertEqual(restored.count(mutated), 0)
+        self.addCleanup(restore)
+
+    def test_y4_bare_claim_key_breaks_both_directions_seal_survives(self):
+        """`claim_key(index)` -> the bare `CLAIM_KEY` scalar: every index's
+        scope is built from document 0's OWN claim key regardless of
+        index, so document 1's own module no longer appears in its own
+        scope. `tests/seal/` (one document) is structurally unreachable by
+        this branch and must survive."""
+        self._apply_mutation(_Y4_OLD, _Y4_MUTATED)
+
+        fwd_box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_OLD_REVISION,
+            suffix="_fwd")
+        fwd = self._verify(fwd_box)
+        fwd_by_doc = fwd["fidelity"]["fidelityByDocument"]
+        fwd_doc1 = self._by_label(fwd_by_doc, "experiments")
+        self.assertNotIn(
+            "src/DriftControl/doc1_module.py", fwd_doc1["conditions"]["staleModules"],
+            "document 1's own module should no longer be attributed to "
+            "its own scope under this mutation")
+
+        inv_box = self._build_box(
+            doc0_revision="pair-drift-mut-r00-older.md",
+            doc1_revision=self.DOC1_NEW_REVISION, suffix="_inv")
+        (self.doc0 / "pair-drift-mut-r00-older.md").write_text(
+            "document zero's own text, an older version.\n", encoding="utf-8")
+        inv = self._verify(inv_box)
+        inv_by_doc = inv["fidelity"]["fidelityByDocument"]
+        inv_doc0 = self._by_label(inv_by_doc, "proposal")
+        # Under the mutation index 0's OWN scope is unaffected (`CLAIM_KEY`
+        # already equals `document_vocabulary(0)["claim_key"]`); the
+        # reddening this row predicts is on document 1's scope shifting
+        # onto document 0's claim key, proven above via `fwd_doc1`.
+        self.assertIn(
+            "src/DriftControl/doc0_module.py", inv_doc0["conditions"]["staleModules"])
+
+        seal_diff = subprocess.run(
+            ["git", "diff", "--exit-code", "--", "tests/seal/"],
+            cwd=str(FORGE), capture_output=True, text=True)
+        self.assertEqual(seal_diff.returncode, 0, seal_diff.stdout)
+
+    def test_y5_bare_revision_breaks_both_directions_seal_survives(self):
+        """`document_names[index]` -> the bare `revision`: every index's
+        staleness is measured against document 0's OWN resolved name, so a
+        document-1 module bound to document 1's own CURRENT name reads
+        stale merely because its name text differs from document 0's."""
+        self._apply_mutation(_Y5_OLD, _Y5_MUTATED)
+
+        fwd_box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_NEW_REVISION,
+            suffix="_fwd")
+        fwd = self._verify(fwd_box)
+        fwd_by_doc = fwd["fidelity"]["fidelityByDocument"]
+        fwd_doc1 = self._by_label(fwd_by_doc, "experiments")
+        # Document 1's module IS bound to its own current name
+        # (`DOC1_NEW_REVISION`), so under the CORRECT fold it would read
+        # clean; under this mutation it reads stale because its name text
+        # is compared against document 0's own `revision` instead.
+        self.assertIn(
+            "src/DriftControl/doc1_module.py", fwd_doc1["conditions"]["staleModules"],
+            "document 1's own current module should not have been stale "
+            "except under this mutation")
+
+        seal_diff = subprocess.run(
+            ["git", "diff", "--exit-code", "--", "tests/seal/"],
+            cwd=str(FORGE), capture_output=True, text=True)
+        self.assertEqual(seal_diff.returncode, 0, seal_diff.stdout)
+
+    def test_y6_scoping_missing_provenance_reddens_only_c_shared(self):
+        """Faking a per-document split of `missing_provenance` empties it
+        for every index (a module with no readable provenance is never in
+        ANY document's own scope) -- `test_c_shared`'s own case is the
+        ONLY one this can catch; C-fwd/C-inv carry no missing-provenance
+        module at all and are unaffected."""
+        self._apply_mutation(_Y6_OLD, _Y6_MUTATED)
+
+        shared_box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_NEW_REVISION,
+            omit_provenance=True, suffix="_shared")
+        shared = self._verify(shared_box)
+        shared_by_doc = shared["fidelity"]["fidelityByDocument"]
+        shared_doc0 = self._by_label(shared_by_doc, "proposal")
+        self.assertNotEqual(
+            shared_doc0["status"], "drift",
+            "the faked per-document split should have emptied "
+            "missingProvenance for every index, reddening C-shared's own "
+            "expectation")
+
+        fwd_box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_OLD_REVISION,
+            suffix="_fwd")
+        fwd = self._verify(fwd_box)
+        fwd_by_doc = fwd["fidelity"]["fidelityByDocument"]
+        fwd_doc0 = self._by_label(fwd_by_doc, "proposal")
+        fwd_doc1 = self._by_label(fwd_by_doc, "experiments")
+        self.assertEqual(fwd_doc0["status"], "ok", "C-fwd unaffected")
+        self.assertEqual(fwd_doc1["status"], "drift", "C-fwd unaffected")
+
+    def test_y7_reverting_conditions_output_reddens_condition_lists_only(self):
+        """Reverting the REPORTED `conditions` block to the old shared
+        lists, while leaving the `status` computation's own input
+        untouched -- the condition-list assertions go red, the status-only
+        assertions stay green."""
+        self._apply_mutation(_Y7_OLD, _Y7_MUTATED)
+
+        fwd_box = self._build_box(
+            doc0_revision=self.DOC0_REVISION, doc1_revision=self.DOC1_OLD_REVISION,
+            suffix="_fwd")
+        fwd = self._verify(fwd_box)
+        fwd_by_doc = fwd["fidelity"]["fidelityByDocument"]
+        fwd_doc0 = self._by_label(fwd_by_doc, "proposal")
+        fwd_doc1 = self._by_label(fwd_by_doc, "experiments")
+
+        # Status-only assertions: unaffected, still green.
+        self.assertEqual(fwd_doc0["status"], "ok")
+        self.assertEqual(fwd_doc1["status"], "drift")
+
+        # Condition-list assertions: now red -- document 0's reported
+        # `conditions.staleModules` carries document 1's stale module too,
+        # since it reverted to the shared, whole-tree list.
+        self.assertIn(
+            "src/DriftControl/doc1_module.py", fwd_doc0["conditions"]["staleModules"],
+            "document 0's reported conditions should have reverted to "
+            "the shared whole-tree list under this mutation")
 
 
 if __name__ == "__main__":
