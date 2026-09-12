@@ -2,6 +2,13 @@
 {
   "section": "related-work",
   "position": 4,
+  "mode": {
+    "value": "argument",
+    "source": {
+      "file": "sections/05-related-work.md",
+      "quote": "Every claim here belongs to someone else's work, and the section argues what those works together leave unsolved."
+    }
+  },
   "blocks": [
     {
       "id": "rw-preamble",
@@ -59,6 +66,8 @@
 **Extent** 820–1700 words
 **Does not carry** equations
 **Carries** one block per stated problem, and one synthesis figure or table
+
+Every claim here belongs to someone else's work, and the section argues what those works together leave unsolved.
 
 ## Whether the section exists
 

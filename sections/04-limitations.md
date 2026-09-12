@@ -2,6 +2,13 @@
 {
   "section": "limitations",
   "position": 8,
+  "mode": {
+    "value": "argument",
+    "source": {
+      "file": "sections/04-limitations.md",
+      "quote": "Each item is argued rather than reported, and reaches outside this work for the standard it falls short of."
+    }
+  },
   "blocks": [
     {
       "id": "lim-opening-concession",
@@ -55,7 +62,9 @@ new measurement
 
 This subsection states what the reported results do **not** establish. Its source of
 truth is the inverse of every other part of the results section: those are written
-from what the artefacts show, this one from what they fail to show.
+from what the artefacts show, this one from what they fail to show. Each item is
+argued rather than reported, and reaches outside this work for the standard it falls
+short of.
 
 ## The opening is a concession
 

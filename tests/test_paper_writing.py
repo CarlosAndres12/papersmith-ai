@@ -937,21 +937,19 @@ class ModeWideningTests(unittest.TestCase):
     #: levels is schema-valid, never a violation -- `write`'s own
     #: readiness stage is what refuses on it
     #: (`WritingPipelineTests.test_no_mode_resolved_refuses_mode_absent`),
-    #: never this reader. Three of the ten shipped contracts still carry
-    #: no quotable mode-bearing sentence in their own prose as of this
-    #: change's own corrective batch (`02-experimental-setup.md` --
-    #: reserved for a concurrent sibling correction and left untouched
-    #: here on purpose; `04-limitations.md` -- genuinely ambiguous, the
-    #: operator's own editorial call; `05-related-work.md` -- no sentence
-    #: found) and stay undeclared deliberately, not by oversight.
-    _SECTIONS_WITHOUT_MODE = (
-        "02-experimental-setup.md", "04-limitations.md", "05-related-work.md",
-    )
+    #: never this reader. All ten shipped contracts now carry a quotable
+    #: mode-bearing sentence: `02-experimental-setup.md`,
+    #: `04-limitations.md` and `05-related-work.md` initially shipped with
+    #: none declared, and a later corrective batch authored the missing
+    #: sentence for each. The synthetic, no-real-file-required case (neither
+    #: level declaring `mode` still parses and resolves to `None`) is
+    #: covered above by `test_neither_level_declaring_mode_resolves_to_none`
+    #: and, for the corpus-walk's own None-skipping branch, by
+    #: `test_paper_contract.ModeTranscriptionTests.
+    #: test_undeclared_sections_are_absent_not_silently_passing`.
 
     def test_shipped_contracts_declaring_mode_resolve_it_at_every_block(self) -> None:
         for path in sorted(SECTIONS_DIR.glob("*.md")):
-            if path.name in self._SECTIONS_WITHOUT_MODE:
-                continue
             header, _body = paper_contract.parse(path.read_bytes())
             self.assertIsNotNone(header.mode, path.name)
             self.assertIn(header.mode["value"], paper_vocabulary.MODES, path.name)
@@ -959,14 +957,6 @@ class ModeWideningTests(unittest.TestCase):
             for block in header.blocks:
                 resolved = paper_contract.resolve_mode(header, block)
                 self.assertIsNotNone(resolved, (path.name, block["id"]))
-
-    def test_sections_without_a_quotable_mode_sentence_still_parse_with_no_mode_declared(self) -> None:
-        for name in self._SECTIONS_WITHOUT_MODE:
-            path = SECTIONS_DIR / name
-            header, _body = paper_contract.parse(path.read_bytes())
-            self.assertIsNone(header.mode, path.name)
-            for block in header.blocks:
-                self.assertIsNone(paper_contract.resolve_mode(header, block), (path.name, block["id"]))
 
 
 class ContractHeaderTests(unittest.TestCase):

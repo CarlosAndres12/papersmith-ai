@@ -2,6 +2,13 @@
 {
   "section": "experimental-setup",
   "position": 6,
+  "mode": {
+    "value": "transposition",
+    "source": {
+      "file": "sections/02-experimental-setup.md",
+      "quote": "Nothing here is discovered: every condition this section states was already fixed when the experiments ran."
+    }
+  },
   "blocks": [
     {
       "id": "es-preamble",
@@ -49,7 +56,7 @@ method into a protocol: what is measured, what it is measured against, and under
 exactly what conditions. Every number in the results section must trace to something
 declared here.
 
-The methods section says what the model **is**. This one says what was **done** to it.
+The methods section says what the model **is**. This one says what was **done** to it. Nothing here is discovered: every condition this section states was already fixed when the experiments ran.
 
 ## The two subsections split design from execution
 

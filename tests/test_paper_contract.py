@@ -342,12 +342,20 @@ class SchemaTests(unittest.TestCase):
 #: `Requirement: Byte-Clean Header Insertion` asks for, held here so the
 #: proof stays meaningful for every run after this change lands, not only
 #: the one that performed the insertion.
+#:
+#: `02-experimental-setup.md`, `04-limitations.md` and `05-related-work.md`
+#: later received one operator-authored sentence each (the missing
+#: `mode`-bearing sentence a corrective batch added), a legitimate,
+#: intentional prose edit -- their three digests below were re-captured
+#: after that edit and no longer equal the header-migration-era value; the
+#: other seven are untouched since the original migration and keep their
+#: original digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "ca424309f46389e79155d58d36245e4160db77aaf837b48a2b585d1e0e628a89"[:64],
-    "02-experimental-setup.md": "e65e34db61790c00115dd97db5f14a6e47e2be6e9e061da8a4fccb3e6f6f3fdc"[:64],
+    "02-experimental-setup.md": "c4465b7f1a371e1b8ee2315e4032cff0a6e8bf76ac4c0a8903a90635c8f7888f"[:64],
     "03-results-and-discussion.md": "e48277cdcc415b5641a72d7a473bc7900dc1bd882a84afc1f7b6c89e1b5b39f0"[:64],
-    "04-limitations.md": "a9a7c0ee37c43266a09b798f020117362213452014162504118d7847376a08c8"[:64],
-    "05-related-work.md": "5a41968610adeeaf6a407e014cf06a78af935e1773612a3fe85069d14b79060f"[:64],
+    "04-limitations.md": "1e78bf579fcc41399b7bf47981197afe419ce2c657f5d0a3fdad79ac1404931b"[:64],
+    "05-related-work.md": "d4d10c2da38e6c576c6305bd0c37879c81bfb5806670f3c2dc9bc851a19483b4"[:64],
     "06-introduction.md": "0f6c3b6bfe13206470ed22d88a953f96e86b81bd56445b0c2e40d1ee1354cbff"[:64],
     "07-conclusions.md": "a855ee2a68b66328562317274049d9f78108457644089b3125ea6b51a76ae84b"[:64],
     "08-abstract.md": "8814477108c9121d089fa5738b242ca30093bdd4a16952e38da17eda41857c1a"[:64],
@@ -798,14 +806,16 @@ class ModeTranscriptionTests(unittest.TestCase):
     def _real_corpus(self):
         return paper_graph.assemble_corpus(SECTIONS_DIR)
 
-    def _declared_modes(self):
+    def _declared_modes(self, corpus=None):
         """Derived from the corpus, never a hand-listed set of section ids:
-        every section's own `header.mode` (`None` for the three deliberately
-        undeclared sections, `02`/`04`/`05`) plus every block's own `mode`
-        (none in the shipped corpus today, but the walk is generic -- a
-        future block-level declaration is picked up without touching this
-        test)."""
-        corpus = self._real_corpus()
+        every section's own `header.mode` (all ten shipped sections declare
+        one as of the `02`/`04`/`05` corrective) plus every block's own
+        `mode` (none in the shipped corpus today, but the walk is generic --
+        a future block-level declaration is picked up without touching this
+        test). `corpus` defaults to the real shipped one; a caller may pass a
+        synthetic corpus to exercise the None-skipping branch without
+        depending on any real section ever leaving `mode` undeclared."""
+        corpus = corpus if corpus is not None else self._real_corpus()
         entries = []
         for section_id, header in corpus.sections.items():
             if header.mode is not None:
@@ -828,23 +838,57 @@ class ModeTranscriptionTests(unittest.TestCase):
             )
 
         # Golden count, not a hand-listed set of section ids: the walk above
-        # is generic over the whole corpus; this pins it to the seven modes
-        # this build has actually declared -- the same "exactly N, derived
-        # not hand-listed" style `GraphTests` already uses for the two
-        # literal cross-section `after` edges.
-        self.assertEqual(len(entries), 7, "expected exactly the seven declared modes")
+        # is generic over the whole corpus; this pins it to the ten modes
+        # this build has actually declared, one per shipped section -- the
+        # same "exactly N, derived not hand-listed" style `GraphTests`
+        # already uses for the two literal cross-section `after` edges.
+        # Grew from seven to ten when `02-experimental-setup.md`,
+        # `04-limitations.md` and `05-related-work.md` each received their
+        # operator-authored mode-bearing sentence; the count is read off the
+        # real corpus walk above, never edited by hand to match.
+        self.assertEqual(len(entries), 10, "expected exactly the ten declared modes")
 
     def test_undeclared_sections_are_absent_not_silently_passing(self) -> None:
-        """02/04/05 deliberately declare no mode (`test_paper_writing.py`'s
-        `_SECTIONS_WITHOUT_MODE`). The corpus-derived walk above must skip
-        them entirely rather than ever counting the absence as a
-        checked-and-passed entry."""
-        corpus = self._real_corpus()
-        owners = {owner for owner, _mode in self._declared_modes()}
-        for section_id in ("experimental-setup", "limitations", "related-work"):
-            header = corpus.sections[section_id]
-            self.assertIsNone(header.mode, section_id)
-            self.assertNotIn(section_id, owners)
+        """Every shipped section now declares a `mode`
+        (`test_every_declared_modes_quote_is_a_substring_of_its_named_file`'s
+        golden count of ten), so this class exercises the None-skipping
+        branch of the walk on a synthetic corpus instead of leaning on a
+        real section that happens to leave `mode` undeclared -- the walk
+        must still skip an undeclared section entirely rather than ever
+        counting the absence as a checked-and-passed entry."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp)
+            declared_header = {
+                "section": "with-mode", "position": 1,
+                "mode": {
+                    "value": "argument",
+                    "source": {"file": "with-mode.md", "quote": "This section argues."},
+                },
+                "blocks": [{
+                    "id": "b1", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none",
+                }],
+            }
+            undeclared_header = {
+                "section": "without-mode", "position": 2,
+                "blocks": [{
+                    "id": "b2", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none",
+                }],
+            }
+            (sections_dir / "with-mode.md").write_bytes(
+                b"---\n" + json.dumps(declared_header).encode("utf-8") + b"\n---\nThis section argues.\n"
+            )
+            (sections_dir / "without-mode.md").write_bytes(
+                b"---\n" + json.dumps(undeclared_header).encode("utf-8") + b"\n---\nNo mode sentence here.\n"
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            self.assertIsNone(corpus.sections["without-mode"].mode)
+
+            owners = {owner for owner, _mode in self._declared_modes(corpus=corpus)}
+            self.assertIn("with-mode", owners)
+            self.assertNotIn("without-mode", owners)
 
     def test_a_fabricated_mode_quote_on_a_self_sourced_entry_fails_the_lock(self) -> None:
         """Same falsification `GraphTests` already runs for `after`
