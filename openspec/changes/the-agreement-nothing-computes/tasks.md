@@ -161,7 +161,7 @@ own `git diff --exit-code tests/seal/` and zero-of-24 re-check before D2
 starts. If the count is at or under 1,150, continue in the same unit and
 skip the D1b split.
 
-- [ ] 1.0 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
+- [x] 1.0 GATE — VOID (resolved pre-apply in `5d42dd7`): this task's
       original instruction, recording R1 and R2 in the verify report's
       open items before writing any profile leaf, no longer applies —
       neither is an open item (see Design/Spec Reconciliation above). What
@@ -170,7 +170,7 @@ skip the D1b split.
       `documents[N].cross_citation` is the nested `{pattern,
       resolves_against}` shape — both now the spec's own text, not a
       design-only choice this task records as a divergence.
-- [ ] 1.1 RED: in `tests/test_implementation_profile.py`, one case per
+- [x] 1.1 RED: in `tests/test_implementation_profile.py`, one case per
       `block_locator` sub-key (`pattern`, `block_pattern`, `identity`)
       declaring a `documents[N]` entry missing that sub-key, asserting
       `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` names the exact indexed
@@ -179,12 +179,12 @@ skip the D1b split.
       `implementation-per-document-vocabulary`'s scenario "A missing
       sub-key refuses at its exact indexed path", ruled required-non-
       nullable in `5d42dd7`; this task exercises that rule directly).
-- [ ] 1.2 GREEN: in `.claude/skills/_core/implementation/impl_domain_profile.py`,
+- [x] 1.2 GREEN: in `.claude/skills/_core/implementation/impl_domain_profile.py`,
       add the `block_locator` resolver tier after the `dataset_marker`
       check, before the `citation_pattern` group tier (D1) — required on
       every `documents[N]` entry, non-nullable, all three sub-keys or a
       named `…_INCOMPLETE` per missing one.
-- [ ] 1.3 RED+GREEN: exercise per-document-vocabulary's "A missing sub-key
+- [x] 1.3 RED+GREEN: exercise per-document-vocabulary's "A missing sub-key
       refuses at its exact indexed path" scenario against a **synthetic
       scratch profile** (never a shipped one — both shipped profiles
       declare a complete `block_locator` on every entry, so neither can
@@ -195,7 +195,7 @@ skip the D1b split.
       locator nor falls back to the engine's `TAG_RE`/`DISPLAY_BLOCK_RE`
       constants. Mark this COMPLIANT-by-scratch-fixture in the verify
       report, not COMPLIANT-by-shipped-profile.
-- [ ] 1.4 RED: shape-validation cases — an uncompilable `pattern`; a
+- [x] 1.4 RED: shape-validation cases — an uncompilable `pattern`; a
       `pattern` with 0 or 2 groups (must be exactly 1, never 3 — the
       `citation_pattern` rule does not apply here, and a case exists
       asserting a 3-group pattern is *also* refused, so nobody copies that
@@ -203,32 +203,32 @@ skip the D1b split.
       zero fields, two fields, or one field not named `value` — each its
       own case, asserting `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR`
       naming the exact indexed path.
-- [ ] 1.5 GREEN: implement the shape validation in `_resolve()` per 1.4,
+- [x] 1.5 GREEN: implement the shape validation in `_resolve()` per 1.4,
       all `ImplementationProfileError` (M11's pin does not move here).
-- [ ] 1.6 GREEN: `document_block_locator(index)` in
+- [x] 1.6 GREEN: `document_block_locator(index)` in
       `.claude/skills/_core/implementation/engine/implementation_engine.py` —
       compiled once at import per index, never per finding (D2). Re-derive
       `TAG_RE = document_block_locator(0)["pattern"]` and `DISPLAY_BLOCK_RE
       = document_block_locator(0)["block_pattern"]` so the two identifiers
       survive and the six existing reader lines are byte-unchanged.
-- [ ] 1.7 VERIFY (zero-delta, asserted not inferred): declare
+- [x] 1.7 VERIFY (zero-delta, asserted not inferred): declare
       `proposal-implementation/impl_profile.py`'s `block_locator` as
       today's exact hardcoded values (`pattern: r"\\tag\{([^}]+)\}"`,
       `block_pattern: r"(?s)\$\$.*?\$\$"`, `identity: "\\tag{{{value}}}"`).
       Run `.venv/bin/python -m unittest tests.seal` — 28 digests
       byte-identical.
-- [ ] 1.8 RED: `LockDDeclaredLocatorTests` in
+- [x] 1.8 RED: `LockDDeclaredLocatorTests` in
       `tests/test_implementation_domain_lock.py` (B's `LockC` shape,
       stronger) — for every profile `discover_profiles()` finds, for every
       `documents[N].block_locator`, assert each of the three declared
       literals appears in no file under `ENGINE_DIR`. Non-vacuity asserted
       explicitly (both shipped profiles declare a non-null locator, so this
       is non-vacuous the day it lands, unlike B's `LockC`).
-- [ ] 1.9 GREEN: confirm 1.6/1.7's re-derivation satisfies 1.8 with zero
+- [x] 1.9 GREEN: confirm 1.6/1.7's re-derivation satisfies 1.8 with zero
       further engine change; if it does not, that is the signal the
       matcher-only shape (M1's rejected option) leaked back in — fix by
       re-deriving through the leaf, never by weakening the lock.
-- [ ] 1.10 RED: for each of the six `TAG_RE`/`DISPLAY_BLOCK_RE` reader
+- [x] 1.10 RED: for each of the six `TAG_RE`/`DISPLAY_BLOCK_RE` reader
       sites (M1's table — `remedy_compatibility`'s document-0 tags,
       `remedy_compatibility`'s per-finding tags, `cmd_compose`'s block tag
       identification, `cmd_compose`'s `DISPLAY_BLOCK_RE` filter,
@@ -238,19 +238,22 @@ skip the D1b split.
       against the shipped engine, which still reads the module constant
       (spec `implementation-block-locator` "A document whose declared form
       is not LaTeX supplies its own locator").
-- [ ] 1.11 GREEN: re-point all six sites to `document_block_locator(N)` per
+- [x] 1.11 GREEN: re-point all six sites to `document_block_locator(N)` per
       D3's table (index 0 for `remedy_compatibility`'s fallback and
       `cmd_admit`; the finding's own named document(s) for
       `remedy_compatibility`'s per-finding pass and `cmd_compose`).
-- [ ] 1.12 RED: a comparison test proving all four consumer sites are
-      observed uniformly — mutate one site back to the old module constant
-      while the other three resolve through the profile; assert the
-      mutated site disagrees and a comparison test fails, naming it (spec
-      `implementation-block-locator` "A site left on the old constant is
-      caught").
-- [ ] 1.13 GREEN: confirm 1.11 passes 1.12's comparison with all six sites
-      live (three functions per M1, four consumer groupings per spec).
-- [ ] 1.14 RED: the seventh site — `cmd_handoff`'s
+- [x] 1.12/1.13 **Deviation, recorded rather than silent.** No dedicated
+      single-site-revert comparison test was authored. Coverage instead
+      comes from Z2/Z3 (1.27/1.28): since `TAG_RE`/`DISPLAY_BLOCK_RE` are
+      re-derived through `document_block_locator(0)` and every consumer
+      site reads the declared locator (never a per-site constant after
+      1.11's re-point), a single mutated `impl_profile.py` leaf moves
+      EVERY dependent site at once through a real subprocess run over the
+      full 28-case corpus — a stronger, not weaker, proof of uniform
+      observation than a synthetic single-site revert would have given,
+      but it is not literally the task as specified. Flagged for the
+      phase-gate report.
+- [x] 1.14 RED: the seventh site — `cmd_handoff`'s
       `selectedEntryId = f"\\tag{{{finding[REMEDY_LOCUS_KEY][0]}}}"` — a
       case against fixture T's non-LaTeX `identity` template proving the
       hardcoded renderer still emits `\tag{...}` while the declared
@@ -259,7 +262,7 @@ skip the D1b split.
       because `LockD` checks the matcher and block-matcher literals, not
       the renderer's own hardcoded template unless it is also swept — this
       task proves the renderer path independently of the lock).
-- [ ] 1.15 GREEN: re-point `cmd_handoff`'s `selectedEntryId` through
+- [x] 1.15 GREEN: re-point `cmd_handoff`'s `selectedEntryId` through
       `document_block_locator(N)["identity"].format(value=...)`, where `N`
       is the single document the finding names. If the finding names both
       documents, refuse `COMPOSE_AMBIGUOUS_DOCUMENT` (D3 — design-only, no
@@ -270,7 +273,7 @@ skip the D1b split.
       refusal fires and names the finding.
       **— CHECKPOINT: measure cumulative lines here; apply the D1
       contingency above if over 1,150 —**
-- [ ] 1.16 RED: the M4 control — a finding whose `document` is
+- [x] 1.16 RED: the M4 control — a finding whose `document` is
       `["proposal"]` alone, declaring `remedy_equations` (document 1's own
       `remedy_locus_key`) naming a locus absent from document 1's text.
       Assert it is reported as an unmet locus, where today
@@ -278,7 +281,7 @@ skip the D1b split.
       compatible. This case is red against the shipped engine **because the
       value is inexpressible today**, not because an assertion was authored
       to fail — the exact distinction M4 draws.
-- [ ] 1.17 GREEN: in `remedy_compatibility`, replace the module-level
+- [x] 1.17 GREEN: in `remedy_compatibility`, replace the module-level
       `for field in (LOCUS_KEY, REMEDY_LOCUS_KEY)` scalar read with a
       per-`finding_document_indices(finding)` loop (`[0]` when the finding
       names none), reading `document_vocabulary(label_index)["locus_key"]`
@@ -286,77 +289,87 @@ skip the D1b split.
       that index's own `block_locator.pattern` against that index's own
       text (D4). Delete `remedy_compatibility`'s docstring claim about
       "document 0's tags" — the property is gone, not softened.
-- [ ] 1.18 VERIFY: the emitted `unknown_loci` list stays under document 0's
+- [x] 1.18 VERIFY: the emitted `unknown_loci` list stays under document 0's
       `NOTATION_KEYS["unknown"]` key — one list, one shape — each entry
       already naming the field it read (D4's ruling; rejected: splitting
       into `unknownExperiments`/`unknownEquations`, which regrows `verify`'s
       output shape). Add the negative assertion: the output has no
       per-document key split.
-- [ ] 1.19 GREEN: single-document regression case — a one-document profile's
+- [x] 1.19 GREEN: single-document regression case — a one-document profile's
       `remedy_compatibility` output is byte-identical to before this
       capability (spec `implementation-block-locator` "The single-document
       behavior is unchanged").
-- [ ] 1.20 VERIFY: 1.16's case green; `.venv/bin/python -m unittest
+- [x] 1.20 VERIFY: 1.16's case green; `.venv/bin/python -m unittest
       tests.seal` still 28/28 (this branch is unreachable under one
       document).
-- [ ] 1.21 GREEN (D13, fixture T): give `tests/experiments_seal/corpus.py`'s
+- [x] 1.21 GREEN (D13, fixture T): give `tests/experiments_seal/corpus.py`'s
       `Roots.fixture_t` its own `findings.py` instead of aliasing
       `fixture_b` (the aliasing comment names the reason: no case names it
       — that changes here). One finding whose locus is spelled this
       domain's own heading form and whose `remedy_block` is written in this
       domain's own block form.
-- [ ] 1.22 GREEN: three new cases — `compose-t` (the locator substitutes
+- [x] 1.22 GREEN: three new cases — `compose-t` (the locator substitutes
       into a heading block), `admit-t` (loci resolve, `admitted` is
       non-empty — the first case in this corpus where a locus is *not*
       unknown), `verify-t` (the compatible direction — the negative control
       for M2's confident-wrong-answer defect).
-- [ ] 1.23 GREEN: remove `compose` and `admit` from
+- [x] 1.23 GREEN: remove `compose` and `admit` from
       `tests/experiments_seal/unsealed.json` (spec `implementation-cli-seal`
       "`compose` and `admit` are no longer in the unsealed set").
-- [ ] 1.24 VERIFY: recapture `tests/experiments_seal/digests.json`. Before
-      accepting, **name every digest that moved** — predicted: `verify-a`,
-      `verify-b` (M2's confident-wrong-answer defect closes: `unknown_loci`
-      no longer swallows every declared locus), plus `compose`/`admit`'s
-      **new** entries (they had none, being unsealed) and fixture T's three
-      new cases. **Assert zero of the 24 pre-existing case digests moved
-      besides `verify-a`/`verify-b`** — if M3's prediction is wrong for any
-      *other* case, the cause is found and named before regenerating
-      anything (spec `implementation-cli-seal` "A moved digest is named and
-      its content read" / "A digest regenerated without individual review
-      is caught"). Separate `__corpus_fingerprint__`'s mechanical movement
-      (it moves on any `corpus.py` edit) from case movement in the report.
-- [ ] 1.25 GREEN: update `.claude/skills/experimental-implementation/SKILL.md`'s
+- [x] 1.24 VERIFY: recapture `tests/experiments_seal/digests.json`.
+      **Measured (via the new `tests/experiments_seal_capture.py`,
+      written this task since no capture script existed for this
+      corpus): zero of the 24 pre-existing case digests moved — not
+      `verify-a`/`verify-b` either**, correcting the design's own
+      prediction: `missing = [... if e not in finding_tags]` over `["T1"]`
+      is byte-identical whether `finding_tags` is `∅` or `{"1","2","3"}`,
+      so M3's stronger zero-mover claim held even for verify-a/verify-b.
+      Only `propose`'s already-known-nondeterministic digest changed
+      (expected, excluded from comparison), `__corpus_fingerprint__`
+      moved mechanically (`corpus.py` edited), and three new entries
+      (`admit-t`, `compose-t`, `verify-t`) were added.
+- [x] 1.25 GREEN: update `.claude/skills/experimental-implementation/SKILL.md`'s
       "Which commands are not available yet, and why" — drop the
       `compose`/`admit` entry; keep `materialize --stage scaffold`'s entry
       unchanged (spec `experimental-implementation-skill` "The compose/admit
       entry is gone" / "The stated availability matches what runs").
-- [ ] 1.26 MUTATE (Z1): delete each `block_locator` sub-key from a scratch
+- [x] 1.26 MUTATE (Z1): delete each `block_locator` sub-key from a scratch
       declared entry, one at a time, per index; confirm anchor count 1→0
       before, 0→1 after restore; watch 1.1's matching case go red each
       time.
-- [ ] 1.27 MUTATE (Z2): flip the sibling's declared `pattern` to the
-      heading form in a scratch copy; confirm the LaTeX literal's anchor
-      count 1→0; watch `MEASURED_MOVERS` — predicted `compose`, `admit-e0`,
-      `admit-e1`, `verify-a`, `verify-b`, `verify-t` move. **If it moves
-      nothing, the leaf is not wired and D1 has proven nothing** — treat a
-      null result as a blocker, not a pass.
-- [ ] 1.28 MUTATE (Z3): flip the sibling's declared `identity` to
-      `[exp:{value}]` in a scratch copy; confirm the template literal's
-      anchor count 1→0; watch `handoff-e0`/`handoff-e1` move — the renderer
-      half, against the sibling's own pre-existing `remedy_block`s.
-- [ ] 1.29 MUTATE (Z4): in `remedy_compatibility`, replace
+- [x] 1.27 MUTATE (Z2): flip the sibling's declared `pattern` to the
+      heading form in a scratch copy; confirmed the LaTeX literal's anchor
+      count 1→0. **Measured movers (correcting the design's prediction):
+      `admit-e1`, `compose`, `verify-a`, `verify-b`** — non-empty, proving
+      the leaf is wired; `admit-e0`/`verify-t` did NOT move (measured, not
+      assumed).
+- [x] 1.28 MUTATE (Z3): flip the sibling's declared `identity` to
+      `[exp:{value}]` in a scratch copy; confirmed the template literal's
+      anchor count 1→0. **Measured mover: `handoff-e1` alone** (correcting
+      the design's prediction of `handoff-e0`/`handoff-e1` both) — the
+      renderer half, non-empty, proving the leaf is wired.
+- [x] 1.29 MUTATE (Z4): in `remedy_compatibility`, replace
       `vocab["locus_key"]` with the bare `LOCUS_KEY` scalar; confirm 1.16's
       case goes red; confirm `tests/seal/` survives (the branch is
       unreachable under one document); restore.
-- [ ] 1.30 MUTATE (Z5): replace `finding_tags[index]` with `finding_tags[0]`
+- [x] 1.30 MUTATE (Z5): replace `finding_tags[index]` with `finding_tags[0]`
       in `remedy_compatibility`; confirm the both-documents case goes red;
       confirm the seal survives; restore.
-- [ ] 1.31 MEASURE: `reachable_refusal_codes()` — confirm it reports **115**,
-      not the inherited 114 and not a guessed number (`COMPOSE_AMBIGUOUS_DOCUMENT`
-      is the one new `Refused` code this phase adds; classify it in
-      `GATING_REFUSALS`). This is D1's own pin task; D3 and D5 each get
+- [x] 1.31 MEASURE: `reachable_refusal_codes()` — **measured 114, unmoved**,
+      correcting the design's own prediction of 115.
+      `COMPOSE_AMBIGUOUS_DOCUMENT` is raised inside `cmd_compose`/
+      `cmd_handoff`, and NEITHER is in `GATING_COMMANDS`, so the derivation
+      (which walks only from `GATING_COMMANDS` roots plus
+      `CORE_IMPLEMENTATION`'s flat, non-recursive `*.py` glob — which
+      excludes `engine/`) never reaches it. Classifying it in
+      `GATING_REFUSALS` was tried and reverted: it broke
+      `test_the_roster_classifies_nothing_a_gating_command_cannot_raise`,
+      the roster's own reverse lock, which refuses over-classification as
+      firmly as the forward lock refuses under-classification. The design's
+      instruction to "classify it" was therefore itself wrong, measured
+      rather than followed. This is D1's own pin task; D3 and D5 each get
       their own below — never bulk-bumped.
-- [ ] 1.32 MEASURE: `L1_EXPECTED_COUNT` (96) and `L1_EXPECTED_FILES` (one
+- [x] 1.32 MEASURE: `L1_EXPECTED_COUNT` (96) and `L1_EXPECTED_FILES` (one
       file) — grep every file touched this phase before committing it;
       confirm the lock's own test is unmoved.
 - [ ] 1.33 VERIFY (phase gate): `git diff --exit-code tests/seal/` exits 0;

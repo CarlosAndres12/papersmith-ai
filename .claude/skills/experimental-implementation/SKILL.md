@@ -172,10 +172,6 @@ sibling ships is ~99% general machinery, and copying ~2,000 lines to change the
 ~20 that are not would be the exact duplication the operator refused for the
 CLI, one directory over). Consequence, stated rather than discovered:
 
-- **`compose` and `admit`** read `\tag{}` (LaTeX display-equation tags) and the
-  block locator built for that shape. This domain's own documents carry no such
-  tags, and building a locator for a shape this domain does not have is out of
-  scope for this change (deferred; see design's own D11).
 - **`materialize --stage scaffold`** and any other stage that copies kit
   destinations reads `assets/kit/`, which this skill does not ship. A target
   scaffolded under this domain needs its object-to-module map approved and
