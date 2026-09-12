@@ -78,7 +78,7 @@ def _cut2_fields_src(tmp_dir: Path) -> str:
         "'names': ['equation', 'equations', 'ecuación', 'ecuaciones', "
         "'mathematics', 'matemática', 'formulation']}, "
         f"'documents': [{{'directory': Path({str(documents_dir)!r}), "
-        "'label': 'proposal'}]")
+        "'label': 'proposal', 'dataset_marker': None}]")
 
 
 _counter = itertools.count()
@@ -486,6 +486,11 @@ _CUT2_LEAVES: tuple[str, ...] = (
     # Cut 2. `_without_leaf` below special-cases this indexed shape.
     "documents[0].directory",
     "documents[0].label",
+    # `a-data-directory-somebody-can-owe` (B1, design.md D1): its own tier,
+    # never a member of `_DOCUMENT_VOCABULARY_LEAVES` -- appended after
+    # `label` so this generic per-leaf walk also proves index 0's own case;
+    # `DatasetMarkerLeafOwnTierTests` below proves the OTHER index.
+    "documents[0].dataset_marker",
 )
 
 #: `vocabulary.names` is declared at S13 (design.md D7), not S2 -- so a
@@ -538,7 +543,11 @@ def _cut2_profile(tmp_dir: Path, *, with_names: bool = True) -> dict:
         # (`DOCUMENTS_DIRECTORY`/`DOCUMENTS_LABEL`) is unchanged from Cut 2's
         # scalar shape.
         "documents": [
-            {"directory": tmp_dir / "proposals", "label": "proposal"},
+            {"directory": tmp_dir / "proposals", "label": "proposal",
+             # B1 (`a-data-directory-somebody-can-owe`, design.md D1):
+             # required, own tier, nullable -- `None` here since this
+             # fixture's own tests are not testing the dataset demand.
+             "dataset_marker": None},
         ],
     }
     if with_names:
@@ -565,7 +574,8 @@ def _to_profile_source(value) -> str:
     return repr(value)
 
 
-_INDEXED_LEAF_RE = re.compile(r"^documents\[(\d+)\]\.(directory|label)$")
+_INDEXED_LEAF_RE = re.compile(
+    r"^documents\[(\d+)\]\.(directory|label|dataset_marker)$")
 
 
 def _without_leaf(profile: dict, dotted: str) -> dict:
@@ -573,7 +583,9 @@ def _without_leaf(profile: dict, dotted: str) -> dict:
     (design.md D4): `documents[N].directory`/`documents[N].label` name an
     entry INSIDE the `documents` list, never a top-level dict key -- handled
     as its own branch rather than `dotted.split(".", 1)`, which would look
-    for a literal `documents[0]` section key that does not exist."""
+    for a literal `documents[0]` section key that does not exist.
+    `dataset_marker` (B1, `a-data-directory-somebody-can-owe`) joins the
+    same indexed shape."""
     clone = copy.deepcopy(profile)
     indexed = _INDEXED_LEAF_RE.match(dotted)
     if indexed:
@@ -673,6 +685,51 @@ class DocumentsDirectoryOwnTierTests(unittest.TestCase):
         self.assertFalse(Path(module.PROFILE["documents"][0]["directory"]).exists())
 
 
+class DatasetMarkerLeafOwnTierTests(unittest.TestCase):
+    """B1 (`a-data-directory-somebody-can-owe`, design.md D1, tasks.md
+    1.1): `documents[N].dataset_marker` is its OWN required tier, appended
+    right after the `label` check -- never a member of
+    `_DOCUMENT_VOCABULARY_LEAVES`, which is all-or-nothing over five leaves
+    unrelated to this one. Per-INDEX case, both directions: index 0 alone
+    (`_CUT2_LEAVES`, above) is not enough to prove the walk runs per entry,
+    so this class also proves index 1, and the positive controls (`None`
+    and a real string both pass)."""
+
+    def _tmp_dir(self) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix="impl-profile-dataset-marker-"))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def test_a_second_documents_missing_dataset_marker_refuses_by_indexed_name(self):
+        tmp_dir = self._tmp_dir()
+        full = _two_document_profile(tmp_dir)
+        profile_file = _write_profile(tmp_dir, full)
+        with self.assertRaises(RuntimeError) as ctx:
+            _fresh_resolver_load(str(profile_file))
+        message = str(ctx.exception)
+        self.assertIn("IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE", message)
+        self.assertIn("documents[1].dataset_marker", message)
+
+    def test_none_is_a_valid_declaration_and_passes(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        self.assertIsNone(full["documents"][0]["dataset_marker"])
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertIsNone(module.PROFILE["documents"][0]["dataset_marker"])
+
+    def test_a_declared_marker_string_passes(self):
+        tmp_dir = self._tmp_dir()
+        full = _cut2_profile(tmp_dir)
+        full["documents"][0]["dataset_marker"] = "**Dataset:**"
+        (tmp_dir / "proposals").mkdir()
+        profile_file = _write_profile(tmp_dir, full)
+        module = _fresh_resolver_load(str(profile_file))
+        self.assertEqual(
+            module.PROFILE["documents"][0]["dataset_marker"], "**Dataset:**")
+
+
 class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
     """Threat-matrix RED test (design.md, Environment-variable routing,
     task 9.2): `IMPLEMENTATION_PROPOSALS` must still win over
@@ -756,7 +813,8 @@ def _two_document_profile(tmp_dir: Path, *, document_one_overlay: dict | None = 
     appended -- optionally carrying its own per-document vocabulary
     overlay."""
     profile = _cut2_profile(tmp_dir)
-    entry: dict = {"directory": tmp_dir / "documents-1", "label": "document-one"}
+    entry: dict = {"directory": tmp_dir / "documents-1", "label": "document-one",
+                   "dataset_marker": None}
     if document_one_overlay is not None:
         entry.update(document_one_overlay)
     profile["documents"].append(entry)
@@ -955,8 +1013,10 @@ class IndexedDocumentsLeafRefusalTests(unittest.TestCase):
     def _two_document_profile(self, tmp_dir: Path) -> dict:
         full = _cut2_profile(tmp_dir)
         full["documents"] = [
-            {"directory": tmp_dir / "documents-0", "label": "label-0"},
-            {"directory": tmp_dir / "documents-1", "label": "label-1"},
+            {"directory": tmp_dir / "documents-0", "label": "label-0",
+             "dataset_marker": None},
+            {"directory": tmp_dir / "documents-1", "label": "label-1",
+             "dataset_marker": None},
         ]
         return full
 
