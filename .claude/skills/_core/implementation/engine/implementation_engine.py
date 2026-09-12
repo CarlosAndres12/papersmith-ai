@@ -15061,8 +15061,6 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # From the disk, not from the index: a misplaced module is worth reporting before
     # it enters the history, not after. See `present_files`.
     paths = present_files(target)
-    with_data = (target / name / "Data").is_dir()
-    missing_dirs = [d for d in expected_dirs(name, with_data) if not (target / d).is_dir()]
     # The same ignore list `classify` uses. Without it a tracked virtualenv
     # reports thousands of stray modules and buries the one that matters.
     stray = [
@@ -15097,18 +15095,6 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     structure_gaps = {"scaffoldGaps": scaffold_gaps(target, name),
                       "objectGaps": object_gaps(target, name),
                       "harnessGaps": harness_gaps(target, name)}
-    structure_ok = (not missing_dirs and not stray and not stale_refs
-                    and not unparsable
-                    and not scaffold_gaps(target, name)
-                    and not scaffold_recorded["drift"]
-                    and not scaffold_recorded["unrecorded"]
-                    and not object_gaps(target, name)
-                    and not object_recorded["drift"]
-                    and not object_recorded["unrecorded"]
-                    and not harness_gaps(target, name)
-                    and not harness_recorded["drift"]
-                    and not harness_recorded["unrecorded"])
-
     package = target / "src" / package_name(name)
     modules: list[dict] = []
     missing_provenance: list[str] = []
@@ -15157,6 +15143,31 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     discovery = revision_discovery(family)
     discovered = discovery["revision"]
     revision = args.revision or discovered
+
+    # `a-data-directory-somebody-can-owe` (B1, design.md D5): moved down
+    # to here, three statements, nothing else -- `with_data`/
+    # `missing_dirs`/`structure_ok` have exactly three readers between
+    # them (`structure_ok` itself, and `structure.status`/
+    # `structure.missingDirs` in the output dict below), and every one of
+    # those readers already sits below this line. `declares_dataset`
+    # needs `revision` resolved first (D2's own disjunct), which is the
+    # one reason this move exists; every statement `stray`/`stale_refs`/
+    # `unparsable`/the three `*_recorded` folds depend on stays exactly
+    # where it was. Output key order is fixed by the final dict literal
+    # below, so the move is observationally inert.
+    with_data = declares_dataset(revision) or (target / name / "Data").is_dir()
+    missing_dirs = [d for d in expected_dirs(name, with_data) if not (target / d).is_dir()]
+    structure_ok = (not missing_dirs and not stray and not stale_refs
+                    and not unparsable
+                    and not scaffold_gaps(target, name)
+                    and not scaffold_recorded["drift"]
+                    and not scaffold_recorded["unrecorded"]
+                    and not object_gaps(target, name)
+                    and not object_recorded["drift"]
+                    and not object_recorded["unrecorded"]
+                    and not harness_gaps(target, name)
+                    and not harness_recorded["drift"]
+                    and not harness_recorded["unrecorded"])
 
     for module in modules:
         module["stale"] = bool(revision) and module["revision"] != revision

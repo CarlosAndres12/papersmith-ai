@@ -29,32 +29,33 @@ Chain strategy: stacked-to-main
 
 ## Phase 1: Profile leaf (B1)
 
-- [ ] 1.1 RED: `tests/test_implementation_profile.py` — per-index case: a `documents[N]` entry missing `dataset_marker` raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[N].dataset_marker` exactly.
-- [ ] 1.2 GREEN: `.claude/skills/_core/implementation/impl_domain_profile.py` `_resolve()` — append a `dataset_marker` required-key check to the per-entry walk, right after the existing `label` check; NOT added to `_DOCUMENT_VOCABULARY_LEAVES`.
-- [ ] 1.3 `tests/fixtures/two_documents/impl_profile.py` — add two `"dataset_marker": None` lines (fixture edit, not the reaching configuration).
-- [ ] 1.4 `.claude/skills/proposal-implementation/impl_profile.py` — add the one sanctioned sibling line, `"dataset_marker": None,`.
+- [x] 1.1 RED: `tests/test_implementation_profile.py` — per-index case: a `documents[N]` entry missing `dataset_marker` raises `IMPLEMENTATION_DOMAIN_PROFILE_INCOMPLETE` naming `documents[N].dataset_marker` exactly.
+- [x] 1.2 GREEN: `.claude/skills/_core/implementation/impl_domain_profile.py` `_resolve()` — append a `dataset_marker` required-key check to the per-entry walk, right after the existing `label` check; NOT added to `_DOCUMENT_VOCABULARY_LEAVES`.
+- [x] 1.3 `tests/fixtures/two_documents/impl_profile.py` — add two `"dataset_marker": None` lines (fixture edit, not the reaching configuration).
+- [x] 1.4 `.claude/skills/proposal-implementation/impl_profile.py` — add the one sanctioned sibling line, `"dataset_marker": None,`.
+- [x] 1.5 (finding, closed) `.claude/skills/experimental-implementation/impl_profile.py` — both `documents[N]` entries also need `"dataset_marker": None` in B1, not only in B2: the required-key check would otherwise redden this skill's own `test_the_real_profile_resolves_cleanly`/`LeafRefusalTests`/`PublishedCommandsRunVerbatimTests` the moment it lands, since `_resolve()` validates the REAL shipped profile in those tests. `documents[0]` still gets its real marker only in B2 (task 8.1); `documents[1]` stays `None` permanently.
 
 ## Phase 2: Detector (B1)
 
-- [ ] 2.1 RED: `tests/test_experimental_implementation.py` — `None` marker never opens a file (revision points at a missing file, detector still returns `False`, no raise).
-- [ ] 2.2 RED: same file — line-leading match: `lstrip().startswith(marker)` true only when the marker starts the line; a **mid-sentence-only** occurrence answers `False` (the X3 strength case).
-- [ ] 2.3 RED: same file — a marker containing regex metacharacters (e.g. `.*`) matches only literally (host-supplied-text threat row).
-- [ ] 2.4 RED: same file — or-fold: a two-document fixture where only index 1 declares still answers demand `True` (kills "read index 0 always").
-- [ ] 2.5 GREEN: `.claude/skills/_core/implementation/engine/implementation_engine.py` — add the detector, reading each declared document via `revision_source`/`document_revision_names` (no new path-join site), or-folded across `documents[N]`.
+- [x] 2.1 RED: `tests/test_experimental_implementation.py` — `None` marker never opens a file (revision points at a missing file, detector still returns `False`, no raise).
+- [x] 2.2 RED: same file — line-leading match: `lstrip().startswith(marker)` true only when the marker starts the line; a **mid-sentence-only** occurrence answers `False` (the X3 strength case).
+- [x] 2.3 RED: same file — a marker containing regex metacharacters (e.g. `.*`) matches only literally (host-supplied-text threat row).
+- [x] 2.4 RED: same file — or-fold: a two-document fixture where only index 1 declares still answers demand `True` (kills "read index 0 always").
+- [x] 2.5 GREEN: `.claude/skills/_core/implementation/engine/implementation_engine.py` — add the detector, reading each declared document via `revision_source`/`document_revision_names` (no new path-join site), or-folded across `documents[N]`.
 
 ## Phase 3: Thread `--revision` through `build_plan` (B1)
 
-- [ ] 3.1 RED: `tests/test_experimental_implementation.py` — `plan` with no `--revision` on a target with no documents root exits 0, stdout byte-identical to today (reading-at-plan-time threat row).
-- [ ] 3.2 RED: same file — the `PLAN_STALE` agreement test: real subprocesses, `plan --revision X` → approve → `apply` exits 0 and `createDirs` contains the declared `Data/`; repeat through `materialize --stage`.
-- [ ] 3.3 RED: same file — an approved `plan.json` with no `"boundTo"` key still applies (pre-existing-plans data-integrity row).
-- [ ] 3.4 GREEN: engine `main()` parser registration — add `--revision` on `plan` alone (joins the eight-name set as its own registration, mirroring `walk`'s separate one).
-- [ ] 3.5 GREEN: `build_plan` gains a third parameter; new disjunct `declared or <existing two>`; `plan["boundTo"]` emitted only when `revision is not None`.
-- [ ] 3.6 GREEN: `cmd_plan` passes `args.revision`; `cmd_apply` and `_materialize_plan_gate` read the seed from `approved["boundTo"]["revision"]` (never compared in `cmd_apply`'s four-key check) and pass the same seed to `build_plan`.
+- [x] 3.1 RED: `tests/test_experimental_implementation.py` — `plan` with no `--revision` on a target with no documents root exits 0, stdout byte-identical to today (reading-at-plan-time threat row).
+- [x] 3.2 RED: same file — the `PLAN_STALE` agreement test: real subprocesses, `plan --revision X` → approve → `apply` exits 0 and `createDirs` contains the declared `Data/`; repeat through `materialize --stage`.
+- [x] 3.3 RED: same file — an approved `plan.json` with no `"boundTo"` key still applies (pre-existing-plans data-integrity row).
+- [x] 3.4 GREEN: engine `main()` parser registration — add `--revision` on `plan` alone (joins the eight-name set as its own registration, mirroring `walk`'s separate one).
+- [x] 3.5 GREEN: `build_plan` gains a third parameter; new disjunct `declared or <existing two>`; `plan["boundTo"]` emitted only when `revision is not None`.
+- [x] 3.6 GREEN: `cmd_plan` passes `args.revision`; `cmd_apply` and `_materialize_plan_gate` read the seed from `approved["boundTo"]["revision"]` (never compared in `cmd_apply`'s four-key check) and pass the same seed to `build_plan`.
 
 ## Phase 4: `cmd_verify` reorder (B1)
 
-- [ ] 4.1 GREEN: `cmd_verify` — move `with_data`, `missing_dirs`, `structure_ok` below `revision = args.revision or discovered` (D5, three statements, no restructure).
-- [ ] 4.2 GREEN: `with_data` becomes `declared or (target / name / "Data").is_dir()`.
+- [x] 4.1 GREEN: `cmd_verify` — move `with_data`, `missing_dirs`, `structure_ok` below `revision = args.revision or discovered` (D5, three statements, no restructure). Measured: `git diff --exit-code tests/seal/` exits 0, sha256 unchanged at `011300df7daf001055fa30d895aeaac27a680e2abcc239a027b5c30169dc6f75`, and the sibling's full suite (`test_proposal_implementation.py`, 1477 tests) stays `OK (skipped=2)`.
+- [x] 4.2 GREEN: `with_data` becomes `declared or (target / name / "Data").is_dir()`.
 
 ## Phase 5: Finish F5 (B1)
 
