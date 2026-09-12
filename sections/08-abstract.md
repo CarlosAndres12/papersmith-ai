@@ -15,7 +15,7 @@
     "value": "transposition",
     "source": {
       "file": "sections/08-abstract.md",
-      "quote": "The abstract is the whole argument at one-fiftieth scale, and for most readers it is the whole paper."
+      "quote": "Every sentence here compresses something the paper already establishes, and nothing in it reaches outside this work."
     }
   },
   "blocks": [
@@ -87,7 +87,9 @@
 
 The abstract is the whole argument at one-fiftieth scale, and for most readers it is
 the whole paper. It must be self-contained: no forward reference, no undefined
-acronym, nothing that only makes sense after reading further.
+acronym, nothing that only makes sense after reading further. Every sentence here
+compresses something the paper already establishes, and nothing in it reaches
+outside this work.
 
 ## Global structural rule
 

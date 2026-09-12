@@ -347,9 +347,13 @@ class SchemaTests(unittest.TestCase):
 #: later received one operator-authored sentence each (the missing
 #: `mode`-bearing sentence a corrective batch added), a legitimate,
 #: intentional prose edit -- their three digests below were re-captured
-#: after that edit and no longer equal the header-migration-era value; the
-#: other seven are untouched since the original migration and keep their
-#: original digest.
+#: after that edit and no longer equal the header-migration-era value.
+#: `08-abstract.md` received one further operator-authored sentence (a
+#: `mode.source.quote` unambiguous to a human reader, repointing `mode`
+#: away from the pre-existing "whole argument at one-fiftieth scale"
+#: sentence, which stays in the body as ordinary prose) -- its digest below
+#: was re-captured after that edit too. The other six are untouched since
+#: the original migration and keep their original digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "ca424309f46389e79155d58d36245e4160db77aaf837b48a2b585d1e0e628a89"[:64],
     "02-experimental-setup.md": "c4465b7f1a371e1b8ee2315e4032cff0a6e8bf76ac4c0a8903a90635c8f7888f"[:64],
@@ -358,7 +362,7 @@ PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "05-related-work.md": "d4d10c2da38e6c576c6305bd0c37879c81bfb5806670f3c2dc9bc851a19483b4"[:64],
     "06-introduction.md": "0f6c3b6bfe13206470ed22d88a953f96e86b81bd56445b0c2e40d1ee1354cbff"[:64],
     "07-conclusions.md": "a855ee2a68b66328562317274049d9f78108457644089b3125ea6b51a76ae84b"[:64],
-    "08-abstract.md": "8814477108c9121d089fa5738b242ca30093bdd4a16952e38da17eda41857c1a"[:64],
+    "08-abstract.md": "2e5ef7501bccafc785be3aa7fa640dbcf62add3e7e5bc345fa1be21f34a20b66"[:64],
     "09-title-and-keywords.md": "7f44428e530a0209152366e83a7c7e23c52cfc41efe1bc9689eb813c3c44b297"[:64],
     "10-back-matter.md": "8965bd1e429556163077e4350c1a57d4d4d06f3852fa7b6b117236bdc61be2ff"[:64],
 }
