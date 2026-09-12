@@ -13,12 +13,20 @@ Public surface:
     append_record(paper_dir, record, ...) -> dict
     read_records(paper_dir, block_id)     -> list[dict]
     read_all_records(paper_dir)           -> list[dict]
-    classify_guidance_child(path, sections_dir=...) -> "evidence"|"style"|"ambiguous"
     write_evidence_manifest(folder, section_id, papers) -> dict
 
 No I/O toward the network anywhere in this module -- resolution and metadata
 live in `paper_resolve.py`; this module only ever reads bytes already on
 disk (`design.md`, Decision 2 and 6).
+
+**`classify_guidance_child` was removed** (zero-production-caller
+corrective): it was a second, competing `guidance/` classifier alongside
+`paper_guidance.read_registry` -- name-plus-manifest here versus a
+per-folder `.paper-writing.json` marker there. `plan` and the
+`style-sampler` agent (`.claude/agents/style-sampler.md`: "that
+classification belongs to `plan`'s own registry") both already resolve the
+evidence/style distinction through `paper_guidance.py`, so this function
+was a duplicate mechanism with no consumer, never the missing wire.
 """
 from __future__ import annotations
 
@@ -280,37 +288,6 @@ def read_all_records(paper_dir: Path) -> list[dict]:
             if line:
                 records.append(json.loads(line))
     return records
-
-
-def _section_ids(sections_dir: Path) -> set[str]:
-    if not sections_dir.is_dir():
-        return set()
-    return {entry.stem for entry in sections_dir.glob("*.md")}
-
-
-def classify_guidance_child(path: Path, *, sections_dir: Path) -> str:
-    """`evidence` | `style` | `ambiguous`, from two independent
-    discriminators (`design.md`, Decision 6): the folder's own name is a
-    section id drawn from `sections/*.md` **at runtime** -- never a literal
-    list, which is what makes renaming a section id move the evidence
-    folder with zero code changed -- and the presence of this capability's
-    own `.papersmith-evidence.json` manifest, never `paper_guidance.py`'s
-    unrelated `.paper-writing.json` marker.
-
-    Both present -> `evidence`. Neither present -> `style` (an ordinary
-    style-reference folder, name and manifest both absent). Exactly one
-    present -> `ambiguous`, resolved by neither this function nor any
-    caller in this change (`evidence-set`, Requirement: Evidence Folders
-    Carry a Producer-Written Manifest -- "name-alone is guessable,
-    manifest-alone is forgeable").
-    """
-    name_is_section = path.name in _section_ids(sections_dir)
-    has_manifest = (path / _EVIDENCE_MANIFEST_NAME).is_file()
-    if name_is_section and has_manifest:
-        return "evidence"
-    if not name_is_section and not has_manifest:
-        return "style"
-    return "ambiguous"
 
 
 def write_evidence_manifest(folder: Path, *, section_id: str, papers: list[str],
