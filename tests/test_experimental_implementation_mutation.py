@@ -122,9 +122,19 @@ MUTATIONS: dict[str, tuple[str, str, str]] = {
         '"remedy_locus_key": "remedy_loci",', "REMEDY_LOCUS_KEY"),
     "findings.notation_keys": (
         '"locus": "experiments",', '"locus": "loci",', "NOTATION_KEYS"),
+    # Cut 3 slice C (`the-second-document-verified-on-its-own-terms`,
+    # design.md D3): the resolver now validates every `citation_pattern`'s
+    # group count. The mutation replaces the WHOLE two-line literal (both
+    # raw-string halves) with a single-line, still-three-group pattern --
+    # the old two-branch-only replacement left the THIRD (unedited)
+    # branch's own group in place, producing a 1-group pattern that the
+    # resolver now refuses outright before this test's own fresh-import
+    # ever runs.
     "findings.citation_pattern": (
-        r'r"Exps?\.?\s*\(?(\d+)\)?|Experiment\.?\s*\(?(\d+)\)?|"',
-        r'r"NOMATCHPATTERN_\d+|"', "CITATION_PATTERN"),
+        'r"Exps?\\.?\\s*\\(?(\\d+)\\)?|Experiment\\.?\\s*\\(?(\\d+)\\)?|"\n'
+        '            r"Experimentos?\\s*\\((\\d+)\\)"',
+        'r"Zzs?\\.?\\s*\\(?(\\d+)\\)?|Zzk\\.?\\s*\\(?(\\d+)\\)?|Zzq\\s*\\((\\d+)\\)"',
+        "CITATION_PATTERN"),
     "vocabulary.subject_singular": (
         '"subject_singular": "experiment",', '"subject_singular": "claim",',
         "SUBJECT_SINGULAR"),

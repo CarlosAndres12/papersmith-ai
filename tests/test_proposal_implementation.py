@@ -12446,16 +12446,28 @@ class SeventhScaffoldBlockTests(unittest.TestCase):
 
 
 class ExtraDocumentFidelityStatusTests(unittest.TestCase):
-    """Cut 3 (`a-revision-is-two-documents`, Phase 14, design.md D7/C8):
-    `_extra_document_fidelity_status` -- one document beyond document 0's
-    own `fidelity_status`, the same four shared conditions plus whether
-    THIS document's own revision text resolves. A pure, module-level
-    function (never a closure inside `cmd_verify`), so it stays directly
-    testable regardless of how many documents any particular process has
-    loaded -- `IMPLEMENTATION_PROPOSALS_1` overrides `revision_source`'s
-    own `index=1` root without ever touching `DOCUMENTS[1]`, which this
+    """Cut 3 (`a-revision-is-two-documents`, Phase 14, design.md D7/C8),
+    signature rewritten Cut 3 slice C (`the-second-document-verified-on-
+    its-own-terms`, design.md D4/D5): `_extra_document_fidelity_status`
+    -- one document beyond document 0's own `fidelity_status`, now folded
+    from that document's own `conditions` dict (`staleModules`/
+    `missingProvenance`/`invariantsWithoutTest`/`unreachedModules`,
+    `cmd_verify`'s own `conditions_by_index[N]` shape) plus whether THIS
+    document's own revision text resolves. A pure, module-level function
+    (never a closure inside `cmd_verify`), so it stays directly testable
+    regardless of how many documents any particular process has loaded --
+    `IMPLEMENTATION_PROPOSALS_1` overrides `revision_source`'s own
+    `index=1` root without ever touching `DOCUMENTS[1]`, which this
     one-document process's profile does not declare.
     """
+
+    #: The four-key shape `cmd_verify`'s own `conditions_by_index[N]`
+    #: builds, all empty -- the "nothing fired" baseline every case below
+    #: starts from and overrides one key of at a time.
+    _EMPTY_CONDITIONS = {
+        "staleModules": [], "missingProvenance": [],
+        "invariantsWithoutTest": [], "unreachedModules": [],
+    }
 
     def _extra_root(self, revision_text: str | None = "some text"):
         root = Path(tempfile.mkdtemp())
@@ -12474,29 +12486,48 @@ class ExtraDocumentFidelityStatusTests(unittest.TestCase):
 
     def test_unknown_when_no_revision_or_the_documents_own_text_is_unresolvable(self):
         self.assertEqual(
-            impl._extra_document_fidelity_status(None, 1, [], [], [], [], False),
+            impl._extra_document_fidelity_status(
+                None, 1, self._EMPTY_CONDITIONS, False),
             "unknown")
         self._extra_root(revision_text=None)  # root exists, "r1.md" does not
         self.assertEqual(
-            impl._extra_document_fidelity_status("r1.md", 1, [], [], [], [], False),
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, False),
             "unknown")
 
-    def test_drift_when_any_shared_condition_fires(self):
+    def test_drift_when_any_condition_fires(self):
         self._extra_root()
         self.assertEqual(
             impl._extra_document_fidelity_status(
-                "r1.md", 1, ["modA"], [], [], [], False), "drift")
+                "r1.md", 1, {**self._EMPTY_CONDITIONS, "staleModules": ["modA"]},
+                False),
+            "drift")
         self.assertEqual(
             impl._extra_document_fidelity_status(
-                "r1.md", 1, [], ["modB"], [], [], False), "drift")
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "missingProvenance": ["modB"]}, False),
+            "drift")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "invariantsWithoutTest": ["inv"]}, False),
+            "drift")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "unreachedModules": [{"module": "m"}]},
+                False),
+            "drift")
 
     def test_undeclared_and_ok(self):
         self._extra_root()
         self.assertEqual(
-            impl._extra_document_fidelity_status("r1.md", 1, [], [], [], [], True),
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, True),
             "undeclared")
         self.assertEqual(
-            impl._extra_document_fidelity_status("r1.md", 1, [], [], [], [], False),
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, False),
             "ok")
 
 
