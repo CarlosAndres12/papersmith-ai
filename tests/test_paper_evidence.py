@@ -170,9 +170,17 @@ class EvidenceSpanTests(unittest.TestCase):
         # independence of AUTHORSHIP (this quote was not shaped to pass),
         # never independence of DOMAIN. That limit is stated here, not
         # silently assumed.
+        #
+        # The quote moved once, when the README was rewritten to document
+        # nine skills instead of five and its opening paragraph went with
+        # it. The replacement is deliberately taken from a section that
+        # rewrite did NOT touch: a line authored for this test, or authored
+        # in the same pass that fixed it, would still be verbatim and would
+        # no longer be independent of authorship, which is the whole of
+        # what this fixture proves.
         readme = FORGE_ROOT / "README.md"
         self.assertTrue(readme.is_file(), "README.md must exist for this fixture to mean anything")
-        quote = "Una forja de papers: ingiere PDFs de referencia a Markdown de alta fidelidad y"
+        quote = "**Papers guía** — las referencias metodológicas / de estilo."
         span = paper_evidence.EvidenceSpan.locate(readme, quote)
         self.assertEqual(span.quote, quote)
 
