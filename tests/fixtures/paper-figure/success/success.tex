@@ -1,0 +1,11 @@
+\documentclass{standalone}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\begin{document}
+\begin{tikzpicture}
+% node: encoder
+\node (encoder) [draw] {Encoder};
+% node: decoder
+\node (decoder) [draw, right=of encoder] {Decoder};
+\end{tikzpicture}
+\end{document}
