@@ -12,7 +12,9 @@ and the citation pattern's exactly-three-group shape (task 1.4, M2).
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
+import hashlib
 import importlib.util
 import itertools
 import json
@@ -1595,6 +1597,312 @@ class LocalReachUnitTests(unittest.TestCase):
         empty mapping as local by accident; `local_reach` must not."""
         engine = self._engine()
         self.assertFalse(engine.local_reach({"class": {}}))
+
+
+class AdmissibilityMultiDocumentAbsenceFailOpenTests(unittest.TestCase):
+    """M10: `admissibility_record`'s multi-document staleness check must
+    not read an absent `documents[1]` entry, or an unreadable document-1
+    source, as fresh. Both used to fall through to `"present"`; both must
+    now answer `"unknown"`."""
+
+    def _tmp_dir(self, prefix: str) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _engine(self, doc0_dir: Path, doc1_dir: Path):
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        pairs = [("IMPLEMENTATION_PROPOSALS", str(doc0_dir)),
+                 ("IMPLEMENTATION_PROPOSALS_1", str(doc1_dir))]
+        saved = [(key, os.environ.get(key)) for key, _ in pairs]
+        for key, value in pairs:
+            os.environ[key] = value
+
+        def _restore():
+            for key, original in saved:
+                if original is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = original
+
+        self.addCleanup(_restore)
+        return module
+
+    def test_a_missing_document_one_entry_is_unknown_not_fresh(self):
+        doc0_dir = self._tmp_dir("m10-entry-doc0-")
+        doc1_dir = self._tmp_dir("m10-entry-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nbody.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text("proposal body.\n", encoding="utf-8")
+        module = self._engine(doc0_dir, doc1_dir)
+
+        box = self._tmp_dir("m10-entry-box-")
+        (box / "tests").mkdir()
+        source = (doc0_dir / "e1.md").read_text(encoding="utf-8")
+        record = {
+            "revision": "e1.md",
+            "revisionSha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "findings": {},
+            # No entry at all for document 1 ("proposal").
+            "documents": [],
+        }
+        (box / "tests" / "admissibility.json").write_text(
+            json.dumps(record), encoding="utf-8")
+
+        result = module.admissibility_record(box, "e1.md")
+        self.assertNotEqual(result["status"], "present",
+                            "a missing documents[1] entry reads as fresh")
+        self.assertEqual(result["status"], "unknown")
+
+    def test_an_unreadable_document_one_source_is_unknown_not_fresh(self):
+        doc0_dir = self._tmp_dir("m10-source-doc0-")
+        doc1_dir = self._tmp_dir("m10-source-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nbody.\n", encoding="utf-8")
+        # doc1_dir is left with no digit-named file at all, so document 1's
+        # own name never resolves and its text can never be read.
+        module = self._engine(doc0_dir, doc1_dir)
+
+        box = self._tmp_dir("m10-source-box-")
+        (box / "tests").mkdir()
+        source = (doc0_dir / "e1.md").read_text(encoding="utf-8")
+        record = {
+            "revision": "e1.md",
+            "revisionSha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            "findings": {},
+            "documents": [{"label": "proposal", "revision": "p1.md",
+                           "revisionSha256": "deadbeef"}],
+        }
+        (box / "tests" / "admissibility.json").write_text(
+            json.dumps(record), encoding="utf-8")
+
+        result = module.admissibility_record(box, "e1.md")
+        self.assertNotEqual(result["status"], "present",
+                            "an unreadable document-1 source reads as fresh")
+        self.assertEqual(result["status"], "unknown")
+
+
+class PositionStateAbsentBranchKeyParityTests(unittest.TestCase):
+    """M11: the absent-position return must carry every key the full
+    return does, `unmeasurable` included -- a consumer reading
+    `position["unmeasurable"]` on an absent target must not `KeyError`."""
+
+    def _engine(self):
+        engine, tmp_dir = _engine_with_documents([
+            {"directory": Path(tempfile.mkdtemp(prefix="posstate-doc-")),
+             "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator(), "cross_citation": None},
+        ])
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return engine
+
+    def test_the_absent_branch_carries_unmeasurable(self):
+        engine = self._engine()
+        target = Path(tempfile.mkdtemp(prefix="posstate-target-"))
+        self.addCleanup(shutil.rmtree, target, ignore_errors=True)
+        result = engine.position_state(target, "Nope", {}, None, None)
+        self.assertEqual(result["status"], "absent")
+        self.assertIn("unmeasurable", result)
+        self.assertEqual(result["unmeasurable"], [])
+
+    def _function_docstring(self, name: str) -> str:
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        definition = next(
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef) and node.name == name)
+        return ast.get_docstring(definition) or ""
+
+    def test_the_docstring_no_longer_claims_filesystem_free_beyond_the_block(self):
+        doc = self._function_docstring("position_state")
+        self.assertNotIn("reads no filesystem itself", doc)
+        self.assertIn("position.jsonl", doc)
+
+    def test_the_docstring_cites_returned_keys_own_stated_limitation_correctly(self):
+        doc = self._function_docstring("position_state")
+        test_source = (FORGE / "tests" / "test_proposal_implementation.py").read_text(
+            encoding="utf-8")
+        lines = test_source.splitlines()
+        # `returned_keys`'s own stated dict-literal-only limitation, wherever
+        # it currently sits -- proven against the real file rather than a
+        # number carried in this test.
+        self.assertIn("dict literal", "\n".join(lines[229:232]))
+        self.assertIn("test_proposal_implementation.py:230-232", doc)
+
+
+class IntrospectBenchmarkConfigFallbackTests(unittest.TestCase):
+    """M12: the `INTROSPECT` script's own `__benchmark__` read must fall
+    back to `config.py`, exactly like `resolve_benchmark_declaration`
+    does -- a declaration living only there must not read as absent here."""
+
+    def _write_fixture_interpreter(self, bin_dir: Path) -> Path:
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            target = bin_dir / "python.exe"
+            os.symlink(sys.executable, target)
+            return target
+        target = bin_dir / "python"
+        import shlex as _shlex
+        target.write_text(
+            f"#!/bin/sh\nexec {_shlex.quote(sys.executable)} \"$@\"\n",
+            encoding="utf-8")
+        target.chmod(0o755)
+        return target
+
+    def _box(self, suffix: str, files: dict) -> Path:
+        path = Path(tempfile.mkdtemp(prefix=f"m12-{suffix}-"))
+        self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        package = path / "src" / "Method_Benchmark"
+        package.mkdir(parents=True)
+        for name, source in files.items():
+            (package / name).write_text(source, encoding="utf-8")
+        self._write_fixture_interpreter(
+            path / ".venv" / ("Scripts" if os.name == "nt" else "bin"))
+        return path
+
+    def _engine(self):
+        engine, tmp_dir = _engine_with_documents(_real_profile()["documents"])
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return engine
+
+    def test_a_declaration_only_in_config_py_is_not_read_as_absent(self):
+        """`__init__.py` binds nothing; `config.py` alone declares
+        `__benchmark__` with a `conclusionEntry` naming a function that does
+        not exist. Before the fix, `contract` reads `{}` and the inert
+        entry names `"*"` ("el contrato no declara conclusionEntry"); after
+        it, `contract` is read from `config.py` and the inert entry names
+        the declared (unresolvable) entry instead -- proof the text was
+        actually read, not merely that some inert entry exists."""
+        engine = self._engine()
+        target = self._box("config-only", {
+            "__init__.py": "",
+            "config.py": (
+                "__benchmark__ = {'report': "
+                "{'conclusionEntry': 'entrypoint.nonexistent_fn'}}\n"),
+            "entrypoint.py": "VALUE = 1\n",
+        })
+        # Non-empty, so INTROSPECT reaches the "try to exercise the
+        # conclusion" branch rather than its own "no record" one.
+        record = target / "record.json"
+        record.write_text(json.dumps({"x": 1}), encoding="utf-8")
+        result = engine.introspect(
+            target, "Method", record, entry_module="Method_Benchmark.entrypoint")
+        self.assertEqual(result["status"], "ok", result)
+        conclusions = result["inertConclusions"]
+        self.assertEqual(len(conclusions), 1, conclusions)
+        self.assertEqual(conclusions[0]["conclusion"],
+                         "entrypoint.nonexistent_fn")
+        self.assertIn("no se pudo ejercitar", conclusions[0]["reason"])
+
+
+class JobExecutionFieldsSharedReaderTests(unittest.TestCase):
+    """M13: `accelerator`/`localBudget` must be read off `run_config`
+    through one shared function both `remote_execution_jobs_state` and
+    `cmd_gate` call, never two separately drifting expressions."""
+
+    def _engine(self):
+        engine, tmp_dir = _engine_with_documents(_real_profile()["documents"])
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return engine
+
+    def test_the_shared_reader_returns_both_fields(self):
+        engine = self._engine()
+        self.assertEqual(
+            engine._job_execution_fields(
+                {"accelerator": "T4", "localBudget": 3, "other": "x"}),
+            {"accelerator": "T4", "localBudget": 3})
+
+    def test_the_shared_reader_returns_none_for_either_absent(self):
+        engine = self._engine()
+        self.assertEqual(
+            engine._job_execution_fields({}),
+            {"accelerator": None, "localBudget": None})
+
+    def _calls_the_shared_reader(self, function_name: str) -> bool:
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        definition = next(
+            node for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.FunctionDef) and node.name == function_name)
+        return any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "_job_execution_fields"
+            for node in ast.walk(definition))
+
+    def test_remote_execution_jobs_state_calls_the_shared_reader(self):
+        self.assertTrue(
+            self._calls_the_shared_reader("remote_execution_jobs_state"))
+
+    def test_cmd_gate_calls_the_shared_reader(self):
+        self.assertTrue(self._calls_the_shared_reader("cmd_gate"))
+
+
+class DeadGatingRefusalJustificationTests(unittest.TestCase):
+    """L3: `_skipped_rung_detail`, `_step_operand_detail`,
+    `_record_operand_detail` and `_record_shape_detail` no longer justify
+    the detail/raise split with the retired `raised_refusal_codes` walk --
+    `reachable_refusal_codes` (test_proposal_implementation.py) follows
+    references into helper modules today, so a helper-deep `Refused`
+    would not go unclassified either way."""
+
+    FUNCTIONS = ("_skipped_rung_detail", "_step_operand_detail",
+                "_record_operand_detail", "_record_shape_detail")
+
+    def test_none_of_the_four_docstrings_cites_the_retired_walk(self):
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(source)
+        by_name = {node.name: node for node in ast.walk(tree)
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name in self.FUNCTIONS}
+        self.assertEqual(set(by_name), set(self.FUNCTIONS))
+        leaks = []
+        for name, node in by_name.items():
+            doc = ast.get_docstring(node) or ""
+            if "raised_refusal_codes" in doc or "GatingRefusalRosterTests" in doc:
+                leaks.append(name)
+        self.assertEqual(leaks, [],
+                         f"still cites the retired walk: {leaks}")
+
+
+class DeadImportAndStaleCallerCitationTests(unittest.TestCase):
+    """L4: six names imported by the engine and never used elsewhere in
+    it. `latest_revision`'s own dead-caller claim lives in a test this
+    file does not own (`test_proposal_implementation.py`), and is only
+    reported here, never edited."""
+
+    UNUSED = ("WORKSPACE", "LFS_POINTER_PREFIX", "TEXT_EXT",
+              "read_text", "text_files", "is_nesting")
+
+    def test_the_engine_imports_none_of_the_six_dead_names(self):
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(source)
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imported.add(alias.asname or alias.name)
+        leaked = [name for name in self.UNUSED if name in imported]
+        self.assertEqual(leaked, [], f"still imported: {leaked}")
+
+    def test_latest_revision_has_no_production_caller_left(self):
+        """The engine's own production code never calls `latest_revision`
+        -- `revision_discovery` replaced its one caller. The keeper test's
+        own "one production caller" wording is reported to the orchestrator
+        for the agent that owns `test_proposal_implementation.py`; this
+        file does not edit it."""
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(source)
+        callers = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.FunctionDef)
+                    and node.name != "latest_revision"):
+                for call in ast.walk(node):
+                    if (isinstance(call, ast.Call)
+                            and isinstance(call.func, ast.Name)
+                            and call.func.id == "latest_revision"):
+                        callers.append(node.name)
+        self.assertEqual(callers, [])
 
 
 if __name__ == "__main__":

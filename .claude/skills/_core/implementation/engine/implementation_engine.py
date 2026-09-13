@@ -51,12 +51,12 @@ from pathlib import Path
 # the shared core is simply its own parent directory -- no longer host-supplied.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from impl_domain_profile import PROFILE  # noqa: E402
-from impl_layout import FORGE_ROOT, WORKSPACE, IGNORED_DIRS, LFS_POINTER_PREFIX, TEXT_EXT  # noqa: E402
+from impl_layout import FORGE_ROOT, IGNORED_DIRS  # noqa: E402
 from impl_refusals import NameRefused, Refused  # noqa: E402
-from impl_gitops import git, lfs_state, present_files, read_text, text_files, tracked_files  # noqa: E402
+from impl_gitops import git, lfs_state, present_files, tracked_files  # noqa: E402
 from impl_guards import require_clean_worktree, require_non_forge_interpreter, resolve_target  # noqa: E402
 from impl_naming import normalize_name, package_name, validate_name  # noqa: E402
-from impl_references import (is_nesting, prefix_mappings, reference_pattern,  # noqa: E402
+from impl_references import (prefix_mappings, reference_pattern,  # noqa: E402
                              scan_reference_updates, scan_stale_references)
 import impl_availability  # noqa: E402
 import impl_execution_strategy  # noqa: E402
@@ -567,13 +567,15 @@ def position_state(target: Path, name: str, evidence: dict,
     Every mark reported here is derived, never read as an asserted claim —
     see `impl_position.derive`. `evidence` is a plain dict of already-computed
     states (the search, the notebooks, the job readiness and, when given, the
-    arrived shards), so this function reads no filesystem itself beyond
-    locating which markdown file, if any, holds the block.
+    arrived shards); this function also reads `.implementation/position.jsonl`
+    itself, via `impl_position.read_events`, for the last gate/close events.
 
     Uniform key set on every branch, `absent` included: a caller that reads
     `position["sequence"]` on a target that never reached a gate must not
-    special-case the one status where the key would otherwise be missing —
-    `returned_keys`'s agreement rule (test_proposal_implementation.py:161-164).
+    special-case the one status where the key would otherwise be missing.
+    This branch's own return is a bare Name, not a dict literal, so
+    `returned_keys` (test_proposal_implementation.py:230-232) cannot see
+    it at all -- parity here is kept by hand, not by that lock.
 
     Reported and never gating, exactly like `agreements_state` beside it: a
     target with items still open is a not-yet-ready state, not a failure, and
@@ -600,6 +602,9 @@ def position_state(target: Path, name: str, evidence: dict,
         "boundTo": ({entry["label"]: "unknown" for entry in DOCUMENTS}
                     if multi else "unknown"),
         "sequence": [], "disagreements": [], "unmeasured": [],
+        # Held to the same key set the full return has below
+        # (`unmeasurable`, filled by the loop this branch never reaches).
+        "unmeasurable": [],
         # Every item whose box is ticked and whose witness nothing measured
         # -- an assertion, not a reading. Its own list beside `disagreements`
         # rather than folded into it, because a disagreement names a
@@ -5640,7 +5645,15 @@ constants_holder = next(
      if importlib.util.find_spec(candidate) is not None), None)
 config = importlib.import_module(constants_holder) if constants_holder else None
 declaration = importlib.import_module(f"{package}_Benchmark")
-contract = getattr(declaration, "__benchmark__", {}).get("report", {})
+contract = getattr(declaration, "__benchmark__", None)
+if contract is None:
+    # Also try config.py, like the other reader does.
+    try:
+        alt = importlib.import_module(f"{package}_Benchmark.config")
+    except ModuleNotFoundError:
+        alt = None
+    contract = getattr(alt, "__benchmark__", None)
+contract = (contract or {}).get("report", {})
 
 def frozen(value):
     """A collection as a comparable set, or nothing if it is not one."""
@@ -8661,12 +8674,19 @@ def admissibility_record(target: Path, revision: str | None) -> dict:
                 for index in range(1, len(DOCUMENTS)):
                     label = DOCUMENTS[index]["label"]
                     entry = by_label.get(label)
+                    # An absent entry or unreadable text means UNKNOWN,
+                    # never fresh: neither one is evidence of a match.
                     if entry is None:
-                        continue
+                        return {"status": "unknown",
+                                "detail": f"{label!r} has no entry here; "
+                                          "its freshness cannot be known"}
                     extra_source = (revision_source(names[index], index)
                                     if names[index] else None)
                     if extra_source is None:
-                        continue
+                        return {"status": "unknown",
+                                "detail": f"{label!r}'s text could not be "
+                                          "found; its freshness cannot be "
+                                          "known"}
                     extra_current = hashlib.sha256(
                         extra_source.encode("utf-8")).hexdigest()
                     if entry.get("revisionSha256") != extra_current:
@@ -9197,6 +9217,14 @@ def job_notebook_pilot_state(jobs: list[dict], pilot: dict) -> dict:
             "note": JOB_NOTEBOOK_PILOT_NOTE}
 
 
+def _job_execution_fields(run_config: dict) -> dict:
+    """`accelerator`/`localBudget` off one `run_config` -- shared by
+    `remote_execution_jobs_state` and `cmd_gate`, so neither spells the
+    two keys on its own."""
+    return {"accelerator": run_config.get("accelerator"),
+            "localBudget": run_config.get("localBudget")}
+
+
 def remote_execution_jobs_state(target: Path) -> dict:
     """`probe`'s own job-folder fact (design #744 section 9): what job
     folders exist on disk right now, reported alongside
@@ -9218,9 +9246,11 @@ def remote_execution_jobs_state(target: Path) -> dict:
     strategy`): both are optional, additive blocks `jobfolder.
     build_run_config()` writes only when the target declared them, and
     both are carried through verbatim — `None` when absent, never a
-    default. This is the one and only place either is read for
-    `classify_remote_necessity()` (`impl_execution_strategy.py`); no
-    caller opens `run-config.json` a second time to get them.
+    default. `_job_execution_fields` is the one place this pair is read
+    off `run_config` for `classify_remote_necessity()`
+    (`impl_execution_strategy.py`) -- this loop and `cmd_gate` both call
+    it, never spelling the two keys again themselves; no caller opens
+    `run-config.json` a second time to get them.
 
     **The `None` conflation, made visible rather than passed through.**
     `remote_cli._job_folder_staleness()` returns `None` for two different
@@ -9306,8 +9336,7 @@ def remote_execution_jobs_state(target: Path) -> dict:
             "job": job_name,
             "product": product,
             "staleness": dict(job_folder.staleness),
-            "accelerator": run_config.get("accelerator"),
-            "localBudget": run_config.get("localBudget"),
+            **_job_execution_fields(run_config),
             # What this job would RUN, when what it runs is a notebook --
             # read out of the same open `run_config`, exactly as the two
             # fields above it are, and never a second `JOBFOLDER.read()`.
@@ -9400,12 +9429,9 @@ def _skipped_rung_detail(
     """Why this pass skips a rung, or `None` when it skips none: **to seal at
     rung N, every leveled item must already grade as satisfied at rung N-1.**
 
-    Returns the refusal's detail rather than raising it, and the caller raises.
-    `GatingRefusalRosterTests` walks a gating command's own body for the
-    `Refused` literals it carries, and a code raised one call deep in a helper
-    is invisible to that walk -- so a rule this heavy would have entered the
-    engine with nobody having classified it. The refusal is kept where the
-    roster can see it; the reasoning is kept here, where it belongs.
+    Returns the refusal's detail rather than raising it, and the caller
+    raises: the gating command keeps the `Refused` where its own body
+    carries it, and the reasoning stays here.
 
     The three checks above this one ask whether a rung was named, whether the
     target declared it, and whether a leveled witness has a ladder to stand on.
@@ -9513,9 +9539,8 @@ def _step_operand_detail(items: list[dict], steps: dict) -> str | None:
     `None` when every one names a step this target's own `__steps__`
     actually declares -- `_skipped_rung_detail`'s own shape, above, for the
     identical reason: returns the refusal's detail rather than raising it,
-    so `POSITION_STEP_UNKNOWN` stays visible to `raised_refusal_codes` at
-    the one call site (inside `cmd_position`) that raises it, not buried
-    one call deep in a helper `GatingRefusalRosterTests`'s walk cannot see.
+    and `POSITION_STEP_UNKNOWN` is raised where `cmd_position` calls it,
+    not here.
 
     `parse_items` (`impl_position.py`) validates only the witness KIND --
     that `"step"` is a member of `WITNESS_KINDS` -- never the operand
@@ -9546,10 +9571,8 @@ def _record_operand_detail(items: list[dict], records: dict) -> str | None:
     be measured, or `None` when every one names a record this target's own
     `__records__` actually declares -- `_step_operand_detail`'s own shape,
     above, for the identical reason: returns the refusal's detail rather
-    than raising it, so `POSITION_RECORD_UNKNOWN` stays visible to
-    `raised_refusal_codes` at the one call site (inside `cmd_position`) that
-    raises it, not buried one call deep in a helper `GatingRefusalRosterTests`'s
-    walk cannot see.
+    than raising it, and `POSITION_RECORD_UNKNOWN` is raised where
+    `cmd_position` calls it, not here.
 
     **One code covers two facts** (design D6): `__records__` declares
     nothing at all, and `__records__` declares others but not this name.
@@ -9616,10 +9639,9 @@ def _record_shape_detail(items: list[dict], records: dict) -> str | None:
     position write until every entry is finished would be the forge deciding
     when a declaration is done.
 
-    Returns the detail and never raises, for the reason
-    `_record_operand_detail` states in full: a code raised one call deep in a
-    helper is invisible to `raised_refusal_codes`' walk over the `cmd_*`
-    body, so a refusal this heavy would enter the engine unclassified.
+    Returns the detail and never raises: `POSITION_RECORD_UNKNOWN` and its
+    sibling refusal above are raised where `cmd_position` calls them, not
+    here.
     """
     broken = []
     for operand in sorted({
@@ -14314,8 +14336,7 @@ def cmd_gate(args: argparse.Namespace) -> dict:
     gate_cost_forecast = search_cost_forecast(
         gate_state.get("reduction") or {}, declared_required_scale(gate_search))
     gate_necessity = impl_execution_strategy.classify_remote_necessity(
-        jobs=[{"job": args.job, "accelerator": run_config.get("accelerator"),
-               "localBudget": run_config.get("localBudget"),
+        jobs=[{"job": args.job, **_job_execution_fields(run_config),
                "smokeReady": smoke_ready.get(args.job, False)}],
         results_status=gate_state["status"], cost_forecast=gate_cost_forecast)
     necessity_verdict = gate_necessity["jobs"][args.job]["necessity"]
