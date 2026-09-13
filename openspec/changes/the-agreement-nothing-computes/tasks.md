@@ -1515,46 +1515,170 @@ promised**. Estimate 600–950.
 
 ## Phase 6: Cross-slice success-criteria sweep
 
-- [ ] 6.1 Both refusal kinds mutation-proven (3.7/3.8/3.13), each corpus
-      case named before its assertion (3.3, 3.7, 3.8) — confirmed by
-      reading the commit history, not by re-running.
-- [ ] 6.2 Two-discrepancy acknowledgment case (4.1) clears exactly one id;
-      general continue clears nothing (4.3).
-- [ ] 6.3 No-crossing-declared refuses once, not per-claim (3.3, 3.6).
-- [ ] 6.4 No verdict word, no resolution proposal, no repair direction —
-      each proven by mutation (3.11, 5.11), not by reading the source.
-- [ ] 6.5 `remedy_compatibility` reads document N's own locus keys (1.16,
-      1.29).
-- [ ] 6.6 `compose`/`admit` sealed, `unsealed.json` shrunk (1.23, 1.24).
-- [ ] 6.7 Every moved `experiments_seal` digest individually read and
-      defended (1.24, 3.12, 4.6).
-- [ ] 6.8 `tests/seal/`'s 28 digests byte-identical at every phase gate
-      (1.33, 2.14, 3.16, 4.6, 5.16); `npm test` 595/595 throughout;
-      `skipped=6` never moved.
-- [ ] 6.9 No file under `proposal-implementation/` (besides its one
-      profile edit) or `proposal-deliberation/` modified — `git diff
-      --exit-code` on both trees, run once more at the very end.
-- [ ] 6.10 Every new refusal code (`COMPOSE_AMBIGUOUS_DOCUMENT`,
-      `AGREEMENT_CROSSING_UNDECLARED`, `AGREEMENT_DOCUMENTS_DISAGREE`,
-      `HANDOFF_DOCUMENT_UNREADABLE`) appears in `reachable_refusal_codes()`'s
-      roster and is classified in `GATING_REFUSALS` — confirmed at 115, 117,
-      118 in order, never bulk-checked against a single final number.
-      `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR`,
-      `…_INVALID_CROSS_CITATION_PATTERN`, `…_UNKNOWN_CROSS_DOCUMENT`
-      confirmed invisible to that walk (`ImplementationProfileError`, per
-      M11).
-- [ ] 6.11 VOID (resolved pre-apply in `5d42dd7`): R1 and R2 were resolved
-      before apply — `implementation-per-document-vocabulary/spec.md`
-      already carries the nested `cross_citation` shape and the
-      required-non-nullable `block_locator` tier, along with
-      `implementation-block-locator` and `implementation-cross-document-
-      agreement`'s matching text. There is no spec-sync correction left to
-      file as a post-apply follow-up.
-- [ ] 6.12 Report the measured total changed-line count per slice against
-      design's 2,750–4,350 floor and this file's own 750–1,150 /
-      500–800 / 600–950 / 300–500 / 600–950 per-phase estimates — do not
-      repeat the numbers, report what was actually measured, including
-      whether the D1b contingency split fired.
+- [x] 6.1 **Measured, confirmed both by reading commit history and by
+      re-running** (`.venv/bin/python -m unittest
+      tests.test_experiments_seal.AgreementDisagreeZ7MutationTests
+      tests.test_experiments_seal.AgreementCheckTests` → 8/8 `OK`). Kind 1
+      (`AGREEMENT_DOCUMENTS_DISAGREE`'s `claimAbsent`) and Kind 2
+      (`claimUntested`) are proven together by one mutation, Z7 (3.13),
+      which fires on the exact reaching corpus case `agree-disagree`
+      (`trial-crossing-disagree.md` against the crossing target): a
+      per-discrepancy `raise` loses the second named claim, the real
+      implementation names both in one message. Each case's own docstring
+      cites its own task number (3.3/3.4/3.6/3.7/3.8/3.9) and names its
+      reaching fixture before its assertion, confirmed by direct read of
+      `tests/test_experiments_seal.py`.
+- [x] 6.2 **Measured** by re-running `tests.test_experiments_seal.
+      AcknowledgmentTests tests.test_experiments_seal.
+      AcknowledgeZ8MutationTests` → 4/4 `OK`.
+      `test_one_of_two_acknowledged_the_other_still_blocks` (4.1) clears
+      exactly `absent:5`, leaves `untested:9` named in `unacknowledged`;
+      `test_a_general_continue_with_no_ids_clears_nothing` (4.3) clears
+      neither id, whether `--acknowledge` is omitted entirely or names an
+      id that does not exist; Z8's own mutation (clearing the whole list
+      rather than the named id) is caught by 4.1's own two-discrepancy
+      case, confirmed green under the real engine, red under the mutation.
+- [x] 6.3 **Measured** by re-running `AgreementCheckTests.
+      test_zero_crossings_against_the_default_target_refuses_once` (3.3)
+      and `test_a_crossing_that_resolves_clears_and_the_no_crossing_
+      code_never_fires` (3.6) — both green. No-crossing-declared fires
+      exactly once (`AGREEMENT_CROSSING_UNDECLARED`), never per-claim; a
+      fully-resolved crossing clears the no-crossing code entirely rather
+      than degrading into a per-claim refusal.
+- [x] 6.4 **Measured, and this task's own uniform "proven by mutation"
+      framing corrected for one of its two named tasks.** 5.11
+      (`AgreeSuggestionKeyZ11MutationTests.
+      test_adding_a_suggestion_key_reddens_the_keyset_lock`, re-run green)
+      IS a real mutation proof: a scratch copy adding a `suggestion` key to
+      `cmd_agree`'s success payload is caught by the payload's own key-set
+      lock. 3.11 (`test_the_refusal_names_the_discrepancy_without_
+      judging_it`, re-run green) is **not** a mutation test — by its own
+      task text it is a direct absence-of-verdict assertion against the
+      shipped `agree-disagree` output, passing on first write "by
+      construction, not by later removal" (3.11's own annotation). No
+      dedicated mutation test adds a verdict word to `agree`'s refusal
+      `detail` and watches 3.11 catch it; the boundary there is held by
+      construction, not demonstrated by reversion. Both are re-run green;
+      only 5.11 is mutation-proven in the literal sense this task claims
+      for both.
+- [x] 6.5 **Measured** by re-running
+      `tests.test_experimental_implementation.
+      RemedyCompatibilityPerDocumentTests` → 4/4 `OK` (the M4 control 1.16,
+      its positive control, and Z4/Z5's own mutations 1.29/1.30).
+      `remedy_compatibility` reads `document_vocabulary(label_index)
+      ["locus_key"]`/`["remedy_locus_key"]` off the finding's own named
+      document index; reverting to the bare module scalar (Z4) or to
+      `finding_tags[0]` (Z5) desyncs the both-documents case, confirmed red
+      under each mutation.
+- [x] 6.6 **Measured** directly: `tests/experiments_seal/unsealed.json`
+      has exactly two entries (`materialize`, `propose`) — neither
+      `compose` nor `admit` remains. `git log --oneline
+      ba5cde7..HEAD -- tests/experiments_seal/digests.json` shows six
+      commits touching it; the final `digests.json` carries 31 keys (30
+      sealed cases + `__corpus_fingerprint__`), confirmed by direct read —
+      matching 4.6's own "30 cases, 31 keys" re-derivation.
+- [x] 6.7 **Measured**, every commit that ever touched
+      `tests/experiments_seal/digests.json` diffed key-by-key against its
+      own parent (`git show <c>^:...` vs `git show <c>:...`, not inferred
+      from prose): `9657a49` (D1, fixture T) added `admit-t`/`compose-t`/
+      `verify-t`, zero pre-existing moved; `9b01534` (D2, crossing axis)
+      added nothing new, zero pre-existing moved; `4955803` (D3, sealed
+      refusals) added `agree-disagree`/`agree-undeclared`, zero
+      pre-existing moved; `993d9f7` (D4, acknowledgment) added
+      `agree-acknowledge-one`, zero pre-existing moved, and
+      `__corpus_fingerprint__` correctly unmoved (`corpus.py` untouched
+      that commit); `b7240d4` (D5) moved `handoff-e1` alone; `a918526`
+      (D5) moved `verify-a-declared`/`verify-b-declared`/
+      `verify-b-undeclared` together. Total movers across the whole
+      change, `propose`/`__corpus_fingerprint__` mechanical churn
+      excluded: **exactly the four D5 movers named in the brief, and no
+      fifth anywhere in D1–D4.** Each is individually defended in its own
+      phase's own annotation (1.24 zero, 2.10 zero, 3.12 zero, 4.6 zero +
+      fingerprint correctly unmoved, 5.2 `handoff-e1` an expected shape
+      change, 5.4 the three `verify-*` digests a real pre-existing bug
+      fix).
+- [x] 6.8 **Measured this session, one full sequential run** (confirmed no
+      other suite process running first): `git diff --exit-code
+      tests/seal/` → exit 0 (also true after every commit throughout
+      D1–D5, per each phase gate's own annotation). `npm test` →
+      **596/596, not 595/595** — this task's own inherited "595/595" text
+      is the same design-arithmetic error 2.14/3.16/4.6 each already
+      corrected once; D2's own added negative-control test (2.11) is what
+      grew it, and it has stayed exactly 596/596 through D3, D4, D5 and
+      now this sweep. Full Python suite:
+      `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m unittest discover -s
+      tests -p "test_*.py"` → **`Ran 3059 tests`, `OK (skipped=6)`** —
+      identical to D5's own final measurement (5.16), confirming nothing
+      moved between D5's close and this sweep. `skipped=6` unmoved across
+      all five phases and this sweep; no `skipTest` found anywhere.
+      `git status --porcelain` clean after the run — no leftover
+      `implementations/_*` scratch directories. Name-collision sweep
+      (`rg '^class \w+Tests?\(' tests/test_implementation_*.py
+      tests/test_proposal_implementation.py
+      tests/test_experimental_implementation.py
+      tests/test_experiments_seal.py tests/experiments_seal/*.py | sort |
+      uniq -d`) returns nothing. `DerivedDenylistTests` (the M5 cross-domain
+      word-leak lock): 4/4 `OK`.
+- [x] 6.9 **Measured**: `git diff --stat ba5cde7..HEAD --
+      .claude/skills/proposal-implementation/` → exactly 3 files
+      (`impl_profile.py`, `SKILL.md`, `references/usage.md`), matching the
+      one sanctioned profile edit (1.7's `block_locator`, 2.7's
+      `cross_citation: None`) plus the two doctrine-prose files forced by
+      the shared `GATING_COMMANDS`/refusal-count constant (D3's own
+      recorded ripple, 3.16) — no fourth sibling edit anywhere. `git diff
+      --exit-code ba5cde7..HEAD -- .claude/skills/proposal-deliberation/`
+      → exit 0 (zero files). `git diff --exit-code ba5cde7..HEAD --
+      .claude/skills/_core/deliberation/` → exit 0. `git diff --exit-code
+      ba5cde7..HEAD -- .claude/skills/experimental-deliberation/
+      reference-experimental.ts` → exit 0. `git diff --exit-code
+      tests/seal/` (working tree) → exit 0.
+- [x] 6.10 **Measured, and this task's own "115, 117, 118 in order" and
+      "every new refusal code... classified" text corrected against the
+      actual per-phase measurements it should have named instead.**
+      `reachable_refusal_codes()` moved **114 → 116 only**, at D3 (3.15),
+      and stayed 116 unmoved at D4 (4.7) and D5 (5.15) — never 115, 117 or
+      118; each of those design predictions was independently measured
+      false and recorded (1.31, 3.15, 5.15). Of the four new `Refused`
+      codes, only **two** are in the roster and classified in
+      `GATING_REFUSALS` (`AGREEMENT_CROSSING_UNDECLARED`,
+      `AGREEMENT_DOCUMENTS_DISAGREE`, both `WORK_STATE`);
+      `COMPOSE_AMBIGUOUS_DOCUMENT` and `HANDOFF_DOCUMENT_UNREADABLE` are
+      raised inside `cmd_compose`/`cmd_handoff`, neither a
+      `GATING_COMMANDS` root, so the derivation never reaches them —
+      classifying either was tried and reverted both times (1.31, 5.10)
+      because it breaks `test_the_roster_classifies_nothing_a_gating_
+      command_cannot_raise`, the roster's own reverse lock. Re-confirmed
+      this session: `.venv/bin/python -m unittest
+      tests.test_proposal_implementation.GatingRefusalRosterTests` →
+      19/19 `OK`, including the count test (→116) and the reverse lock.
+      `IMPLEMENTATION_DOMAIN_PROFILE_INVALID_BLOCK_LOCATOR`/
+      `…_INVALID_CROSS_CITATION_PATTERN`/`…_UNKNOWN_CROSS_DOCUMENT`
+      confirmed invisible to that walk: `rg` over the test file finds
+      neither near any `GATING_REFUSALS`/`reachable` reference
+      (`ImplementationProfileError`, never `Refused`, per M11).
+- [x] 6.11 **Confirmed void**, unchanged from apply's own pre-apply
+      reconciliation (commit `5d42dd7`, predating every Phase-1 commit).
+      Re-read `implementation-per-document-vocabulary/spec.md`,
+      `implementation-block-locator/spec.md`,
+      `implementation-cross-document-agreement/spec.md` this session: all
+      three already carry the nested `cross_citation` shape and the
+      required-non-nullable `block_locator` text. Nothing left to file as
+      a post-apply spec-sync correction.
+- [x] 6.12 **Measured, per phase, each against its own phase's own named
+      commit range** (never a single blanket diff, reproducing every
+      prior phase-gate number exactly this session): D1 `ba5cde7..ddc3c67`
+      = 1,022+58 = **1,080** (estimate 750–1,150, within; D1b did not
+      fire — the 1.15 checkpoint measured ~1,015, the final total stayed
+      under 1,150). D2 `ddc3c67..e58e32e` = 674+28 = **702** (estimate
+      500–800, within). D3 `e58e32e..35801c9` = 535+39 = **574** (estimate
+      600–950, under the floor). D4 `362df11..993d9f7` = 190+7 = **197**
+      (estimate 300–500, under the floor — the smallest phase in the
+      chain). D5 `137a15d..4e502db` = 855+29 = **884** (estimate 600–950,
+      within). **Sum: 3,437** changed lines across `.claude/skills` +
+      `tests`, inside design's own 2,750–4,350 floor without needing the
+      ceiling — D3 and D4 both landing lighter than their own estimate is
+      what kept the whole chain off the ceiling despite D1 and D5 each
+      landing near or inside the top of theirs.
 
 ## Key Deferred / Out of Scope (do not touch)
 
