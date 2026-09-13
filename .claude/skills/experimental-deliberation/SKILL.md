@@ -324,19 +324,21 @@ Whether it also rewrites the document's own `## Changes` block depends on the ba
 
 **Preview, then accept, on the same stdin.** `CREATE_SUCCESSOR` returns `status: "awaiting_acceptance"`, an `acceptanceToken`, the would-be `targetFilename`, and `preservationDelta`. Nothing is written. To publish, resend the identical request with `acceptSuccessor: true`, the returned token, `acknowledgedRemovals` for every lost atom, and `acknowledgedSourceConflicts` if a conflict was raised. A success returns `status: "published"`, the new filename and hash, a `receiptId`, `manifestStatus: "COMMITTED"`, and `auditStatus`/`selfAuditStatus: "PASS"`. Anything else means it is not done — do not tell the user the edit landed. **Read the next section before you promise a user a published successor.**
 
-### Known limit: the accept turn does not publish in this domain
+### Resolved: the accept turn publishes in this domain
 
-Measured 2026-09-08, by driving the full resolve → preview → accept cycle against a real project: the accept turn answers
+Re-measured 2026-09-12 (`the-agreement-nothing-computes`, Slice D, M7), by driving the full resolve → preview → accept cycle against a real project, twice — once with the exact filenames this note used to name (`experiments-<slug>-v01.md` → `-v02.md`, `tests/experimental-deliberation-publish.test.mjs`, five assertions green), and once again by hand with the filenames a prior diagnosis (dated 2026-09-08) used (`experiments-<slug>-v03.md` → `-v04.md`). Both times the accept turn answers
 
 ```json
-{ "status": "blocked", "category": "recovery", "message": "INVALID_TARGET_REVISION", "mutations": 0, "nextAction": "inspect_error" }
+{ "status": "published", "targetFilename": "experiments-<slug>-v04.md", "targetRevision": "v04" }
 ```
 
-and writes nothing. The cause is in the shared core, not in this skill's profile: `proposal-workspace-adapter.ts` derives the published revision label by matching the target filename against a hardcoded `-r(\d+)\.md$`, and re-checks it against `^r\d{2,}$`. This domain's managed filenames end in `-v03.md`, so the match fails before any write is attempted. Nothing in this skill can be changed to satisfy it, and no request shape works around it.
+and the successor stands on disk beside its source.
 
-What *does* work, and is fully exercised: `STATUS`, `RESOLVE_TARGET`, `CREATE_INITIAL_REVISION` (v1 is created on disk, correctly named `experiments-<slug>-v01.md`), and the whole `CREATE_SUCCESSOR` **preview** turn — target resolution, patch compilation, candidate validation, the canonical-form rules, `preservationDelta`, and the source-authority detection all run and report exactly as documented above. Only the final write is unreachable.
+**The 2026-09-08 diagnosis's cause is not in the source, and was not merely fixed — it never described this code.** `publishSuccessor` computes `targetFilename = nextSuccessorTarget(input.sourceFilename)`, then derives the label through `parseManagedRevision(targetFilename)?.revision`, matched by `LAX_RE` (`artifact-naming.ts`). Every prefix `LAX_RE`, `INCREMENT_RE` and the re-check `strictRevisionLabel` compile is `escapeRegExp(DOMAIN.artifact.revisionPattern)` — this domain's own declared `"v"`, read from `profile.ts`, never a hardcoded `-r(\d+)\.md$`/`^r\d{2,}$` pair. Measured directly against `experiments-m7-drive-report-v03.md`: `parseManagedRevision` returns `{lineage: "m7-drive-report", revision: "v03", ordinal: 3, digits: "03"}`, and `strictRevisionLabel("v04")` is `true`. Nothing here was edited to make this true — the diagnosis simply no longer described this code by the time it was re-checked, and this repository shows no evidence it ever did.
 
-So: deliberate, resolve, and preview freely — the preview is a real check of the bytes you propose, and everything this document says about the rules is verified there. But do not tell the user a version was published until an accept turn actually returns `status: "published"`.
+What is fully exercised: `STATUS`, `RESOLVE_TARGET`, `CREATE_INITIAL_REVISION`, the whole `CREATE_SUCCESSOR` **preview** turn, and now the **accept** turn through to a real published successor — target resolution, patch compilation, candidate validation, the canonical-form rules, `preservationDelta`, the source-authority detection, and the write itself all run and report exactly as documented above.
+
+Repairing `experimental-deliberation`'s accept-turn limit, had it still fired, would have lived in `_core/deliberation/` — a different engine than this change's own subject (`_core/implementation/`) — and stayed out of `the-agreement-nothing-computes`'s own scope regardless of outcome. This measurement is reported, not repaired, because there was nothing left to repair.
 
 **One version per homogeneous batch.** In-place edits publish as one successor version; a relocation publishes as a separate one. A mixed batch completes in one accept call and produces two published versions in sequence.
 
