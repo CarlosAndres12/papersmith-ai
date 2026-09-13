@@ -413,24 +413,34 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: mixed-reach branch's own docstring/comment/refusal prose (design.md
 #: D10's fourth deferredBecause value) grew three more. `local` 35->40,
 #: `named` 177->178, `recorded` 76->77.
+#: `fix/skills-critical-review`: the four per-document consumers of one
+#: premise (`cmd_admit`, `finding_impact`, `cmd_handoff`, `cmd_verify`'s
+#: rows), the two shared readers they now call, walk's retired rehearse act
+#: and the front door's derived name. Their own docstrings and comments were
+#: compressed first -- nine of the words that grew on the first pass came
+#: back down that way -- and what is left below reads naturally with
+#: ordinary English words this pin already exempts. `before` 227->228, `measured` 140->141, `module` 187->189, `object` 27->28, `place` 50->51, `refuses` 92->93, `remedy` 49->55, `something` 67->69.
+#: Six SHRANK, and are recorded here for the same reason: the engine's
+#: module docstring stopped hand-listing four subcommands argparse already
+#: prints in full, and the compressed comments gave the rest back. `against` 184->183, `approved` 29->28, `commands` 19->18, `readable` 24->23, `resolves` 32->31, `whose` 145->144.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 76, "admissible": 3, "after": 79, "against": 184,
-    "agreed": 24, "answered": 71, "answers": 99, "approved": 29,
-    "audit": 15, "before": 227, "benchmark": 91, "beside": 92,
+    "actually": 76, "admissible": 3, "after": 79, "against": 183,
+    "agreed": 24, "answered": 71, "answers": 99, "approved": 28,
+    "audit": 15, "before": 228, "benchmark": 91, "beside": 92,
     "carries": 178, "check": 150, "checkable": 3, "claim": 35,
-    "command": 268, "commands": 19, "compares": 23, "declaration": 191,
+    "command": 268, "commands": 18, "compares": 23, "declaration": 191,
     "destinations": 37, "empty": 113, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 40,
     "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 140, "measurement": 43, "module": 187, "named": 178,
-    "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
-    "place": 50, "premises": 7, "produces": 44, "rather": 332,
-    "readable": 24, "recorded": 77, "refuses": 92, "remedy": 49,
-    "remote": 55, "reported": 142, "resolves": 32, "ruled": 8,
+    "measured": 141, "measurement": 43, "module": 189, "named": 178,
+    "notebooks": 107, "object": 28, "objects": 19, "pilot": 119,
+    "place": 51, "premises": 7, "produces": 44, "rather": 332,
+    "readable": 23, "recorded": 77, "refuses": 93, "remedy": 55,
+    "remote": 55, "reported": 142, "resolves": 31, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
-    "something": 67, "stage": 82, "steps": 133, "sweep": 7,
-    "validated": 7, "value": 233, "whose": 145, "write": 107, "wrong": 51,
+    "something": 69, "stage": 82, "steps": 133, "sweep": 7,
+    "validated": 7, "value": 233, "whose": 144, "write": 107, "wrong": 51,
 }
 
 
@@ -643,7 +653,12 @@ class KitAgreementLockTests(unittest.TestCase):
 # after landing every S3-S13 field: still 96, still 1 file. Any OTHER
 # movement -- a rename campaign, an accidental sweep -- is refused here.
 L1_BASELINE_AT_S0 = 97
-L1_DELIBERATE_SHRINK = 1  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion
+L1_DELIBERATE_SHRINK = 2  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion;
+#: and `fix/skills-critical-review`, where compressing the four per-document
+#: consumers' own comments dropped one prose mention of the first host by name.
+#: A shrink in this count is the direction this pin wants -- it is recorded
+#: rather than absorbed because an unexplained MOVE is the defect, in either
+#: direction: a rename campaign looks exactly like this from outside.
 L1_EXPECTED_COUNT = L1_BASELINE_AT_S0 - L1_DELIBERATE_SHRINK
 L1_EXPECTED_FILES = ["implementation_engine.py"]
 

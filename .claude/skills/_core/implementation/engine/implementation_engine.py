@@ -5085,23 +5085,14 @@ def finding_document_indices(finding: dict) -> list[int]:
 
 def finding_locus_scopes(finding: dict, source: str,
                          sources_by_document: dict | None):
-    """One `(label_index, field, tags)` triple per locus field of every
-    document a finding names -- each index's OWN `locus_key`/
-    `remedy_locus_key` (`document_vocabulary`), matched against tags built
-    with THAT index's own `block_locator.pattern` against THAT index's own
-    text. Never document 0's module-level `LOCUS_KEY`/`REMEDY_LOCUS_KEY`
-    scalars applied to a finding naming a different document.
+    """One `(label_index, field, tags)` triple per locus field of each
+    document a finding names: that index's own `document_vocabulary` keys,
+    against tags from its own `block_locator.pattern` over its own text.
 
-    THE ONE PLACE THIS READ HAPPENS. It was written twice before: correctly
-    inside `remedy_compatibility`, and as document 0's module scalars inside
-    `cmd_admit` -- where a `documents[1]` finding's own fields were looked up
-    under keys it does not declare, found nothing, and nothing read as no
-    objection. `cmd_admit` then wrote `admissible: true` for a finding citing
-    a locus present in no document at all, into the very record the target's
-    remedy suite trusts before measuring. Four consumers shared that premise
-    and a fifth would have inherited it, because the correct read was
-    something a new caller had to remember to copy. Now it is something a new
-    caller calls.
+    The one site for this read. It was spelled twice -- here and in
+    `cmd_admit`, the second one with document 0's module scalars, so fields
+    a finding never declares read as nothing to object to. See commit
+    e88afec for what that cost.
     """
     for label_index in finding_document_indices(finding):
         vocab = document_vocabulary(label_index)
@@ -5117,36 +5108,25 @@ def finding_locus_scopes(finding: dict, source: str,
 
 
 def front_door_description() -> str:
-    """`--help`'s opening line, naming the skill that ACTUALLY launched this
-    engine rather than whichever one the module docstring was written for.
+    """`--help`'s opening line, naming the skill that launched this engine.
 
-    The name is derived from the loaded profile's own `kit.root` -- the
-    directory the profile lives in, which is the skill -- so a third host
-    gets its own name the day it is written, with nothing to remember to
-    update. Before this, both hosts said `proposal-implementation`, and the
-    second host's SKILL.md delegates every argument, subcommand and exit
-    code to this front door, so the wrong name was the whole of what it
-    said about itself.
+    Derived from the loaded profile's own `kit.root`, so a third host gets
+    its own name the day it is written. Both hosts used to print one host's
+    name, and for one of them `--help` is its whole self-description
+    (commit 8e92d40).
     """
     return f"{Path(PROFILE['kit']['root']).name}: {__doc__.strip()}"
 
 
 def finding_declared_loci(finding: dict) -> tuple[list | None, list | None, str]:
-    """`(loci, remedy_loci, remedy_key_name)` as the finding ITSELF declares
-    them -- read under the keys of the documents it NAMES, not under document
-    0's module scalars.
+    """`(loci, remedy_loci, remedy_key_name)` as the finding itself declares
+    them, under the keys of the documents it names. Identical under one
+    document. `None`, not `[]`, when nothing is declared, so a caller can
+    still tell the two apart as `finding.get(KEY)` did.
 
-    Byte-identical under one document, where `document_vocabulary(0)`'s keys
-    ARE `LOCUS_KEY`/`REMEDY_LOCUS_KEY`. It exists for the display tier, which
-    rendered a `documents[1]` finding's loci as `null` and then told the
-    operator the finding "declares no locus (`remedy_experiments` is empty)"
-    while it declared `remedy_equations` and named the document that uses it.
-    A message that states a falsehood about the document a finding names is
-    the same defect as ruling on it wrongly, one tier out.
-
-    `None` when the finding declares nothing at all under any named
-    document's key, so a caller can still tell "declared nothing" from
-    "declared an empty list" exactly as `finding.get(KEY)` did.
+    The display tier used the module scalars and therefore told an operator
+    a finding declared no locus while naming the key it does not use -- see
+    commit 756cf3d.
     """
     loci: list | None = None
     remedy: list | None = None
@@ -5165,17 +5145,10 @@ def finding_declared_loci(finding: dict) -> tuple[list | None, list | None, str]
 
 def finding_named_source(finding: dict, source: str,
                          sources_by_document: dict | None) -> str:
-    """The joined text of every document a finding names, or document 0's
-    when it names none. A named label whose document has no readable source
-    resolves to `None` in `sources_by_document`; every named label
-    unreadable reads as NO TEXT AT ALL for this finding -- unknown, never
-    silently re-checked against document 0's, never a crash from joining a
-    `None`.
-
-    Extracted beside `finding_locus_scopes` for the same reason: the
-    adoption-marker and notation checks were reading document 0's text for
-    every finding, and the two callers that need this must not each
-    re-derive it.
+    """The joined text of each document a finding names, or document 0's
+    when it names none. Every named label unreadable yields no text at all
+    for that finding -- unknown, never re-checked against document 0's, and
+    never a crash from joining a `None`.
     """
     if not sources_by_document:
         return source
@@ -8093,22 +8066,12 @@ def finding_impact(finding: dict, source: str,
             # rule.
             index = DOCUMENT_INDEX_BY_LABEL.get(label)
             pattern = document_citation_re(index) if index is not None else CITATION_RE
-            # This document's OWN `remedy_locus_key` WHEN THE FINDING DECLARES
-            # ONE, and `remedy_loci` otherwise. Both halves are load-bearing
-            # and the second was learned from the sealed corpus:
-            #
-            #   declares its own key  -- a `documents[1]` finding declaring
-            #     `remedy_equations`, read under document 0's
-            #     `remedy_experiments`, was `[]`, so the arithmetic ran over an
-            #     empty list and answered `local` for a remedy of any width.
-            #     `local_reach` then offered it as settleable inline.
-            #   declares none        -- a remedy written in ONE document's
-            #     vocabulary that also NAMES another measures its reach there
-            #     with those same loci, seen through that document's own
-            #     citation pattern. That is the `structural-in-another-document`
-            #     branch, and reading the other document's empty key instead
-            #     collapsed it to `local` -- caught by four sealed digests,
-            #     never by a unit test.
+            # This document's own key WHEN THE FINDING DECLARES ONE, and the
+            # scalar list otherwise. Both halves matter. Without the first, a
+            # wide remedy sized under a key it does not use reads as reaching
+            # one place. Without the second, the
+            # `structural-in-another-document` branch collapses -- four sealed
+            # digests caught that, no unit test did (commit 5e8d277).
             doc_key = (document_vocabulary(index)["remedy_locus_key"]
                        if index is not None else None)
             doc_loci = (finding.get(doc_key) or remedy_loci) if doc_key else remedy_loci
@@ -8281,10 +8244,8 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                         "sized.")
         impact = finding_impact(finding, source, sources_by_document)
         adoption = adoption_state(finding, source)
-        # The KEY NAMES stay document 0's (D6, "representation only": the
-        # scalar shape never varies by finding), and the VALUES are now the
-        # finding's own, read under the keys of the documents it names. A
-        # `documents[1]` finding rendered both as `null` before this.
+        # Key names stay document 0's (D6, "representation only"); the
+        # values are the finding's own.
         own_loci, own_remedy, own_remedy_key = finding_declared_loci(finding)
         item = {"id": finding["id"], "kind": finding.get("kind"),
                 "status": finding.get("status"), "rate": finding.get("rate"),
@@ -8527,30 +8488,16 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     verdicts = {}
     for finding in findings:
         reasons = []
-        # The per-document read `remedy_compatibility` already carries
-        # (`the-agreement-nothing-computes`, Slice D, design.md D4), reaching
-        # the consumer it stopped one command short of. This gate rules
-        # admissibility BEFORE anything is measured, and it read document 0's
-        # `LOCUS_KEY`/`REMEDY_LOCUS_KEY` and document 0's TEXT for every
-        # finding -- so a `documents[1]` finding's own fields were looked up
-        # under keys it does not declare, found nothing, and NOTHING READ AS
-        # NO OBJECTION. Measured both directions before this changed: a
-        # finding citing a locus present in neither document was `admitted`
-        # and its verdict written into `tests/admissibility.json` (which the
-        # target's remedy suite trusts before measuring), and a finding whose
-        # marker and notation are real text of the document it names was
-        # refused with two reasons that were false about that document.
+        # Per-document, via the shared readers above. This gate rules on a
+        # finding BEFORE anything is measured, and it used to read document
+        # 0's keys and text for all of them (commit e88afec).
         finding_source = finding_named_source(finding, source, sources_by_document)
         for label_index, field, index_tags in finding_locus_scopes(
                 finding, source, sources_by_document):
             missing = [e for e in finding.get(field, []) if e not in index_tags]
             if missing:
-                # Keeps "absent from the revision" -- the phrase
-                # `EquationTagRecognitionTests` locks as this refusal's
-                # contract -- and NAMES which revision. Under two documents
-                # the bare phrase was ambiguous, and that ambiguity is the
-                # same one this read exists to close; adding the label
-                # removes it without dropping what the lock holds.
+                # Keeps the phrase `EquationTagRecognitionTests` locks as
+                # this refusal's contract, and says WHICH revision.
                 reasons.append(
                     f"{field} cites entries absent from the revision "
                     f"({DOCUMENTS[label_index]['label']}): {missing}")
@@ -10646,9 +10593,8 @@ def flow_acts(rows: list[dict], steps: dict, jobs: list[dict],
             act = ACT_GENERATE_JOB
         elif not job.get("smokeReady"):
             act = ACT_REHEARSE
-            # A stop, not a performance: `walk_plan` answers "nothing here
-            # knows whether a walk may take it" for any act in neither roster,
-            # and an operator reading that about a rehearsal learns nothing.
+            # A stop, not a performance -- and one that says what to do,
+            # since an unclassified act says nothing useful.
             needs = ("the job folder exists and is not smoke-ready; rehearse "
                      "it by hand as the doctrine prescribes -- no act in this "
                      "engine performs a rehearsal")
@@ -10713,18 +10659,11 @@ def flow_destination(rows: list[dict], steps: dict, jobs: list[dict],
 #: happens. A walk that took it would be the launch path with no gate in
 #: front of it that `flow_acts` refuses to be.
 WALK_PERFORMS = (ACT_RUN_LOCAL, ACT_GENERATE_JOB)
-# `rehearse` sits here and not above because NOTHING PERFORMS IT. `cmd_walk`'s
-# dispatch has two argv shapes -- `step` for run-local, `generate_job_argv` for
-# everything else -- and `generate_job_argv` never passes `--regenerate`, which
-# remote-execution's job writer requires to touch a folder that already exists.
-# A rehearse act is classified precisely WHEN that folder exists and is not
-# smoke-ready, so on the one state the act exists for, walk ran the wrong
-# command and stopped on a refusal about a folder that is supposed to be there.
-# `rg -- '--regenerate|--smoke'` over this engine answers zero.
-#
-# The comment above already said rehearsal is "the rehearsal the doctrine
-# already makes the agent's to run". The roster disagreed with the sentence
-# next to it; the sentence was right.
+# `rehearse` sits below and not above because nothing here performs it: the
+# dispatch has two argv shapes, and the one it would take refuses a folder
+# that already exists -- which is the only state that act is classified in.
+# The sentence above already said a rehearsal is the agent's to run; the
+# roster disagreed with it (commit 7fdec85).
 WALK_STOPS_AT = (ACT_LAUNCH, ACT_BLOCKED, ACT_REHEARSE)
 
 
