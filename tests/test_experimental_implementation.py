@@ -882,6 +882,67 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "incompatible")
 
 
+class FrontDoorIdentityTests(unittest.TestCase):
+    """`-h` is the only self-description this host offers: its own SKILL.md
+    says "every argument, subcommand and exit code is the shared engine's;
+    nothing here re-documents them". It introduced itself by the SIBLING's
+    name, because `argparse(description=__doc__)` read the shared engine's
+    module docstring, and that docstring also hand-listed four subcommands
+    out of twenty-one.
+
+    Both halves are held here. The name must come from the profile that is
+    actually loaded, and the description must not hand-maintain a list
+    argparse already prints in full -- prose duplicating a machine-generated
+    list is this repository's most-recorded defect class, waiting its turn.
+    """
+
+    def _help(self, skill: str) -> str:
+        cli = (FORGE / ".claude" / "skills" / skill / "scripts"
+               / "implementation_cli.py")
+        # The launcher uses `setdefault`, so an IMPLEMENTATION_DOMAIN_PROFILE
+        # left in this process's environment by a sibling test would be
+        # INHERITED by the child and win -- the front door would then
+        # correctly name whatever host that variable points at, and this test
+        # would read it as the wrong name. Passing alone and failing in the
+        # full run is how that showed up. Cleared here so the child resolves
+        # the profile from its own launcher, which is the thing under test.
+        env = {k: v for k, v in os.environ.items()
+               if k != "IMPLEMENTATION_DOMAIN_PROFILE"}
+        done = subprocess.run([sys.executable, str(cli), "-h"], env=env,
+                              capture_output=True, text=True, check=True)
+        return done.stdout
+
+    def test_each_host_names_itself_and_not_its_sibling(self):
+        for skill, sibling in (("experimental-implementation", "proposal-implementation"),
+                               ("proposal-implementation", "experimental-implementation")):
+            with self.subTest(skill=skill):
+                text = self._help(skill)
+                self.assertIn(skill, text, f"{skill}'s own front door never names it")
+                # The sibling's name may not appear at all: there is nothing
+                # in a front door that should mention the other host.
+                self.assertNotIn(
+                    sibling, text,
+                    f"{skill}'s front door introduces itself as {sibling}")
+
+    def test_the_description_does_not_hand_list_a_subset_of_the_subcommands(self):
+        """argparse prints the complete roster on its own. A prose list beside
+        it can only ever be right by accident -- it was four of twenty-one."""
+        text = self._help("experimental-implementation")
+        # argparse reflows the description into one paragraph, so an
+        # indentation-anchored regex passes whatever the docstring says --
+        # it did, on this test's first run. The hand-written blurbs
+        # themselves are the evidence, and they survive reflowing.
+        blurbs = [b for b in ("create/verify the target repository's own virtualenv",
+                              "read-only migration plan",
+                              "execute an approved plan as a single, separate commit",
+                              "layout compliance + revision fidelity")
+                  if b in text]
+        self.assertEqual(
+            blurbs, [],
+            f"the description hand-lists subcommands argparse already prints "
+            f"in full: {blurbs}")
+
+
 class HandoffPerDocumentDisplayTests(unittest.TestCase):
     """The same premise's display tier. `cmd_handoff` builds each item's
     locus fields as `finding.get(LOCUS_KEY)`/`finding.get(REMEDY_LOCUS_KEY)`

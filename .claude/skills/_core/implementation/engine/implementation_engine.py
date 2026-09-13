@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""proposal-implementation: deterministic workspace, migration and fidelity checks.
+"""Deterministic workspace, migration and fidelity checks for a target repository.
+
+This engine serves no domain of its own: the skill that launches it names
+which domain is asking, and `front_door_description()` puts THAT skill's name
+on `--help`. This docstring used to open with one host's name, so the second
+host's own front door -- the only self-description its SKILL.md offers --
+introduced itself as its sibling.
 
 Standard library only, keyless, offline. Target code is never imported or
 executed: provenance is read statically with `ast`.
 
-Commands
-    env     create/verify the target repository's own virtualenv
-    plan    read-only migration plan (structure drift -> file moves)
-    apply   execute an approved plan as a single, separate commit
-    verify  layout compliance + revision fidelity of an existing implementation
+The subcommand roster is argparse's own and is never restated here. It was,
+in prose, and it named four of twenty-one: a hand-maintained copy of a
+machine-generated list can only ever be right by accident.
 
 Every command emits one JSON object on stdout. Exit code 0 means the command
 ran; read `status` to learn whether the repository is compliant. Exit code 2
@@ -5110,6 +5114,21 @@ def finding_locus_scopes(finding: dict, source: str,
                           else set())
         for field in (vocab["locus_key"], vocab["remedy_locus_key"]):
             yield label_index, field, index_tags
+
+
+def front_door_description() -> str:
+    """`--help`'s opening line, naming the skill that ACTUALLY launched this
+    engine rather than whichever one the module docstring was written for.
+
+    The name is derived from the loaded profile's own `kit.root` -- the
+    directory the profile lives in, which is the skill -- so a third host
+    gets its own name the day it is written, with nothing to remember to
+    update. Before this, both hosts said `proposal-implementation`, and the
+    second host's SKILL.md delegates every argument, subcommand and exit
+    code to this front door, so the wrong name was the whole of what it
+    said about itself.
+    """
+    return f"{Path(PROFILE['kit']['root']).name}: {__doc__.strip()}"
 
 
 def finding_declared_loci(finding: dict) -> tuple[list | None, list | None, str]:
@@ -17994,7 +18013,8 @@ COMMANDS = {"walk": cmd_walk,
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="implementation_cli", description=__doc__)
+    parser = argparse.ArgumentParser(prog="implementation_cli",
+                                     description=front_door_description())
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in COMMANDS:
