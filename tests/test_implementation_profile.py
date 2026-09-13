@@ -22,6 +22,7 @@ import contextlib
 import copy
 import importlib.util
 import itertools
+import json
 import os
 import re
 import shutil
@@ -35,6 +36,7 @@ from typing import Mapping
 FORGE = Path(__file__).resolve().parents[1]
 RESOLVER = FORGE / ".claude/skills/_core/implementation/impl_domain_profile.py"
 LAUNCHER = FORGE / ".claude/skills/proposal-implementation/scripts/implementation_cli.py"
+ENGINE_DIR = FORGE / ".claude/skills/_core/implementation/engine"
 
 _ENV_VAR = "IMPLEMENTATION_DOMAIN_PROFILE"
 
@@ -1113,7 +1115,18 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
     hardcoded `FORGE_ROOT / "proposals"`. Proven via a real subprocess
     against a Cut-2-complete fixture profile whose `documents.directory`
     deliberately points somewhere else, never a monkeypatch (recorded
-    scar: patching a module attribute has zero effect on a subprocess)."""
+    scar: patching a module attribute has zero effect on a subprocess).
+
+    A prior version of this test drove `admit` with an out-of-workspace
+    target and asserted only `assertNotIn("REVISION_UNREADABLE", ...)`.
+    Measured: that target trips `OUTSIDE_WORKSPACE` before `revision_source`
+    is ever called, so the assertion held with the override deleted outright
+    (`proposals_root` rewritten to always return `DOCUMENTS[index]["directory"]`)
+    -- neither directory's text was ever read. This version calls
+    `revision_source` itself, in a real subprocess carrying the real env
+    var, and asserts on the CONTENT the fixture plants distinguishably in
+    each directory.
+    """
 
     def test_the_env_override_wins_over_documents_directory(self):
         fixture_dir = Path(tempfile.mkdtemp(prefix="documents-directory-override-"))
@@ -1123,8 +1136,8 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
         env_documents_dir = fixture_dir / "the-real-proposals-dir"
         env_documents_dir.mkdir()
         revision_name = "seal-2.md"
-        (env_documents_dir / revision_name).write_text(
-            "the env-routed revision text\n", encoding="utf-8")
+        env_text = "the env-routed revision text\n"
+        (env_documents_dir / revision_name).write_text(env_text, encoding="utf-8")
         (profile_documents_dir / revision_name).write_text(
             "the profile-routed revision text (must not be read)\n",
             encoding="utf-8")
@@ -1136,21 +1149,19 @@ class DocumentsDirectoryEnvironmentOverrideTests(unittest.TestCase):
         env = dict(os.environ)
         env[_ENV_VAR] = str(profile_file)
         env["IMPLEMENTATION_PROPOSALS"] = str(env_documents_dir)
-        proc = subprocess.run(
-            [sys.executable, str(LAUNCHER), "admit", "--target",
-             "/tmp/does-not-matter-for-this-refusal", "--name", "Method",
-             "--revision", revision_name],
-            capture_output=True, text=True, env=env)
-
-        # The refusal this hits (target/`src/` absent) fires AFTER
-        # `revision_source` reads the bound text -- so a refusal naming
-        # anything at all proves the environment-routed file, not the
-        # profile-routed one, was read.
-        self.assertNotIn(
-            "REVISION_UNREADABLE", proc.stdout + proc.stderr,
-            "the env override did not win: the revision was reported "
-            "unreadable, which only happens if the profile's own "
-            "documents.directory was read instead")
+        probe = (
+            "import sys, json\n"
+            f"sys.path.insert(0, {str(ENGINE_DIR)!r})\n"
+            "import implementation_engine as engine\n"
+            f"print(json.dumps(engine.revision_source({revision_name!r})))\n"
+        )
+        proc = subprocess.run([sys.executable, "-c", probe],
+                              capture_output=True, text=True, env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(
+            json.loads(proc.stdout), env_text,
+            "the env override did not win: revision_source read the "
+            "profile-routed directory's content instead")
 
 
 #: Cut 3 slice C (design.md D1): the five per-document claim-vocabulary
