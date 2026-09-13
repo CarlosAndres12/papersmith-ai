@@ -308,6 +308,31 @@ class AgreementCheckTests(unittest.TestCase):
         self.assertEqual(payload["crossed"], ["9"])
         self.assertEqual(payload["declared"], ["9"])
 
+    def test_a_metric_protocol_mismatch_the_tutor_bullet_names_does_not_refuse(self):
+        """`the-agreement-nothing-computes` (Slice D, design.md D11, tasks.md
+        5.12, spec `implementation-cross-document-agreement`'s own boundary
+        section, restated as SKILL.md's tutor bullet): whether an
+        experiment's declared metric or protocol actually corresponds to
+        what its cited claim asserts is a THIRD discrepancy kind `agree`
+        never checks -- and never can, by construction. `crossing_state`
+        (design.md D6) extracts numerals from `[claims:N]`/`\\tag{N}`
+        alone; it reads no surrounding sentence, no metric name, no
+        protocol description. The SAME resolving fixture this class's own
+        positive control (`test_a_crossing_that_resolves_clears_...`)
+        proves that with -- `CROSSING_RESOLVED_TEXT`'s citation and
+        `PROPOSAL_CROSSING_TEXT`'s declared claim share no metric or
+        protocol content whatsoever, and the crossing still resolves
+        cleanly. There is no separate fixture to author for a mismatch
+        `agree` would have to notice: by this measurement, it notices
+        none, ever."""
+        case = {"id": "agree-metric-mismatch-red", "command": "agree", "fixture": "A",
+                "proposals": True, "crossingTarget": True,
+                "argv": ["--target", "<TARGET>", "--name", "Trial",
+                         "--revision", "trial-crossing-resolved.md"]}
+        payload, status = self._payload(case)
+        self.assertEqual(status, 0, payload)
+        self.assertEqual(payload["status"], "agreed")
+
     def test_the_agreed_payloads_key_set_is_exactly_this_and_no_more(self):
         """`the-agreement-nothing-computes` (Slice D, design.md D11, tasks.md
         5.11): the mutation-adding-a-verdict-field guard, restated at the

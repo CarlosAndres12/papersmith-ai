@@ -145,6 +145,95 @@ and each agent's first instruction is to load this file.
 Each agent also refuses from inside when it finds itself before its own start --
 the backstop, not the rule.
 
+## Where to start: the repository is the memory
+
+Same routing rule as `proposal-implementation`'s own -- **read `src/`, never
+remember a prior session.** An implementation already sitting there is the
+whole record of what was already asked and answered; a repository with none
+has not been through this skill yet.
+
+- **`src/` holds no implementation at all** -> Flow A.
+- **`src/` holds one, whatever revision it is bound to** -> Flow B, which
+  measures drift against BOTH documents before deciding anything.
+
+## Flow A -- first pass
+
+This domain ships no `assets/kit/` (`materialize --stage scaffold` is
+unavailable, above), so a target's scaffold is hand-written, not
+materialized. Everything else follows the sibling's own first-pass shape,
+narrowed to what this domain actually has:
+
+1. Clone the target repository under `implementations/<repo>/`, then `env`
+   to build its own venv from its own interpreter -- never the forge's.
+2. **Ask for the name.** Run `name --name "<whatever they typed>"`, confirm
+   both forms it returns, then **[GATE]** before writing anything with them.
+3. **[GATE] Ask for authorization to implement.** Nothing below writes code
+   before this.
+4. Present the object-to-module map for **both documents** -- which module
+   implements which experiment section, and which implements which
+   equation the experiment answers to (`documents[0]`/`documents[1]`,
+   above). Wait for approval, then write code, and give each module the
+   `__provenance__` claim key it actually implements (`experiments`,
+   `equations`, or both).
+5. Hand off to the `experiments-build` agent once every declared
+   measurement has a place to land (`instrumentation`, the objective flow
+   above) -- delegated, not walked by hand.
+6. Hand off to the `experiments-walk` agent once every step's placement is
+   decided -- the same delegation table above names when each stretch
+   begins and ends.
+
+## Flow B -- every later pass
+
+1. Read `src/` and take the newest revision of **each** declared document
+   independently -- document 0's own discovery, and document 1's own,
+   never one name assumed for both (`each-document-names-its-own-revision`).
+2. **Run the suite with the target interpreter, then `verify --revision
+   <document 0's newest>`.** Same division as the sibling's own Flow B step
+   2: running the suite proves the code *does* what it says; `verify`
+   proves it *says* what it should. Neither substitutes for the other.
+3. **Differences in fidelity, in EITHER document** -> **[GATE] ask whether
+   the user made that document's own change** -- `fidelityByDocument`
+   reports each document's status independently (above), so a drift in
+   document 1 alone routes the same gate document 0's own drift always
+   has, and does not wait for document 0 to also disagree. The gate itself
+   is not repeated or reworded here: it is the sibling's own
+   ("did the user make this change") asked against whichever document's
+   own evidence disagrees.
+4. **Suite green and fidelity clean in both documents** -> `agree
+   --revision <document 0's newest>` (available once more than one
+   document is declared, which this skill's profile always does). Names
+   every citation the experiments document makes into the mathematical
+   proposal that the proposal does not currently declare, and every claim
+   the proposal declares that no experiment cites -- refuses once, naming
+   both kinds together, never a verdict on which side should change.
+   Resolve each named discrepancy in conversation (`--acknowledge <exact
+   id>` clears only the ids echoed back exactly) before continuing.
+
+   - **A third kind `agree` never checks, and never will:** whether an
+     experiment's declared metric or protocol actually corresponds to
+     what the claim it cites asserts. Reading both documents to judge
+     that is exactly the kind of question a check that tried would get
+     wrong in both directions -- blocking correct work and passing broken
+     work alike. It is guidance for whoever reads `agree`'s output next,
+     never a condition `agree` tests: a citation can resolve cleanly by
+     `agree`'s own measure while still citing the wrong claim for what it
+     actually measures, and only a reader who has read both documents can
+     tell.
+5. Once `agree` reports no unacknowledged discrepancy, run `handoff
+   --revision <document 0's newest>` to size the open findings and hand
+   the local ones to the deliberation (`experimental-deliberation`) as
+   agenda items. `settleInline` entries substitute through `compose`;
+   everything else is a prompt for a session of its own.
+6. Once the deliberation publishes a successor revision, this skill's own
+   part is done -- what remains is reaching a **test submission**, and
+   `remote-execution`'s own commands answer it exactly as they do for the
+   sibling: `probe`'s `nextStep` names which one, and
+   [the sibling's own remote-execution seam table](../proposal-implementation/SKILL.md#the-remote-execution-seam--which-subcommand-answers-which-reported-state)
+   names which subcommand answers which reported state. Nothing here
+   re-documents that table or re-asks its own gate; this skill drives the
+   same shared scripts (`REMOTE_EXECUTION_CLI_SCRIPT` et al., already
+   `FORGE_ROOT`-derived) rather than rebuilding them.
+
 ## Entry command
 
 ```bash
