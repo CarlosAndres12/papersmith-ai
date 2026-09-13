@@ -5079,6 +5079,67 @@ def finding_document_indices(finding: dict) -> list[int]:
     return indices if indices else [0]
 
 
+def finding_locus_scopes(finding: dict, source: str,
+                         sources_by_document: dict | None):
+    """One `(label_index, field, tags)` triple per locus field of every
+    document a finding names -- each index's OWN `locus_key`/
+    `remedy_locus_key` (`document_vocabulary`), matched against tags built
+    with THAT index's own `block_locator.pattern` against THAT index's own
+    text. Never document 0's module-level `LOCUS_KEY`/`REMEDY_LOCUS_KEY`
+    scalars applied to a finding naming a different document.
+
+    THE ONE PLACE THIS READ HAPPENS. It was written twice before: correctly
+    inside `remedy_compatibility`, and as document 0's module scalars inside
+    `cmd_admit` -- where a `documents[1]` finding's own fields were looked up
+    under keys it does not declare, found nothing, and nothing read as no
+    objection. `cmd_admit` then wrote `admissible: true` for a finding citing
+    a locus present in no document at all, into the very record the target's
+    remedy suite trusts before measuring. Four consumers shared that premise
+    and a fifth would have inherited it, because the correct read was
+    something a new caller had to remember to copy. Now it is something a new
+    caller calls.
+    """
+    for label_index in finding_document_indices(finding):
+        vocab = document_vocabulary(label_index)
+        if sources_by_document:
+            index_text = sources_by_document.get(DOCUMENTS[label_index]["label"])
+        else:
+            index_text = source if label_index == 0 else None
+        index_tags = (set(document_block_locator(label_index)["pattern"]
+                              .findall(index_text)) if index_text is not None
+                          else set())
+        for field in (vocab["locus_key"], vocab["remedy_locus_key"]):
+            yield label_index, field, index_tags
+
+
+def finding_named_source(finding: dict, source: str,
+                         sources_by_document: dict | None) -> str:
+    """The joined text of every document a finding names, or document 0's
+    when it names none. A named label whose document has no readable source
+    resolves to `None` in `sources_by_document`; every named label
+    unreadable reads as NO TEXT AT ALL for this finding -- unknown, never
+    silently re-checked against document 0's, never a crash from joining a
+    `None`.
+
+    Extracted beside `finding_locus_scopes` for the same reason: the
+    adoption-marker and notation checks were reading document 0's text for
+    every finding, and the two callers that need this must not each
+    re-derive it.
+    """
+    if not sources_by_document:
+        return source
+    named = finding.get("document")
+    labels = named if isinstance(named, list) else [named] if named else []
+    texts = [sources_by_document[label] for label in labels
+             if label in sources_by_document]
+    resolved_texts = [text for text in texts if text is not None]
+    if texts and not resolved_texts:
+        return ""
+    if resolved_texts:
+        return "\n".join(resolved_texts)
+    return source
+
+
 def _single_named_document_index(finding: dict) -> int:
     """The ONE document index a finding names, for the locator sites that
     write into a single document's own syntax (`cmd_compose`, `cmd_handoff`'s
@@ -5146,51 +5207,21 @@ def remedy_compatibility(findings: list[dict], revision: str | None,
     introduces: list[str] = []
 
     for finding in findings:
-        finding_source, finding_tags = source, tags
-        if sources_by_document:
-            named = finding.get("document")
-            labels = named if isinstance(named, list) else [named] if named else []
-            texts = [sources_by_document[label] for label in labels
-                    if label in sources_by_document]
-            # A named label whose document has no readable source resolves
-            # to `None` in `sources_by_document` (`each-document-names-its-
-            # own-revision`: a document's own name may fail to discover or
-            # to read, independently of document 0's). `None` filtered out
-            # here rather than joined -- joining it crashed this function
-            # outright, a defect this change's own fixture reshape exposed
-            # (it was never reachable while every document shared one
-            # filename). Every named label unreadable reads as no text at
-            # all for this finding -- unknown, not silently re-checked
-            # against document 0's -- never a crash.
-            resolved_texts = [text for text in texts if text is not None]
-            if texts and not resolved_texts:
-                finding_source, finding_tags = "", set()
-            elif resolved_texts:
-                finding_source = "\n".join(resolved_texts)
-                finding_tags = set(TAG_RE.findall(finding_source))
-        # `the-agreement-nothing-computes` (Slice D, design.md D4, defect 2):
-        # per-`finding_document_indices(finding)` loop, `[0]` when the
-        # finding names none -- each index's OWN `locus_key`/
-        # `remedy_locus_key` (`document_vocabulary(label_index)`), matched
-        # against tags built with THAT index's own `block_locator.pattern`
-        # against THAT index's own text. Never document 0's module-level
-        # `LOCUS_KEY`/`REMEDY_LOCUS_KEY` scalars applied to a finding naming
-        # a different document -- the exact defect where a `documents[1]`
-        # finding's fields were looked up under document 0's keys, found
-        # nothing, and read as compatible.
-        for label_index in finding_document_indices(finding):
-            vocab = document_vocabulary(label_index)
-            if sources_by_document:
-                index_text = sources_by_document.get(DOCUMENTS[label_index]["label"])
-            else:
-                index_text = source if label_index == 0 else None
-            index_tags = (set(document_block_locator(label_index)["pattern"]
-                              .findall(index_text)) if index_text is not None
-                          else set())
-            for field in (vocab["locus_key"], vocab["remedy_locus_key"]):
-                missing = [e for e in finding.get(field, []) if e not in index_tags]
-                if missing:
-                    unknown_loci.append(f"{finding['id']}.{field}: {missing}")
+        # Both reads now come from `finding_locus_scopes`/`finding_named_source`
+        # rather than being spelled here, because they were spelled TWICE: this
+        # site, correct, and `cmd_admit`'s, which used document 0's module
+        # scalars and admitted findings citing a locus present in no document.
+        # The correct read used to be something a new caller had to remember to
+        # copy; it is now something a new caller calls. `finding_tags` went with
+        # the move: it was assigned on all three branches here and read by
+        # nothing, residue of the per-document fix that replaced its only
+        # consumer.
+        finding_source = finding_named_source(finding, source, sources_by_document)
+        for _label_index, field, index_tags in finding_locus_scopes(
+                finding, source, sources_by_document):
+            missing = [e for e in finding.get(field, []) if e not in index_tags]
+            if missing:
+                unknown_loci.append(f"{finding['id']}.{field}: {missing}")
         absent = [s for s in finding.get("uses", []) if s not in finding_source]
         if absent:
             undefined_notation.append(f"{finding['id']}: {absent}")
@@ -8421,15 +8452,37 @@ def cmd_admit(args: argparse.Namespace) -> dict:
     verdicts = {}
     for finding in findings:
         reasons = []
-        for field in (LOCUS_KEY, REMEDY_LOCUS_KEY):
-            missing = [e for e in finding.get(field, []) if e not in tags]
+        # The per-document read `remedy_compatibility` already carries
+        # (`the-agreement-nothing-computes`, Slice D, design.md D4), reaching
+        # the consumer it stopped one command short of. This gate rules
+        # admissibility BEFORE anything is measured, and it read document 0's
+        # `LOCUS_KEY`/`REMEDY_LOCUS_KEY` and document 0's TEXT for every
+        # finding -- so a `documents[1]` finding's own fields were looked up
+        # under keys it does not declare, found nothing, and NOTHING READ AS
+        # NO OBJECTION. Measured both directions before this changed: a
+        # finding citing a locus present in neither document was `admitted`
+        # and its verdict written into `tests/admissibility.json` (which the
+        # target's remedy suite trusts before measuring), and a finding whose
+        # marker and notation are real text of the document it names was
+        # refused with two reasons that were false about that document.
+        finding_source = finding_named_source(finding, source, sources_by_document)
+        for label_index, field, index_tags in finding_locus_scopes(
+                finding, source, sources_by_document):
+            missing = [e for e in finding.get(field, []) if e not in index_tags]
             if missing:
+                # Keeps "absent from the revision" -- the phrase
+                # `EquationTagRecognitionTests` locks as this refusal's
+                # contract -- and NAMES which revision. Under two documents
+                # the bare phrase was ambiguous, and that ambiguity is the
+                # same one this read exists to close; adding the label
+                # removes it without dropping what the lock holds.
                 reasons.append(
-                    f"{field} cites {SUBJECT_PLURAL} absent from the revision: {missing}")
+                    f"{field} cites entries absent from the revision "
+                    f"({DOCUMENTS[label_index]['label']}): {missing}")
         marker = (finding.get("adoption") or {}).get("absent")
         if not marker:
             reasons.append("declares no adoption marker, so adoption could never be read back")
-        elif marker not in source:
+        elif marker not in finding_source:
             # A marker that does not describe the document today is meaningless:
             # its absence later would be indistinguishable from adoption.
             reasons.append("its adoption marker is not present in the revision, so the "
@@ -8437,7 +8490,7 @@ def cmd_admit(args: argparse.Namespace) -> dict:
         if not finding.get("uses"):
             reasons.append("declares no notation, so compatibility cannot be ruled on")
         else:
-            absent = [s for s in finding["uses"] if s not in source]
+            absent = [s for s in finding["uses"] if s not in finding_source]
             if absent:
                 reasons.append(f"relies on notation the revision does not define: {absent}")
         adoption = adoption_state(finding, source)
