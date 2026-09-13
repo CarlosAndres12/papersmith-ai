@@ -9,6 +9,7 @@ one CLI subprocess test, which scaffolds under the already-gitignored
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import dataclasses
 import hashlib
@@ -41,6 +42,7 @@ import paper_style  # noqa: E402
 import paper_leak  # noqa: E402
 import paper_coupling_evidence  # noqa: E402
 import paper_verify  # noqa: E402
+import paper_objective  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -3528,8 +3530,110 @@ class RefusalRosterTests(unittest.TestCase):
         the same shape `CONTRACT_UNREADABLE` already establishes). Net
         -2 + 1 = -1. `classify_guidance_child` (`paper_evidence.py`) is also
         deleted in the same corrective but raises no `Refused` of its own,
-        so it moves this count by zero."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 95)
+        so it moves this count by zero. Moved from 95 to 96 in the K4
+        corrective (`resolve_sections_dir` never checked the resolved
+        `--sections` path actually existed, so `contract`/`readiness`/
+        `order`/`plan` silently read a typo'd path as a real empty corpus):
+        `paper_contract.resolve_sections_dir` gains one new raise site for
+        `SECTION_CONTRACTS_UNREADABLE` -- reusing, not inventing, the code
+        `paper_verify.UNMEASURED_REASONS` and `paper_coupling_evidence.
+        _blocks_by_fact` already carry for "the corpus itself could not be
+        read", so the set gains a member without gaining a second name for
+        the same condition."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 96)
+
+
+class ObjectiveNorthTests(unittest.TestCase):
+    """`paper_objective.OBJECTIVE_FLOW` is the north `tests/test_agents.py`
+    reads to gate every paper-writing agent's frontmatter (`stage_conditions()`
+    there) -- but that file only ever reads a stage's `behindWhen` to find the
+    ONE stage a person's word closes (`UNMEASURABLE`). Nothing anywhere checks
+    a MEASURABLE `behindWhen` -- one that names a fact a run can check, not a
+    human's future call -- against what `paper_cli.py` actually ships today.
+    A stage whose own verbs are already live in the CLI's parser roster,
+    while its `behindWhen` still says the capability "does not exist yet", is
+    exactly the drift an agent reads and then refuses to run a shipped verb
+    over.
+
+    `STAGE_VERBS` is not invented: every verb named for a stage below is
+    quoted, together with the one-line help `paper_cli.py`'s own
+    `build_parser()` gives it, in this same table this class's docstring and
+    D3's own defect report both drew from `paper_cli.py --help`. A stage
+    absent from this table is simply not covered by this guard -- it is not
+    a claim that stage's own `behindWhen` is trustworthy.
+    """
+
+    #: A `behindWhen` phrase asserting the stage's capability is flatly
+    #: unbuilt -- as opposed to `write`'s legitimate "not yet fed in
+    #: automatically", which names a missing AUTOMATION, not a missing verb,
+    #: and must never trip this pattern.
+    ABSENT_CLAIM = re.compile(
+        r"\bno verb\b|\bhas no\b[^.]*\btoolchain\b|\bdoes not exist yet\b",
+        re.IGNORECASE,
+    )
+
+    # stage -> the paper_cli.py verb(s) whose presence in its OWN parser
+    # roster falsifies a behindWhen claiming that stage's capability is
+    # unbuilt. Each verb is the one paper_cli.py --help names for exactly
+    # this stage's `establishes` text:
+    #   cite    -> resolve ("resolve one identifier's metadata through a
+    #              named connector"), bib ("refs.bib management -- never
+    #              hand-typed"), validate ("the single gate: submit one
+    #              judged verdict ... write on success")
+    #   render  -> render ("compile one diagram id standalone ... via
+    #              latexmk"), place ("place an already-measured figure's
+    #              PDF")
+    #   verify  -> verify ("read-only report over the couplings, citation
+    #              integrity and contract currency")
+    STAGE_VERBS = {
+        "scaffold": ("scaffold",),
+        "plan": ("plan",),
+        "declare": ("declare",),
+        "cite": ("resolve", "bib", "validate"),
+        "write": ("write",),
+        "render": ("render", "place"),
+        "verify": ("verify",),
+    }
+
+    def shipped_verbs(self) -> set[str]:
+        """The verb roster `paper_cli.py`'s own `build_parser()` accepts --
+        the same names `--help` prints, read from the live parser rather than
+        grepped, so a renamed or removed verb changes this set too."""
+        parser = paper_cli.build_parser()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                return set(action.choices.keys())
+        raise AssertionError("paper_cli.py's parser declares no subcommands "
+                              "-- build_parser()'s shape moved")
+
+    def test_a_measurable_behindwhen_never_claims_a_shipped_verb_is_absent(self) -> None:
+        """Cross `OBJECTIVE_FLOW` against the CLI it describes.
+
+        For every stage this class has a verb mapping for: if its own
+        `behindWhen` claims the capability does not exist (`ABSENT_CLAIM`),
+        every verb `STAGE_VERBS` names for that stage must be MISSING from
+        `paper_cli.py`'s actual roster -- otherwise the claim is false today,
+        not merely destined to become false later.
+        """
+        shipped = self.shipped_verbs()
+        stages = {stage["stage"]: stage["behindWhen"]
+                  for stage in paper_objective.OBJECTIVE_FLOW["stages"]}
+        for stage, verbs in self.STAGE_VERBS.items():
+            self.assertIn(
+                stage, stages,
+                f"OBJECTIVE_FLOW no longer declares a {stage!r} stage -- "
+                f"update STAGE_VERBS or this test, never assume it still "
+                f"applies")
+            when = stages[stage]
+            if not self.ABSENT_CLAIM.search(when):
+                continue
+            shipped_for_stage = sorted(set(verbs) & shipped)
+            self.assertFalse(
+                shipped_for_stage,
+                f"{stage!r}'s behindWhen claims its capability does not "
+                f"exist ({when!r}), but paper_cli.py's own parser roster "
+                f"already ships {shipped_for_stage!r} for it -- the north "
+                f"is stale, not the CLI")
 
 
 if __name__ == "__main__":

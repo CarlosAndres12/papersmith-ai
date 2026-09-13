@@ -7,11 +7,14 @@ anything this dict's own values depend on (design.md's own constraint,
 that forces extra scope").
 
 Wording is this change's own to make (design.md's Open Question: "the
-seal requires them to exist, not what they say"). `paper-writing`'s own
-verbs stop at `declare`; `cite`, `write`, `render` and `verify` are named,
-honest future stages — SKILL.md's own "Not shipped yet, on purpose"
-section already says so for `write`, and this dict does not pretend
-otherwise.
+seal requires them to exist, not what they say"). D3 corrected `cite`,
+`render` and `verify`'s own `behindWhen` strings: `resolve`, `bib build`
+and `validate` already carry `cite`; `render`/`place` already compile via
+`latexmk` (`paper_latex.py`); and `verify` is already a shipped read-only
+report (`paper_verify.py`). Only `write` remains a named, honest future
+stage — SKILL.md's own "Not shipped yet, on purpose" section says so:
+`order`'s output is not yet fed into `open`/`substitute` automatically,
+and this dict does not pretend otherwise.
 """
 from __future__ import annotations
 
@@ -63,8 +66,9 @@ OBJECTIVE_FLOW = {
                 "resolution carries the citations that regime demands"
             ),
             "behindWhen": (
-                "no verb in this skill produces or checks a citation yet "
-                "-- a later capability, not built"
+                "any block whose citations regime is discovery or "
+                "resolution still lacks a citation `resolve`, `bib build` "
+                "or `validate` has fixed for it"
             ),
         },
         {
@@ -85,7 +89,8 @@ OBJECTIVE_FLOW = {
                 "merely reported \"unproven\""
             ),
             "behindWhen": (
-                "this skill has no LaTeX toolchain; every successful "
+                "any diagram `render` or figure `place` has not yet run "
+                "successfully through `latexmk`, or any block's "
                 "`substitute` still reports \"rendering\": \"unproven\""
             ),
         },
@@ -96,7 +101,12 @@ OBJECTIVE_FLOW = {
                 "requirement one last time before it leaves this "
                 "repository"
             ),
-            "behindWhen": "no verb performs this check yet",
+            "behindWhen": (
+                "`verify` has not been run since the last `substitute`, "
+                "`render`, `place` or `declare`, or its own report still "
+                "names a coupling, citation-integrity or contract-currency "
+                "failure"
+            ),
         },
     ],
     "arrival": (
