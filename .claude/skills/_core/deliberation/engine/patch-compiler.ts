@@ -1,8 +1,13 @@
-import { LIMITS,sha256,type Compilation,type CompiledPatch,type DocumentState,type EditPlan,type Position,type StructuralEntry,type StructuralPatchSelector } from './types.js'; import { expandDestructiveScope } from './destructive-scope.js'; import { composeSuccessorBlockCandidate } from './successor-composite-engine.js'; import type { SuccessorBlockPlan } from './block-plan.js'; import type { AmbientCompositePart } from './ambient-supplied-planner.js';
+import { LIMITS,sha256,type Compilation,type CompiledPatch,type DocumentState,type EditPlan,type Position,type StructuralEntry,type StructuralPatchSelector } from './types.js'; import { expandDestructiveScope } from './destructive-scope.js'; import { composeSuccessorBlockCandidate } from './successor-composite-engine.js'; import type { SuccessorBlockPlan } from './block-plan.js'; import type { AmbientCompositePart } from './ambient-supplied-planner.js'; import { artifact } from './artifact-naming.js';
 const text=(s:DocumentState,e:StructuralEntry)=>{const value=s.documentBytes.subarray(e.startByte,e.endByte).toString('utf8');if(sha256(value)!==e.textSha256)throw new Error('STALE_INDEX_ENTRY');return value};
 const insertionPoint=(entry:StructuralEntry,position:Position)=>{if(position==='before')return {point:entry.startByte,adapterPosition:'before' as const};if(position==='after'||position==='inside_end')return {point:entry.endByte,adapterPosition:'after' as const};throw new Error('UNSUPPORTED_INSIDE_START')};
 const apply=(base:Buffer,edits:{start:number;end:number;value:Buffer}[])=>edits.sort((a,b)=>b.start-a.start).reduce((candidate,e)=>Buffer.concat([candidate.subarray(0,e.start),e.value,candidate.subarray(e.end)]),base);
-const ARTIFACT_MARKER=Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+// Finding M7: was a hardcoded `Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n')` --
+// a domain declaring its own `artifact.marker` had its successor section-replacement
+// boundary logic (`protectedMarker` below) silently compare against the WRONG bytes.
+// Read from the profile, like every other core site except `revision-lifecycle-store.ts`
+// (kept hardcoded on purpose, for a Python cross-language regex guard).
+const ARTIFACT_MARKER=artifact.marker;
 const trailingNewlines=(value:Buffer)=>{let index=value.length;while(index>0&&value[index-1]===0x0a){index--;if(index>0&&value[index-1]===0x0d)index--;}return index;};
 const leadingNewlines=(value:Buffer)=>{let index=0;while(index<value.length){if(value[index]===0x0d&&value[index+1]===0x0a)index+=2;else if(value[index]===0x0a)index++;else break;}return index;};
 function compileSuccessorSectionReplacement(state:DocumentState,entry:StructuralEntry,replacementText:string){

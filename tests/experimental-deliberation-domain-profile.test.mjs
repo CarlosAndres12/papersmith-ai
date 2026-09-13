@@ -22,9 +22,17 @@ const skillDir = path.join(repoRoot, '.claude/skills/experimental-deliberation')
 const profilePath = path.join(skillDir, 'profile.ts');
 const piRoot = '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent';
 
-// Exactly the top-level keys `domain-profile.ts` refuses a profile for omitting,
-// plus the six nested `artifact.*` fields it checks separately.
-const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'proseReferenceText', 'vocabulary', 'artifact', 'preservation', 'references', 'sources', 'objective'];
+// Exactly the top-level keys `domain-profile.ts` refuses a profile for omitting (finding
+// M6 fixed this to actually match the comment below: `vocabulary.*` used to be listed here
+// with no core enforcement behind it at all -- `domain-profile.ts` refused a profile for
+// NONE of these eight fields, so this constant only ever proved this PROFILE declares them,
+// never that the core would refuse one that did not; see
+// `tests/proposal-deliberation-domain-profile-vocabulary.test.mjs` for that refusal proven
+// directly against the core), plus the six nested `artifact.*` fields it checks separately.
+// `proseReferenceText` is deliberately absent (finding L5): it is optional now, and this
+// profile no longer declares a renderer it never invoked -- `preservation-experimental.ts`
+// has no "ref" atom kind and `reference-experimental.ts` needs only the raw matched value.
+const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'vocabulary', 'artifact', 'preservation', 'references', 'sources', 'objective'];
 const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'];
 const VOCABULARY_REQUIRED = ['conceptualTerms', 'expertPattern', 'displayNounPattern', 'displayNounStripPattern', 'subjectPattern', 'subjectTerms', 'subjectLocusDescription', 'subjectEvidenceLabel'];
 

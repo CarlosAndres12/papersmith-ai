@@ -257,7 +257,7 @@ Advisory means the conflict does not block preview; it blocks the **accept** tur
 
 ## Creating v1, checked by the same gate as every successor
 
-When `STATUS` reports zero managed revisions, create v1 explicitly with `CREATE_INITIAL_REVISION` (see [usage examples](references/usage.md)). The engine loads the declared sources for this one call and composes v1 from your idea text plus those source fragments, included **verbatim** under a `## Paper Guide Reference` heading, one `### <path>` subsection per fragment (`initial-revision-renderer.ts`, `renderFromIdea`).
+When `STATUS` reports zero managed revisions, create v1 explicitly with `CREATE_INITIAL_REVISION` (see [usage examples](references/usage.md)). The engine loads the declared sources for this one call and composes v1 from your idea text plus those source fragments, included **verbatim** under a `## Reference Sources` heading, one `### <path>` subsection per fragment (`initial-revision-renderer.ts`, `renderFromIdea`).
 
 **v1 is checked, not exempt.** `initial-revision-creation.ts` imports `violations` from the canonical-form gate and runs it against the composed v1 markdown before any write: a candidate that fails [The canonical form](#the-canonical-form) is refused with `status: 'blocked'`, `code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION'`, and nothing is written. This is the same `violations()` check the successor path runs — not a second gate, the identical one.
 

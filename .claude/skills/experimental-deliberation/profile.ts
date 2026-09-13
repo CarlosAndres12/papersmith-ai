@@ -49,7 +49,13 @@ export const profile: DeliberationDomainProfile = {
 	// an ordinal: experiments are added, split and retired, and a positional number
 	// would silently re-point every citation the first time one is removed.
 	proseReferencePattern: "\\((?:Exp|Experiment)\\.\\s*([A-Za-z0-9][A-Za-z0-9._-]*)\\)",
-	proseReferenceText: (value) => `(Exp. ${value})`,
+	// Finding L5: no file this domain owns ever reads a rendered display string for a
+	// citation -- `reference-experimental.ts`'s `cites` captures the raw identifier value
+	// via `proseReferencePattern` and needs nothing more; `preservation-experimental.ts`
+	// has no "ref" atom kind at all (its atoms are report tables, baselines, success
+	// criteria, figures, datasets -- never a prose citation). `proseReferenceText` is now
+	// optional at the engine level for exactly this reason, so this profile stops
+	// declaring a renderer it never invoked.
 	vocabulary: {
 		conceptualTerms: ["experimental design", "baseline", "ablation", "evaluation protocol", "reported metric"],
 		// The engine's intent matching is Spanish and shared; only the SUBJECT is this
@@ -79,12 +85,22 @@ export const profile: DeliberationDomainProfile = {
 		revisionLabel: (ordinal) => `v${String(ordinal).padStart(2, "0")}`,
 		sidecarRoot: ".experimental-deliberation",
 		// NOT free to change, and byte-identical to `proposal-deliberation`'s on purpose.
-		// Three core files still SPELL this literal instead of reading it back out of the
-		// profile -- `patch-compiler.ts`, `draft-materialization.ts` and
-		// `revision-lifecycle-store.ts` -- so a domain that declared its own marker would
-		// have its documents written with one string and validated against another, and
-		// the failure would be silent. Copied exactly until those three read the profile.
+		// One core file still SPELLS this literal instead of reading it back out of the
+		// profile -- `revision-lifecycle-store.ts`, on purpose, for a Python cross-language
+		// regex guard (see its own comment). A domain that declared its own marker would
+		// have that ONE file's "latest managed revision" resolution silently fail to
+		// recognize its documents even though every other core site -- including
+		// `patch-compiler.ts` and `draft-materialization.ts`, both now fixed to read
+		// `artifact.marker` instead of a second hardcoded copy -- recognizes them correctly.
+		// Copied exactly until that one file's Python-guard constraint is lifted.
 		marker: "<!-- proposal-workspace:artifact:v1 -->\n",
+		// Finding L6: `initial-revision-renderer.ts` used to hardcode `## Paper Guide
+		// Reference` above every loaded read-only source fragment in v1, regardless of
+		// domain. Accurate for the mathematical sibling (its one source really is a paper
+		// guide) and wrong here: this domain's declared sources are a data paper, the
+		// latest managed proposal and an area benchmark -- never a paper guide. Declared
+		// so v1 names what it actually loaded.
+		sourceReferenceHeading: "Reference Sources",
 		// Declared, unlike the mathematical sibling. A mathematical revision is answerable
 		// to its own derivation, which is timeless; an experimental one is answerable to a
 		// reader who has to know what changed between two plans before a run is launched

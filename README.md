@@ -233,23 +233,60 @@ verifica**. El agente propone un cambio; el motor comprueba que ese cambio no
 rompió nada y, si lo rompió, se niega. Un agente puede equivocarse. Un motor
 determinista no cambia de opinión.
 
-**Y cómo se encadenan.** Las cinco no son islas: cada una recibe algo concreto de
+**Y cómo se encadenan.** Las nueve no son islas: cada una recibe algo concreto de
 otra y le entrega algo concreto a la siguiente. Este es el mapa; cada skill explica
-su propia costura en detalle, en su apartado.
+su propia costura en detalle, en su apartado. Las flechas dicen **qué** pasa por la
+costura, no sólo que existe — y cada una de las etiquetas de abajo está leída de la
+declaración de la skill que la recibe, no inferida del nombre de la carpeta.
 
 ```mermaid
-flowchart LR
+flowchart TD
     PDF["PDFs que dejás en guidance/"] --> PI["1. paper-ingestion"]
-    PI -- "Markdown en paper-guide/" --> PD["2. proposal-deliberation"]
+
+    PI -- "guidance/paper-guide (opcional)" --> PD["2. proposal-deliberation"]
+    PI -- "guidance/data-paper (obligatoria)" --> ED["6. experimental-deliberation"]
+    PI -- "guidance/area-benchmark (opcional)" --> ED
+
+    PD -- "proposals/ — la revisión publicada" --> ED
     PD -- "STATUS + el texto de la revisión" --> IMP["3. proposal-implementation"]
+    ED -- "experiments/ — el protocolo publicado" --> EIM["7. experimental-implementation"]
+    PD -- "proposals/ — el documento 1 del par" --> EIM
+
     IMP -- "correcciones, detrás de compuerta" --> PD
+    EIM -- "correcciones, detrás de compuerta" --> ED
+
+    IMP -- "el repo destino en implementations/" --> EIM
     IMP -- "carpeta del trabajo en tools/" --> RE["5. remote-execution"]
-    KA["4. kaggle-accounts"] -- "worker + ruta, nunca el valor" --> RE
+    EIM -- "carpeta del trabajo en tools/" --> RE
+    KA["4. kaggle-accounts"] -- "worker + ruta al token, nunca el valor" --> RE
     RE -- "el registro, sólo lectura" --> IMP
+
+    PD -- "proposals/" --> PW["8. paper-writing"]
+    ED -- "experiments/" --> PW
+    EIM -- "el código del destino y lo que sus corridas devolvieron" --> PW
+    PW --> PAPER["paper/main.tex + Figures/"]
+
+    SA["9. skill-audit"] -. "audita a cualquiera: informa, nunca cambia" .-> PI
+    SA -. " " .-> PD
+    SA -. " " .-> IMP
+    SA -. " " .-> RE
 ```
 
-El lazo entre la 2 y la 3 es el corazón de la forja, y va en los dos sentidos: la
-matemática baja a código, y lo que el código descubre sube de vuelta al documento.
+**Tres cosas que el mapa dice y conviene leer despacio.**
+
+*Los dos lazos hacia arriba son el corazón de la forja.* La matemática baja a código
+y lo que el código descubre sube de vuelta al documento; lo mismo entre el protocolo
+experimental y su implementación. En los dos casos la vuelta pasa por una compuerta
+que **vos** abrís: el código propone la corrección, nunca la publica.
+
+*Las cuatro de en medio son dos pares sobre dos motores.* La 2 y la 6 comparten un
+motor de deliberación; la 3 y la 7, un motor de implementación. Lo único que cambia
+entre los dos huéspedes de cada par es su `profile.ts` o su `impl_profile.py` — por
+eso un defecto en un motor aparece en dos skills a la vez, y por eso las
+limitaciones del motor están anotadas en las dos.
+
+*La 8 es la única que lee de todo lo anterior a la vez*, y la 9 no está en la cadena:
+se para al costado y mira a cualquiera, incluida a sí misma.
 
 ---
 
@@ -505,6 +542,7 @@ La `r01` no se puede retirar nunca, ni tampoco una revisión que tenga descendie
 | Ciclo de vida | `revision-lifecycle-store.ts`, `revision-lifecycle-transaction.ts` | Retiro y restauración transaccionales, con reversión en orden inverso si algo falla a mitad. |
 | Concurrencia | `mutation-lock.ts` | Impide dos publicaciones simultáneas sobre el mismo archivo. |
 | Token de aceptación | `successor-acceptance-registry.ts` | Ata una vista previa a su aceptación. Vive en memoria, es de un solo uso y muere con el proceso: no se puede aceptar mañana una previa de hoy. |
+| Agente delegado | `.claude/agents/deliberation-publish.md` | El tramo **terminal**, y arranca recién después de que vos aceptaste: resuelve la entrada, compone el reemplazo sustituyendo **adentro** de ella en vez de devolver un bloque pelado, y publica. `Read`, `Bash`, `Glob`, `Grep` — **sin `Write` ni `Edit`**, porque sólo el motor escribe. La deliberación misma no está en su tramo y no puede estarlo: eso no lo cierra nada más que vos. |
 
 **Qué escribe en el disco.**
 
@@ -673,14 +711,14 @@ silencio, hasta que alguien nota que faltan recibos. **Cómo se arregla:** con u
 `stateRoot(root)` del que salgan los 21. Es un refactor chico y desbloquea las dos
 cosas de arriba.
 
-*Un campo obligatorio que el segundo dominio declara y nunca usa, y un import vivo por un
-`void`.* `proseReferenceText` está en los obligatorios —el motor se niega a arrancar sin
-él— y no tiene ningún lector en el núcleo: su único lector está del lado matemático. El
-otro host lo declara porque debe, y su proceso jamás lo invoca. En el mismo archivo de
-entrada, `cli.mjs` importa `pathToFileURL` y su última línea es `void pathToFileURL;`,
-que existe únicamente para que el import no se lea como no usado. **Cómo se arregla:**
-sacar el campo de los obligatorios o darle un lector en el núcleo; y borrar el import con
-su `void`.
+*Resuelto.* `proseReferenceText` era obligatorio a nivel de motor sin tener ningún lector
+en el núcleo —su único lector real siempre fue el lado matemático
+(`preservation-math.ts`)—, y el otro host lo declaraba porque debía, sin invocarlo jamás.
+Ahora es opcional en `domain-profile.ts`; `preservation-math.ts` exige su propia
+necesidad localmente (falla con `PROSE_REFERENCE_TEXT_REQUIRED` si no está), y el perfil
+experimental dejó de declararlo. En el mismo archivo de entrada, `cli.mjs` importaba
+`pathToFileURL` sin usarlo salvo por un `void pathToFileURL;` de cierre; ambos se
+borraron.
 
 **Diagrama.**
 
@@ -905,6 +943,8 @@ igual.
 | `assets/kit/nb/benchmark.py` | Entrena las dos implementaciones bajo una misma reducción acotada. Se niega a correr bajo un intérprete ajeno —porque el tiempo de pared y la memoria pico **son** la medición— y se niega a correr sin cableado declarado. |
 | `assets/kit/nb/verdict.py` | La lógica de juicio: sólo concede un ganador cuando las medias difieren más que el error estándar combinado, y por debajo de tres repeticiones **no da veredicto**, sólo imprime una estimación puntual. |
 | `assets/kit/nb/report_digest.py` | Hashea todo `src/` en un sello que el informe imprime y que `verify` recalcula, para poder probar que un informe está atado al código exacto que lo produjo. |
+| `.claude/agents/implementation-build.md` | El tramo **entre dos compuertas tuyas**: del mapa objeto-a-módulo aprobado al informe de hallazgos que vos decidís. Materializa el andamiaje, escribe un módulo por objeto matemático con su procedencia y sus tests de invariante, barre las configuraciones declaradas, y **falla sobre la admisibilidad de cada remedio ANTES de medirlo**. `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`. No decide ni pregunta: termina reportando qué encontró y cuánto costó establecerlo. |
+| `.claude/agents/implementation-walk.md` | El tramo **de las colocaciones ya decididas al lanzamiento que vos tenés que autorizar**: camina el flujo declarado acto por acto en su propio orden, corre los pasos locales, commitea el producto de cada uno, refresca la posición, y genera las carpetas de trabajo que un paso remoto necesita. `Read`, `Bash`, `Glob`, `Grep` — sin `Write`. **Se detiene en el lanzamiento y no tiene camino para enviar una campaña**, ni para ejecutar un ensayo: ese acto no lo realiza nadie acá (ver **Limitaciones conocidas**). |
 
 **Qué escribe en el disco.**
 
@@ -1521,7 +1561,9 @@ conversación.
    mano.
 2. **Bifurcación.** Cero revisiones gestionadas → crear v1. Ya hay una → editar.
 3. **Crear v1.** El motor carga las tres fuentes una sola vez, las incluye verbatim bajo
-   `## Paper Guide Reference`, y compone el documento a partir de tu idea de texto. **La idea
+   `## Reference Sources` (encabezado propio de este dominio; el motor compartido escribía
+   `## Paper Guide Reference` para cualquier dominio hasta que este perfil declaró el suyo,
+   finding L6), y compone el documento a partir de tu idea de texto. **La idea
    necesita al menos dos oraciones.** El título sale de la primera y el encabezado de sección de
    la segunda; con una sola oración las dos calculan el mismo texto, `# X` y `## X` quedan
    byte-idénticos, y cada consulta de locus posterior queda ambigua para siempre.
@@ -1565,7 +1607,7 @@ conversación.
 | `cli.mjs` | 13 líneas. Fija `DELIBERATION_DOMAIN_PROFILE` a este `profile.ts` y delega el resto entero — argumentos, modo stdin, códigos de salida — al `cli.mjs` del motor compartido. |
 | `.claude/agents/experimental-validation.md` | El tramo `validated`: busca y verifica, nunca compone. Termina cuando ningún hallazgo depende de la memoria en vez de una búsqueda de esta misma corrida. |
 | `.claude/agents/experimental-publish.md` | El tramo terminal: empieza donde el operador ya aceptó el cambio, termina con el sucesor publicado y vigente. No tiene `Write` ni `Edit` — sólo el motor escribe. |
-| `_core/deliberation/engine/` (~50 archivos TS) | El motor compartido con `proposal-deliberation`, sin cambios para admitir este dominio. Ver el desglose completo en la sección de `proposal-deliberation`; tres de esos archivos — `patch-compiler.ts`, `draft-materialization.ts`, `revision-lifecycle-store.ts` — todavía escriben el marcador de artefacto como literal en vez de leerlo del perfil (ver **Limitaciones conocidas**). |
+| `_core/deliberation/engine/` (~50 archivos TS) | El motor compartido con `proposal-deliberation`, sin cambios para admitir este dominio. Ver el desglose completo en la sección de `proposal-deliberation`; un solo archivo — `revision-lifecycle-store.ts` — todavía escribe el marcador de artefacto como literal, a propósito, para un guard Python de cruce de lenguaje (ver **Limitaciones conocidas**). |
 
 **Los seguros.**
 
@@ -1588,45 +1630,36 @@ conversación.
   búsqueda de esta corrida se marca `[pending-verification]`; una URL plausible es peor que una
   ausente, porque parece verificada.
 
-**Limitaciones conocidas.**
+**Limitaciones conocidas.** Las tres de abajo estaban abiertas y ya se resolvieron.
 
-*El marcador del artefacto sigue duplicado en tres archivos del motor.* `patch-compiler.ts:5`,
-`draft-materialization.ts:12` y `revision-lifecycle-store.ts:19` todavía escriben
-`<!-- proposal-workspace:artifact:v1 -->` como constante literal en vez de leerla de
-`DOMAIN.artifact.marker`, mientras los otros siete sitios del motor sí la leen del perfil. Hoy no
-muerde a nadie porque los dos dominios que existen copian el mismo byte a byte — el propio
-comentario de `profile.ts` (líneas 81-86) lo dice sin rodeos. Un tercer dominio que declarara su
-propio marcador tendría sus documentos escritos con una cadena y validados contra otra, y la
-falla sería silenciosa. **Cómo se arregla:** que esos tres archivos lean `DOMAIN.artifact.marker`
-igual que ya hacen `artifact-naming.ts`, `orchestrator.ts`, `initial-revision-creation.ts` y el
-resto.
+*Resuelto: el marcador del artefacto ya no está duplicado sin motivo.* `patch-compiler.ts` y
+`draft-materialization.ts` escribían `<!-- proposal-workspace:artifact:v1 -->` como constante
+literal en vez de leerla de `DOMAIN.artifact.marker` — el segundo, además, sin ningún lector: la
+constante estaba muerta. El primero ahora lee `artifact.marker` como los demás sitios del motor;
+el segundo perdió la constante entera. Sólo `revision-lifecycle-store.ts:19` sigue escribiendo el
+literal, y a propósito: un guard Python de cruce de lenguaje lo lee por regex.
 
-*El cargador del perfil de dominio acepta secciones enteras vacías.* `domain-profile.ts` revisa
-que `REQUIRED` no tenga claves de nivel superior `undefined`, y después vuelve a revisar
-`artifact.*` y `objective.*` explícitamente — con un comentario propio que dice por qué: la
-primera pasada dejaba pasar `artifact: {}` vacío. Esa misma lección no llegó a `vocabulary`,
-`preservation`, `references` ni `sources`: un perfil que declarara `vocabulary: {}` publicaría v1
-igual, y después no podría resolver ningún locus, con el mensaje culpando a la consulta en vez de
-al perfil. Y la comprobación que sí se agregó para `stages[].establishes`/`.behindWhen` sólo
-prueba `=== undefined`, así que una cadena vacía `""` la atraviesa sin marcar nada — exactamente
-el daño que el comentario de esa comprobación dice que existe para evitar. Esta skill no lo sufre
-— declara los ocho campos de `vocabulary` llenos — pero el motor no se lo exigiría a la próxima.
-**Cómo se arregla:** extender la comprobación de "no vacío" que ya existe para `artifact` y
-`objective` a las cuatro secciones restantes, y cambiar la prueba de los campos de `stages` de
-`=== undefined` a también rechazar la cadena vacía.
+*Resuelto: el cargador del perfil de dominio ya no acepta secciones enteras vacías.*
+`domain-profile.ts` revisaba que `REQUIRED` no tuviera claves de nivel superior `undefined`, y
+volvía a revisar `artifact.*`/`objective.*` explícitamente, pero la misma lección no llegaba a
+`vocabulary`, `preservation`, `references` ni `sources`, y la comprobación de `stages[].establishes`/
+`.behindWhen` sólo probaba `=== undefined` (una cadena vacía la atravesaba). Ahora los ocho campos
+de `vocabulary`, las funciones de `preservation`/`references`, una lista de `sources` no vacía y
+bien formada, y cadenas no vacías en `objective.arrival`/`.purpose`/`.humanStops`/`stages[].*` se
+revisan igual de explícitamente, con el mismo código de error nombrando el campo anidado. Esta
+skill nunca lo sufrió — declara los ocho campos de `vocabulary` llenos — pero el motor ya se lo
+exige a la próxima.
 
-*Siete contadores de auto-auditoría nacieron en cero y no tienen forma de dejar de estarlo.*
-`runtime-metrics.ts:47` define `recordScientificMetric`, y es la **única** ocurrencia del símbolo
-en todo el repositorio — nada lo llama, en ningún archivo de producción ni de test. Los siete
-contadores que alimenta (`entry`, `blocked`, `recovery_required`,
-`materialization_blocked`/`_recovery_required`/`_retry`, `recovery_diagnostic`) arrancan en 0 y
-viajan sin cambiar hasta el bloque `metrics` que devuelve cada auto-auditoría — el mismo bloque
-que tanto `SKILL.md` como los dos agentes le piden al operador que lea como `selfAuditStatus:
-"PASS"`. Su hermano `recordLifecycleMetric`, en el mismo archivo, sí tiene dos sitios de llamada
-reales y dos tests que afirman sus contadores; éste no tiene ninguno. **Cómo se arregla:** cablear
-las llamadas en los puntos donde el motor detecta cada evento — igual que ya existe para
-`recordLifecycleMetric` — o retirar el campo del reporte de auto-auditoría hasta que algo lo
-llame, para que un contador en cero dejara de leerse como una medición.
+*Resuelto (decisión tomada): los siete contadores de auto-auditoría que nacían en cero se
+retiraron.* `runtime-metrics.ts` definía `recordScientificMetric`, con cero llamadores de
+producción y cero tests — la única ocurrencia del símbolo era su propia definición. Los siete
+contadores que alimentaba viajaban sin cambiar hasta el bloque `metrics` que devuelve cada
+auto-auditoría, indistinguibles de una medición real. Se retiraron (`scientificMetrics`,
+`recordScientificMetric` y el tipo que los declaraba) en vez de inventarles sitios de llamada:
+decidir DÓNDE instrumentar cada uno es una pregunta de diseño real que este arreglo no puede
+responder por adivinanza, y una colocación equivocada seguiría siendo señal falsa, sólo que ya no
+visiblemente en cero. `recordLifecycleMetric` (dos sitios de llamada reales, dos tests) queda como
+el patrón a seguir si alguna vez se diseñan productores reales para estos siete.
 
 **Diagrama.**
 
@@ -1948,6 +1981,8 @@ donde nada quedó afirmado sin que una corrida lo haya chequeado.
 | `scripts/paper_verify.py` | Siete chequeos puros sobre esa evidencia — cero I/O propio, reporte de sólo lectura. |
 | `scripts/paper_objective.py` | El norte declarado: `OBJECTIVE_FLOW`, leído por `tests/test_agents.py` vía `ast.literal_eval` — literales puros, sin llamadas ni imports. |
 | `sections/*.md` | Los diez contratos reales, versionados: front-matter JSON + prosa. Entrada real, no fixture. |
+| `.claude/agents/insumos-observer.md` | Lee las **cuatro fuentes declaradas** del paper —`proposals/`, `experiments/`, el código del repo destino y lo que devolvieron sus corridas— y reporta, por cada hecho observable, si está satisfecho y **con qué evidencia**. `Read`, `Glob`, `Grep`. **Nunca decide un valor y nunca corre `declare`**: su informe es lo que una persona lee antes de correrlo ella. El informe se pasa por archivo y `observe` lo valida contra el esquema — nunca se le cree a un agente su propia cuenta. |
+| `.claude/agents/style-sampler.md` | Resuelve el bloque equivalente, **entero**, de cada carpeta de `guidance/` que el registro clasifica como `style-reference`, y lo devuelve **verbatim, nunca recortado**. `Read`, `Glob`, `Grep`. Lo que devuelve es el único material contra el cual una prueba posterior de solapamiento puede comparar un borrador con estilo: si recortara, la prueba compararía contra algo que nadie escribió. |
 
 **Los seguros.**
 

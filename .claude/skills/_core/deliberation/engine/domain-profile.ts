@@ -45,8 +45,19 @@ export type DeliberationDomainProfile = {
 	 * agreed only by luck.
 	 */
 	readonly proseReferencePattern: string;
-	/** The same citation, written back out for an atom's display text. */
-	readonly proseReferenceText: (value: string) => string;
+	/**
+	 * The same citation, written back out for an atom's display text.
+	 *
+	 * Optional (finding L5): no file under `_core/` ever reads this -- its one real
+	 * reader anywhere is one host's own preservation module, for the "ref" atom kind
+	 * its own gate extracts. A host with no "ref" atom kind at all used to be forced to
+	 * declare a renderer it never invoked anyway (this field was in `REQUIRED` below);
+	 * that host's own preservation module documents, on purpose, that it reads no
+	 * `DOMAIN` field at all. A mandatory engine-level field with a real reader in
+	 * exactly one host is that host's OWN requirement, not the engine's, so it is
+	 * enforced there (that module's own lazy read) instead of here.
+	 */
+	readonly proseReferenceText?: (value: string) => string;
 	/**
 	 * What this domain's instructions are ABOUT.
 	 *
@@ -117,6 +128,22 @@ export type DeliberationDomainProfile = {
 			/** Renders the FULL header block -- including its own heading line -- from the caller's `changeSummary`. Replaces the header entry's entire span each version; the receipt is where full history lives. */
 			readonly render: (summary: { readonly what: string; readonly why: string }) => string;
 		};
+		/**
+		 * Finding L6: `initial-revision-renderer.ts` used to hardcode `## Paper Guide
+		 * Reference` above every loaded read-only source fragment in v1, regardless of
+		 * domain -- accurate for a domain whose one source really is a paper guide, and
+		 * wrong for a domain whose declared sources never are. Undeclared (the default,
+		 * matching that first domain's own choice) renders the exact prior literal, zero
+		 * migration.
+		 */
+		readonly sourceReferenceHeading?: string;
+		/**
+		 * Finding L6: `successor-edit-planner.ts` used to hardcode `## Accepted scientific
+		 * decisions` for its claim-provenance document-tail summary block, undeclared by
+		 * any profile. Undeclared (the default) renders the exact prior literal, zero
+		 * migration for either shipped host.
+		 */
+		readonly acceptedDecisionsHeading?: string;
 	};
 	/**
 	 * Change 9: names which loaded sources this domain treats as a hard bound on claims, and
@@ -193,6 +220,17 @@ export type DeliberationDomainProfile = {
 
 const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'] as const;
 const OBJECTIVE_REQUIRED = ['purpose', 'stages', 'arrival', 'humanStops'] as const;
+// Finding M6: `REQUIRED` below only ever checked TOP-LEVEL key presence, so
+// `vocabulary: {}` passed it exactly as vacuously as `artifact: {}` and `objective: {}`
+// once did -- and unlike those two, nothing here ever caught it: a profile missing every
+// one of these eight non-optional fields still started, then silently resolved no locus
+// and blamed the caller's query for it.
+const VOCABULARY_REQUIRED = ['conceptualTerms', 'expertPattern', 'displayNounPattern', 'displayNounStripPattern', 'subjectPattern', 'subjectTerms', 'subjectLocusDescription', 'subjectEvidenceLabel'] as const;
+// `preservation: {}` / `references: {}` pass `REQUIRED` the same vacuous way; both fields
+// are functions, never checked as more than "not undefined", so a profile missing either
+// method started and died only at first use with "... is not a function".
+const PRESERVATION_REQUIRED = ['extractAtoms', 'violations'] as const;
+const REFERENCES_REQUIRED = ['declares', 'cites'] as const;
 /** No `/`, no `..`, no empty segment -- a profile-supplied path segment escaping the workspace sandbox is the one adjacent risk change 3 introduces (design.md, "profile-supplied path segments are validated at load"). */
 const SAFE_ARTIFACT_SEGMENT = /^\.?[A-Za-z0-9._-]+$/;
 function isSafeArtifactSegment(value: unknown): value is string {
@@ -207,7 +245,10 @@ if (!configured)
 		"through a skill's own cli.mjs, which sets it.",
 	);
 
-const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "proseReferenceText", "vocabulary", "artifact", "preservation", "references", "sources", "objective"] as const;
+// `proseReferenceText` is deliberately NOT here (finding L5): it is optional in the type
+// above, since the engine itself never reads it and only one host's own preservation
+// module needs it -- that host enforces its own requirement locally instead.
+const REQUIRED = ["deriveBase", "baseLabel", "baseLabelLong", "exampleSlug", "names", "proseReferencePattern", "vocabulary", "artifact", "preservation", "references", "sources", "objective"] as const;
 
 // Absolute, and refused otherwise. A relative path resolves against the working
 // directory, and the engine does not control that: a CLI child process launched
@@ -241,15 +282,64 @@ const missingObjective = OBJECTIVE_REQUIRED.filter((key) => objectiveValue[key] 
 if (missingObjective.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingObjective.map((key) => `objective.${key}`).join(", ")}.`);
 
 // `stages` presence alone (the check above) does not rule out `stages: []` -- a north with no
-// stages is not a north. Every element must carry all three keys, or a stage this domain
-// declares by name would silently establish nothing and close on no condition at all.
+// stages is not a north. Every element must carry all three keys as non-empty strings, or a
+// stage this domain declares by name would silently establish nothing and close on no
+// condition at all. This used to test `=== undefined` only, which is the shape the guard was
+// written for and not the harm: an `establishes` or `behindWhen` equal to the empty string
+// is not `undefined` and slipped through, publishing an empty north field exactly as
+// `humanStops: []` did below.
+const nonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 const stages = objectiveValue.stages as readonly unknown[];
 const stagesIncomplete = !Array.isArray(stages) || stages.length === 0
 	|| stages.some((stage) => {
 		const value = stage as Record<string, unknown>;
-		return typeof value !== 'object' || value === null || value.stage === undefined || value.establishes === undefined || value.behindWhen === undefined;
+		return typeof value !== 'object' || value === null || !nonEmptyString(value.stage) || !nonEmptyString(value.establishes) || !nonEmptyString(value.behindWhen);
 	});
 if (stagesIncomplete) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing objective.stages.`);
+
+// `objective.arrival`/`objective.purpose` presence alone (`OBJECTIVE_REQUIRED` above) does
+// not rule out `""` -- an empty string is not `undefined` and publishes an empty north field
+// in every `STATUS` response and on both CLI error paths.
+if (!nonEmptyString(objectiveValue.arrival) || !nonEmptyString(objectiveValue.purpose))
+	throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${[!nonEmptyString(objectiveValue.arrival) ? 'objective.arrival' : undefined, !nonEmptyString(objectiveValue.purpose) ? 'objective.purpose' : undefined].filter(Boolean).join(", ")}.`);
+
+// `objective.humanStops` presence alone does not rule out `[]` -- asserting that NOTHING is a
+// person's decision is not a north either. `objective`'s own doc comment: "What no operation
+// may close on its own word -- always a person's decision"; an empty array names none.
+const humanStops = objectiveValue.humanStops as readonly unknown[];
+if (!Array.isArray(humanStops) || humanStops.length === 0 || !humanStops.every(nonEmptyString))
+	throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing objective.humanStops.`);
+
+// `vocabulary: {}` passes `REQUIRED` exactly as vacuously as `artifact: {}` and `objective: {}`
+// once did. All eight fields are checked here explicitly, under the same refusal code.
+const vocabularyValue = loaded.profile!.vocabulary as Record<string, unknown>;
+const missingVocabulary = VOCABULARY_REQUIRED.filter((key) => vocabularyValue[key] === undefined);
+if (missingVocabulary.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingVocabulary.map((key) => `vocabulary.${key}`).join(", ")}.`);
+
+// `preservation: {}` / `references: {}` pass `REQUIRED` the same vacuous way. Both fields'
+// members are functions the engine calls directly (`preservation.ts`, `candidate-validator.ts`,
+// `reference-index.ts`, `document-index.ts`); a profile missing one used to start and die only
+// at first use with a raw "... is not a function" instead of a clear refusal at load time.
+const preservationValue = loaded.profile!.preservation as Record<string, unknown>;
+const missingPreservation = PRESERVATION_REQUIRED.filter((key) => typeof preservationValue[key] !== 'function');
+if (missingPreservation.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingPreservation.map((key) => `preservation.${key}`).join(", ")}.`);
+
+const referencesValue = loaded.profile!.references as Record<string, unknown>;
+const missingReferences = REFERENCES_REQUIRED.filter((key) => typeof referencesValue[key] !== 'function');
+if (missingReferences.length) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} is missing ${missingReferences.map((key) => `references.${key}`).join(", ")}.`);
+
+// `sources` presence alone does not rule out `[]` or a list of malformed entries. Both shipped
+// hosts declare at least one real source (one a single optional guide, the other three,
+// two of them required) -- an empty or malformed list is indistinguishable from every
+// `required: true` source check (`missingRequiredSources`, in the file that reads `sources`
+// for fragment loading) silently never running, so it is refused rather than trusted.
+const sourcesValue = loaded.profile!.sources;
+const sourcesMalformed = !Array.isArray(sourcesValue) || sourcesValue.length === 0
+	|| sourcesValue.some((source) => {
+		const value = source as Record<string, unknown>;
+		return typeof value !== 'object' || value === null || !nonEmptyString(value.path) || typeof value.required !== 'boolean';
+	});
+if (sourcesMalformed) throw new Error(`DELIBERATION_DOMAIN_PROFILE_INCOMPLETE: ${configured} declares an empty or malformed sources list.`);
 
 // Change 3 turns a sandbox root (the managed directory, the sidecar root) into a profile value;
 // `REQUIRED`-membership alone does not make a caller-supplied path segment safe to join under the
