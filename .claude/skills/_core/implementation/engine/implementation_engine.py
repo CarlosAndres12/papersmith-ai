@@ -5225,7 +5225,10 @@ def remedy_compatibility(findings: list[dict], revision: str | None,
         return {"status": "unknown", "reason": f"revision {revision!r} not readable",
                 NOTATION_KEYS["unknown"]: [], "undefinedNotation": [], "introducesNotation": []}
 
-    tags = set(TAG_RE.findall(source))
+    # No `tags` here: document 0's pattern over document 0's text was computed
+    # on every call and read by nothing once the per-document loop replaced its
+    # only consumer. Left standing, it reads as load-bearing to whoever comes
+    # next -- which is exactly what it stopped being.
     unknown_loci: list[str] = []
     undefined_notation: list[str] = []
     introduces: list[str] = []
