@@ -409,6 +409,10 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: 111->113, `local` 31->35, `module` 186->187, `named` 171->177,
 #: `rather` 331->332, `refuses` 91->92, `remedy` 48->49, `value`
 #: 229->233, `whose` 142->145, `write` 106->107.
+#: `the-agreement-nothing-computes` (Slice D5, second growth): the
+#: mixed-reach branch's own docstring/comment/refusal prose (design.md
+#: D10's fourth deferredBecause value) grew three more. `local` 35->40,
+#: `named` 177->178, `recorded` 76->77.
 M5_PINNED_RESIDUE: dict[str, int] = {
     "actually": 76, "admissible": 3, "after": 79, "against": 184,
     "agreed": 24, "answered": 71, "answers": 99, "approved": 29,
@@ -417,12 +421,12 @@ M5_PINNED_RESIDUE: dict[str, int] = {
     "command": 268, "commands": 19, "compares": 23, "declaration": 191,
     "destinations": 37, "empty": 113, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
-    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 35,
+    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 40,
     "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 140, "measurement": 43, "module": 187, "named": 177,
+    "measured": 140, "measurement": 43, "module": 187, "named": 178,
     "notebooks": 107, "object": 27, "objects": 19, "pilot": 119,
     "place": 50, "premises": 7, "produces": 44, "rather": 332,
-    "readable": 24, "recorded": 76, "refuses": 92, "remedy": 49,
+    "readable": 24, "recorded": 77, "refuses": 92, "remedy": 49,
     "remote": 55, "reported": 142, "resolves": 32, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
     "something": 67, "stage": 82, "steps": 133, "sweep": 7,

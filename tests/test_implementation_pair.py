@@ -2013,6 +2013,40 @@ class HandoffLocalReachTests(unittest.TestCase):
         "    },\n"
         "]\n"
     )
+    #: design.md D10's own fourth branch: a finding naming BOTH documents
+    #: where ONE resolves local and the OTHER structural. `local_reach`'s
+    #: union already refuses to treat this as settleable (never enters the
+    #: inline branch, so no COMPOSE_AMBIGUOUS_DOCUMENT risk here); the
+    #: generic "not local at all" reason would be FALSE for it, since
+    #: document 0's own reading genuinely is local -- `deferredBecause:
+    #: "structural-in-another-document"` is the distinct value this
+    #: fixture exists to reach.
+    MIXED_FINDINGS_SOURCE = (
+        "FINDINGS = [\n"
+        "    {\n"
+        "        'id': 'mixed-reach',\n"
+        "        'kind': 'gap',\n"
+        "        'status': 'measured',\n"
+        "        'rate': 'always',\n"
+        "        'statement': 'Local in one document, structural in the "
+        "other.',\n"
+        "        'remedy': 'No change to either document; this finding "
+        "exists only to prove the mixed-reach branch.',\n"
+        "        'document': ['proposal', 'experiments'],\n"
+        "        'equations': ['44'], 'remedy_equations': ['44'],\n"
+        "        'uses': [], 'introduces': [],\n"
+        "        'adoption': {'absent': 'NEVER_IN_EITHER_TEXT', 'expect': "
+        "['ALSO_NEVER']},\n"
+        "    },\n"
+        "]\n"
+    )
+    #: Document 1's own text for the mixed-reach case alone -- cites its
+    #: locus THREE times under document 1's own "Exp." pattern
+    #: (structural), while document 0's shared `REVISION_TEXT` above never
+    #: mentions "44" at all (0 citations under document 0's own "Ec."
+    #: pattern, genuinely local).
+    MIXED_REVISION_1_TEXT = (
+        "Exp.(44) cited, Exp.(44) again, Exp.(44) a third time.\n")
 
     def setUp(self):
         profile_root = Path(tempfile.mkdtemp(prefix="handoff-consumer-profile-"))
@@ -2147,6 +2181,35 @@ class HandoffLocalReachTests(unittest.TestCase):
             "doc1-local-unwritten", payload["audit"]["localRemediesNotWritten"],
             "expected to be included on document 1's own per-document "
             "reading, not excluded by document 0's own scalar reading")
+
+    def test_mixed_reach_defers_with_its_own_distinct_reason(self):
+        """design.md D10's own fourth branch: `mixed-reach` names both
+        documents, resolving `local` for `proposal` and `structural` for
+        `experiments`. `local_reach`'s union already excludes it from the
+        inline-settle branch; this proves it lands with `deferredBecause:
+        "structural-in-another-document"`, not the generic "this change is
+        NOT local at all" reason, which would be false for it."""
+        box = self._build_box(self.MIXED_FINDINGS_SOURCE, "_mixed")
+        # This case needs its OWN document 1 text (structural under
+        # document 1's own pattern) -- rebuilt with a dedicated doc1 dir
+        # rather than the shared, all-empty `self.doc1`.
+        mixed_doc1 = Path(tempfile.mkdtemp(prefix="handoff-consumer-mixed-doc1-"))
+        self.addCleanup(shutil.rmtree, mixed_doc1, ignore_errors=True)
+        (mixed_doc1 / self.REVISION_1).write_text(
+            self.MIXED_REVISION_1_TEXT, encoding="utf-8")
+        handoff = self.run_cli(
+            box, "handoff", "--target", str(box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, doc1_dir=mixed_doc1)
+        self.assertEqual(handoff.returncode, 0, handoff.stdout + handoff.stderr)
+        payload = json.loads(handoff.stdout)
+        deferred = {item["id"]: item for item in payload["deferToOwnSession"]}
+        self.assertIn("mixed-reach", deferred)
+        self.assertEqual(
+            deferred["mixed-reach"]["impact"]["class"],
+            {"proposal": "local", "experiments": "structural"})
+        self.assertEqual(
+            deferred["mixed-reach"]["deferredBecause"],
+            "structural-in-another-document")
 
 
 _Z9_OLD = "local_reach(impact)"

@@ -8242,6 +8242,23 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                     "bloque corregido escrito (`remedy_block`). La redacción de la "
                     f"{SUBJECT_COLLECTIVE_ES} es la decisión, y no se infiere de la prosa.")
                 item["deferredBecause"] = "remedy-text-missing"
+            elif (isinstance(impact["class"], dict)
+                    and "local" in impact["class"].values()):
+                # `the-agreement-nothing-computes` (Slice D, design.md D10):
+                # a fourth branch, in the SAME hardcoded Spanish as its three
+                # neighbours (M2 stays recorded and unresolved -- translating
+                # one of four would make the output bilingual, a behavioural
+                # delta the seal must refuse). Local in one named document
+                # and structural in another -- `local_reach`'s own union
+                # already refused to treat this as settleable, but the
+                # generic "not local at all" reason below would be false
+                # here: at least one document genuinely reads local.
+                reason = (
+                    "Este cambio es local en un documento pero estructural en "
+                    f"otro (mide {impact['class']!r}), así que no puede "
+                    "resolverse dentro de un solo documento. Merece una "
+                    "sesión propia.")
+                item["deferredBecause"] = "structural-in-another-document"
             else:
                 reason = (
                     f"Este cambio NO es local: reescribe {impact[NOTATION_KEYS['locus']]} "
