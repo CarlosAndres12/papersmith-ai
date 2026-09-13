@@ -2866,7 +2866,11 @@ def main(argv: list[str] | None = None) -> int:
                 ADAPTER.AdapterError) as exc:
             return _refused(exc)
 
-        print(json.dumps(result, sort_keys=True))
+        # `default=str` for the same reason `submit`/`status`/`fetch`/
+        # `smoke record` already carry it: this prints `result` whole, and
+        # a future `cmd_distribute` field can nest a `Path` (a `staleness`
+        # sub-dict, say) exactly the way `status` acquired one.
+        print(json.dumps(result, sort_keys=True, default=str))
         if result["places"] == 0 and result["units"] > 0:
             return 1
         return 0
@@ -2888,10 +2892,16 @@ def main(argv: list[str] | None = None) -> int:
         except (RemoteCLIError, ADAPTER.AdapterError) as exc:
             return _refused(exc)
 
+        # `default=str`: `Status.__post_init__` validates `state` against
+        # the seam's own vocabulary but never constrains `detail`'s type --
+        # a backend reporting a structured `detail` rather than the plain
+        # string every adapter happens to send today would hit the same
+        # `TypeError` `status` once did.
         print(
             json.dumps(
                 {"state": status_result.state, "detail": status_result.detail},
                 sort_keys=True,
+                default=str,
             )
         )
         return 0
@@ -2968,7 +2978,10 @@ def main(argv: list[str] | None = None) -> int:
         for note in arbitration:
             print(note, file=sys.stderr)
 
-        print(json.dumps(result, sort_keys=True))
+        # `default=str`, same reason as `distribute`: this prints `result`
+        # whole and it already carries `staleness`, the exact nested shape
+        # `status` broke on.
+        print(json.dumps(result, sort_keys=True, default=str))
         return 0
 
     if args.command == "generate-job":
@@ -3038,6 +3051,12 @@ def main(argv: list[str] | None = None) -> int:
                         args.target, args.commit, job_folder.run_config["commit"]),
                 },
                 sort_keys=True,
+                # `default=str`: `staleness` is the exact sub-dict `status`
+                # broke on once already, one layer up. `_staleness_for()`
+                # returns str/list[str]/None today; that is a fact about
+                # one helper's present shape, never a guarantee this print
+                # site holds on its own.
+                default=str,
             )
         )
         return 0
@@ -3078,7 +3097,10 @@ def main(argv: list[str] | None = None) -> int:
         except (RemoteCLIError, JOBFOLDER.JobFolderError) as exc:
             return _refused(exc)
 
-        print(json.dumps(result, sort_keys=True))
+        # `default=str`, same reason as `distribute`/`reconcile`: `result`
+        # already carries `staleness`, the exact nested shape `status`
+        # broke on once already, one layer up.
+        print(json.dumps(result, sort_keys=True, default=str))
         return 0
 
     return 1
