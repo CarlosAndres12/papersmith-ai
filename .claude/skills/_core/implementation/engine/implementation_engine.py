@@ -8156,6 +8156,28 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
 
     inline, deferred, settled = [], [], []
     for finding in read_findings(target):
+        # `the-agreement-nothing-computes` (Slice D, design.md D10): about
+        # the WORLD, not the engine -- a finding naming a declared document
+        # whose own revision could not be read (`sources_by_document`'s own
+        # value is `None` for that label). Never blanket on `sources_by_
+        # document` alone: only a finding that actually NAMES the missing
+        # document refuses, mirroring `finding_impact`'s own standing rule
+        # that an unnamed document contributes nothing. Precedent:
+        # `DOCUMENT_REVISION_UNREADABLE` at the binding-write sites
+        # (`_extra_document_revisions`) -- this is the reader-side twin,
+        # raised here instead of silently reading document 0's text alone
+        # while the second is missing.
+        if sources_by_document:
+            named = finding.get("document")
+            labels = named if isinstance(named, list) else [named] if named else []
+            for label in labels:
+                if label in sources_by_document and sources_by_document[label] is None:
+                    raise Refused(
+                        "HANDOFF_DOCUMENT_UNREADABLE",
+                        f"{finding['id']} names {label!r}, whose own revision "
+                        "cannot be read; nothing can be handed off for it. "
+                        "Publish a revision there before this finding can be "
+                        "sized.")
         impact = finding_impact(finding, source, sources_by_document)
         adoption = adoption_state(finding, source)
         item = {"id": finding["id"], "kind": finding.get("kind"),
