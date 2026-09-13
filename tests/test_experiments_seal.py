@@ -308,6 +308,22 @@ class AgreementCheckTests(unittest.TestCase):
         self.assertEqual(payload["crossed"], ["9"])
         self.assertEqual(payload["declared"], ["9"])
 
+    def test_the_agreed_payloads_key_set_is_exactly_this_and_no_more(self):
+        """`the-agreement-nothing-computes` (Slice D, design.md D11, tasks.md
+        5.11): the mutation-adding-a-verdict-field guard, restated at the
+        consumer layer -- D11's own mutation is 'add a suggestion key to
+        cmd_agree's payload'; this lock is what that mutation goes red
+        against (`AgreeSuggestionKeyZ11MutationTests`, below)."""
+        case = {"id": "agree-resolved-keyset", "command": "agree", "fixture": "A",
+                "proposals": True, "crossingTarget": True,
+                "argv": ["--target", "<TARGET>", "--name", "Trial",
+                         "--revision", "trial-crossing-resolved.md"]}
+        payload, status = self._payload(case)
+        self.assertEqual(status, 0, payload)
+        self.assertEqual(
+            set(payload.keys()),
+            {"command", "target", "revision", "status", "crossed", "declared"})
+
     def test_documents_disagree_names_both_kinds_in_one_refusal(self):
         """3.7 (negative half) + 3.8 (negative half) + 3.9: document 0
         cites `[claims:5]` (`trial-crossing-disagree.md`), document 1 (via
@@ -660,6 +676,86 @@ class AgreeRegistrationZ10MutationTests(unittest.TestCase):
                                    capture_output=True, text=True)
         self.assertEqual(real_proc.returncode, 0, real_proc.stdout + real_proc.stderr)
         self.assertTrue(json.loads(real_proc.stdout.strip())["equal"])
+
+
+class AgreeSuggestionKeyZ11MutationTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D11, tasks.md
+    5.11): D11's own mutation, restated at the consumer layer -- add a
+    `suggestion` key to `cmd_agree`'s returned payload, in a scratch copy,
+    and confirm the key-set lock above goes red under it. Never the
+    shipped engine -- the same scratch-copy mechanism Z10 already uses in
+    this file."""
+
+    def test_adding_a_suggestion_key_reddens_the_keyset_lock(self):
+        real_source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        anchor = (
+            'return {"command": "agree", "target": str(target), '
+            '"revision": args.revision,\n'
+            '            "status": "agreed", "crossed": crossed, '
+            '"declared": declared}')
+        self.assertEqual(real_source.count(anchor), 1)
+        mutated_anchor = (
+            'return {"command": "agree", "target": str(target), '
+            '"revision": args.revision,\n'
+            '            "status": "agreed", "crossed": crossed, '
+            '"declared": declared, "suggestion": "follow the target"}')
+        self.assertEqual(real_source.count(mutated_anchor), 0)
+        mutated_source = real_source.replace(anchor, mutated_anchor, 1)
+        self.assertEqual(mutated_source.count(anchor), 0)
+        self.assertEqual(mutated_source.count(mutated_anchor), 1)
+
+        # `impl_layout.FORGE_ROOT = Path(__file__).resolve().parents[4]`
+        # (measured directly): the scratch copy must preserve the real
+        # repo's OWN nesting depth under `.claude/skills/_core/
+        # implementation/`, or `resolve_target`'s "must live under
+        # .../implementations" check resolves against the wrong root
+        # entirely (a flat `scratch/core/engine/...` copy, as Z10 uses,
+        # never runs `resolve_target` at all -- this test does, since it
+        # exercises the real return statement through a real `cmd_agree`
+        # call).
+        scratch_forge = Path(tempfile.mkdtemp(prefix="z11-forge-"))
+        self.addCleanup(shutil.rmtree, scratch_forge, ignore_errors=True)
+        scratch_core_dir = scratch_forge / ".claude" / "skills" / "_core" / "implementation"
+        shutil.copytree(ENGINE_DIR.parent, scratch_core_dir,
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        (scratch_core_dir / "engine" / "implementation_engine.py").write_text(
+            mutated_source, encoding="utf-8")
+        (scratch_forge / "implementations").mkdir(parents=True)
+
+        tmp = tempfile.mkdtemp(prefix="z11-corpus-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        roots = ec.build(Path(tmp) / "corpus")
+
+        case = {"id": "agree-resolved-mutated", "command": "agree",
+                "fixture": "A", "proposals": True, "crossingTarget": True,
+                "argv": ["--target", "<TARGET>", "--name", "Trial",
+                         "--revision", "trial-crossing-resolved.md"]}
+        target_dir = scratch_forge / "implementations" / "z11-target"
+        shutil.copytree(roots.fixture_a, target_dir)
+        argv = eh.seal_harness.resolve_argv(case, target_dir, roots, None)
+        env = eh._build_env_with_document_one(case, roots)
+        # Never set by `_build_env_with_document_one` itself -- that key is
+        # ordinarily defaulted by `implementation_cli.py`'s own launcher
+        # (`os.environ.setdefault`), which this test bypasses entirely by
+        # invoking the scratch `implementation_engine.py` module directly.
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(
+            FORGE / ".claude" / "skills" / "experimental-implementation"
+            / "impl_profile.py")
+
+        scratch_engine = str(scratch_core_dir / "engine" / "implementation_engine.py")
+        proc = subprocess.run(
+            [sys.executable, scratch_engine, "agree", *argv],
+            env=env, capture_output=True, text=True, cwd=str(scratch_forge))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "agreed")
+        self.assertIn("suggestion", payload)
+        self.assertNotEqual(
+            set(payload.keys()),
+            {"command", "target", "revision", "status", "crossed", "declared"},
+            "the mutated payload's key set should have grown by one -- "
+            "this is what the keyset lock above catches")
 
 
 if __name__ == "__main__":
