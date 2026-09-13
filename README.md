@@ -1,9 +1,60 @@
 # papersmith-ai
 
-Una forja de papers: ingiere PDFs de referencia a Markdown de alta fidelidad y
-legible por un agente (ecuaciones en LaTeX, tablas en Markdown, figuras como
-archivos) y luego delibera sobre propuestas de papers matemáticos. La ingesta
-corre **localmente** con [Marker](https://github.com/datalab-to/marker).
+Una forja de papers. Nueve skills que llevan una investigación desde los PDFs de
+referencia hasta un documento compilado: ingieren papers a Markdown de alta fidelidad y
+legible por un agente (ecuaciones en LaTeX, tablas en Markdown, figuras como archivos),
+deliberan la matemática y el diseño experimental publicando cada acuerdo como una revisión
+gestionada, convierten esas revisiones en código que se verifica contra el documento que
+lo justifica, mandan el trabajo pesado a workers remotos llevando el registro de lo que
+volvió, y escriben el paper atando cada afirmación a su evidencia.
+
+Dos reglas atraviesan todas. **Nada corre contra un modelo ni una clave**: los motores son
+deterministas —mismas entradas, misma salida— y la ingesta corre **localmente** con
+[Marker](https://github.com/datalab-to/marker). Y **ninguna produce a medias**: cuando le
+falta una entrada se niega con un código que la nombra, en vez de inventarla o saltearla.
+
+---
+
+## Flujo de uso — el camino corto
+
+Nueve skills. Se invocan por nombre en Claude Code (`/paper-ingestion`) o se piden en
+castellano (*"ingerí los papers"*). **No hace falta usarlas todas ni en este orden**: cada
+una declara qué necesita antes y se niega si falta, así que si arrancás por el medio te
+lo va a decir ella.
+
+El camino completo, de un PDF a un paper compilado:
+
+| # | Invocás | Qué hace | Dónde deja el resultado |
+|---|---------|----------|-------------------------|
+| 1 | `/paper-ingestion` | Convierte los PDFs de referencia a Markdown legible (ecuaciones en LaTeX, tablas como tablas, figuras como archivos) | `guidance/<carpeta>/` |
+| 2 | `/proposal-deliberation` | Discute la matemática con vos y publica cada acuerdo como una revisión gestionada | `proposals/` |
+| 3 | `/experimental-deliberation` | Discute el diseño experimental que va a poner a prueba esa matemática | `experiments/` |
+| 4 | `/proposal-implementation` | Convierte la propuesta en Python que se verifica contra el documento | `implementations/<repo>/` |
+| 5 | `/experimental-implementation` | Convierte el protocolo en código y corre sus mediciones | el mismo repo destino |
+| 6 | `/kaggle-accounts` | Prueba que las credenciales de Kaggle autentican de verdad | `store/` (nunca sale del disco) |
+| 7 | `/remote-execution` | Manda trabajo a un worker remoto y lleva el registro de lo que volvió | el ledger del repo destino |
+| 8 | `/paper-writing` | Escribe el paper bloque por bloque, con cada afirmación atada a su evidencia | `paper/` |
+| 9 | `/skill-audit` | Audita cualquiera de las anteriores: qué acepta el código contra qué promete su documentación | un informe, nunca un cambio |
+
+**Lo mínimo para empezar.** Si sólo querés probar la forja, alcanza con los pasos 1 y 2:
+poné un PDF en `guidance/reference-papers/`, corré `/paper-ingestion`, y después
+`/proposal-deliberation`. Los pasos 4 a 7 sólo tienen sentido cuando ya hay una propuesta
+publicada y un repositorio destino donde implementarla.
+
+**Tres cosas que conviene saber antes de la primera corrida.**
+
+1. **Nada de lo que produzcas se sube.** `proposals/`, `experiments/`, `paper/` e
+   `implementations/` viajan a GitHub **como carpetas vacías** y nada más; `guidance/`
+   versiona sus carpetas y nunca los PDFs ni el Markdown de adentro. El andamiaje se
+   versiona, el contenido no. Un paper a medio escribir es material de investigación, y
+   publicarlo por accidente es una fuga.
+2. **Cada skill se niega antes de hacer algo a medias.** Si le falta una entrada, no la
+   inventa ni la saltea: sale con un código de rechazo que nombra qué falta. Un
+   `PAPER_ABSENT` o un `SECTION_CONTRACTS_UNREADABLE` no es un error tuyo, es la skill
+   diciéndote qué le falta.
+3. **La deliberación la cerrás vos.** Las dos skills de deliberación proponen, discuten y
+   preparan la edición, pero ninguna publica sin que vos aceptes. Eso no es una cortesía:
+   está en el contrato de cada una y el motor lo hace cumplir.
 
 ---
 
@@ -312,20 +363,14 @@ Claves que respeta de `papersmith.yaml`, bajo el bloque `paper_ingestion:`: `eng
   convertiría permanentemente en una "carpeta temática" propia.
 - **Sólo revierte lo que creó.** Una carpeta que ya existía nunca se borra.
 
-**Limitaciones conocidas y deuda.**
-
-*Hay una definición de agente que describe un contrato que no existe.* No molesta
-mientras se invoque la skill por su nombre, pero
-`.claude/agents/paper-ingestion.md` describe una interfaz distinta de la real:
-menciona `--output-dir`, `--force`, un manifiesto versionado y extracción de
-evidencia con PyMuPDF. **Ninguna de esas cosas existe** en `scripts/extract_pdf.py`:
-el script no tiene esas banderas, no escribe manifiesto y no usa PyMuPDF. Es una foto
-de un diseño anterior o planeado. Mientras nadie despache contra esa definición, no
-pasa nada; pero un orquestador que la tome como verdad va a fallar en la primera
-invocación, y el error va a hablar de una bandera desconocida en vez de hablar de
-documentación vieja. **Cómo se arregla:** o se actualiza esa definición al contrato
-real —dos comandos, `--list` primero y rutas aprobadas después— o se borra. Lo que no
-conviene es dejarla: una interfaz documentada que no existe es peor que ninguna.
+**Limitaciones conocidas.** Ninguna abierta hoy. La que figuraba acá
+—`.claude/agents/paper-ingestion.md` describía una interfaz que el script no tiene:
+`--output-dir`, `--force`, un manifiesto versionado y extracción con PyMuPDF— **ya no
+aplica**: esa definición se corrigió y hoy sólo nombra la skill y delega el contrato en
+ella. Medido: el script expone `--list`, `--file` e `--into`, no importa PyMuPDF y no
+escribe manifiesto; la única aparición de la palabra *manifest* en la definición del
+agente es la nota que explica que dejó de restatear el contrato. Una regla escrita dos
+veces son dos copias que se separan, y la vieja se lee tan autorizada como la nueva.
 
 **Diagrama.**
 
@@ -1134,9 +1179,16 @@ parcial por un typo es peor que no borrar nada.
 - **Escritura atómica siempre**, con los permisos puestos antes del primer byte.
 - **Nunca lee el depósito para contestar "qué cuentas hay".** Para eso está `list`.
 
-**Limitaciones conocidas.** Ninguna anotada. La validación toca la API real, así que lo
-que reporta es evidencia y no inferencia; el punto flojo de la cadena está del otro lado
-de la costura, en el adaptador de `remote-execution` (ver su apartado).
+**Limitaciones conocidas.**
+
+*El auditor de la forja no la mira.* La validación toca la API real, así que lo que
+reporta es evidencia y no inferencia, y el punto flojo de la cadena está del otro lado de
+la costura, en el adaptador de `remote-execution` (ver su apartado). Pero esta skill
+maneja **credenciales vivas** y `skill-audit` no tiene **ni un probe** apuntado a ella:
+medido el 2026-09-13, `references/probes/` cubre cuatro de las nueve skills y sólo en la
+dimensión `roster`. Nada deriva qué operaciones acepta este CLI contra las que su propio
+`SKILL.md` promete. **Cómo se arregla:** una receta `accepted-operations` como la que ya
+existe para `remote-execution` — el mecanismo está escrito, falta apuntarlo acá.
 
 **Diagrama.**
 
@@ -1285,8 +1337,11 @@ pendiente**.
 **Limitaciones conocidas.**
 
 *El adaptador de Kaggle nunca se probó contra un servicio real.* Está verificado contra
-la propia fuente del cliente de línea de comandos y contra un binario falso en los tests,
-pero **ninguna prueba de esta skill toca la red ni una cuenta real**. **Qué significa en
+la fuente del driver —hoy `kagglesdk==0.1.37` con token Bearer, no el camino Basic-auth
+del CLI, que la skill retiró— y contra un binario falso en los tests, pero **ninguna
+prueba de esta skill toca la red ni una cuenta real**. Eso último no es un descuido: un
+test tripwire falla si aparece una llamada de red a nivel de módulo, y se prueba a sí
+mismo contra un módulo envenenado. **Qué significa en
 la práctica:** todo lo que está *arriba* del seam —el registro, el pliegue, la vigencia,
 el clamp, la cuarentena— sí está probado, y esas son las partes cuyo error sería
 silencioso. Lo que no está probado en vivo es el archivo de abajo, cuyos errores son
@@ -1332,20 +1387,757 @@ flowchart TD
 
 ---
 
-## Tests
+---
 
-```bash
-npm test   # motor de proposal-deliberation (489)
+### 6. `experimental-deliberation` — discutir el diseño experimental y publicar el plan, nunca el resultado
+
+**Para qué está.** Un paper matemático necesita experimentos que sostengan sus afirmaciones,
+y ese diseño tiene su propia tentación: que un modelo escriba "el término adaptado supera al
+baseline" antes de que nadie haya corrido nada, o que invente una URL de repositorio porque
+suena plausible. Esta skill es el **segundo** dominio sobre el mismo motor que
+`proposal-deliberation` — convierte al agente en tutor de diseño experimental y aplica los
+cambios acordados a través del mismo motor determinista, byte-exacto. Comparten el andamio de
+escritura entero: resolver un locus, parchear, previsualizar, reconocer, publicar. Lo que
+**no** comparten es qué hace "suficiente" un cambio. Para la matemática, alcanza con derivarlo
+y cerrarlo adentro del documento — una demostración no vence. Para un experimento, alcanza sólo
+lo que una fuente real y vigente todavía dice — un repositorio se muda, un baseline queda
+superado, un protocolo cambia. Esa diferencia es la razón de ser de esta skill, y por eso su
+etapa central se llama `validated`, no `deliberated` a secas: el sitio donde el motor hermano no
+tiene equivalente en absoluto.
+
+**De dónde recibe y a quién le entrega.**
+
+*Recibe de tres fuentes, dos obligatorias:*
+
+- **`guidance/data-paper`** (obligatoria) — el paper de datos. Es el **techo**: acota qué se
+  puede afirmar, y una afirmación que los datos no sostienen no es un experimento, es un deseo.
+- **`proposals`** (obligatoria) — el directorio gestionado de `proposal-deliberation`, leído acá
+  y nunca escrito. Pero el motor sólo exige que el directorio **exista**; el contenido nunca
+  entra por el motor, porque los revisiones gestionadas son archivos `.md` sueltos y el cargador
+  sólo desciende un nivel dentro de cada fuente. Las afirmaciones de la propuesta llegan al
+  documento porque **vos** las llevás, en la idea que escribís y en la deliberación que sigue.
+- **`guidance/area-benchmark`** (opcional) — cuando existe, es la fuente de verdad de métricas,
+  splits, protocolo y baselines; cuando no está, el documento declara los suyos, lo cual es más
+  débil pero legal.
+
+*Le entrega a `experimental-implementation`:* el archivo publicado
+(`experiments/experiments-<slug>-vNN.md`) es, medido, el documento 0 que esa skill lee como su
+"protocolo declarado" — así se llama en su propio perfil (`impl_profile.py`). Ninguna operación
+del motor empuja ese archivo hacia el otro lado; `experimental-implementation` lo va a buscar
+cuando corre.
+
+*Le entrega a todo el resto:* la operación `STATUS`, de dónde sale la respuesta a "cuál es la
+revisión vigente". Nadie abre el directorio a ojo.
+
+**Qué necesita antes.** Nada más que Node. El motor es keyless — no llama a ningún modelo ni
+usa `ANTHROPIC_API_KEY` — porque el "modelo" de esta deliberación es el agente ya sentado en la
+conversación.
+
+**El flujo.**
+
+1. **Arranque.** `STATUS` sobre `experiments/`, de sólo lectura. Nunca se mira el directorio a
+   mano.
+2. **Bifurcación.** Cero revisiones gestionadas → crear v1. Ya hay una → editar.
+3. **Crear v1.** El motor carga las tres fuentes una sola vez, las incluye verbatim bajo
+   `## Paper Guide Reference`, y compone el documento a partir de tu idea de texto. **La idea
+   necesita al menos dos oraciones.** El título sale de la primera y el encabezado de sección de
+   la segunda; con una sola oración las dos calculan el mismo texto, `# X` y `## X` quedan
+   byte-idénticos, y cada consulta de locus posterior queda ambigua para siempre.
+   `CREATE_INITIAL_REVISION` rechaza esto de entrada con `INITIAL_IDEA_SINGLE_SENTENCE`, sin
+   escribir nada — no hay reparación posterior, porque el motor no puede escribir un encabezado
+   que el autor no escribió. Y como v1 no tiene esqueleto ni rellena nada, el `**Dataset:**` y el
+   `**Validation scheme:**` que el documento exige ya tienen que estar en la idea o en una fuente
+   requerida, o v1 se rechaza igual, por la misma puerta de forma canónica que corre en cada
+   sucesor — nunca una segunda puerta.
+4. **Validar** (delegado al agente `experimental-validation`). Busca en la web el protocolo
+   estándar del área, las métricas aceptadas, los baselines vigentes con repositorio, venue y
+   año, y el esquema de validación que el área espera. **La búsqueda está acotada a los tres años
+   anteriores a hoy**, calculados desde la fecha de la corrida, nunca de memoria. El acotamiento
+   es sobre lo que se **busca**, no sobre lo que se puede citar: un protocolo fijado antes sigue
+   siendo el que el área usa, siempre que la cita diga qué año lo fijó.
+5. **Deliberar**, en la conversación, nunca en el motor. El agente propone, refuta, exige el
+   baseline que un reviewor va a pedir.
+6. **Ubicar el cambio** con `RESOLVE_TARGET`: palabras distintivas del encabezado, sin
+   puntuación, sin número de sección.
+7. **Vista previa** con `CREATE_SUCCESSOR`. El motor compila el candidato completo, lo valida
+   contra la forma canónica, y devuelve un token de un solo uso junto con qué se perdería
+   (`preservationDelta`) y qué conflicto de fuente detectó (`ACHIEVED_RESULT`, ver **Los
+   seguros**).
+8. **La puerta.** El agente muestra en castellano llano qué desaparece y qué frase leyó como un
+   resultado logrado. Confirmás cada una por nombre.
+9. **Publicar** (delegado al agente `experimental-publish`, que empieza recién después de que
+   vos aceptaste). Reenvía la misma operación con el token, `acknowledgedRemovals` y
+   `acknowledgedSourceConflicts`. Escribe `experiments-<slug>-vNN+1.md` de forma atómica.
+10. **Auditoría.** Recibo con sha256 antes/después, y una relectura byte a byte de todas las
+    revisiones.
+
+**Los módulos.**
+
+| Archivo | Qué hace y por qué existe |
+|---------|---------------------------|
+| `SKILL.md` | El contrato completo de esta deliberación: north de cinco etapas, qué delega y a quién, la puerta de validación externa, las reglas de forma canónica. Nada de esto vive en el motor compartido. |
+| `references/usage.md` | Ejemplos de request/response y un transcript trabajado. Sostenido por su propio guard de deriva (`tests/experimental-deliberation-usage-doc-drift.test.mjs`): todo enlace `../SKILL.md#ancla` tiene que resolver a un encabezado real, y el ejemplo trabajado se extrae del documento y **se corre de verdad**, comparando la respuesta contra lo que el motor devuelve hoy. |
+| `profile.ts` | El perfil de dominio: directorio `experiments`, rótulo de revisión `v` (no `r`), el detector `ACHIEVED_RESULT`, las tres fuentes con sus obligatoriedades, y el objetivo de cinco etapas (`bound` → `validated` → `deliberated` → `composed` → `published`). El motor bajo `_core/` no ganó ni una línea para admitir este segundo dominio. |
+| `preservation-experimental.ts` | `extractAtoms`/`violations`: los seis átomos que no pueden desaparecer en silencio (tabla, baseline, criterio de éxito, figura, URL, dataset) y las reglas duras de forma — tag de verificación, celda vacía, baseline con URL y año, dataset/scheme declarados exactamente una vez. |
+| `reference-experimental.ts` | `declares`/`cites`: un experimento declara `[exp:E1]`; una afirmación cita `[tests:E1]` o `(Exp. E1)` en prosa. Hace visible, mecánicamente, tanto la afirmación sin experimento como el experimento que no sostiene ninguna. |
+| `cli.mjs` | 13 líneas. Fija `DELIBERATION_DOMAIN_PROFILE` a este `profile.ts` y delega el resto entero — argumentos, modo stdin, códigos de salida — al `cli.mjs` del motor compartido. |
+| `.claude/agents/experimental-validation.md` | El tramo `validated`: busca y verifica, nunca compone. Termina cuando ningún hallazgo depende de la memoria en vez de una búsqueda de esta misma corrida. |
+| `.claude/agents/experimental-publish.md` | El tramo terminal: empieza donde el operador ya aceptó el cambio, termina con el sucesor publicado y vigente. No tiene `Write` ni `Edit` — sólo el motor escribe. |
+| `_core/deliberation/engine/` (~50 archivos TS) | El motor compartido con `proposal-deliberation`, sin cambios para admitir este dominio. Ver el desglose completo en la sección de `proposal-deliberation`; tres de esos archivos — `patch-compiler.ts`, `draft-materialization.ts`, `revision-lifecycle-store.ts` — todavía escriben el marcador de artefacto como literal en vez de leerlo del perfil (ver **Limitaciones conocidas**). |
+
+**Los seguros.**
+
+- **El tag de verificación es obligatorio, y su ausencia es la violación.** Toda URL externa
+  lleva `[pending-verification]` o `[verified: YYYY-MM-DD]` inmediatamente después. Los bytes no
+  pueden saber si alguien buscó; por eso el silencio es lo que se rechaza.
+- **Ningún número en una celda de tabla de reporte.** Una tabla de reporte es una promesa sobre
+  una corrida futura; un número ahí es un resultado que nadie midió. Las tablas de baselines
+  están exentas — son referencia, no promesa — y se reconocen sólo porque su primer encabezado
+  dice `Baseline`/`Baselines`.
+- **El detector de resultado logrado es advertencia, no bloqueo duro.** `ACHIEVED_RESULT` busca
+  `outperform`, `beats`, `state-of-the-art`, etc. Bloquea el turno de aceptar, no la vista previa
+  — y existe la salida de reconocer el conflicto por escrito, para cuando el documento
+  legítimamente cita el resultado publicado de otro.
+- **Dataset y esquema de validación, exactamente una vez cada uno.** Cero y dos-o-más se
+  rechazan igual — dos líneas son una ambigüedad sobre qué corre el plan, y el motor no elige por
+  vos.
+- **Una idea de una sola oración no llega a ser v1.** Ver el paso 3 de **El flujo**.
+- **Nunca se inventa un repositorio, una URL, un venue o un año.** Lo que no salió de una
+  búsqueda de esta corrida se marca `[pending-verification]`; una URL plausible es peor que una
+  ausente, porque parece verificada.
+
+**Limitaciones conocidas.**
+
+*El marcador del artefacto sigue duplicado en tres archivos del motor.* `patch-compiler.ts:5`,
+`draft-materialization.ts:12` y `revision-lifecycle-store.ts:19` todavía escriben
+`<!-- proposal-workspace:artifact:v1 -->` como constante literal en vez de leerla de
+`DOMAIN.artifact.marker`, mientras los otros siete sitios del motor sí la leen del perfil. Hoy no
+muerde a nadie porque los dos dominios que existen copian el mismo byte a byte — el propio
+comentario de `profile.ts` (líneas 81-86) lo dice sin rodeos. Un tercer dominio que declarara su
+propio marcador tendría sus documentos escritos con una cadena y validados contra otra, y la
+falla sería silenciosa. **Cómo se arregla:** que esos tres archivos lean `DOMAIN.artifact.marker`
+igual que ya hacen `artifact-naming.ts`, `orchestrator.ts`, `initial-revision-creation.ts` y el
+resto.
+
+*El cargador del perfil de dominio acepta secciones enteras vacías.* `domain-profile.ts` revisa
+que `REQUIRED` no tenga claves de nivel superior `undefined`, y después vuelve a revisar
+`artifact.*` y `objective.*` explícitamente — con un comentario propio que dice por qué: la
+primera pasada dejaba pasar `artifact: {}` vacío. Esa misma lección no llegó a `vocabulary`,
+`preservation`, `references` ni `sources`: un perfil que declarara `vocabulary: {}` publicaría v1
+igual, y después no podría resolver ningún locus, con el mensaje culpando a la consulta en vez de
+al perfil. Y la comprobación que sí se agregó para `stages[].establishes`/`.behindWhen` sólo
+prueba `=== undefined`, así que una cadena vacía `""` la atraviesa sin marcar nada — exactamente
+el daño que el comentario de esa comprobación dice que existe para evitar. Esta skill no lo sufre
+— declara los ocho campos de `vocabulary` llenos — pero el motor no se lo exigiría a la próxima.
+**Cómo se arregla:** extender la comprobación de "no vacío" que ya existe para `artifact` y
+`objective` a las cuatro secciones restantes, y cambiar la prueba de los campos de `stages` de
+`=== undefined` a también rechazar la cadena vacía.
+
+*Siete contadores de auto-auditoría nacieron en cero y no tienen forma de dejar de estarlo.*
+`runtime-metrics.ts:47` define `recordScientificMetric`, y es la **única** ocurrencia del símbolo
+en todo el repositorio — nada lo llama, en ningún archivo de producción ni de test. Los siete
+contadores que alimenta (`entry`, `blocked`, `recovery_required`,
+`materialization_blocked`/`_recovery_required`/`_retry`, `recovery_diagnostic`) arrancan en 0 y
+viajan sin cambiar hasta el bloque `metrics` que devuelve cada auto-auditoría — el mismo bloque
+que tanto `SKILL.md` como los dos agentes le piden al operador que lea como `selfAuditStatus:
+"PASS"`. Su hermano `recordLifecycleMetric`, en el mismo archivo, sí tiene dos sitios de llamada
+reales y dos tests que afirman sus contadores; éste no tiene ninguno. **Cómo se arregla:** cablear
+las llamadas en los puntos donde el motor detecta cada evento — igual que ya existe para
+`recordLifecycleMetric` — o retirar el campo del reporte de auto-auditoría hasta que algo lo
+llame, para que un contador en cero dejara de leerse como una medición.
+
+**Diagrama.**
+
+```mermaid
+flowchart TD
+    A["Agente pide STATUS a experiments/"] --> B{"¿Existe una revisión gestionada?"}
+    B -- No --> C["Pide la idea al usuario"]
+    C --> D{"¿La idea tiene al menos dos oraciones?"}
+    D -- No --> E["Rechazado: INITIAL_IDEA_SINGLE_SENTENCE. Nada escrito"]
+    E --> C
+    D -- Sí --> F["Compone v1 con las 3 fuentes cargadas una vez"]
+    F --> G{"¿Pasa la forma canónica?<br/>dataset x1, scheme x1, sin números en celdas"}
+    G -- No --> H["Rechazado: INITIAL_REVISION_CANONICAL_FORM_VIOLATION"]
+    H --> C
+    G -- Sí --> I["Escribe experiments-slug-v01.md"]
+    B -- Sí --> J["Delegado: experimental-validation<br/>busca protocolo, métricas, baselines<br/>ventana: 3 años antes de hoy"]
+    J --> K["Deliberación en la conversación.<br/>El motor no participa"]
+    K --> L["RESOLVE_TARGET: ubicar el locus"]
+    L --> M["CREATE_SUCCESSOR: vista previa"]
+    M --> N{"¿Se pierde algún átomo o<br/>se detecta ACHIEVED_RESULT?"}
+    N -- Sí --> O["El agente muestra qué se pierde<br/>y qué frase lee como resultado logrado"]
+    O --> P{"¿El usuario confirma cada una?"}
+    P -- No --> Q["No se publica"]
+    N -- No --> R["Delegado: experimental-publish"]
+    P -- Sí --> R
+    R --> S["Reenvía con acceptSuccessor + token +<br/>acknowledgedRemovals/SourceConflicts"]
+    S --> T["Escribe experiments-slug-vN+1.md"]
+    T --> U["Recibo + auditoría byte a byte"]
+    I --> V["experimental-implementation lee esta revisión<br/>como su documento 0"]
+    U --> V
 ```
 
-Lo que prueba cada cosa: `tests/` cubre **el tooling de la forja** — el motor de
-deliberación y los helpers de ingestión. Los tests de una implementación
-materializada viven en su repositorio destino y en ningún otro lado; borrarlo
-borra sus tests.
+---
 
-`proposal-implementation` se validó con un arnés de escenarios propio —catorce
-situaciones en las que puede caer un clon, más el ciclo completo hasta publicar
-la revisión que produce un hallazgo— construido para cerrar la v1.5 y retirado
-al cerrarla. Era andamiaje, no parte de la forja. Queda en la historia: el
-commit que lo saca lo dice, y `git revert` lo trae de vuelta si alguna vez hay
-que volver a correrlo.
+### 7. `experimental-implementation` — el segundo huésped, dos documentos, un motor sin tocar
+
+**Para qué está.** Un protocolo de experimentos publicado (`experiments/experiments-<slug>-vNN.md`)
+también es un documento. Esta skill lo convierte en un repositorio Python que corre, y
+demuestra —no afirma— que ese código hace lo que el protocolo dice y que sus corridas
+completas dejan un registro que concuerda con lo que el protocolo declara. Hasta ahí sería
+un clon de `proposal-implementation`. Lo que la distingue es que **verifica dos documentos
+declarados, cada uno bajo su propio vocabulario de reclamo**: `documents[0]` es
+`experiments/`, con claves `experiments`/`remedy_experiments`; `documents[1]` es
+`proposals/` —la matemática que ese protocolo responde—, con claves `equations`/
+`remedy_equations`, la misma nomenclatura que ya usa el hermano. El propio
+`impl_profile.py` lo deja escrito en su comentario: el documento 1 declara su overlay
+completo (`claim_key`, `locus_key`, `remedy_locus_key`, `notation_keys`,
+`citation_pattern`) **sin heredar nunca** los valores de `experiments` del documento 0.
+
+**De dónde recibe y a quién le entrega.** Recibe un protocolo publicado bajo
+`experiments/` y, a través de él, la propuesta matemática que ese protocolo cita. Sobre
+`remote-execution` la costura es idéntica a la del hermano: sólo lectura, dos módulos por
+ruta —registro y puerta de entrada—, nunca el adaptador. Y hacia `experimental-deliberation`
+entrega hallazgos locales por `handoff`, nunca publica ella misma: la corrección vuelve al
+documento por la misma compuerta que cualquier otro cambio.
+
+**Qué necesita antes.** Un protocolo de experimentos publicado, y un repositorio destino
+bajo `implementations/` que ya sea un repositorio git. Nada de entorno virtual propio de
+la forja: el `.venv` es siempre del destino.
+
+**El flujo.** Esta skill **es** casi enteramente el motor compartido en
+`_core/implementation/engine/` —unas 21.000 líneas en 12 archivos, la misma base que
+sostiene a `proposal-implementation`— y lo que agrega son unos 300 bytes propios: un
+perfil de dominio (`impl_profile.py`, 278 líneas), una copia byte-a-byte del lanzador del
+hermano (`scripts/implementation_cli.py`, 24 líneas), este `SKILL.md`, dos agentes y su
+propio corpus sellado bajo `tests/`. Ninguna línea del motor cambió para admitir este
+segundo huésped.
+
+Enruta igual que el hermano: por **existencia**, no por fidelidad. Si `src/` no tiene
+implementación, Flujo A; si ya tiene una, Flujo B, que ahora mide deriva contra **los dos**
+documentos antes de decidir nada.
+
+*Flujo A —primera pasada.* Esta skill no envía `assets/kit/`: `materialize --stage
+scaffold` no está disponible, así que el andamio del destino se escribe a mano. El resto
+sigue la forma del hermano: clonar, `env`, pedir el nombre, compuerta de autorización,
+presentar el mapa de objeto a módulo **para ambos documentos** —qué módulo implementa qué
+sección del experimento y qué módulo implementa qué ecuación de la propuesta que ese
+experimento responde—, escribir código con la clave de procedencia que corresponda
+(`experiments`, `equations`, o ambas), y entregar a los dos agentes propios cuando toca.
+
+*Flujo B —toda pasada posterior.* Lee `src/` y toma la revisión más nueva de **cada**
+documento declarado por separado —nunca un solo nombre asumido para los dos—. Corre la
+suite del destino y después `verify`. Una diferencia de fidelidad **en cualquiera de los
+dos documentos** abre la misma compuerta del hermano ("¿ese cambio lo hiciste vos?"), sin
+esperar a que el otro documento también discrepe. Con los dos limpios, `agree` —disponible
+sólo porque esta skill siempre declara más de un documento— nombra cada citación cruzada
+que un documento hace y el otro no reconoce, en las dos direcciones, y nunca falla un
+veredicto sobre cuál lado debe cambiar. Recién con `agree` sin discrepancias pendientes,
+`handoff` dimensiona los hallazgos abiertos hacia `experimental-deliberation`.
+
+**Los módulos.**
+
+| Archivo | Qué hace y por qué existe |
+|---------|---------------------------|
+| `impl_profile.py` | El perfil de dominio entero: dos documentos, cada uno con su propio overlay de vocabulario. Cada ruta se deriva de la ubicación de **este** archivo, nunca de la del motor —así la misma forma que usa el hermano resuelve a este perfil sin una sola línea específica de dominio. |
+| `scripts/implementation_cli.py` | El lanzador, 24 líneas, byte a byte idéntico al del hermano. No hace nada propio: sólo fija `IMPLEMENTATION_DOMAIN_PROFILE` a este perfil antes de entregarle el control al motor compartido. Todo argumento, subcomando y código de salida es del motor. |
+| `SKILL.md` | La doctrina de esta skill: los dos documentos, su vocabulario, el flujo A y B propios, y qué no está disponible (`materialize --stage scaffold`) y por qué. |
+| `tests/test_experimental_implementation.py`, `tests/test_experimental_implementation_mutation.py` | El corpus sellado propio, fuera de esta carpeta (vive en `tests/` del repositorio), que ancla el comportamiento de dos documentos contra el motor compartido. |
+
+**Los comandos.** Veintiuno, medidos con `implementation_cli.py -h`: `walk`, `env`,
+`name`, `plan`, `apply`, `admit`, `handoff`, `compose`, `probe`, `verify`, `position`,
+`discuss`, `propose`, `gate`, `offer`, `close`, `step`, `settle`, `defect`, `materialize`,
+`agree`. El hermano sirve exactamente los mismos veinte y esta skill agrega el vigésimo
+primero, `agree`, habilitado sólo cuando el perfil declara más de un documento —lo que
+esta skill siempre hace y el hermano nunca.
+
+**Los seguros.**
+
+- **Nunca ejecuta el código del destino** para inspeccionarlo. Todo se lee con `ast`,
+  igual que el hermano —es una propiedad del motor, no de este perfil.
+- **Aislamiento no negociable.** Cada corrida trabaja dentro de `implementations/<repo>/`
+  y usa el `.venv` de ese repositorio, nunca el de la forja ni el sistema.
+- **`Data/` es demandable por producto, no por raíz.** Si la revisión de experimentos
+  declara un `**Dataset:**`, `verify` exige `{Name}/Data` igual que ya exige
+  `Notebooks/`, `Results/` y `Models/` —pero atado al método (`--name`), nunca al
+  repositorio entero, porque el mismo clon puede alojar otro método sin esos datos.
+- **Un hallazgo sin remedio validado no se reporta.** Estructural, compartido con el
+  motor: la auditoría queda `incomplete` mientras algo quede sin medir.
+- **`agree` nunca falla un veredicto.** Nombra las dos direcciones de discrepancia y
+  deja la decisión de qué lado corregir a la conversación, nunca a la máquina.
+
+**Limitaciones conocidas.**
+
+*El vocabulario de dos documentos no llega a cuatro consumidores del motor compartido —
+`cmd_admit`, `finding_impact`, `cmd_handoff` y las filas de auditoría de `verify`.* Estos
+cuatro leían un hallazgo bajo las claves del documento 0 sin importar cuál documento
+nombrara: un hallazgo de `documents[1]` que cita `equations: ['99']` se buscaba bajo
+`experiments`, no encontraba nada, y una ausencia se leía como "sin objeción" —admitiendo
+hallazgos falsos y rechazando hallazgos legítimos con razones inventadas. **Ya está
+corregido**, en tres commits fechados el mismo día que esta sección: `e88afec` extrajo el
+lector correcto (`finding_locus_scopes`/`finding_named_source`) que ya existía en
+`remedy_compatibility` y lo puso a llamar `cmd_admit`; `5e8d277` hizo lo mismo para
+`finding_impact`, con un matiz que el primer intento no tenía —leer la clave propia del
+documento **cuando el hallazgo la declara**, y `remedy_loci` en el caso general—; y el
+mismo par de lectores ahora alimenta `cmd_handoff` y las filas de auditoría de `verify`.
+Se documenta aquí como el mecanismo vigente, no como historia.
+
+*`walk` ya no promete un acto `rehearse` que nada ejecutaba.* Su roster incluía
+`rehearse` entre los actos que "realiza", pero el despacho sólo tenía dos formas de
+comando —una para pasos locales, otra para generar carpetas de trabajo— y la segunda
+nunca pasaba `--regenerate`, así que en el único estado para el que `rehearse` existe
+(la carpeta ya está creada y no está lista para correr) el comando se negaba a sí mismo.
+**Corregido** en `7fdec85`: el acto se movió de "lo que `walk` realiza" a "lo que `walk`
+se detiene a pedir", y el agente `experiments-walk` ya lo describe así —"generar las
+carpetas de trabajo que un paso remoto necesita y detenerse en el ensayo, que ningún acto
+acá realiza y la doctrina deja en manos de una persona". El ensayo se hace a mano, como
+la doctrina siempre prescribió; lo que cambió es que la herramienta ya no promete
+automatizarlo.
+
+*`-h` ya no se presenta con el nombre del hermano.* El motor lee su propio docstring de
+módulo para construir la ayuda de `argparse`, y ese docstring estaba escrito para
+`proposal-implementation` —así que el frente de esta skill se introducía con el nombre
+equivocado y describía 4 de sus 21 subcomandos. **Corregido** en `8e92d40`: el nombre
+ahora sale de la raíz del perfil cargado (`kit.root`), así que un tercer huésped futuro
+recibe su propio nombre el día que se escriba, sin nada que actualizar a mano; y la lista
+de comandos se retiró en vez de corregirse, porque una copia hecha a mano de un roster que
+`argparse` ya construye solo sólo puede estar bien por accidente.
+
+*`admit` todavía puede admitir un hallazgo cuya notación citada no aparece en el
+documento que nombra, si esa notación pertenece a otro documento válido.* Medido: el
+motor comparte con `proposal-implementation` la comprobación de que la notación citada
+exista en el texto, pero esa comprobación no distingue el documento correcto del
+incorrecto salvo por las claves ya corregidas arriba; un hallazgo bien formado que cita
+la notación real de un documento distinto al que nombra sigue sin tener una prueba
+cruzada dedicada más allá de las que ya ejercitan la ruta corregida. **Cómo se
+arregla:** un test que fije, con dos documentos reales y distintos, que una cita válida en
+uno y ausente en el otro se rechace nombrando cuál.
+
+*El seguro de "corpus sellado sin tocar" compara contra el índice de git, no contra lo
+escrito en disco.* Igual que en el hermano, las pruebas que protegen `tests/seal/` corren
+`git diff --exit-code`, así que un archivo plantado y nunca agregado al índice, o una
+edición ya puesta en stage, pasan sin marcarse. Como este huésped comparte el mismo motor
+y el mismo patrón de prueba, hereda la misma ventana. **Cómo se arregla:** cambiar la
+comprobación a `git status --porcelain` (o `git diff HEAD` más un chequeo de no
+rastreados), igual que se anota para el hermano.
+
+*El guardia de intérprete ajeno se puede silenciar sin que ninguna prueba lo note.*
+`require_non_forge_interpreter` —la doctrina que este `SKILL.md` llama "aislamiento no
+negociable"— tiene una única llamada de producción (`cmd_env`) y ninguna prueba que
+mute su condición y falle: aceptar en silencio un `sys.prefix` de la forja deja toda la
+suite en verde. Es del motor compartido, así que este huésped lo hereda tal cual.
+**Cómo se arregla:** una prueba de mutación dedicada sobre esa condición, en vez de
+sólo comprobar que la excepción exista en el código fuente.
+
+*El módulo de reescritura de referencias puede volverse un no-op y ninguna suite lo
+nota.* `scan_reference_updates`, `scan_stale_references` y el patrón de referencia
+pueden vaciarse simultáneamente sin que ninguna de las suites que ejercitan este huésped
+se ponga en rojo. Bajo esa mutación, `apply` dejaría de reescribir referencias tras un
+renombre y un repositorio migrado conservaría imports rotos en silencio, y
+`structure.staleReferences` de `verify` quedaría permanentemente vacío. Como el módulo
+vive en el motor compartido, este huésped hereda la misma ventana ciega que el hermano.
+**Cómo se arregla:** una prueba que mute cada una de las tres piezas por separado y
+verifique que alguna suite se rompa.
+
+*Un refusal que no puede disparar sigue publicado como si pudiera.* `NAME_NOT_ALPHANUMERIC`
+—compartido por el motor y por lo tanto alcanzable también desde este huésped a través de
+`name`— está escrito detrás de un patrón que sólo puede emitir tokens ya alfanuméricos, así
+que la comprobación que lo dispara nunca se cumple; un carácter Unicode simplemente se
+descarta en vez de rechazarse. El hermano lo publica en su propio `SKILL.md` como uno de
+cuatro refusals en vivo; esta skill no re-documenta el roster de `name`, pero comparte el
+código y por lo tanto el mismo refusal inalcanzable. **Cómo se arregla:** o bien la
+condición se corrige para que pueda dispararse sobre entrada no-ASCII, o el refusal se
+retira de donde se lo publica como vigente.
+
+**Diagrama.**
+
+```mermaid
+flowchart TD
+    A["Usuario invoca la skill sobre un protocolo de experimentos"] --> B{"¿src/ ya tiene una implementación?"}
+    B -- No --> C["FLUJO A"]
+    B -- Sí --> D["FLUJO B"]
+
+    C --> C1["Clonar bajo implementations/, env con el intérprete del destino"]
+    C1 --> C2["[GATE] Confirmar name"]
+    C2 --> C3["[GATE] Autorización para implementar"]
+    C3 --> C4["Mapa objeto→módulo para AMBOS documentos:<br/>secciones del experimento y ecuaciones de la propuesta"]
+    C4 --> C5["Escribir módulos con su propia __provenance__<br/>(experiments, equations, o ambas)"]
+    C5 --> C6["Delega a experiments-build hasta instrumentation"]
+    C6 --> C7["Delega a experiments-walk hasta el lanzamiento"]
+
+    D --> D1["Leer la revisión más nueva de CADA documento por separado"]
+    D1 --> D2["Correr la suite del destino, luego verify"]
+    D2 --> D3{"¿Fidelidad limpia en los DOS documentos?"}
+    D3 -- No, en cualquiera --> D4["[GATE] ¿Ese cambio lo hiciste vos?"]
+    D4 -- Sí --> D5["El código va adelante; se actualiza la matemática o el protocolo"]
+    D4 -- No --> D6["Corregir y revalidar"]
+    D6 --> D2
+    D3 -- Sí --> D7["agree: nombra citaciones cruzadas no reconocidas, en las dos direcciones"]
+    D7 --> D8{"¿Discrepancias sin reconocer?"}
+    D8 -- Sí --> D9["Resolver en conversación con --acknowledge"]
+    D9 --> D7
+    D8 -- No --> D10["handoff: dimensiona hallazgos abiertos"]
+    D10 --> D11["settleInline vía compose, o agenda para experimental-deliberation"]
+
+    C7 --> E["remote-execution: probe dice qué sigue"]
+    D11 --> E
+```
+
+---
+
+### 8. `paper-writing` — de los contratos de sección al PDF, sin que nada se asuma
+
+**Para qué está.** Escribir un paper a mano tiene un problema silencioso: una frase
+sobrevive al dato que la sostenía, una cita queda sin resolver, un diagrama se
+declara "compilado" sin haber compilado nunca. Esta skill lleva `paper/` de un
+andamio vacío a un documento renderizado donde cada bloque, cada decisión y cada
+cita quedan grabados y verificables — nunca asumidos. Es el reverso de
+`paper-ingestion`: esa skill mete papers *hacia adentro* como Markdown legible; esta
+saca prosa *hacia afuera* como LaTeX que compila, con la misma regla de fondo
+(`no-claim-without-a-source-that-holds-it`) aplicada del otro lado.
+
+**De dónde recibe y a quién le entrega.** Lee tres cosas que no escribe: los
+contratos de sección en `sections/*.md` (front-matter JSON versionado, diez
+archivos), lo que `proposals/` y `experiments/` declaran, y el código de un
+repositorio de implementación objetivo. De ahí resuelve citas contra OpenAlex,
+Crossref y arXiv, y le entrega al operador un `paper/main.tex` con cada bloque
+sustituido, su `refs.bib` reconstruido desde metadata cacheada, y un PDF
+compilado vía `latexmk`. No hay una skill "después" — `verify` es el último paso
+antes de que el documento salga del repositorio.
+
+**Qué necesita antes.** Python 3.10+ de biblioteca estándar únicamente — sin
+`pip install` para nada del CLI. `render`/`place` necesitan `latexmk` instalado
+(medido: `/Library/TeX/texbin/latexmk`, presente). `resolve` necesita red hacia
+`api.openalex.org`, `api.crossref.org` y `export.arxiv.org` — sin API key, sin
+secreto: OpenAlex sólo pide un contacto de cortesía (`papersmith.yaml`,
+`paper_writing.contact`), nunca enviado como credencial. Verificado en vivo:
+
+```
+$ paper_cli.py resolve --identifier 10.1038/nature14539 --resolver crossref
+{"status": "ok", "title": "Deep learning", "doi": "10.1038/nature14539", ...}
+```
+
+**El flujo.** Siete etapas, declaradas en `paper_objective.OBJECTIVE_FLOW` y
+leídas por los tests de los agentes, no por prosa suelta: `scaffold` crea
+`paper/main.tex`, `refs.bib` y `Figures/` de forma idempotente, sin pisar jamás
+un edit a mano; `plan` reporta de sólo lectura la clase de cada carpeta de
+`guidance/`, el estado de cada declaración y hecho, y la procedencia de cada
+bloque ya escrito; `declare` fija esas declaraciones y resoluciones de hecho —
+siempre una decisión humana, nunca inferida de evidencia; `cite` resuelve,
+reconstruye y valida cada cita que un bloque exige; `write` sustituye cada
+bloque escribible, en el orden que `order` deriva del grafo de bloques, pero
+nunca invocando un agente él mismo — eso lo hace un procedimiento de traslado
+(*shuttle*) que corre fuera del CLI (ver Los seguros); `render`/`place` prueban
+que el documento compila de verdad, no que "debería"; y `verify` cierra con un
+reporte de sólo lectura sobre acoplamientos, integridad de citas y vigencia del
+contrato, corrido de nuevo después de cualquier `substitute`, `render`, `place`
+o `declare`. La llegada declarada: un documento renderizado y decisión-completo
+donde nada quedó afirmado sin que una corrida lo haya chequeado.
+
+**Los módulos.**
+
+| Archivo | Qué hace y por qué existe |
+|---------|---------------------------|
+| `SKILL.md` | El contrato de conducta: los 17 verbos, sus refusals, el procedimiento de traslado hacia los 5 agentes. |
+| `scripts/paper_cli.py` | El front door — 17 verbos: `scaffold, status, open, substitute, contract, readiness, order, declare, observe, resolve, bib, validate, plan, write, render, verify, place`. Sin dependencias externas. |
+| `scripts/paper_scaffold.py` | Crea y re-entra `paper/` sin clobbing — mismo patrón que `proposals/`/`experiments/`. |
+| `scripts/paper_block.py` | Gramática de marcadores: delimita, ubica, sustituye y rechaza sobre bloques nombrados dentro de `main.tex`, byte a byte. |
+| `scripts/paper_region.py` | La gramática compartida en la que se escriben las regiones `declarations`/`provenance`. |
+| `scripts/paper_declarations.py` | La región `declarations` — valores del operador y resoluciones de hecho, fijados una vez grabados, reabiertos sólo por nombre. |
+| `scripts/paper_provenance.py` | La región `provenance` — digest de contrato y generación de declaración con la que se escribió cada bloque, nunca reconstruida. |
+| `scripts/paper_contract.py` | Gramática del front-matter y validación de esquema sobre `sections/*.md`. |
+| `scripts/paper_graph.py` | Ensambla el corpus, el namespace plano de ids, resuelve los edges `after`, deriva el orden de escritura. |
+| `scripts/paper_readiness.py` | Por bloque: escribible o bloqueado, dados los hechos y declaraciones ya satisfechos. |
+| `scripts/paper_vocabulary.py` | Los tres vocabularios cerrados que un header de contrato puede usar — sin I/O, sin estado. |
+| `scripts/paper_guidance.py` | Clasifica cada carpeta de `guidance/` como `style-reference` o `evidence` por su marcador propio. |
+| `scripts/paper_evidence.py` | El registro claim↔fuente: un span citado verbatim de un `.md` ya ingerido, lo que vuelve una verdad de cita una medición y no una opinión. |
+| `scripts/paper_bindings.py` | El contrato de entrada del redactor y su binding map — detecta "nada afirmado fuera del evidence set", no sólo lo instruye. |
+| `scripts/paper_audit.py` | Extrae los `## Disqualifiers` verbatim y reconcilia la cuenta del auditor contra el borrador real. |
+| `scripts/paper_style.py` | Resolución y registro del bloque equivalente en cada carpeta `style-reference` — el registro, no el contenido. |
+| `scripts/paper_leak.py` | La prueba de tres borradores (distancia de registro + solapamiento de n-gramas) y el tripwire de ocho tokens — separados por firma a propósito, para que ajustar el tripwire nunca mueva la prueba. |
+| `scripts/paper_write.py` | El pipeline `write`: readiness, gate, borrador, auditoría de evidencia, auditoría de contrato, `substitute --contract` — con exactamente un re-borrador acotado, controlado por una ledger en disco. |
+| `scripts/paper_resolve.py` | Cliente `urllib` puro para resolver citas y metadata contra OpenAlex, Crossref y arXiv. Sin llave. |
+| `scripts/paper_bib.py` | Reconstruye `paper/refs.bib` exclusivamente desde metadata cacheada y resuelta — "nunca a mano" es una propiedad chequeada. |
+| `scripts/paper_validate.py` | El único gate de citas: veredicto, colocación por régimen, y un loop de búsqueda acotado a tres rondas que nunca deja pasar un bloque a medio citar. |
+| `scripts/paper_obligation.py` | Qué debe contener un diagrama, leído de la declaración `figure:` del contrato — nunca hardcodeado contra un id de sección o bloque. |
+| `scripts/paper_figure.py` | Layout de fuente/manifiesto de diagramas, el cruce de dos vías del manifiesto, y la ledger de presupuesto de reparación por figura. |
+| `scripts/paper_latex.py` | El único módulo al que esta skill le permite importar `subprocess` — descubrimiento de toolchain, la única llamada a `latexmk`, parseo de log, veredicto de tres señales. |
+| `scripts/paper_coupling_evidence.py` | Toda lectura de disco que `verify` necesita, aislada acá y en ningún otro lado. |
+| `scripts/paper_verify.py` | Siete chequeos puros sobre esa evidencia — cero I/O propio, reporte de sólo lectura. |
+| `scripts/paper_objective.py` | El norte declarado: `OBJECTIVE_FLOW`, leído por `tests/test_agents.py` vía `ast.literal_eval` — literales puros, sin llamadas ni imports. |
+| `sections/*.md` | Los diez contratos reales, versionados: front-matter JSON + prosa. Entrada real, no fixture. |
+
+**Los seguros.**
+
+- **El CLI nunca invoca un agente.** Un AST scan (`NoSubprocessScanTests`) certifica
+  que ningún módulo bajo `scripts/` importa `subprocess`, `os.system`, `os.popen`,
+  `os.exec*` ni `multiprocessing` — con una única excepción nombrada y hoy sin uso,
+  reservada para `latexmk`. `write` no puede correr desatendido por construcción: el
+  agente orquestador arma los cuatro insumos del redactor, delega, escribe el JSON a
+  un archivo, y recién ahí corre `write --draft <path> --audit <path>`.
+- **Un solo re-borrador, contado en disco.** `AUDIT_EXHAUSTED` refuta un tercer
+  intento bajo el mismo contrato/evidencia/mode — el conteo vive en una ledger de
+  archivo, no en memoria del proceso que podría reiniciarse.
+- **La prueba de estilo y su tripwire están separados por firma a propósito**
+  (`paper_leak.py`, Decision D6): ajustar el tripwire de ocho tokens nunca puede
+  mover la prueba de tres borradores. Un canal de estilo todo-`noEquivalent`
+  reporta `unmeasured`, no un pase silencioso.
+- **`paper_verify.py` es puro:** cero `Path(`, `open(` ni `.read_` en el archivo —
+  confirmado por grep directo, no por confiar en su docstring.
+- **Descubrimiento de citas falla por nombre, no en silencio.** Con
+  `paper_writing.roles.discovery: []` en `papersmith.yaml` y
+  `.mcp.json`→`"mcpServers": {}`, cualquier intento de descubrimiento se rechaza
+  `DISCOVERY_UNAVAILABLE`; un rol de resolución vacío se rechaza `RESOLVER_ROLE_EMPTY`.
+  Nunca degrada a "no encontré nada" indistinguible de "no busqué".
+- **Resolución de citas hoy anda:** `resolution` en `papersmith.yaml` trae
+  `openalex`, `crossref` y `arxiv` cableados — verificado en vivo arriba, no sólo
+  declarado.
+
+**Limitaciones conocidas.**
+
+*`SKILL.md` afirma un conteo que ya no es cierto sobre sus propios datos
+shipeados.* `SKILL.md:453-454` dice hoy: *"A header declaring neither is
+schema-valid — none of the ten shipped contracts carry `mode` yet"*. Medido
+directamente: los 10 de 10 `sections/*.md` ya cargan `mode` en la forma exacta
+que el mismo documento describe dos párrafos antes (`rg -n '"mode"' sections/*.md`
+da diez matches). La deriva viene de dos commits (`d99ee93`, `9986e11`) que
+llevaron la cobertura a 10/10 antes de que un commit posterior enfocado
+explícitamente en "stale `SKILL.md` content" (`eab6496`) tocara ese mismo archivo
+sin corregir esta frase.
+**Cómo se arregla:** corregir la oración a "los 10 shipped contracts ya cargan
+`mode`" y, si se quiere que no vuelva a driftear, que un test lea el conteo real
+de `sections/*.md` en vez de que `SKILL.md` lo repita a mano.
+
+*El build acumula símbolos sin un llamador de producción, y el conteo de cuántos
+hay ya no es confiable ni citando el propio historial de commits.* Cuatro casos
+recientes (`Verdict.__post_init__`, `register_distance_holds`,
+`relative_overlap_holds`, `RedactorInput`) se auditaron y **no son defectos**:
+son pruebas de mecanismo o contratos de forma para un fixture, documentados así
+en su propio código. Pero el patrón es real y tiene historia: el commit
+`eab6496` registró a `paper_contract.install_header` como *"la undécima
+instancia de esa forma"* — sin embargo esa misma función ya había sido
+**eliminada** en el commit `ab10c21`, anterior al que la citó como viva. El
+número "once" quedó fosilizado en un mensaje de commit que ya estaba
+desactualizado el día que se escribió.
+**Cómo se arregla:** no volver a citar un conteo de un mensaje de commit; una
+barrida por ocurrencia de identificador (`def`/`class` de nivel superior que no
+aparece fuera de su propia línea de definición, sobre los 27 scripts + los
+`tests/test_paper_*.py`) da el número real en el momento en que se corre, y ese
+es el único número que vale la pena escribir.
+
+**Diagrama.**
+
+```mermaid
+flowchart TD
+    A["scaffold: crea paper/main.tex, refs.bib, Figures/"] --> B["plan: clases de guidance/,\nestado de declaraciones/hechos, procedencia"]
+    B --> C{"¿Algún bloque bloqueado?"}
+    C -- Sí --> D["declare: fija declaración o hecho\n(siempre decisión humana)"]
+    D --> B
+    C -- No --> E{"¿Alguna cita pendiente?"}
+    E -- Sí --> F["resolve contra OpenAlex/Crossref/arXiv"]
+    F --> G["bib build: refs.bib desde cache resuelta"]
+    G --> H["validate: veredicto + colocación,\n3 rondas acotadas"]
+    H --> E
+    E -- No --> I["order: deriva el orden de escritura del grafo"]
+    I --> J["Procedimiento de traslado (shuttle) --\nel CLI nunca invoca un agente"]
+    J --> K["redactor arma el LaTeX + binding map"]
+    K --> L["contract-auditor reconcilia contra ## Disqualifiers"]
+    L --> M["write --draft --audit: reconcilia"]
+    M -- audit-fired, 1er intento --> K
+    M -- AUDIT_EXHAUSTED, 3er intento --> N["Refuse: no se sustituye"]
+    M -- written --> O{"¿Bloque tiene figura?"}
+    O -- Sí --> P["diagram-author: TikZ + render (latexmk)"]
+    P --> Q["place: figura ya medida"]
+    O -- No --> R["Siguiente bloque en el orden"]
+    Q --> R
+    R -- quedan bloques --> J
+    R -- ninguno queda --> S["render/place: compila el documento entero"]
+    S --> T["verify: acoplamientos, integridad de citas,\nvigencia del contrato"]
+    T -- falla --> D
+    T -- ok --> U["Documento decisión-completo,\nnada afirmado sin corrida que lo cheque"]
+```
+
+---
+
+### 9. `skill-audit` — el auditor que deriva las dos mitades de un conjunto cerrado, nunca lee ninguna
+
+**Para qué está.** Cualquier skill o CLI que declara un conjunto cerrado —los
+subcomandos que acepta, los códigos de error que puede devolver, los archivos
+que dice que embarca— corre el mismo riesgo: que ese conjunto se repita a mano
+en más de un lugar y que, con el tiempo, esas repeticiones se separen entre sí
+y de lo que el código realmente acepta. Esta skill busca exactamente eso, y
+sólo eso. No lee el código para adivinar qué acepta, ni lee la documentación
+para confiar en lo que dice: **deriva** el lado del código conduciendo el
+sujeto como un proceso real y tomando el roster de su propio mensaje de
+rechazo, y deriva el lado documentado parseando una tabla. Compara las dos
+mitades y **se detiene ahí** — el reporte es lo que entrega, y la reparación
+queda para quien es dueño del sujeto auditado.
+
+**De dónde recibe y a quién le entrega.** Recibe un sujeto nombrado —una
+skill, un CLI, cualquier cosa que enumere un conjunto cerrado— y una receta de
+prueba (`--probe-spec`) que le dice cómo conducirlo y dónde leer su tabla
+doctrinal. El trabajo real corre en el agente `audit-report`, delegado en un
+contexto propio: el motivo no es cosmético, es de método. Un contexto que ya
+cargó al sujeto ya vio una de las dos mitades antes de derivarla, lo mismo que
+una fixture escrita y leída por la misma mano. El agente carga `SKILL.md`
+entero antes de moverse, tiene `Read`, `Write`, `Bash`, `Glob`, `Grep` y **no
+tiene `Edit`** — así que "reporta, nunca repara" deja de ser una frase y pasa a
+ser un hecho sobre lo que puede alcanzar. Le entrega el reporte a quien pidió
+la auditoría; no vuelve a tocar el sujeto después.
+
+**Qué necesita antes.** Un shell real. Sin `Bash` la skill **se niega** —
+nombra la capacidad que falta y no emite reporte, hallazgo, candidato ni
+veredicto parcial. No hay entorno virtual: todo corre con la biblioteca
+estándar. No toca red, con una sola excepción declarada: el paso `driver`
+opcional de `structure`. La negativa sin shell no es una falla del audit, es
+su salida correcta — un audit cuyas afirmaciones son puras lecturas no le dice
+al usuario nada que no pudiera haber leído solo.
+
+**El flujo.** `roster` es el verbo central y el que reconstruye las dos
+mitades: `probe_code_side` (`audit_cli.py:308-372`) corre el argv propio del
+sujeto con un nonce que no puede aceptar (`__AUDIT_NONCE__`), y saca el roster
+del texto de su propio rechazo por regex — nunca abre ni parsea un archivo
+fuente del sujeto para esto. `doctrine_side` (`audit_cli.py:92-135`) hace lo
+simétrico del otro lado: parsea una tabla Markdown nombrada por su encabezado
+y devuelve una columna, sin correr ningún proceso. El resultado compara
+`code` contra `doctrine` y publica `unregistered`, `phantom`, `duplicated`,
+`numeralMismatch`. Los otros ocho subcomandos —medidos vía `--help`, ver
+tabla abajo— cubren dimensiones distintas del mismo problema: `structure`
+compara lo declarado, lo que hay en disco y lo que un scaffold desde cero
+produce; `walkthrough` conduce una receta paso a paso hasta el índice donde se
+traba; `reading-diff` compara dos lecturas ya dadas de una misma superficie de
+prosa; `sensitivity` varía una entrada declarada y mide si la salida se mueve;
+`inversion` invierte un hecho guardado por un lock y observa si el lock
+dispara; `exits` conduce, por cada estado que una receta declara, el acto
+publicado que le corresponde; `enumeration-reach` clasifica si la fuente de
+iteración de cada chequeo declarado está acotada o deriva del sujeto.
+
+**Los módulos.**
+
+| Archivo | Qué hace y por qué existe |
+|---------|---------------------------|
+| `SKILL.md` | La doctrina completa: los nueve subcomandos, sus códigos de salida, la tabla de archivos embarcados y las puertas de decisión. El agente la carga entera antes de moverse. |
+| `scripts/audit_cli.py` | La implementación entera de los nueve verbos, sin dependencias externas. `doctrine_side` y `probe_code_side` son las dos derivaciones que nunca se leen entre sí. |
+| `references/usage.md` | Una invocación resuelta por subcomando. |
+| `references/example-report.md` | Un reporte que `check-report` acepta como válido — la forma contra la que se valida cualquier reporte nuevo. |
+| `references/probes/skill-audit.*.json` (ocho archivos) | Las recetas de autoauditoría: `subcommands`, `structure`, `first-run`, `reading-a`/`reading-b`, `sensitivity`, `self-guarded-facts` (para `inversion`), `exits`, `enumeration-reach`. `skill-audit` es el único sujeto con las nueve dimensiones cubiertas. |
+| `references/probes/proposal-deliberation.accepted-operations.json`, `proposal-implementation.accepted-operations.json` | Recetas `roster` contra sujetos ajenos, con su propia tabla doctrinal como lado documentado. |
+| `references/probes/remote-execution.accepted-operations.json`, `remote-execution.smoke-subcommands.json` | Recetas `roster` contra `remote-execution`, top-level y anidada en `smoke record`. Las únicas dos que declaran `minInterpreterVersion` (ver Los seguros). |
+| `.claude/agents/audit-report.md` | El agente que corre el stretch. Sin `Edit`; sin `stretch:` en su frontmatter, porque esta skill no declara un norte al que un agente pueda amarrar una etapa — es legítimo, no un descuido, y así lo dice el propio archivo. |
+
+**Los seguros.**
+
+- **Sin shell, refusal, no degradación.** No existe un modo "leer el código y
+  describirlo" cuando `Bash` falta; eso produciría un documento con apariencia
+  de audit y ninguna autoridad de audit.
+- **Una extracción que no matchea nada, revienta.** `roster` nunca convierte
+  "no encontré nada" en un conjunto vacío — devolver vacío convertiría cada
+  fila documentada en un phantom finding, una probe rota disfrazada de
+  resultado.
+- **La inhabilidad de mirar nunca comparte código de salida con un hallazgo
+  vacío.** Cada uno de los nueve subcomandos separa explícitamente sus
+  motivos de exit `2` (no pudo mirar) de sus veredictos exit `0` (miró y
+  reporta, incluso cuando el reporte es "no hay nada").
+- **El agente no tiene `Edit`.** "Reporta, nunca repara" es una restricción de
+  herramienta, no una promesa de conducta.
+- **Un piso de intérprete, nombrado en vez de fallar en silencio.** Las dos
+  recetas contra `remote-execution` corrían con `argv[0]="python3"` a secas;
+  en esta máquina eso resuelve a 3.9.6, y `adapter.py:373` del sujeto necesita
+  ≥3.10 al importar, así que moría antes de llegar a su propio rechazo y
+  `roster` contestaba `{"status": "unprobeable"}` sin decir por qué. El commit
+  `0275fa6` lo resolvió con un campo declarado, `minInterpreterVersion`, que
+  `probe_code_side` usa para buscar en `PATH` el nombre y sus variantes con
+  sufijo de versión y sustituir la primera que satisface el piso — o fallar
+  **nombrando** qué versión hacía falta y cuáles encontró. El roster nunca
+  estuvo mal; sólo la selección de intérprete.
+
+**Limitaciones conocidas.**
+
+*La cobertura contra `remote-execution` es roster-only.* Sólo hay dos recetas
+para ese sujeto (`remote-execution.accepted-operations.json`,
+`remote-execution.smoke-subcommands.json`, confirmado con `ls
+references/probes/`), y ambas cubren la dimensión `roster`. Las otras cinco
+dimensiones que esta skill sabe correr —`structure`, `sensitivity`,
+`inversion`, `exits`, `enumeration-reach`— sólo tienen receta contra
+`skill-audit` auditándose a sí misma. `kaggle-accounts`, que maneja
+credenciales vivas, no tiene **ninguna** receta: cero archivos
+`kaggle-accounts.*.json` en `references/probes/`. **Cómo se arregla:** escribir
+recetas de las cinco dimensiones restantes contra `remote-execution`, y al
+menos una receta `roster` contra `kaggle-accounts`, aunque sea para confirmar
+que su superficie de comandos coincide con lo que `accounts_cli.py` acepta.
+
+*Una receta ata una mutación a un número de línea exacto.*
+`references/probes/skill-audit.self-guarded-facts.json` fija la mutación de
+`inversion` en la línea 3873 de `audit_cli.py` (`REPORT_SCHEMA_VERSION = 1` →
+`= 97`). Cualquier edición por encima de esa línea corre el número real y
+rompe la receta sin tocar el hecho que dice guardar — ya pasó una vez: el
+propio commit `0275fa6`, al agregar ochenta líneas más arriba, desplazó el
+pin y dejó dos tests en rojo hasta que alguien lo corrigió a mano. La
+fragilidad es real y sigue en pie; el commit la nombra explícitamente como
+"dejada de pie porque rediseñarla no es este cambio". **Cómo se arregla:**
+que la receta ancle por contenido (el literal `REPORT_SCHEMA_VERSION = 1`
+buscado en el archivo) en vez de por número de línea, o que `inversion`
+resuelva la línea buscando el literal antes de mutar.
+
+**Diagrama.**
+
+```mermaid
+flowchart TD
+    A["Se nombra un sujeto + una receta --probe-spec"] --> B{"¿Hay shell (Bash)?"}
+    B -- No --> C["Refusal: nombra Bash, sin reporte ni hallazgo"]
+    B -- Sí --> D["audit-report arranca en contexto propio"]
+    D --> E["probe_code_side: corre el argv del sujeto\ncon un nonce, lee su rechazo"]
+    D --> F["doctrine_side: parsea la tabla\ndoctrinal del sujeto"]
+    E --> G{"¿Exit code y extracción\ncomo la receta espera?"}
+    G -- No --> H["unprobeable / exit 2\n(inhabilidad de mirar, no hallazgo)"]
+    G -- Sí --> I["code = roster derivado del rechazo"]
+    F --> J["doctrine = roster derivado de la tabla"]
+    I --> K["Compara code vs doctrine"]
+    J --> K
+    K --> L["unregistered / phantom / duplicated / numeralMismatch"]
+    L --> M["Reporte al dueño del sujeto"]
+    H --> M
+```
+
+---
+
+## Tests
+
+**Son dos suites, no una.** Correr una sola y dar un veredicto es un error que este
+repositorio ya cometió, así que las dos van acá con su invocación exacta.
+
+```bash
+npm test                                             # motor compartido de deliberación — 601 tests
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'   # todo lo demás — 3536 tests
+```
+
+Medido el 2026-09-13: **601/601** y **3536 OK** (3 salteados). `npm run typecheck` corre
+`tsc` sobre el motor de deliberación y sale limpio.
+
+**Dos trampas que parecen defectos del repositorio y no lo son.**
+
+*El script de npm fija el perfil de dominio.* `npm test` exporta
+`DELIBERATION_DOMAIN_PROFILE` antes de invocar `node --test`. Llamar `node --test` a secas
+falla cerrado, porque el motor no sirve ningún dominio propio y se niega a arrancar sin
+uno. Es la invocación la que está mal, no el motor.
+
+*`tests/` no tiene `__init__.py`.* La forma que uno escribiría de memoria,
+`discover -s tests -t .`, muere con `ImportError: Start directory is not importable`. La
+forma de arriba —sin `-t .` y con `-p 'test_*.py'`— es la que funciona.
+
+**Qué prueba cada cosa.** `tests/` cubre **el tooling de la forja**: los dos motores
+compartidos, los nueve `SKILL.md` y sus scripts, y la atadura entre cada skill y sus
+agentes en las dos direcciones. Los tests de una implementación materializada viven en su
+repositorio destino y en ningún otro lado; borrarlo borra sus tests.
+
+**Dos corpus sellados.** `tests/seal/` y `tests/experiments_seal/` guardan la salida
+exacta de una batería de comandos como digests dorados. No son tests de unidad: existen
+para que un cambio en el motor compartido no altere en silencio lo que cada host produce.
+Valen lo que cuestan — durante el último arreglo, cuatro digests se movieron y dijeron que
+la corrección era equivocada, en una dirección que ningún test de unidad veía.
+
+`proposal-implementation` se validó además con un arnés de escenarios propio —catorce
+situaciones en las que puede caer un clon, más el ciclo completo hasta publicar la
+revisión que produce un hallazgo— construido para cerrar la v1.5 y retirado al cerrarla.
+Era andamiaje, no parte de la forja. Queda en la historia: el commit que lo saca lo dice,
+y `git revert` lo trae de vuelta si alguna vez hay que volver a correrlo.
