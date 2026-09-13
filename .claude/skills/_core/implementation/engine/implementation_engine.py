@@ -8113,9 +8113,22 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
         raise Refused("REVISION_UNREADABLE",
                       f"{args.revision!r} is not readable; nothing can be handed off.")
 
+    # `the-agreement-nothing-computes` (Slice D, design.md D10): additive,
+    # built exactly as `cmd_admit` builds it -- `None` under one document,
+    # since `finding_impact`'s own per-document reshape is gated on this
+    # argument's own presence, never on a module-level document count read
+    # internally.
+    sources_by_document = None
+    if len(DOCUMENTS) > 1:
+        names = document_revision_names(args.revision)
+        sources_by_document = {DOCUMENTS[0]["label"]: source}
+        for index in range(1, len(DOCUMENTS)):
+            sources_by_document[DOCUMENTS[index]["label"]] = (
+                revision_source(names[index], index) if names[index] else None)
+
     inline, deferred, settled = [], [], []
     for finding in read_findings(target):
-        impact = finding_impact(finding, source)
+        impact = finding_impact(finding, source, sources_by_document)
         adoption = adoption_state(finding, source)
         item = {"id": finding["id"], "kind": finding.get("kind"),
                 "status": finding.get("status"), "rate": finding.get("rate"),

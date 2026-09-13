@@ -1904,5 +1904,179 @@ class DriftControlFoldMutationTests(unittest.TestCase):
             "the shared whole-tree list under this mutation")
 
 
+class HandoffLocalReachTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D10, tasks.md
+    5.1-5.6/5.9-5.10): `cmd_handoff`'s own consumer -- `sources_by_document`
+    threaded (5.1), `local_reach` reading both shapes (5.2), the
+    two-document routing case (5.3), `HANDOFF_DOCUMENT_UNREADABLE` (5.9/
+    5.10). Real subprocess `handoff`, the identical two-document profile
+    `PerDocumentCitationImpactClassTests` already builds (`pair_corpus`),
+    a purpose-built `findings.py` for this consumer layer alone."""
+
+    REVISION = "handoff-consumer-r01.md"
+    REVISION_1 = "handoff-consumer-plan-v01.md"
+    PACKAGE = "HandoffConsumer"
+
+    #: Document 0's own text -- carries neither citation syntax at all for
+    #: either locus below (0 citations under document 0's own "Ec."/"Eq."
+    #: pattern), and both findings' own adoption markers, so neither is
+    #: read back as already adopted.
+    REVISION_TEXT = (
+        "## 1\n\nOLD_SOLO stands as written, uncorrected. OLD_BOTH also "
+        "remains, untouched by either document's own citation syntax.\n")
+    #: Document 1's own text -- carries neither document's own citation
+    #: syntax for locus "22" at all (0 citations under document 1's own
+    #: "Exp." pattern either), keeping `both-local-ambiguous` local in
+    #: BOTH documents at once.
+    REVISION_1_TEXT = (
+        "Document 1's own text, citing nothing this fixture measures.\n")
+
+    FINDINGS_SOURCE = (
+        "FINDINGS = [\n"
+        "    {\n"
+        "        'id': 'mono-local-settle',\n"
+        "        'kind': 'gap',\n"
+        "        'status': 'measured',\n"
+        "        'rate': 'always',\n"
+        "        'statement': 'The first entry still carries its "
+        "uncorrected value.',\n"
+        "        'remedy': 'Replace the first entry with its corrected "
+        "form.',\n"
+        "        'document': 'proposal',\n"
+        "        'equations': ['11'], 'remedy_equations': ['11'],\n"
+        "        'uses': [], 'introduces': [],\n"
+        "        'adoption': {'absent': 'OLD_SOLO', 'expect': "
+        "['NEW_SOLO']},\n"
+        "        'remedy_block': 'the corrected first entry',\n"
+        "    },\n"
+        "    {\n"
+        "        'id': 'both-local-ambiguous',\n"
+        "        'kind': 'gap',\n"
+        "        'status': 'measured',\n"
+        "        'rate': 'always',\n"
+        "        'statement': 'Both declared documents resolve local, at "
+        "once.',\n"
+        "        'remedy': 'No change to either document; this finding "
+        "exists only to prove the two-document routing.',\n"
+        "        'document': ['proposal', 'experiments'],\n"
+        "        'equations': ['22'], 'remedy_equations': ['22'],\n"
+        "        'uses': [], 'introduces': [],\n"
+        "        'adoption': {'absent': 'OLD_BOTH', 'expect': "
+        "['NEW_BOTH']},\n"
+        "        'remedy_block': 'the corrected shared entry',\n"
+        "    },\n"
+        "]\n"
+    )
+
+    def setUp(self):
+        profile_root = Path(tempfile.mkdtemp(prefix="handoff-consumer-profile-"))
+        self.addCleanup(shutil.rmtree, profile_root, ignore_errors=True)
+        self.profile_roots = pair_corpus.build(profile_root)
+
+        self.doc0 = Path(tempfile.mkdtemp(prefix="handoff-consumer-doc0-"))
+        self.addCleanup(shutil.rmtree, self.doc0, ignore_errors=True)
+        (self.doc0 / self.REVISION).write_text(self.REVISION_TEXT, encoding="utf-8")
+
+        self.doc1 = Path(tempfile.mkdtemp(prefix="handoff-consumer-doc1-"))
+        self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
+        (self.doc1 / self.REVISION_1).write_text(self.REVISION_1_TEXT, encoding="utf-8")
+
+        self.box = FORGE / "implementations" / f"_handoff_consumer_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
+        self.box.mkdir(parents=True)
+        env = dict(os.environ)
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "handoff-consumer"
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "handoff-consumer@example.invalid"
+        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
+        (self.box / self.PACKAGE).mkdir(parents=True)
+        (self.box / "tests").mkdir(parents=True)
+        (self.box / "tests" / "findings.py").write_text(
+            self.FINDINGS_SOURCE, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+                       check=True, capture_output=True)
+
+    def run_cli(self, *args, doc1_dir=None):
+        env = dict(os.environ)
+        env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
+        env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
+        env["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir if doc1_dir is not None else self.doc1)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_a_single_document_local_finding_still_settles_inline(self):
+        """5.1/5.2: `mono-local-settle` names only `proposal`. Once
+        `sources_by_document` is threaded (5.1), `impact["class"]` becomes
+        a ONE-key mapping (`{"proposal": "local"}`) even though the finding
+        never names document 1 at all -- every finding in a two-document
+        profile is wrapped, since `document` is a required field. Before
+        `local_reach` (5.2) replaces the bare string comparison, this
+        mapping fails `impact["class"] == "local"` and the finding falls
+        to `deferToOwnSession` with the WRONG reason
+        (`deferredBecause: "structural-reach"`) even though it measures
+        local -- the exact silent regression M5 names. This assertion
+        names the CORRECT end state and is red until 5.2 lands."""
+        handoff = self.run_cli(
+            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(handoff.returncode, 0, handoff.stdout + handoff.stderr)
+        payload = json.loads(handoff.stdout)
+        settled_ids = [item["id"] for item in payload["settleInline"]]
+        deferred_ids = [item["id"] for item in payload["deferToOwnSession"]]
+        self.assertIn(
+            "mono-local-settle", settled_ids,
+            f"expected to settle inline; deferToOwnSession carries "
+            f"{deferred_ids!r} instead")
+
+    def test_a_finding_naming_both_documents_local_in_both_routes_rather_than_silently_deferring(self):
+        """5.3: `both-local-ambiguous` names BOTH documents, each
+        resolving `local`. Before `local_reach`, the mapping fails the
+        bare string comparison and the finding silently lands in
+        `deferToOwnSession` (`deferredBecause: "structural-reach"`),
+        indistinguishable from a genuinely structural finding -- the
+        broken state the spec's own scenario names ("rather than ...
+        falling to `deferToOwnSession` by default"). Once `local_reach`
+        reads the mapping correctly, the finding is routed into the
+        SAME branch a single-document local finding is (`elif
+        local_reach(impact) and remedy_block and remedy_locus`) --
+        which for a finding naming two documents raises
+        `COMPOSE_AMBIGUOUS_DOCUMENT` by construction (`_single_named_
+        document_index`, D1/D3): `cmd_handoff` cannot render a single
+        `selectedEntryId` for two documents at once. That refusal IS the
+        routing this scenario measures against silent deferral -- an
+        explicit, named refusal rather than an unremarked, wrongly
+        labelled deferral. Measured, not assumed: this is also the
+        FIRST test in this suite that exercises `COMPOSE_AMBIGUOUS_
+        DOCUMENT` actually firing (Phase 1's own task 1.15 recorded
+        adding one; none exists on disk)."""
+        handoff = self.run_cli(
+            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(handoff.returncode, 2, handoff.stdout + handoff.stderr)
+        payload = json.loads(handoff.stdout)
+        self.assertEqual(payload["code"], "COMPOSE_AMBIGUOUS_DOCUMENT")
+        self.assertIn("both-local-ambiguous", payload["detail"])
+
+    def test_handoff_document_unreadable_refuses_by_name(self):
+        """5.9/5.10: document 1's own root is emptied (no revision family
+        at all) -- `document_revision_names` resolves `None` for index 1,
+        so `sources_by_document["experiments"]` is `None`. A finding
+        naming `experiments` (`both-local-ambiguous`, present in this same
+        fixture) must refuse `HANDOFF_DOCUMENT_UNREADABLE` by name rather
+        than silently reading document 0's text alone while the second is
+        missing."""
+        empty_doc1 = Path(tempfile.mkdtemp(prefix="handoff-consumer-empty-doc1-"))
+        self.addCleanup(shutil.rmtree, empty_doc1, ignore_errors=True)
+        handoff = self.run_cli(
+            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            "--revision", self.REVISION, doc1_dir=empty_doc1)
+        self.assertEqual(handoff.returncode, 2, handoff.stdout + handoff.stderr)
+        payload = json.loads(handoff.stdout)
+        self.assertEqual(payload["code"], "HANDOFF_DOCUMENT_UNREADABLE")
+        self.assertIn("both-local-ambiguous", payload["detail"])
+        self.assertIn("experiments", payload["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
