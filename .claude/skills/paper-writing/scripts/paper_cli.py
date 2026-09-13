@@ -126,6 +126,13 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # an ongoing "create a new section contract" workflow) ----------------
     "MALFORMED_HEADER": WORK_STATE,
     "SECTIONS_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
+    #: K4 corrective: `resolve_sections_dir` now also refuses when the
+    #: resolved path does not exist as a directory, reusing the exact code
+    #: `UNMEASURED_REASONS` (`paper_verify.py`) and `_blocks_by_fact`
+    #: (`paper_coupling_evidence.py`) already use to name "the corpus
+    #: itself could not be read" — never a second code for the same
+    #: condition.
+    "SECTION_CONTRACTS_UNREADABLE": WORK_STATE,
     # --- corpus assembly and order (paper_graph.py) -----------------------
     "ID_COLLISION": WORK_STATE,
     "ORDER_CYCLE": WORK_STATE,

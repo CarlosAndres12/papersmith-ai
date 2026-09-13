@@ -17,7 +17,8 @@ all; it only parses what is already there.
 Public surface:
 
     parse(data)                    -> (ContractHeader, body_bytes)
-    resolve_sections_dir(arg, ...) -> Path   (raises SECTIONS_OUTSIDE_REPOSITORY)
+    resolve_sections_dir(arg, ...) -> Path   (raises SECTIONS_OUTSIDE_REPOSITORY,
+                                               SECTION_CONTRACTS_UNREADABLE)
 """
 from __future__ import annotations
 
@@ -491,6 +492,26 @@ def resolve_sections_dir(sections_arg: str | None, *, forge_root: Path = paper_s
     `paper_scaffold.FORGE_ROOT` rather than re-deriving a second root
     constant — the same `parents[4]` resolution `paper_scaffold.py` already
     proved, at the same directory depth from this file.
+
+    Also refuses `SECTION_CONTRACTS_UNREADABLE` (work-state) when an
+    EXPLICIT `sections_arg` sits under `forge_root` but does not exist as a
+    directory (K4 corrective). Without this, a typo'd `--sections` path
+    read as a real, legitimately empty corpus: `contract`/`readiness`/
+    `order`/`plan` all reported a clean `ok` with zero blocks,
+    indistinguishable from an actually-empty corpus. Reuses the exact code
+    `paper_verify.UNMEASURED_REASONS` and `paper_coupling_evidence.
+    _blocks_by_fact` already use to name "the corpus itself could not be
+    read" — never a second code for the same condition — rather than
+    inventing a fresh one.
+
+    Scoped to an explicit `sections_arg` only, never the bare default
+    (`<forge_root>/sections` when `sections_arg` is falsy): a caller who
+    names a path is making a claim about reality worth checking; the
+    default is this skill's own convention, always populated in a real
+    checkout, and `test_sections_dir_defaults_to_sections_under_the_forge_
+    root` fixes its own contract to the resolved path alone, independent of
+    whatever the fixture's throwaway `forge_root` does or does not contain
+    on disk.
     """
     root = forge_root.resolve()
     target = Path(sections_arg).resolve() if sections_arg else (root / "sections")
@@ -500,5 +521,10 @@ def resolve_sections_dir(sections_arg: str | None, *, forge_root: Path = paper_s
         raise Refused(
             "SECTIONS_OUTSIDE_REPOSITORY",
             f"{target} does not resolve inside the repository root {root}",
+        )
+    if sections_arg and not target.is_dir():
+        raise Refused(
+            "SECTION_CONTRACTS_UNREADABLE",
+            f"{target} does not exist as a directory; the section corpus cannot be read",
         )
     return target

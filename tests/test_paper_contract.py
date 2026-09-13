@@ -329,6 +329,38 @@ class SchemaTests(unittest.TestCase):
 
             self.assertEqual(resolved, (forge_root / "sections").resolve())
 
+    def test_sections_dir_that_does_not_exist_refuses_section_contracts_unreadable(self) -> None:
+        """K4 corrective: an in-repository but non-existent `--sections`
+        path (a typo, most often) previously resolved silently and every
+        downstream verb read it as a real empty corpus -- `{"blocks": [],
+        "danglingEdges": []}` reported as clean `ok`, indistinguishable from
+        a genuinely empty corpus. Reuses `SECTION_CONTRACTS_UNREADABLE`
+        (`paper_verify.UNMEASURED_REASONS`) rather than inventing a new
+        code -- the same vocabulary that already names "the corpus itself
+        could not be read" everywhere else in this skill."""
+        with tempfile.TemporaryDirectory() as tmp:
+            forge_root = Path(tmp) / "repo"
+            forge_root.mkdir()
+            missing = forge_root / "no_existe_xyz"
+
+            with self.assertRaises(Refused) as ctx:
+                paper_contract.resolve_sections_dir(str(missing), forge_root=forge_root)
+
+            self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
+            self.assertIn(str(missing), ctx.exception.detail)
+
+    def test_sections_dir_that_is_a_file_refuses_section_contracts_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            forge_root = Path(tmp) / "repo"
+            forge_root.mkdir()
+            not_a_dir = forge_root / "sections-but-a-file"
+            not_a_dir.write_text("not a directory\n", encoding="utf-8")
+
+            with self.assertRaises(Refused) as ctx:
+                paper_contract.resolve_sections_dir(str(not_a_dir), forge_root=forge_root)
+
+            self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
+
 
 #: The ten shipped contracts' body digests as committed at HEAD **before**
 #: this change (578d117f9008062c08bc3a4bd93f2e7245b4ce9b), when every file
