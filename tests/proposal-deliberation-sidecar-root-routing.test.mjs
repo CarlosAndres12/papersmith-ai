@@ -72,7 +72,7 @@ const service = new initialRevision.InitialRevisionCreationService(
 	{ hasManagedProposal: async () => false },
 	initialRevision.createFilesystemInitialRevisionPublicationPort(process.env.PROJECT_ROOT),
 );
-const result = await service.execute({ idea: 'A test idea for sidecar routing.' });
+const result = await service.execute({ idea: 'A test idea for sidecar routing. It exists so the sidecar has somewhere to land.' });
 console.log(JSON.stringify(result));
 `;
 

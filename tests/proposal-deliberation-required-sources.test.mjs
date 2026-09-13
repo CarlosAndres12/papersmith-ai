@@ -53,7 +53,7 @@ test('3.2.1 a declared, present source loads its fragments exactly as today', as
 		const guideFolder = path.join(run.projectRoot, 'guidance/paper-guide/style');
 		await mkdir(guideFolder, { recursive: true });
 		await writeFile(path.join(guideFolder, 'style.md'), 'Always define notation before use.', 'utf8');
-		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that catches unjustified inference steps in a proof draft.' });
+		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that catches unjustified inference steps in a proof draft. It names the step it doubts.' });
 		assert.equal(result.status, 'created', JSON.stringify(result));
 		const written = await readFile(path.join(run.projectRoot, 'proposals', result.targetFilename), 'utf8');
 		assert.match(written, /Paper Guide Reference/);
@@ -67,7 +67,7 @@ test('3.2.3 an absent, not-required source (proposal-deliberation\'s guide) pres
 	const run = await defaultProfileFixture();
 	try {
 		// No guidance/ directory at all -- the default profile's one declared source, `required: false`.
-		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that verifies each induction step explicitly.' });
+		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that verifies each induction step explicitly. It refuses to advance past one it cannot check.' });
 		assert.equal(result.status, 'created', JSON.stringify(result));
 		const written = await readFile(path.join(run.projectRoot, 'proposals', result.targetFilename), 'utf8');
 		assert.doesNotMatch(written, /Paper Guide Reference/, 'no fragments were injected');

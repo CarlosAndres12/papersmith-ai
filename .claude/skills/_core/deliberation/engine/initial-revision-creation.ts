@@ -41,7 +41,7 @@ export type CreateInitialRevisionInput = { idea: string; guideFragments?: readon
 
 export type CreateInitialRevisionResult =
 	| { status: 'created'; filename: string; revision: string; documentSha256: string; canonicalMetadata: CanonicalProposalMetadata; markdown: string }
-	| { status: 'blocked'; code: 'INITIAL_IDEA_REQUIRED' | 'MANAGED_PROPOSAL_ALREADY_EXISTS' }
+	| { status: 'blocked'; code: 'INITIAL_IDEA_REQUIRED' | 'MANAGED_PROPOSAL_ALREADY_EXISTS' | 'INITIAL_IDEA_SINGLE_SENTENCE' }
 	| { status: 'blocked'; code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION'; violations: readonly PreservationViolation[] };
 
 /**
@@ -64,6 +64,28 @@ export class InitialRevisionCreationService {
 		if (!idea) return { status: 'blocked', code: 'INITIAL_IDEA_REQUIRED' };
 		if (await this.existingProposal.hasManagedProposal()) return { status: 'blocked', code: 'MANAGED_PROPOSAL_ALREADY_EXISTS' };
 		const composed = this.renderer.renderFromIdea({ idea, guideFragments: input.guideFragments });
+		// An idea with no second sentence collapses `title` and `sectionHeading` to the same
+		// bytes, by construction: `sectionHeading`'s fallback chain ends in `sentences[0] ?? idea`,
+		// which is character for character what `title` computes on the line above it
+		// (`initial-revision-renderer.ts`). The document then goes out with `# X` and `## X`
+		// identical, and what that costs was measured on both hosts:
+		//
+		//   a domain with no canonical-form rules of its own  v1 IS created, and can never be
+		//       edited: every locus query against it is ambiguous and blocked, and a second
+		//       CREATE is refused MANAGED_PROPOSAL_ALREADY_EXISTS. The only exit is moving
+		//       files by hand, outside this engine entirely.
+		//   a domain that declares them  the renderer's triplication trips that domain's OWN
+		//       canonical form, so an idea obeying every rule its skill states cannot become
+		//       v1 at all -- and the refusal blames the author for a repetition THIS ENGINE
+		//       introduced.
+		//
+		// Refused here rather than repaired in the renderer: this engine cannot write a section
+		// heading the author did not write. `sentences` splits on `(?<=[.!?])\s+`, so "one
+		// sentence" means "no sentence-ending punctuation" -- newlines and blank lines do not
+		// supply one, which is why an idea laid out over several lines still collapses.
+		if (composed.canonicalMetadata.title === composed.canonicalMetadata.sectionHeading) {
+			return { status: 'blocked', code: 'INITIAL_IDEA_SINGLE_SENTENCE' };
+		}
 		// Canonical form, over the COMPOSED v1 rather than over the idea alone.
 		//
 		// Every other publication path in this engine runs `validateCandidate`, whose
