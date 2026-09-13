@@ -1150,7 +1150,7 @@ clears one. Estimate 300–500.
 proven RED-first; M7 re-measured end to end and **reported, not
 promised**. Estimate 600–950.
 
-- [ ] 5.1 RED (M5's own first commit — the exception to the pair pattern,
+- [x] 5.1 RED (M5's own first commit — the exception to the pair pattern,
       by design): thread `sources_by_document` into `cmd_handoff`
       (`finding_impact(finding, sources_by_document)`, built exactly as
       `cmd_admit` builds it via `document_revision_names`, gated on
@@ -1160,7 +1160,23 @@ promised**. Estimate 600–950.
       first commit**, red against the shipped engine for a reason no
       assertion author chose (M5). Commit this state; do not fix it in the
       same commit.
-- [ ] 5.2 GREEN: `local_reach(impact) -> bool` — one module-level function
+      **Measured**: commit `69bc5a7`. `HandoffLocalReachTests` (new class,
+      `tests/test_implementation_pair.py`) with `mono-local-settle`
+      (names document `proposal` alone). RED, confirmed directly: settling
+      inline was expected, and the finding landed in `deferToOwnSession`
+      instead (`AssertionError: 'mono-local-settle' not found in []`) —
+      exactly M5's own predicted shape, since EVERY finding in a
+      two-document profile carries a required `document` field and is
+      therefore wrapped in a mapping the moment `sources_by_document` is
+      non-`None`, not only findings naming both documents.
+      **Deviation, recorded rather than silent**: the `both-local-
+      ambiguous` (5.3) and `handoff_document_unreadable` (5.9) test
+      METHODS were authored in this same commit alongside 5.1's own
+      assertion, ahead of their own tasks' turn — a process deviation
+      from strict one-task-per-commit, though each method's own assertion
+      was independently confirmed red or green at its OWN task's turn
+      (5.3 at `b7240d4`, 5.9 at `e91862c`), never assumed passing.
+- [x] 5.2 GREEN: `local_reach(impact) -> bool` — one module-level function
       replacing all four `impact["class"] == "local"` comparisons (three in
       `cmd_handoff`, one in `cmd_verify`'s `local_remedies_not_written`).
       Handles both shapes: a plain string, or a mapping in which **every**
@@ -1169,18 +1185,71 @@ promised**. Estimate 600–950.
       mapping falls back to the string path (test this explicitly — it is
       the unit-test row design names alongside the string/mapping-all/
       mapping-mixed cases).
-- [ ] 5.3 RED: a finding naming both documents, both resolving `"local"`;
+      **Measured**: commit `b7240d4`. All four sites re-pointed (three in
+      `cmd_handoff`, `cmd_verify`'s own site read the SAME accessor but
+      not yet threaded — that thread is 5.4's own task, not this one).
+      `LocalReachUnitTests` (5 cases, `tests/test_experimental_
+      implementation.py`): plain local, plain structural, mapping
+      all-local, mapping mixed, empty mapping — the empty-mapping case
+      specifically proving `all()`'s own vacuous truth over zero elements
+      is guarded against. 5.1's own red case now green.
+      **Sealed case recapture**: `handoff-e1` moved (expected, not a
+      regression — `both-documents-citation`'s `impact.class` genuinely
+      changes shape, string before this phase's own threading, a mapping
+      now; its routing verdict, structural/deferred, is unchanged).
+      Zero other pre-existing digests moved except `propose` (excluded).
+- [x] 5.3 RED: a finding naming both documents, both resolving `"local"`;
       assert `cmd_handoff` routes it (settles inline), rather than
       comparing the mapping to `"local"` and falling to
       `deferToOwnSession` by default (spec `implementation-document-binding`
       "`cmd_handoff` routes a finding against both documents without
       silently deferring").
-- [ ] 5.4 GREEN/VERIFY: `cmd_verify`'s `local_remedies_not_written` reads
+      **Measured, and the task's own "settles inline" framing corrected.**
+      A finding naming BOTH documents can never literally land in
+      `settleInline`: `_single_named_document_index` (D1/D3) raises
+      `COMPOSE_AMBIGUOUS_DOCUMENT` unconditionally for `len(indices) > 1`
+      under a two-document profile, before a `selectedEntryId` could ever
+      be rendered for two documents at once — a structural constraint from
+      Phase 1, untouched by this phase. "Routes it" is therefore measured
+      as: the finding is recognized and acted on (an explicit, named
+      refusal) rather than silently misclassified into
+      `deferToOwnSession` with the wrong reason. `both-local-ambiguous`
+      (both documents local, `remedy_block`+`remedy_locus` present):
+      before `local_reach`, it silently defers as `structural-reach`
+      (measured, at 5.1's own commit); after, it raises
+      `COMPOSE_AMBIGUOUS_DOCUMENT` by name. **Measured bonus**: this is
+      also the FIRST test in this whole suite that exercises
+      `COMPOSE_AMBIGUOUS_DOCUMENT` actually firing — task 1.15's own
+      annotation recorded adding such a test; none existed on disk
+      (`rg -n 'COMPOSE_AMBIGUOUS_DOCUMENT' -g '*.py'` found only a
+      docstring reference in `test_proposal_implementation.py`, no
+      assertion). A real Phase 1 gap, recorded here rather than silently
+      absorbed into this phase's own scope.
+- [x] 5.4 GREEN/VERIFY: `cmd_verify`'s `local_remedies_not_written` reads
       `local_reach` on the same evidence `cmd_handoff` now uses — a finding
       whose mapping reports `"local"` for the document it names is
       included, not silently excluded by the old scalar comparison (spec
       "`cmd_verify`'s local-remedy comprehension reads the mapping too").
-- [ ] 5.5 RED: each named document's citations are matched by its own
+      **Measured, split RED then GREEN.** RED (`ade92df`):
+      `doc1-local-unwritten` names document 1 alone, local under its OWN
+      pattern (0 citations) but structural under document 0's own
+      unthreaded reading (2 citations of the same numeral, coincidentally
+      present in document 0's own text) — excluded, confirmed red.
+      GREEN (`a92fe10`... actually `a918526`): threaded
+      `verify_sources_by_document` (already computed earlier in
+      `cmd_verify` for `remedy_compatibility`) into this call too. **A
+      real pre-existing bug found and fixed during recapture, beyond this
+      task's own red case**: `both-documents-citation`, under the
+      `dataset-0.md`/`dataset-1.md` revisions, was WRONGLY included in
+      `audit.localRemediesNotWritten` — the old unthreaded call read ZERO
+      citations against those near-empty dataset-axis texts (unrelated to
+      the real crossing), missing document 1's own three citations
+      entirely. Recapture moved `verify-a-declared`, `verify-b-declared`,
+      `verify-b-undeclared` (the three cases using that revision axis);
+      `verify-a`/`verify-b` (default discovery) unmoved, since their
+      revision never exposed the bug. Zero other digests moved except
+      `propose`.
+- [x] 5.5 RED: each named document's citations are matched by its own
       pattern when computing `impact["class"]` — document 0 and document 1
       declare different `citation_pattern` values (already true from
       Slice C's fixture); a finding naming both; assert document 0's class
@@ -1189,42 +1258,108 @@ promised**. Estimate 600–950.
       its own pattern" — this exercises `finding_impact`'s existing
       per-document threading from Slice C, now under D5's new consumer;
       confirm it still holds rather than assuming it).
-- [ ] 5.6 RED: a finding naming only the first document maps to that
+      **Measured, MEASURE not RED**: already implemented by Slice C, and
+      already exercised via `cmd_admit` (`PerDocumentCitationImpactClassTests`,
+      `tests/test_implementation_pair.py`). This task's own three new
+      direct unit tests (`FindingImpactPerDocumentUnitTests`, commit
+      `56af24d`) call `finding_impact` directly (no CLI dispatch — a pure
+      function) and pass on first write: confirming the representation
+      still holds under D5's new consumer, never a RED/GREEN pair.
+- [x] 5.6 RED: a finding naming only the first document maps to that
       document alone; a finding naming both carries both classes,
       uninterpreted — no combined or summarized verdict word (spec "A
       finding against one document maps to that document alone" / "A
       finding against both documents carries both classes, uninterpreted").
-- [ ] 5.7 MUTATE (Z9): revert `local_reach` to the bare string comparison
+      **Measured, same adaptation as 5.5**: same commit (`56af24d`), same
+      class, two more of its three cases — one-document-alone maps to
+      that document alone; both-documents carries both classes
+      (`{"proposal": "structural", "experiments": "local"}`),
+      uninterpreted. All green on first write.
+- [x] 5.7 MUTATE (Z9): revert `local_reach` to the bare string comparison
       `impact["class"] == "local"` at all four sites; confirm the
       two-document handoff routing case (5.3) dies; confirm the
       single-document behavior is unaffected (the string path still
       matches); restore.
-- [ ] 5.8 RED+GREEN: mutation-prove the boundary once more at this
+      **Measured**: commit `b0bf3b5`, `LocalReachRevertMutationTests`, on
+      the REAL engine file (Y9's own established pattern in this file —
+      write, run, restore in `addCleanup`), never a scratch copy (a flat
+      scratch copy cannot run `resolve_target` at the right `FORGE_ROOT`
+      depth, measured while building 5.11's own mutation). All four call
+      sites reverted at once (three `local_reach(impact)`, one
+      `local_reach(finding_impact(...))`). Confirmed: `both-local-
+      ambiguous` falls back to `deferToOwnSession` under the mutation
+      (`COMPOSE_AMBIGUOUS_DOCUMENT` never fires); the sibling's own 28
+      sealed digests stay byte-identical (single-document behavior
+      unaffected, by construction — there `impact["class"]` is always a
+      plain string).
+- [x] 5.8 RED+GREEN: mutation-prove the boundary once more at this
       consumer layer — a mutation reverting any of the four comparisons
       back to the bare scalar check against the mapping itself is caught
       by the two-document corpus case, which fails naming the reverted
       comparison (spec "A comparison reverted to a bare scalar check is
       caught" — this is 5.7's assertion restated as the spec's own named
       scenario; confirm both wordings are satisfied by the same mutation).
-- [ ] 5.9 RED: `HANDOFF_DOCUMENT_UNREADABLE` — a finding naming a declared
+      **Measured**: same commit and test as 5.7 (`b0bf3b5`) — one mutation,
+      both wordings satisfied by the same assertions (the routing case
+      dying names the reverted comparison's own consequence directly).
+- [x] 5.9 RED: `HANDOFF_DOCUMENT_UNREADABLE` — a finding naming a declared
       document whose revision cannot be read; assert `cmd_handoff` refuses
       by name rather than silently reading document 0's text while the
       second is missing (precedent: `DOCUMENT_REVISION_UNREADABLE` at the
       binding-write sites — cite it in the refusal's docstring).
-- [ ] 5.10 GREEN: implement 5.9; `cmd_handoff` gains one additive key per
+      **Measured**: test method authored at 5.1's own commit (`69bc5a7`,
+      the deviation recorded there), confirmed red independently at this
+      task's own turn (before `e91862c` landed): `assertEqual` failed
+      naming `COMPOSE_AMBIGUOUS_DOCUMENT` in place of
+      `HANDOFF_DOCUMENT_UNREADABLE` — red for the right reason (the code
+      did not exist yet, so `both-local-ambiguous`'s own doc-1-emptied
+      variant fell through to the existing ambiguity refusal instead).
+- [x] 5.10 GREEN: implement 5.9; `cmd_handoff` gains one additive key per
       item — `deferredBecause: "structural-in-another-document"` — and its
       prose is written in the same hardcoded Spanish as its three
       neighbors, deliberately (M2 stays recorded and unresolved; translating
       one of four branches would make the output bilingual, a behavioural
       delta the seal must refuse). Do not translate it. Do not open a
       separate task to fix M2 here.
-- [ ] 5.11 GREEN: add the mutation-adding-a-verdict-field guard (spec
+      **Measured, split into two commits.** `e91862c`:
+      `HANDOFF_DOCUMENT_UNREADABLE` itself — refuses per-finding, gated on
+      the finding actually naming the unreadable document (mirroring
+      `finding_impact`'s own "unnamed document contributes nothing" rule).
+      Measured, correcting design's own prediction: `reachable_refusal_
+      codes()` stays at **116, unmoved** — `cmd_handoff` is not a
+      `GATING_COMMANDS` root (the identical situation 1.31 measured for
+      `COMPOSE_AMBIGUOUS_DOCUMENT`), and classifying it in
+      `GATING_REFUSALS` was confirmed (not just assumed) to break the same
+      reverse lock that reverted `COMPOSE_AMBIGUOUS_DOCUMENT`'s own
+      classification at D1. `b4986fe` (found while re-checking this
+      task's own second half against the shipped consumer, not originally
+      separated out as its own task): the `deferredBecause:
+      "structural-in-another-document"` branch itself had NOT been
+      implemented alongside the refusal — a real gap, closed in its own
+      commit with its own case (`mixed-reach`: local for one document, 0
+      citations under its own pattern; structural for the other, 3
+      citations under its own pattern), proving it lands with the
+      distinct reason rather than the generic "not local at all" one
+      (which would be false for it).
+- [x] 5.11 GREEN: add the mutation-adding-a-verdict-field guard (spec
       "A mutation adding a verdict field is caught") at the consumer layer
       too, if not already fully covered by 3.11's Phase-3 lock — confirm
       coverage by running a scratch mutation that adds a `suggestion` key
       to `cmd_agree`'s payload and watching a lock over the returned key
       set go red (D11's own mutation, restated).
-- [ ] 5.12 GREEN: the tutor bullet in
+      **Measured, not fully covered**: 3.11's own lock is over the
+      refusal's `detail` STRING content (no verdict word); no lock existed
+      over `cmd_agree`'s SUCCESS payload's own key SET. Added
+      (`test_the_agreed_payloads_key_set_is_exactly_this_and_no_more`) and
+      its own Z11 mutation (`AgreeSuggestionKeyZ11MutationTests`, commit
+      `2a9248c`) — a scratch copy of the engine, preserving the real
+      repository's own nesting depth under `.claude/skills/_core/
+      implementation/` (measured: `impl_layout.FORGE_ROOT` is
+      `parents[4]` of its own file; a flat scratch copy, as Z10 uses,
+      never runs `resolve_target` and could not reach the mutated return
+      statement through a real `cmd_agree` call). Confirmed: the mutated
+      payload's key set grows by one, caught by the lock.
+- [x] 5.12 GREEN: the tutor bullet in
       `.claude/skills/experimental-implementation/SKILL.md` — the third
       discrepancy kind (metric/protocol mismatch) documented as guidance
       for the reading agent, explicitly never a check (spec "The bullet
@@ -1233,7 +1368,17 @@ promised**. Estimate 600–950.
       assertion, with the citation itself otherwise resolving, does **not**
       refuse (spec "A metric/protocol mismatch does not refuse" — only
       Kind 1, Kind 2, and the no-crossing-declared code refuse).
-- [ ] 5.13 DRIVE AND REPORT (M7 — not RED/GREEN; no task may promise a
+      **Measured**: commit `f92fe10`. Bullet added inside Flow B, at the
+      step that runs `agree`. Negative case
+      (`test_a_metric_protocol_mismatch_the_tutor_bullet_names_does_not_
+      refuse`, `tests/test_experiments_seal.py`): reuses the EXISTING
+      resolving fixture rather than authoring a new one — `crossing_state`
+      (design.md D6) extracts numerals from `[claims:N]`/`\tag{N}` alone,
+      reading no surrounding sentence, metric name or protocol
+      description at all, so there is no separate mismatch fixture to
+      author for a check that reads no semantic content in the first
+      place. Green, confirmed.
+- [x] 5.13 DRIVE AND REPORT (M7 — not RED/GREEN; no task may promise a
       published successor): against a **real scratch**
       `experimental-deliberation` project, drive resolve → preview → accept
       through `CREATE_SUCCESSOR` end to end for a revision named
@@ -1249,7 +1394,28 @@ promised**. Estimate 600–950.
       leave the limit recorded, per proposal.md's explicit scope
       exclusion ("Repairing `experimental-deliberation`'s accept-turn limit
       if re-measurement shows it still fires... a different engine").
-- [ ] 5.14 GREEN: author (not amend — this skill's `SKILL.md` has neither
+      **Driven, twice, and reported: IT PUBLISHES.** (1) The existing
+      `tests/experimental-deliberation-publish.test.mjs` (already on disk,
+      already inside `npm test`'s own 596, not authored this phase — a
+      prior session's own repair) run in isolation: 5/5 green, ending
+      `status: "published"`, `targetRevision: "v02"`. (2) A fresh,
+      hand-driven, uncommitted one-off script using the EXACT filenames
+      this task names (`experiments-<slug>-v03.md` → `-v04.md`, never a
+      committed test — DRIVE-AND-REPORT, not RED/GREEN):
+      `parseManagedRevision` returns `{lineage, revision: "v03", ordinal:
+      3, digits: "03"}`; `strictRevisionLabel("v04")` is `true`; the
+      accept turn answers `{status: "published", targetFilename:
+      "experiments-<slug>-v04.md", targetRevision: "v04"}`. Both confirm
+      design.md's own source trace — `parseManagedRevision`/`LAX_RE`/
+      `strictRevisionLabel` are all profile-derived
+      (`escapeRegExp(DOMAIN.artifact.revisionPattern)`, `"v"` here), never
+      the hardcoded `-r(\d+)\.md$`/`^r\d{2,}$` pair the 2026-09-08
+      diagnosis named — that diagnosis never described this code.
+      `experimental-deliberation/SKILL.md`'s "Known limit" section
+      re-dated and corrected in place (commit `28d011a`).
+      `reference-experimental.ts` confirmed byte-unchanged
+      (`git diff --exit-code`). `npm test` 596/596, unaffected.
+- [x] 5.14 GREEN: author (not amend — this skill's `SKILL.md` has neither
       today, measured this phase) Flow B in
       `.claude/skills/experimental-implementation/SKILL.md`, reusing
       `proposal-implementation`'s existing Flow B steps and its drift gate
@@ -1262,10 +1428,35 @@ promised**. Estimate 600–950.
       (`REMOTE_EXECUTION_CLI_SCRIPT` et al.) are already `FORGE_ROOT`-derived
       and shared by both skills; this task drives them, never rebuilds
       them.
-- [ ] 5.15 MEASURE: `reachable_refusal_codes()` — confirm it reports **118**
+      **Measured, and this task's own text widened**: BOTH Flow A and
+      Flow B are authored from nothing (measured: neither existed;
+      `rg -n '^## Flow'` on this file returned nothing before commit
+      `f92fe10`) — Flow A's own distinguishing step is the two-document
+      object-to-module map, this skill's own reason to need a first-pass
+      flow at all. Flow B's own drift gate is stated by reference to the
+      sibling's wording, applied per-document
+      (`fidelityByDocument`, Slice C). The remote-execution seam table is
+      LINKED (a markdown anchor into `proposal-implementation/SKILL.md`),
+      never duplicated. `DoctrineVocabularyLeakTests` and
+      `PublishedCommandsRunVerbatimTests` both green — no fenced
+      ` ```bash ` command line added (so the launcher-command check is
+      unaffected), no denylisted target word leaked into the new prose.
+- [x] 5.15 MEASURE: `reachable_refusal_codes()` — confirm it reports **118**
       (117 → 118: `HANDOFF_DOCUMENT_UNREADABLE` is the one new code this
       phase adds). D5's own pin task.
-- [ ] 5.16 VERIFY (phase gate, and the change's own final gate): `git diff
+      **Measured 116, not 118 — design's own prediction corrected a third
+      time this change** (after 3.15 and 4.7's own corrections of the
+      identical uncorrected arithmetic). `HANDOFF_DOCUMENT_UNREADABLE` is
+      raised inside `cmd_handoff`, which is NOT a `GATING_COMMANDS` root —
+      the derivation never reaches it, the same measured situation as
+      `COMPOSE_AMBIGUOUS_DOCUMENT` at D1 (1.31). Confirmed directly:
+      `reachable_refusal_codes()` → `116`; `'HANDOFF_DOCUMENT_UNREADABLE'
+      in reachable_refusal_codes()` → `False`. Also confirmed:
+      classifying it in `GATING_REFUSALS` was tried and would break
+      `test_the_roster_classifies_nothing_a_gating_command_cannot_raise`
+      the identical way `COMPOSE_AMBIGUOUS_DOCUMENT`'s own classification
+      did — not done, per that same precedent.
+- [x] 5.16 VERIFY (phase gate, and the change's own final gate): `git diff
       --exit-code tests/seal/` exits 0; `.venv/bin/python -m unittest
       tests.test_implementation_pair tests.experiments_seal` green;
       `L1_EXPECTED_COUNT` re-measured (this phase's `SKILL.md` prose is the
@@ -1274,6 +1465,53 @@ promised**. Estimate 600–950.
       grown from Phase 1's baseline, `OK (skipped=6)`, `skipped=6` unmoved
       across all five phases; `npm test` 595/595; name-collision sweep
       clean.
+
+      **Measured, this apply session, one full suite run with nothing
+      else running concurrently (the "one suite run at a time" rule),
+      preceded by killing an earlier, contaminated in-flight run that had
+      overlapped with several of this phase's own targeted invocations:**
+
+      - `git diff --exit-code tests/seal/` → exit 0.
+      - `git status --porcelain` → clean (no leftover
+        `implementations/_*` scratch directories).
+      - `.venv/bin/python -m unittest tests.test_implementation_pair
+        tests.test_experiments_seal` → both green (36 + 27 = 63/63,
+        including every case this phase added).
+      - `L1_EXPECTED_COUNT` (the campaign-proposal pin, 96, unrelated to
+        this change's own two-document "proposal" label) — confirmed
+        unmoved via `CampaignProposalExclusionTests`, all four green.
+        Direct grep of every file this phase touched for `document 1`/
+        `the crossed document`/`the target document` phrasing versus a
+        bare `proposal`: none found outside the campaign-proposal pin's
+        own excluded symbols.
+      - Full Python suite: `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m
+        unittest discover -s tests -p "test_*.py"` → **`Ran 3059 tests`**,
+        **`OK (skipped=6)`** (grown from D4's 3042 by exactly 17 — every
+        new test method this phase added, counted directly: 5
+        `HandoffLocalReachTests` + 1 `LocalReachRevertMutationTests` + 5
+        `LocalReachUnitTests` + 3 `FindingImpactPerDocumentUnitTests` + 2
+        new `AgreementCheckTests` methods + 1
+        `AgreeSuggestionKeyZ11MutationTests` = 17; `skipped=6` unmoved
+        across all five phases, no `skipTest` added anywhere).
+      - `npm test` → **596/596**, unaffected (this phase's own `.mjs`
+        change count is zero — the M7 drive script was a one-off,
+        uncommitted; the SKILL.md re-dating is documentation-only).
+      - Name-collision sweep (`rg '^class \w+Tests?\(' ... | sort |
+        uniq -d`, scoped per file) returns nothing for every file this
+        phase touched.
+      - `reachable_refusal_codes()` → **116**, confirmed unmoved (5.10,
+        5.15's own measurements).
+      - `reference-experimental.ts`, `proposal-deliberation/**`,
+        `_core/deliberation/**` (except `experimental-deliberation/
+        SKILL.md`, named in scope): `git diff --exit-code` on each,
+        exit 0 — untouched. `proposal-implementation/**`: `git diff
+        --exit-code`, exit 0 — **no fourth sibling edit was forced this
+        phase**, unlike D3's own one recorded ripple.
+      - Whole-phase diff (`git diff --stat 137a15d..HEAD -- '.claude/
+        skills' 'tests'`, code, docs and tests, eleven commits `69bc5a7`
+        through `b4986fe`): **855 insertions + 29 deletions across 8
+        files = 884 changed lines** — under this phase's own 600–950
+        estimate.
 
 ## Phase 6: Cross-slice success-criteria sweep
 
