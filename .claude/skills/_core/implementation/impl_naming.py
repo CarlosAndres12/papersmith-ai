@@ -32,15 +32,28 @@ def normalize_name(raw: str) -> dict:
     if not text:
         raise NameRefused("NAME_EMPTY")
     # Split first on explicit separators, then inside each piece on camel boundaries.
+    # The trailing alternative catches any run the ASCII patterns above it do not:
+    # a stray symbol or a non-ASCII letter. Nothing is left to fall through
+    # unmatched, so nothing is silently dropped -- it becomes a token and meets
+    # the guard below instead. Before this, a character no alternative matched
+    # (an accent, a CJK letter) simply vanished from the name; "münchen" became
+    # "M-Nchen" with no refusal at all. Losing letters silently is worse than
+    # refusing the name, so the guard is made reachable rather than removed.
     tokens: list[str] = []
     for piece in re.split(r"[\s\-_]+", text):
         if not piece:
             continue
-        tokens.extend(re.findall(r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+", piece))
+        tokens.extend(re.findall(
+            r"[A-Z]+(?![a-z])|[A-Z][a-z0-9]*|[a-z0-9]+|[^A-Za-z0-9]+", piece))
     if not tokens:
         raise NameRefused("NAME_HAS_NO_WORDS")
     for token in tokens:
-        if not token.isalnum():
+        # `str.isalnum` is Unicode-aware and accepts letters like 'é'; the
+        # tokenizer above only ever hands ASCII patterns a match, so a token
+        # that survives here is either every character the ASCII patterns
+        # matched, or the catch-all run of whatever they did not. An ASCII
+        # check is what actually distinguishes the two.
+        if not (token.isascii() and token.isalnum()):
             raise NameRefused(f"NAME_NOT_ALPHANUMERIC:{token}")
     if tokens[0][0].isdigit():
         raise NameRefused("NAME_STARTS_WITH_DIGIT")

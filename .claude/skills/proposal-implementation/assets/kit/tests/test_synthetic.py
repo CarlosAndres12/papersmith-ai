@@ -11,7 +11,6 @@ import numpy as np
 SEED = {{SEED}}
 
 
-def test_{{EXPECTATION}}() -> None:
+def test_{{EXPECTATION}}(rng) -> None:
     """Expectation: <what must happen, and why, stated before running>."""
-    rng = np.random.default_rng(SEED)  # noqa: F841
     raise NotImplementedError
