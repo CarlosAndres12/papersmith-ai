@@ -529,10 +529,12 @@ proposals/research-concept-rNN.md           la revisión, con un marcador de art
 - **Falla cerrado.** Una operación desconocida se rechaza; no cae al camino por
   defecto.
 
-**Limitaciones conocidas.** Nueve. Las cinco primeras son del motor de edición, y cada
-una dice qué pasa, qué podés hacer igual, qué no, y cómo se arreglaría. Las cuatro
-últimas son sobre el alcance de las garantías: qué es lo que esta skill, medida, no
-puede afirmar.
+**Limitaciones conocidas.** Vienen en tres grupos, y no las cuento acá a propósito: un
+número escrito a mano al lado de una lista envejece la primera vez que alguien agrega una,
+y este documento ya tuvo tres casos así. Primero las del **motor de edición** —qué pasa,
+qué podés hacer igual, qué no, y cómo se arreglaría—; después las del **alcance de las
+garantías**, o sea qué es lo que esta skill, medida, no puede afirmar; y al final las del
+**motor compartido**, que valen igual para el otro dominio que lo usa.
 
 *La consulta que ubica un cambio es sensible a cómo la escribís.* Para aplicar un
 cambio hay que decirle a qué sección apunta. Esa consulta se compara **por substring
@@ -670,6 +672,15 @@ nada — la mitad de la contabilidad queda escribiéndose en la carpeta vieja, e
 silencio, hasta que alguien nota que faltan recibos. **Cómo se arregla:** con un único
 `stateRoot(root)` del que salgan los 21. Es un refactor chico y desbloquea las dos
 cosas de arriba.
+
+*Un campo obligatorio que el segundo dominio declara y nunca usa, y un import vivo por un
+`void`.* `proseReferenceText` está en los obligatorios —el motor se niega a arrancar sin
+él— y no tiene ningún lector en el núcleo: su único lector está del lado matemático. El
+otro host lo declara porque debe, y su proceso jamás lo invoca. En el mismo archivo de
+entrada, `cli.mjs` importa `pathToFileURL` y su última línea es `void pathToFileURL;`,
+que existe únicamente para que el import no se lea como no usado. **Cómo se arregla:**
+sacar el campo de los obligatorios o darle un lector en el núcleo; y borrar el import con
+su `void`.
 
 **Diagrama.**
 
@@ -1056,6 +1067,64 @@ arregla:** completándola, o borrando la enumeración y dejando sólo el puntero
 `references/usage.md` — un inventario que se mantiene solo es mejor que uno que hay que
 acordarse de actualizar.
 
+*Una ausencia se lee como "no está vieja".* Bajo dos documentos,
+`admissibility_record`'s staleness check hace `continue` cuando falta la entrada de un
+documento declarado o cuando su fuente no se puede leer — así que un registro incompleto
+pasa como vigente. La compatibilidad de doble forma está documentada; los `continue`
+silenciosos no. **Cómo se arregla:** que una ausencia responda `unknown` y no vigencia.
+
+*La rama "sin posición" devuelve una clave menos, y el candado que dice sostener la forma
+no puede verla.* `position_state` devuelve 13 claves cuando no hay posición y 14 cuando
+la hay: falta `unmeasurable`. Un consumidor que la lea directo revienta con `KeyError` —
+`sequence_block_detail` ya se defiende con `.get`, que es la pista. El docstring dice que
+la forma la sostiene una regla de acuerdo entre retornos, pero ese helper sólo lee
+retornos que son **diccionarios literales**, y esta rama devuelve un nombre. **Cómo se
+arregla:** que la rama ausente devuelva la clave, o que el candado sepa leer un `return
+<nombre>`.
+
+*Dos lectores de `__benchmark__`, con el desacuerdo que el resolver declara extinto.*
+`resolve_benchmark_declaration` se llama a sí mismo "el único lugar del que todo lector
+saca `__benchmark__`". El script `INTROSPECT`, que corre dentro del intérprete del
+destino, lo lee del atributo del módulo importado. Una declaración que vive en
+`config.py` y no se reexporta es real para el resolver e inexistente para `INTROSPECT`:
+un hecho, dos lectores, veredictos distintos. **Cómo se arregla:** que `INTROSPECT` pase
+por el resolver, o que el docstring deje de afirmar unicidad.
+
+*"El único lugar" donde se leen `accelerator`/`localBudget` era falso al nacer.*
+`cmd_gate` los arma por su cuenta desde su propio `run_config` y se los pasa al mismo
+clasificador. Los dos sitios citan el mismo cambio de diseño, así que no es deriva: el
+cuantificador nunca fue cierto. Hoy leen el mismo archivo igual, y nada los ata.
+**Cómo se arregla:** un lector, o un test que falle si se separan.
+
+*El kit embarca dos defensas que nadie invoca.* `ruled_revision` devuelve la revisión
+contra la que se dictó la admisibilidad, para que un test de remedio pueda negarse a
+medir bajo otra: cero llamadores. `resolve_device`: cero referencias, incluidas las
+notebooks. Y el fixture `rng` de `conftest.py` no lo pide ningún test, mientras dos
+plantillas arman uno local marcado `# noqa: F841`. El motor sí detecta la obsolescencia,
+pero recién en `verify`; la defensa existía justo para la ventana anterior. **Cómo se
+arregla:** cablearlas o borrarlas — lo que no conviene es dejarlas.
+
+*Prosa que sobrevivió a su mecanismo, en seis sitios.* Seis comentarios del motor
+justifican el patrón de "devolver el detalle y que el llamador levante" apelando a
+`raised_refusal_codes`, un barrido que no veía un rechazo escondido dentro de un helper.
+Ese barrido ya fue reemplazado por `reachable_refusal_codes`, que sigue las referencias
+hasta cada función de nivel de módulo y toma los helpers enteros: hoy un rechazo
+helper-adentro se pone rojo hasta que se lo clasifique. La ubicación del patrón sigue
+siendo buena; la razón escrita al lado está muerta, seis veces, y el barrido viejo
+sobrevive sólo para probar lo que no puede ver. **Cómo se arregla:** borrar la
+justificación muerta antes que el código que justifica — un comentario falso es un defecto
+con vida propia, porque el próximo que pase le cree.
+
+*Seis imports muertos, y un test que mantiene vivo un símbolo citando un llamador que no
+existe.* Tres líneas de import del motor traen siete nombres que no usa. Y
+`latest_revision` está muerta en producción desde que un cambio reemplazó a su único
+llamador por `revision_discovery` — nada la llama, y ningún despacho dinámico la alcanza.
+Se mantiene viva a propósito, por una spec y ocho tests unitarios; el defecto está en el
+pin mismo: el test que la sostiene se justifica diciendo *"cinco tests unitarios **y un
+llamador de producción** la leen como `str | None`"*. Ese llamador se fue. Es prosa que
+sobrevivió a su mecanismo **dentro del test que mantiene vivo al símbolo**. **Cómo se
+arregla:** corregir la justificación del pin —o retirar el pin— y borrar los imports.
+
 **Diagrama.**
 
 ```mermaid
@@ -1349,6 +1418,19 @@ ruidosos: un comando mal formado falla y se ve. **Qué podés hacer:** si algo f
 vivo por primera vez, empezá a buscar ahí y no en el seam. **Cómo se arregla:** con un
 ensayo real —para eso existe `submit --smoke`—, que es exactamente el camino más barato
 para descubrirlo antes de gastar una corrida grande.
+
+*Tres comandos imprimen sin red de contención, y el mismo bug ya pasó una vez.* `status`
+se arreglaba antes de cada `Path` anidado que apareciera, cambiando a
+`json.dumps(..., default=str)`. Ese arreglo llegó a cuatro de los nueve sitios de
+impresión: `distribute` (`remote_cli.py:2869`), `reconcile` (`:2971`) y `readiness`
+(`:3081`) siguen con la forma vieja, y los tres crashean con `TypeError: Object of type
+PosixPath is not JSON serializable` en cuanto su payload lleve uno — probado por mutación.
+Hoy no muerde, y sólo por una razón: `_staleness_for()` devuelve `str` en todos sus
+campos. Eso es un hecho sobre la forma actual de un helper, no una garantía que esos tres
+sitios sostengan por su cuenta — y `status` adquirió su `Path` anidado exactamente así,
+porque alguien agregó un sub-bloque y nadie tocó todos los sitios de impresión. **Cómo se
+arregla:** `default=str` en los cinco restantes, y un test de regresión por comando como
+el que ya protege a los cuatro arreglados.
 
 **Diagrama.**
 
