@@ -11,6 +11,7 @@ and the citation pattern's exactly-three-group shape (task 1.4, M2).
 
 from __future__ import annotations
 
+import argparse
 import copy
 import importlib.util
 import itertools
@@ -879,6 +880,133 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
                               capture_output=True, text=True, env=env)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(proc.stdout.strip(), "incompatible")
+
+
+class AdmitPerDocumentTests(unittest.TestCase):
+    """`cmd_admit` is a fourth consumer of the premise
+    `RemedyCompatibilityPerDocumentTests` above already had corrected, and
+    the lock never reached it: the gate that rules admissibility BEFORE
+    anything is measured reads document 0's `locus_key`/`remedy_locus_key`
+    and document 0's TEXT for every finding -- including one that names
+    `documents[1]` and declares this host's `equations`/`remedy_equations`.
+
+    Both directions are held here because either alone leaves the other
+    standing. A bogus `documents[1]` finding must not be admitted (its
+    verdict is written into `tests/admissibility.json`, which the target's
+    remedy suite trusts before measuring), and a legitimate one must not be
+    refused with reasons that are false about the document it names.
+    """
+
+    DECLARATION = (
+        "__benchmark__ = {\n"
+        "    'revision': 'e1.md',\n"
+        "    'arms': {},\n"
+        "    'report': {'renderers': [], 'conclusions': []},\n"
+        "}\n"
+    )
+
+    def _tmp_dir(self, prefix: str) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _engine_with_proposals_override(self, doc0_dir: Path, doc1_dir: Path):
+        """Copied from `RemedyCompatibilityPerDocumentTests` rather than
+        extracted, for the reason that file's own siblings state: a helper
+        shared between a passing lock and a new one couples what goes red."""
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        saved = {key: os.environ.get(key)
+                 for key in ("IMPLEMENTATION_PROPOSALS", "IMPLEMENTATION_PROPOSALS_1")}
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+
+        def _restore():
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.addCleanup(_restore)
+        return module
+
+    def _box(self, tag: str, findings: str) -> Path:
+        # Under `implementations/`, never a temp dir: `resolve_target`
+        # refuses anything outside it, and that refusal is the shipped
+        # behaviour, not an obstacle to route around.
+        box = FORGE / "implementations" / f"_admit_perdoc_{tag}_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            self.DECLARATION, encoding="utf-8")
+        (box / "tests" / "findings.py").write_text(findings, encoding="utf-8")
+        return box
+
+    def _admit(self, doc0_text: str, doc1_text: str, findings: str) -> dict:
+        doc0_dir = self._tmp_dir("admit-doc0-")
+        doc1_dir = self._tmp_dir("admit-doc1-")
+        (doc0_dir / "e1.md").write_text(doc0_text, encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(doc1_text, encoding="utf-8")
+        module = self._engine_with_proposals_override(doc0_dir, doc1_dir)
+        box = self._box("run", findings)
+        return module.cmd_admit(argparse.Namespace(
+            target=str(box), name="Method", revision="e1.md"))
+
+    def test_a_bogus_document_one_finding_is_not_admitted(self):
+        """Direction 1. The finding names `documents[1]` and cites tag 99,
+        which exists in NEITHER document. `remedy_compatibility` already
+        refuses it; `admit` must not write `admissible: true` for it.
+
+        The adoption marker and the notation are deliberately present in
+        DOCUMENT 0's text, so that those two checks cannot fire: the only
+        thing left that can refuse this finding is its locus, which is the
+        read under test. Without that, the test passes for a reason
+        unrelated to the defect -- which it did, on its first run.
+        """
+        result = self._admit(
+            doc0_text="## 1\n\nThe experiments mention $$a = b$$ in passing.\n",
+            doc1_text="The proposal declares $$a = b \\tag{1}$$ only.\n",
+            findings=(
+                "FINDINGS = [\n"
+                "    {\n"
+                "        'id': 'doc1-bogus-locus',\n"
+                "        'document': ['proposal'],\n"
+                "        'equations': ['99'],\n"
+                "        'remedy_equations': ['99'],\n"
+                "        'uses': ['a = b'],\n"
+                "        'introduces': [],\n"
+                "        'adoption': {'absent': 'a = b', 'expect': []},\n"
+                "    },\n"
+                "]\n"))
+        self.assertNotIn("doc1-bogus-locus", result["admitted"])
+        self.assertIn("doc1-bogus-locus", result["inadmissible"])
+
+    def test_a_legitimate_document_one_finding_is_not_refused_with_false_reasons(self):
+        """Direction 2. The finding's locus, adoption marker and notation
+        are all real text of the document it NAMES, and absent from
+        document 0. No reason may claim otherwise."""
+        result = self._admit(
+            doc0_text="## 1\n\nnothing relevant.\n",
+            doc1_text="The proposal declares $$a = b \\tag{1}$$.\n",
+            findings=(
+                "FINDINGS = [\n"
+                "    {\n"
+                "        'id': 'doc1-legit',\n"
+                "        'document': ['proposal'],\n"
+                "        'equations': ['1'],\n"
+                "        'remedy_equations': ['1'],\n"
+                "        'uses': ['a = b'],\n"
+                "        'introduces': [],\n"
+                "        'adoption': {'absent': 'a = b', 'expect': []},\n"
+                "    },\n"
+                "]\n"))
+        self.assertEqual(result["inadmissible"].get("doc1-legit"), None,
+                         "refused a finding whose locus, marker and notation "
+                         "are all real text of the document it names")
 
 
 class CrossingStateTests(unittest.TestCase):
