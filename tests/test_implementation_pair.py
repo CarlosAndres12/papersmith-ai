@@ -1931,7 +1931,17 @@ class HandoffLocalReachTests(unittest.TestCase):
     REVISION_1_TEXT = (
         "Document 1's own text, citing nothing this fixture measures.\n")
 
-    FINDINGS_SOURCE = (
+    #: `mono-local-settle` names only `proposal` -- 5.1/5.2's own case.
+    #: `both-local-ambiguous` names BOTH documents, each resolving
+    #: `local` -- 5.3/5.9/5.10's own case. Kept in SEPARATE fixture
+    #: packages (never one `FINDINGS` list): `cmd_handoff` raises the
+    #: first refusal it reaches and aborts the WHOLE call, so a package
+    #: carrying both findings at once would let `both-local-ambiguous`'s
+    #: own `COMPOSE_AMBIGUOUS_DOCUMENT` (or `HANDOFF_DOCUMENT_UNREADABLE`)
+    #: mask `mono-local-settle`'s own settled-inline assertion entirely --
+    #: measured, not assumed, this exact collision reddened both this
+    #: file's original single-package draft.
+    MONO_FINDINGS_SOURCE = (
         "FINDINGS = [\n"
         "    {\n"
         "        'id': 'mono-local-settle',\n"
@@ -1949,6 +1959,10 @@ class HandoffLocalReachTests(unittest.TestCase):
         "['NEW_SOLO']},\n"
         "        'remedy_block': 'the corrected first entry',\n"
         "    },\n"
+        "]\n"
+    )
+    BOTH_FINDINGS_SOURCE = (
+        "FINDINGS = [\n"
         "    {\n"
         "        'id': 'both-local-ambiguous',\n"
         "        'kind': 'gap',\n"
@@ -1981,23 +1995,24 @@ class HandoffLocalReachTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.doc1, ignore_errors=True)
         (self.doc1 / self.REVISION_1).write_text(self.REVISION_1_TEXT, encoding="utf-8")
 
-        self.box = FORGE / "implementations" / f"_handoff_consumer_{os.getpid()}_{id(self)}"
-        self.addCleanup(shutil.rmtree, self.box, ignore_errors=True)
-        self.box.mkdir(parents=True)
+    def _build_box(self, findings_source: str, suffix: str) -> Path:
+        box = FORGE / "implementations" / f"_handoff_consumer_{os.getpid()}_{id(self)}{suffix}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
         env = dict(os.environ)
         env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = "handoff-consumer"
         env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = "handoff-consumer@example.invalid"
-        subprocess.run(["git", "init", "-q", str(self.box)], check=True, capture_output=True)
-        (self.box / self.PACKAGE).mkdir(parents=True)
-        (self.box / "tests").mkdir(parents=True)
-        (self.box / "tests" / "findings.py").write_text(
-            self.FINDINGS_SOURCE, encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=self.box, env=env, check=True,
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / self.PACKAGE).mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "tests" / "findings.py").write_text(findings_source, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=box, env=env, check=True,
                        capture_output=True)
-        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=self.box, env=env,
+        subprocess.run(["git", "commit", "-q", "-m", "initial"], cwd=box, env=env,
                        check=True, capture_output=True)
+        return box
 
-    def run_cli(self, *args, doc1_dir=None):
+    def run_cli(self, box: Path, *args, doc1_dir=None):
         env = dict(os.environ)
         env["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.profile_roots.profile_path)
         env["IMPLEMENTATION_PROPOSALS"] = str(self.doc0)
@@ -2017,8 +2032,9 @@ class HandoffLocalReachTests(unittest.TestCase):
         (`deferredBecause: "structural-reach"`) even though it measures
         local -- the exact silent regression M5 names. This assertion
         names the CORRECT end state and is red until 5.2 lands."""
+        box = self._build_box(self.MONO_FINDINGS_SOURCE, "_mono")
         handoff = self.run_cli(
-            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            box, "handoff", "--target", str(box), "--name", self.PACKAGE,
             "--revision", self.REVISION)
         self.assertEqual(handoff.returncode, 0, handoff.stdout + handoff.stderr)
         payload = json.loads(handoff.stdout)
@@ -2050,8 +2066,9 @@ class HandoffLocalReachTests(unittest.TestCase):
         FIRST test in this suite that exercises `COMPOSE_AMBIGUOUS_
         DOCUMENT` actually firing (Phase 1's own task 1.15 recorded
         adding one; none exists on disk)."""
+        box = self._build_box(self.BOTH_FINDINGS_SOURCE, "_both")
         handoff = self.run_cli(
-            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            box, "handoff", "--target", str(box), "--name", self.PACKAGE,
             "--revision", self.REVISION)
         self.assertEqual(handoff.returncode, 2, handoff.stdout + handoff.stderr)
         payload = json.loads(handoff.stdout)
@@ -2066,10 +2083,11 @@ class HandoffLocalReachTests(unittest.TestCase):
         fixture) must refuse `HANDOFF_DOCUMENT_UNREADABLE` by name rather
         than silently reading document 0's text alone while the second is
         missing."""
+        box = self._build_box(self.BOTH_FINDINGS_SOURCE, "_unreadable")
         empty_doc1 = Path(tempfile.mkdtemp(prefix="handoff-consumer-empty-doc1-"))
         self.addCleanup(shutil.rmtree, empty_doc1, ignore_errors=True)
         handoff = self.run_cli(
-            "handoff", "--target", str(self.box), "--name", self.PACKAGE,
+            box, "handoff", "--target", str(box), "--name", self.PACKAGE,
             "--revision", self.REVISION, doc1_dir=empty_doc1)
         self.assertEqual(handoff.returncode, 2, handoff.stdout + handoff.stderr)
         payload = json.loads(handoff.stdout)

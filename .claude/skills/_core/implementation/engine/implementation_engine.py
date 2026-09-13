@@ -8018,6 +8018,34 @@ def finding_impact(finding: dict, source: str,
     return result
 
 
+def local_reach(impact: dict) -> bool:
+    """Whether a finding's impact reaches no further than one locus,
+    settleable inline -- the single accessor all four
+    `impact["class"] == "local"` comparisons become (`the-agreement-
+    nothing-computes`, Slice D, design.md D10): three in `cmd_handoff`,
+    one in `cmd_verify`'s own `local_remedies_not_written`.
+
+    `impact["class"]` (`finding_impact`, above) is one of two shapes: a
+    plain string under one document, or -- once a caller threads
+    `sources_by_document` -- a `{label: "local"|"structural"}` mapping.
+    The reach is the UNION across every named document: local in one and
+    structural in another is structural, never local, because settling a
+    remedy inline substitutes into ONE document's own syntax and a
+    finding whose reach is uneven cannot be reduced to that.
+
+    An EMPTY mapping (no per-document entry contributed at all) falls
+    back to the plain-string comparison rather than `all()`'s own
+    vacuous truth over zero elements -- `all(() for _ in {})` is `True`,
+    which would read an empty mapping as local by accident; comparing it
+    to the string `"local"` instead answers `False`, the same as any
+    other non-string, non-matching value.
+    """
+    cls = impact["class"]
+    if isinstance(cls, dict) and cls:
+        return all(value == "local" for value in cls.values())
+    return cls == "local"
+
+
 def adoption_state(finding: dict, source: str) -> dict:
     """Has the revision taken this remedy in?
 
@@ -8139,7 +8167,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                 "statement": finding.get("statement"), "remedy": finding.get("remedy")}
         if adoption["state"] == "adopted":
             settled.append(item)
-        elif (impact["class"] == "local" and finding.get("remedy_block")
+        elif (local_reach(impact) and finding.get("remedy_block")
                 and finding.get(REMEDY_LOCUS_KEY)):
             # Local and written out: hand the deliberation a request it can act
             # on. The locus travels as its own tag rather than as a quote of
@@ -8175,7 +8203,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             # hardens that violation into a contract shape rather than
             # resolving it: translating it here would be a behavioural delta
             # the seal must refuse.
-            if impact["class"] == "local" and not finding.get(REMEDY_LOCUS_KEY):
+            if local_reach(impact) and not finding.get(REMEDY_LOCUS_KEY):
                 # Local by measurement only because it names no locus at all.
                 # There is no locus to resolve in the document, so there is
                 # nothing the deliberation could be asked to replace.
@@ -8184,7 +8212,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                     f"reescribiría (`{REMEDY_LOCUS_KEY}` está vacío), así que no hay "
                     "un locus que resolver en el documento.")
                 item["deferredBecause"] = "remedy-locus-missing"
-            elif impact["class"] == "local":
+            elif local_reach(impact):
                 # Local reach, but nobody wrote the corrected block. Deferring is
                 # the honest outcome; saying "not local" here would be false.
                 reason = (
@@ -15710,7 +15738,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # documented semantics (spec), not by oversight.
     local_remedies_not_written = [
         f["id"] for f in findings
-        if finding_impact(f, source or "")["class"] == "local"
+        if local_reach(finding_impact(f, source or ""))
         and not f.get("remedy_block")
         and adoption_state(f, source or "")["state"] != "adopted"
     ]

@@ -58,9 +58,9 @@
     "sha256": "2d82baf642268c9fae4aeb18fdafa4f4a4bfb019ef37bf51a3c4317add518879"
   },
   "handoff-e1": {
-    "bytes": 4364,
+    "bytes": 4511,
     "exit": 0,
-    "sha256": "13f2df9ae03d8c6996119b3d88bd0c169f7e9798d31ef3dd92624877fb0f2b3d"
+    "sha256": "585c816153243ed8269db570e83d9283a68a0a5800114dcde09a0fd0991de4ef"
   },
   "name": {
     "bytes": 87,
@@ -105,7 +105,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "0eec545c3eb1d642f0912230f3a1a8118db8fad0b1fc4acc9cbf2d8faa2534de"
+    "sha256": "aad7eba6de61f04dd1f99fac2a21545b329d0a8a3550b7a1d7c79b570a38116f"
   },
   "settle": {
     "bytes": 2826,

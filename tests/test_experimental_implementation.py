@@ -1067,5 +1067,46 @@ class CrossingStateTests(unittest.TestCase):
         self.assertEqual(seal_diff.returncode, 0)
 
 
+class LocalReachUnitTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D10, tasks.md
+    5.2): `local_reach`'s own shape table, pure -- no profile dependency,
+    so a single trivial document is enough to get a fresh engine handle."""
+
+    def _engine(self):
+        engine, tmp_dir = _engine_with_documents([
+            {"directory": Path(tempfile.mkdtemp(prefix="local-reach-")),
+             "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator(), "cross_citation": None},
+        ])
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return engine
+
+    def test_a_plain_local_string_is_reachable(self):
+        engine = self._engine()
+        self.assertTrue(engine.local_reach({"class": "local"}))
+
+    def test_a_plain_structural_string_is_not_reachable(self):
+        engine = self._engine()
+        self.assertFalse(engine.local_reach({"class": "structural"}))
+
+    def test_a_mapping_all_local_is_reachable(self):
+        engine = self._engine()
+        self.assertTrue(engine.local_reach(
+            {"class": {"proposal": "local", "experiments": "local"}}))
+
+    def test_a_mixed_mapping_is_not_reachable(self):
+        """Local in one document and structural in the other is
+        structural -- the reach is the union, never the best case."""
+        engine = self._engine()
+        self.assertFalse(engine.local_reach(
+            {"class": {"proposal": "local", "experiments": "structural"}}))
+
+    def test_an_empty_mapping_falls_back_to_the_string_path(self):
+        """`all()`'s own vacuous truth over zero elements would read an
+        empty mapping as local by accident; `local_reach` must not."""
+        engine = self._engine()
+        self.assertFalse(engine.local_reach({"class": {}}))
+
+
 if __name__ == "__main__":
     unittest.main()
