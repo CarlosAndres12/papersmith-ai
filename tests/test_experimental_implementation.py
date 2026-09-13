@@ -882,6 +882,65 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "incompatible")
 
 
+class WalkPromisesOnlyWhatItPerformsTests(unittest.TestCase):
+    """`walk` listed `rehearse` in `WALK_PERFORMS`, and no code path performs
+    it. Its dispatch has exactly two argv shapes -- `step` for run-local and
+    `generate_job_argv` for everything else -- and `generate_job_argv` never
+    passes `--regenerate`, which remote-execution's job writer requires to
+    touch a folder that already exists. A `rehearse` act is classified
+    PRECISELY when the job folder exists and is not smoke-ready, so on the
+    one state the act exists for, walk ran the wrong command and stopped on
+    a refusal about a folder that is supposed to be there.
+
+    The engine's own comment beside `WALK_PERFORMS` already says rehearsal is
+    "the rehearsal the doctrine already makes the agent's to run". The
+    roster disagreed with the sentence next to it.
+
+    Retiring the promise rather than building the act: the doctrine that
+    rehearsal is run by hand is documented, works, and is what both hosts
+    actually do. Building an automated act to match a sentence would be
+    adding surface to justify prose.
+    """
+
+    def test_the_engine_does_not_claim_to_perform_an_act_it_cannot(self):
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        self.assertNotIn(
+            module.ACT_REHEARSE, module.WALK_PERFORMS,
+            "walk claims to perform rehearse; nothing in the engine composes "
+            "`--regenerate`, `submit --smoke`, `fetch` or `smoke record`")
+        self.assertIn(
+            module.ACT_REHEARSE, module.WALK_STOPS_AT,
+            "an act walk does not perform must be a stop, not unclassified -- "
+            "`walk_plan` answers 'nothing here knows whether a walk may take "
+            "it' for anything in neither roster")
+
+    def test_a_walk_stops_at_a_rehearse_act_instead_of_running_generate_job(self):
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        plan = module.walk_plan([
+            {"step": "s1", "act": module.ACT_RUN_LOCAL, "needs": None},
+            {"step": "s2", "act": module.ACT_REHEARSE, "needs": None},
+            {"step": "s3", "act": module.ACT_RUN_LOCAL, "needs": None},
+        ])
+        self.assertEqual([a["step"] for a in plan["performs"]], ["s1"])
+        self.assertIsNotNone(plan["stopsAt"])
+        self.assertEqual(plan["stopsAt"]["step"], "s2")
+
+    def test_no_shipped_document_promises_walk_rehearses(self):
+        """The four documents that carried the promise: the first host's
+        SKILL.md and both walk agents' descriptions."""
+        offenders = []
+        for path, phrase in (
+                (FORGE / ".claude/skills/proposal-implementation/SKILL.md",
+                 "and `rehearse`"),
+                (FORGE / ".claude/agents/implementation-walk.md",
+                 "rehearse them on a worker"),
+                (FORGE / ".claude/agents/experiments-walk.md",
+                 "rehearse them on a worker")):
+            if phrase in path.read_text(encoding="utf-8"):
+                offenders.append(f"{path.name}: {phrase!r}")
+        self.assertEqual(offenders, [], f"still promise an act walk cannot perform: {offenders}")
+
+
 class FrontDoorIdentityTests(unittest.TestCase):
     """`-h` is the only self-description this host offers: its own SKILL.md
     says "every argument, subcommand and exit code is the shared engine's;

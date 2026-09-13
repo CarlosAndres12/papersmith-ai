@@ -10641,14 +10641,21 @@ def flow_acts(rows: list[dict], steps: dict, jobs: list[dict],
                                   "lives under"})
             continue
         job = by_name.get(job_name)
+        needs = None
         if job is None:
             act = ACT_GENERATE_JOB
         elif not job.get("smokeReady"):
             act = ACT_REHEARSE
+            # A stop, not a performance: `walk_plan` answers "nothing here
+            # knows whether a walk may take it" for any act in neither roster,
+            # and an operator reading that about a rehearsal learns nothing.
+            needs = ("the job folder exists and is not smoke-ready; rehearse "
+                     "it by hand as the doctrine prescribes -- no act in this "
+                     "engine performs a rehearsal")
         else:
             act = ACT_LAUNCH
         acts.append({"step": row["step"], "placement": placement,
-                     "act": act, "job": job_name, "needs": None})
+                     "act": act, "job": job_name, "needs": needs})
     return acts
 
 
@@ -10705,8 +10712,20 @@ def flow_destination(rows: list[dict], steps: dict, jobs: list[dict],
 #: campaign, and it is the one act whose plan a person asked to see before it
 #: happens. A walk that took it would be the launch path with no gate in
 #: front of it that `flow_acts` refuses to be.
-WALK_PERFORMS = (ACT_RUN_LOCAL, ACT_GENERATE_JOB, ACT_REHEARSE)
-WALK_STOPS_AT = (ACT_LAUNCH, ACT_BLOCKED)
+WALK_PERFORMS = (ACT_RUN_LOCAL, ACT_GENERATE_JOB)
+# `rehearse` sits here and not above because NOTHING PERFORMS IT. `cmd_walk`'s
+# dispatch has two argv shapes -- `step` for run-local, `generate_job_argv` for
+# everything else -- and `generate_job_argv` never passes `--regenerate`, which
+# remote-execution's job writer requires to touch a folder that already exists.
+# A rehearse act is classified precisely WHEN that folder exists and is not
+# smoke-ready, so on the one state the act exists for, walk ran the wrong
+# command and stopped on a refusal about a folder that is supposed to be there.
+# `rg -- '--regenerate|--smoke'` over this engine answers zero.
+#
+# The comment above already said rehearsal is "the rehearsal the doctrine
+# already makes the agent's to run". The roster disagreed with the sentence
+# next to it; the sentence was right.
+WALK_STOPS_AT = (ACT_LAUNCH, ACT_BLOCKED, ACT_REHEARSE)
 
 
 def generate_job_argv(target: Path, name: str, step: str, entry: dict,
