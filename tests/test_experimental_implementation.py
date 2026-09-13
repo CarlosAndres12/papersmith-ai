@@ -882,6 +882,107 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "incompatible")
 
 
+class HandoffPerDocumentDisplayTests(unittest.TestCase):
+    """The same premise's display tier. `cmd_handoff` builds each item's
+    locus fields as `finding.get(LOCUS_KEY)`/`finding.get(REMEDY_LOCUS_KEY)`
+    -- document 0's scalars -- so a `documents[1]` finding, which declares
+    `equations`/`remedy_equations`, renders both as `null`.
+
+    Worse than a display gap: the deferral branch tells the operator the
+    finding "no declara qué reescribiría (`remedy_experiments` está vacío)"
+    when the finding declares `remedy_equations` and names it. A refusal
+    message that states a falsehood about the document the finding names is
+    the same defect as admitting it wrongly, one tier out.
+    """
+
+    DECLARATION = (
+        "__benchmark__ = {\n"
+        "    'revision': 'e1.md',\n"
+        "    'arms': {},\n"
+        "    'report': {'renderers': [], 'conclusions': []},\n"
+        "}\n"
+    )
+
+    def _tmp_dir(self, prefix: str) -> Path:
+        tmp_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return tmp_dir
+
+    def _handoff(self, findings: str) -> dict:
+        doc0_dir = self._tmp_dir("handoff-doc0-")
+        doc1_dir = self._tmp_dir("handoff-doc1-")
+        (doc0_dir / "e1.md").write_text("## 1\n\nnothing relevant.\n", encoding="utf-8")
+        (doc1_dir / "p1.md").write_text(
+            "The proposal declares $$a = b \\tag{1}$$.\n", encoding="utf-8")
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        saved = {k: os.environ.get(k) for k in
+                 ("IMPLEMENTATION_PROPOSALS", "IMPLEMENTATION_PROPOSALS_1")}
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(doc0_dir)
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(doc1_dir)
+
+        def _restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        self.addCleanup(_restore)
+        box = FORGE / "implementations" / f"_handoff_perdoc_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            self.DECLARATION, encoding="utf-8")
+        (box / "tests" / "findings.py").write_text(findings, encoding="utf-8")
+        return module.cmd_handoff(argparse.Namespace(
+            target=str(box), name="Method", revision="e1.md"))
+
+    FINDING = (
+        "FINDINGS = [\n"
+        "    {\n"
+        "        'id': 'doc1-display',\n"
+        "        'document': ['proposal'],\n"
+        "        'kind': 'gap', 'status': 'measured', 'rate': 'always',\n"
+        "        'equations': ['1'],\n"
+        "        'remedy_equations': ['1'],\n"
+        "        'uses': ['a = b'],\n"
+        "        'introduces': [],\n"
+        "        'statement': 'x', 'remedy': 'y',\n"
+        "    },\n"
+        "]\n")
+
+    def _item(self, result: dict) -> dict:
+        for bucket in ("settleInline", "deferToOwnSession", "settled"):
+            for item in result.get(bucket, []):
+                if item["id"] == "doc1-display":
+                    return item
+        self.fail(f"finding not present in any bucket: {list(result)}")
+
+    def test_the_item_carries_the_loci_the_finding_declares(self):
+        item = self._item(self._handoff(self.FINDING))
+        declared = [value for key, value in item.items()
+                    if key.lower().startswith(("equation", "remedyequation",
+                                               "experiment", "remedyexperiment"))]
+        self.assertNotEqual(
+            declared, [None, None],
+            "a documents[1] finding's own loci render as null because the item "
+            f"is built from document 0's keys: {item}")
+
+    def test_the_deferral_message_does_not_name_a_key_the_finding_does_not_use(self):
+        """The falsehood. A finding declaring `remedy_equations` must never be
+        told that `remedy_experiments` is empty."""
+        result = self._handoff(self.FINDING)
+        item = self._item(result)
+        prompts = [entry.get("prompt", "") for entry in result.get("deferToOwnSession", [])]
+        self.assertFalse(
+            any("remedy_experiments" in p for p in prompts),
+            f"names a key the finding does not declare: {prompts}\nitem: {item}")
+
+
 class FindingImpactPerDocumentTests(unittest.TestCase):
     """`finding_impact`'s per-document `class` is the same premise's second
     consumer: `remedy_loci` is read once, under document 0's

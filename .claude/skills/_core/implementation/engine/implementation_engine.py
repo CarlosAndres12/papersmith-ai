@@ -5112,6 +5112,38 @@ def finding_locus_scopes(finding: dict, source: str,
             yield label_index, field, index_tags
 
 
+def finding_declared_loci(finding: dict) -> tuple[list | None, list | None, str]:
+    """`(loci, remedy_loci, remedy_key_name)` as the finding ITSELF declares
+    them -- read under the keys of the documents it NAMES, not under document
+    0's module scalars.
+
+    Byte-identical under one document, where `document_vocabulary(0)`'s keys
+    ARE `LOCUS_KEY`/`REMEDY_LOCUS_KEY`. It exists for the display tier, which
+    rendered a `documents[1]` finding's loci as `null` and then told the
+    operator the finding "declares no locus (`remedy_experiments` is empty)"
+    while it declared `remedy_equations` and named the document that uses it.
+    A message that states a falsehood about the document a finding names is
+    the same defect as ruling on it wrongly, one tier out.
+
+    `None` when the finding declares nothing at all under any named
+    document's key, so a caller can still tell "declared nothing" from
+    "declared an empty list" exactly as `finding.get(KEY)` did.
+    """
+    loci: list | None = None
+    remedy: list | None = None
+    remedy_key = REMEDY_LOCUS_KEY
+    for index in finding_document_indices(finding):
+        vocab = document_vocabulary(index)
+        got_loci = finding.get(vocab["locus_key"])
+        got_remedy = finding.get(vocab["remedy_locus_key"])
+        if got_loci is not None:
+            loci = list(got_loci) if loci is None else loci + list(got_loci)
+        if got_remedy is not None:
+            remedy = list(got_remedy) if remedy is None else remedy + list(got_remedy)
+            remedy_key = vocab["remedy_locus_key"]
+    return loci, remedy, remedy_key
+
+
 def finding_named_source(finding: dict, source: str,
                          sources_by_document: dict | None) -> str:
     """The joined text of every document a finding names, or document 0's
@@ -8230,17 +8262,22 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                         "sized.")
         impact = finding_impact(finding, source, sources_by_document)
         adoption = adoption_state(finding, source)
+        # The KEY NAMES stay document 0's (D6, "representation only": the
+        # scalar shape never varies by finding), and the VALUES are now the
+        # finding's own, read under the keys of the documents it names. A
+        # `documents[1]` finding rendered both as `null` before this.
+        own_loci, own_remedy, own_remedy_key = finding_declared_loci(finding)
         item = {"id": finding["id"], "kind": finding.get("kind"),
                 "status": finding.get("status"), "rate": finding.get("rate"),
-                NOTATION_KEYS["locus"]: finding.get(LOCUS_KEY),
-                NOTATION_KEYS["remedyLocus"]: finding.get(REMEDY_LOCUS_KEY),
+                NOTATION_KEYS["locus"]: own_loci,
+                NOTATION_KEYS["remedyLocus"]: own_remedy,
                 "introduces": finding.get("introduces", []),
                 "impact": impact, "adoption": adoption,
                 "statement": finding.get("statement"), "remedy": finding.get("remedy")}
         if adoption["state"] == "adopted":
             settled.append(item)
         elif (local_reach(impact) and finding.get("remedy_block")
-                and finding.get(REMEDY_LOCUS_KEY)):
+                and own_remedy):
             # Local and written out: hand the deliberation a request it can act
             # on. The locus travels as its own tag rather than as a quote of
             # the text being corrected — a bare fragment like a symbol and its
@@ -8275,13 +8312,13 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             # hardens that violation into a contract shape rather than
             # resolving it: translating it here would be a behavioural delta
             # the seal must refuse.
-            if local_reach(impact) and not finding.get(REMEDY_LOCUS_KEY):
+            if local_reach(impact) and not own_remedy:
                 # Local by measurement only because it names no locus at all.
                 # There is no locus to resolve in the document, so there is
                 # nothing the deliberation could be asked to replace.
                 reason = (
                     f"Este hallazgo mide como local, pero no declara qué {SUBJECT_SINGULAR_ES} "
-                    f"reescribiría (`{REMEDY_LOCUS_KEY}` está vacío), así que no hay "
+                    f"reescribiría (`{own_remedy_key}` está vacío), así que no hay "
                     "un locus que resolver en el documento.")
                 item["deferredBecause"] = "remedy-locus-missing"
             elif local_reach(impact):
@@ -8325,7 +8362,7 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
                 f"CORRECCIÓN PROPUESTA (validada, no adoptada):\n{finding.get('remedy')}\n\n"
                 f"NOTACIÓN QUE AGREGARÍA: {', '.join(finding.get('introduces', [])) or 'ninguna'}\n"
                 f"{SUBJECT_PLURAL_ES.upper()} A TOCAR: "
-                f"{', '.join(finding.get(REMEDY_LOCUS_KEY, []))}")
+                f"{', '.join(own_remedy or [])}")
             deferred.append(item)
 
     # Diagnostic and costless (design decision 7): a new report key, never a
