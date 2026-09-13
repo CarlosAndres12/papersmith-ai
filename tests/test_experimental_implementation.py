@@ -882,6 +882,60 @@ class RemedyCompatibilityPerDocumentTests(unittest.TestCase):
         self.assertEqual(proc.stdout.strip(), "incompatible")
 
 
+class FindingImpactPerDocumentTests(unittest.TestCase):
+    """`finding_impact`'s per-document `class` is the same premise's second
+    consumer: `remedy_loci` is read once, under document 0's
+    `REMEDY_LOCUS_KEY`, and that same list is handed to `_impact_class`
+    inside the per-document loop. A `documents[1]` finding declares
+    `remedy_equations`; read under `remedy_experiments` it is `[]`, so the
+    class arithmetic runs over an empty list and answers `local` for a
+    remedy of any width at all.
+
+    `local_reach` gates three sites in `cmd_handoff` and `cmd_verify`'s
+    `localRemediesNotWritten`, and this host's Flow B routes `settleInline`
+    entries into `compose` -- so a structural remedy is offered to the
+    deliberation as settleable inline, sized by a measurement that read
+    nothing.
+
+    The scalar `locus`/`introducesNotation`/`citedElsewhere` fields stay
+    document 0's by design (Cut 3, D6, "representation only"); only the
+    per-document `class` is under test here.
+    """
+
+    def test_a_wide_document_one_remedy_is_not_classified_local(self):
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        finding = {
+            "id": "doc1-wide", "document": ["proposal"],
+            # Five loci, in document 1's OWN remedy key.
+            "remedy_equations": ["1", "2", "3", "4", "5"],
+            "uses": ["a = b"], "introduces": [],
+        }
+        impact = module.finding_impact(
+            finding, "## 1\n\nnothing relevant.\n",
+            sources_by_document={
+                "experiments": "## 1\n\nnothing relevant.\n",
+                "proposal": ("$$a = b \\tag{1}$$ $$c \\tag{2}$$ $$d \\tag{3}$$ "
+                             "$$e \\tag{4}$$ $$f \\tag{5}$$\n")})
+        self.assertEqual(impact["class"].get("proposal"), "structural")
+        self.assertFalse(module.local_reach(impact))
+
+    def test_a_single_locus_document_one_remedy_is_still_local(self):
+        """Positive control: the per-document read must not turn every
+        `documents[1]` remedy structural. One locus, nothing introduced."""
+        module, _ = _engine_with_documents(_real_profile()["documents"])
+        finding = {
+            "id": "doc1-narrow", "document": ["proposal"],
+            "remedy_equations": ["1"], "uses": ["a = b"], "introduces": [],
+        }
+        impact = module.finding_impact(
+            finding, "## 1\n\nnothing relevant.\n",
+            sources_by_document={
+                "experiments": "## 1\n\nnothing relevant.\n",
+                "proposal": "$$a = b \\tag{1}$$\n"})
+        self.assertEqual(impact["class"].get("proposal"), "local")
+        self.assertTrue(module.local_reach(impact))
+
+
 class AdmitPerDocumentTests(unittest.TestCase):
     """`cmd_admit` is a fourth consumer of the premise
     `RemedyCompatibilityPerDocumentTests` above already had corrected, and

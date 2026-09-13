@@ -8042,7 +8042,26 @@ def finding_impact(finding: dict, source: str,
             # rule.
             index = DOCUMENT_INDEX_BY_LABEL.get(label)
             pattern = document_citation_re(index) if index is not None else CITATION_RE
-            doc_cls, _ = _impact_class(remedy_loci, introduces, doc_source, pattern)
+            # This document's OWN `remedy_locus_key` WHEN THE FINDING DECLARES
+            # ONE, and `remedy_loci` otherwise. Both halves are load-bearing
+            # and the second was learned from the sealed corpus:
+            #
+            #   declares its own key  -- a `documents[1]` finding declaring
+            #     `remedy_equations`, read under document 0's
+            #     `remedy_experiments`, was `[]`, so the arithmetic ran over an
+            #     empty list and answered `local` for a remedy of any width.
+            #     `local_reach` then offered it as settleable inline.
+            #   declares none        -- a remedy written in ONE document's
+            #     vocabulary that also NAMES another measures its reach there
+            #     with those same loci, seen through that document's own
+            #     citation pattern. That is the `structural-in-another-document`
+            #     branch, and reading the other document's empty key instead
+            #     collapsed it to `local` -- caught by four sealed digests,
+            #     never by a unit test.
+            doc_key = (document_vocabulary(index)["remedy_locus_key"]
+                       if index is not None else None)
+            doc_loci = (finding.get(doc_key) or remedy_loci) if doc_key else remedy_loci
+            doc_cls, _ = _impact_class(doc_loci, introduces, doc_source, pattern)
             per_document[label] = doc_cls
         if per_document:
             result["class"] = per_document
