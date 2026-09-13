@@ -57,31 +57,33 @@ proposals/                                          (required — directory pres
 guidance/area-benchmark/<name>/<name>.md            (optional)
 ```
 
+Because [v1 is checked, not exempt](../SKILL.md#creating-v1-checked-by-the-same-gate-as-every-successor), the idea text itself must already carry both of this domain's declared labels, `**Dataset:** …` and `**Validation scheme:** …`, and **each on its own line**: both rules match at line start, so folding a declaration into the middle of a sentence does not satisfy them.
+
 ```bash
 node .claude/skills/experimental-deliberation/cli.mjs '{
   "operation": "CREATE_INITIAL_REVISION",
-  "instruction": "An experimental plan testing whether the proposed adaptation term improves held-out accuracy under domain shift without target labels. Claim C1: the method needs no target labels. Claim C2: the gain survives a reduced labelled budget."
+  "instruction": "Domain shift baseline sweep. Testing whether the proposed adaptation term improves held-out accuracy under domain shift without target labels. Claim C1: the method needs no target labels. Claim C2: the gain survives a reduced labelled budget.\n\n**Dataset:** domain-shift-benchmark (standard train/validation/test split as distributed).\n\n**Validation scheme:** paired Wilcoxon signed-rank test, 5 seeds, 3 repetitions per seed."
 }'
 ```
 
-On success:
+Driven verbatim (2026-09-13), against a fixture carrying both required sources:
 
 ```json
 {
   "status": "created",
   "operation": "CREATE_INITIAL_REVISION",
   "targetFilename": "experiments-domain-shift-baseline-sweep-v01.md",
-  "targetRevision": "r01",
-  "targetSha256": "e8558ab5…",
-  "canonicalMetadata": { "schemaVersion": 1, "title": "Domain shift baseline sweep.", "sectionHeading": "…" },
+  "targetRevision": "v01",
+  "targetSha256": "1a792177fd2a918c25c26310e482d2b27ba5240ea0b8060cef1a144c78fb2264",
+  "canonicalMetadata": { "schemaVersion": 1, "title": "Domain shift baseline sweep.", "sectionHeading": "Testing whether the proposed adaptation term improves held-out accuracy under domain shift without target labels." },
   "mutations": 1,
-  "receiptId": "experiments-domain-shift-baseline-sweep-v01.md:r01",
+  "receiptId": "experiments-domain-shift-baseline-sweep-v01.md:v01",
   "manifestStatus": "NOT_TRACKED",
   "nextAction": null
 }
 ```
 
-Two things to read carefully in that response. The **filename slug is derived from the first sentence of your idea** — the title and section heading come from the idea text too, never from a fixed skeleton — so write that first sentence as the lineage name you want. And `targetRevision` reports the literal string `r01` even though the file on disk is `…-v01.md`: `initial-revision-creation.ts` carries that label as a fixed literal, and only the filename is profile-driven. The filename is the authority; the label is cosmetic.
+Two things to read carefully in that response. The **filename slug is derived from the first sentence of your idea** — the title and section heading come from the idea text too, never from a fixed skeleton — so write that first sentence as the lineage name you want; a short, standalone first sentence (`"Domain shift baseline sweep."`) is what produced the clean `domain-shift-baseline-sweep` slug above. And `targetRevision` reports **`v01`, the same label the filename carries** — `artifact.revisionLabel(1)`, read from this domain's own profile, never a hardcoded `r01`: the filename is the authority and the label agrees with it.
 
 If a required source directory is absent:
 
@@ -96,14 +98,18 @@ If a required source directory is absent:
 
 If a managed revision already exists, it blocks with `MANAGED_PROPOSAL_ALREADY_EXISTS` — it never overwrites or duplicates one.
 
-### Read v1 before you build on it
+### v1 is checked before it is written
 
-**Nothing validates v1's content.** Source fragments are pasted in verbatim under a `## Paper Guide Reference` heading, one `### <path>` per fragment. Open the file the moment it is created and check two things:
+**v1 is checked, not exempt.** Source fragments are pasted in verbatim under a `## Paper Guide Reference` heading, one `### <path>` per fragment — but `CREATE_INITIAL_REVISION` runs the composed candidate through the identical `violations()` gate `CREATE_SUCCESSOR` runs, before any write (see [SKILL.md](../SKILL.md#creating-v1-checked-by-the-same-gate-as-every-successor)). If a pasted fragment carries a filled report-table cell, or a URL with no verification tag, v1 is refused outright:
 
-1. **No filled results table came through from a source.** Strip it to headers with empty cells, or replace the paste with a citation.
-2. **Every URL that came through carries a verification tag.** An untagged one will block the first successor that touches its region.
+```json
+{
+  "status": "blocked",
+  "blockers": [{ "code": "INITIAL_REVISION_CANONICAL_FORM_VIOLATION", "message": "…: url-without-verification-marker -- https://example.org/untagged-source must be followed by [pending-verification] or [verified: YYYY-MM-DD]; an unmarked URL claims a search that left no trace" }]
+}
+```
 
-Both fixes are ordinary `CREATE_SUCCESSOR` edits — see below, and read [what the accept turn actually answers today](#what-the-accept-turn-actually-answers-today) before promising the user the fix landed.
+Driven for real: a source fragment containing one bare URL and nothing else wrong never becomes a file on disk. So there is nothing to repair in v1 for either of those two conditions *after* creation — a v1 that exists already satisfies them, exactly as any successor does; asking the reader to check for a violation that would have blocked the write is asking them to repair a file that cannot exist. What is still worth a read once v1 is created is what the gate does **not** check: whether a pasted source fragment says what you meant it to, and whether the idea text you sent is the document you actually want to build on.
 
 ## Open one `--serve` process for the whole deliberation
 
@@ -330,26 +336,21 @@ Leave a lost id out and the accept answers `MATH_REMOVALS_NOT_ACKNOWLEDGED` and 
 
 The acceptance token is single-use and lives only in that `--serve` process's memory: a preview from one process cannot be accepted by another invocation.
 
-### What the accept turn actually answers today
+### Resolved: the accept turn publishes in this domain
 
-A successful publish would return `status: "published"`, the new filename, `targetSha256`, `receiptId`, `manifestStatus: "COMMITTED"`, and `auditStatus`/`selfAuditStatus: "PASS"`. **In this domain it does not get there.** Driving the full cycle above against a real project on 2026-09-08 produced:
+A successful publish returns `status: "published"`, the new filename, `targetSha256`, `receiptId`, `manifestStatus: "COMMITTED"`, and `auditStatus`/`selfAuditStatus: "PASS"`. **This domain reaches that.** Driving the full `resolve → preview → accept` cycle above against a real project (2026-09-13), on a v01 created exactly as shown earlier in this page, produced:
 
 ```json
-{
-  "operation": "CREATE_SUCCESSOR",
-  "status": "blocked",
-  "category": "recovery",
-  "message": "INVALID_TARGET_REVISION",
-  "mutations": 0,
-  "patchCount": 0,
-  "manifestStatus": "NOT_PUBLISHED",
-  "nextAction": "inspect_error"
-}
+{"status":"resolved","operation":"RESOLVE_TARGET","entryId":"composite:72:0cd72369d4fa6c88","blocked":false,"question":null,"text":"## Testing whether the proposed adaptation term improves held-out accuracy under domain shift without target labels.\n\n…"}
+{"operation":"CREATE_SUCCESSOR","sourceFilename":"experiments-domain-shift-baseline-sweep-v01.md","status":"awaiting_acceptance","targetFilename":"experiments-domain-shift-baseline-sweep-v02.md","acceptanceToken":"l6k6lEbqwNH9Ghqb5IKWdBa47_mXmyBpOw457pbh25U","patchCount":2,"manifestStatus":"NOT_PUBLISHED","nextAction":"accept_successor"}
+{"operation":"CREATE_SUCCESSOR","sourceFilename":"experiments-domain-shift-baseline-sweep-v01.md","status":"published","targetFilename":"experiments-domain-shift-baseline-sweep-v02.md","targetSha256":"f6f79c273001ca9657f51c322bacfc8fc480e6cd453efcac31d27cec7e12292c","receiptId":"experiments-domain-shift-baseline-sweep-v02.md:v02","manifestStatus":"COMMITTED","auditStatus":"PASS","selfAuditStatus":"PASS","nextAction":null}
 ```
 
-Nothing was written. The cause is in the shared core: `proposal-workspace-adapter.ts` derives the published revision label from the target filename with a hardcoded `-r(\d+)\.md$`, and this domain's successors are named `…-v03.md`. No request shape avoids it, and no change inside this skill fixes it — see [SKILL.md's known limit](../SKILL.md#known-limit-the-accept-turn-does-not-publish-in-this-domain).
+(`entryId` and `acceptanceToken` are session-specific, like every other illustrative field on this page; `status`, `manifestStatus`, `auditStatus` and `selfAuditStatus` are not.)
 
-Everything up to that point is real and worth running: resolution, patch compilation, candidate validation, the canonical-form rules, `preservationDelta`, and the source-authority detection all execute on the preview turn. Treat the preview as the check it is, and never report a version as published without a `status: "published"` in hand.
+The successor stood on disk beside its source. An earlier diagnosis of this path, on 2026-09-08, reported `INVALID_TARGET_REVISION` and blamed a hardcoded `-r(\d+)\.md$` in the shared core. Re-measured, that cause is not in the source and never described this code: `nextSuccessorTarget`, `parseManagedRevision` and `strictRevisionLabel` all read the revision pattern from this domain's own profile (`DOMAIN.artifact.revisionPattern`, `"v"`), so a `…-v0N.md` successor parses and validates exactly as an `…-r0N.md` one would in the mathematical sibling. See [SKILL.md](../SKILL.md#resolved-the-accept-turn-publishes-in-this-domain) for the full re-measurement.
+
+Everything up to and including the write is real and worth running: resolution, patch compilation, candidate validation, the canonical-form rules, `preservationDelta`, the source-authority detection, and the publish itself all execute exactly as documented above. Still, read `status`, `manifestStatus`, `auditStatus` and `selfAuditStatus` before telling the user an edit landed — anything other than `published` / `COMMITTED` / `PASS` / `PASS` means it did not.
 
 ## When the candidate breaks the canonical form
 
