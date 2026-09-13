@@ -1918,12 +1918,16 @@ class HandoffLocalReachTests(unittest.TestCase):
     PACKAGE = "HandoffConsumer"
 
     #: Document 0's own text -- carries neither citation syntax at all for
-    #: either locus below (0 citations under document 0's own "Ec."/"Eq."
+    #: locus "11"/"22" (0 citations under document 0's own "Ec."/"Eq."
     #: pattern), and both findings' own adoption markers, so neither is
-    #: read back as already adopted.
+    #: read back as already adopted. Locus "33" (5.4's own verify case) IS
+    #: cited here, twice, via document 0's OWN citation syntax -- the
+    #: value the OLD, unthreaded `finding_impact(f, source or "")` call
+    #: would (wrongly) read for a finding naming document 1 alone.
     REVISION_TEXT = (
         "## 1\n\nOLD_SOLO stands as written, uncorrected. OLD_BOTH also "
-        "remains, untouched by either document's own citation syntax.\n")
+        "remains, untouched by either document's own citation syntax. "
+        "Elsewhere, Ec.(33) recurs, and Ec.(33) recurs again.\n")
     #: Document 1's own text -- carries neither document's own citation
     #: syntax for locus "22" at all (0 citations under document 1's own
     #: "Exp." pattern either), keeping `both-local-ambiguous` local in
@@ -1978,6 +1982,34 @@ class HandoffLocalReachTests(unittest.TestCase):
         "        'adoption': {'absent': 'OLD_BOTH', 'expect': "
         "['NEW_BOTH']},\n"
         "        'remedy_block': 'the corrected shared entry',\n"
+        "    },\n"
+        "]\n"
+    )
+    #: 5.4: `local_remedies_not_written` must read `local_reach` on the
+    #: SAME per-document evidence `cmd_handoff` uses, not the OLD scalar
+    #: computed unconditionally against document 0's own text. This
+    #: finding names document 1 ("experiments") ALONE, carries NO
+    #: `remedy_block` (unwritten -- the whole point of the list), and its
+    #: locus ("33") is cited TWICE in document 0's own text under document
+    #: 0's own pattern (structural, if wrongly read there) but ZERO times
+    #: in document 1's own text under document 1's own pattern (genuinely
+    #: local, for the document it actually names).
+    VERIFY_FINDINGS_SOURCE = (
+        "FINDINGS = [\n"
+        "    {\n"
+        "        'id': 'doc1-local-unwritten',\n"
+        "        'kind': 'gap',\n"
+        "        'status': 'measured',\n"
+        "        'rate': 'always',\n"
+        "        'statement': 'Document 1s own entry still carries its "
+        "uncorrected value.',\n"
+        "        'remedy': 'Replace document 1s own entry with its "
+        "corrected form.',\n"
+        "        'document': 'experiments',\n"
+        "        'equations': ['33'], 'remedy_equations': ['33'],\n"
+        "        'uses': [], 'introduces': [],\n"
+        "        'adoption': {'absent': 'NEVER_IN_EITHER_TEXT', 'expect': "
+        "['ALSO_NEVER']},\n"
         "    },\n"
         "]\n"
     )
@@ -2094,6 +2126,27 @@ class HandoffLocalReachTests(unittest.TestCase):
         self.assertEqual(payload["code"], "HANDOFF_DOCUMENT_UNREADABLE")
         self.assertIn("both-local-ambiguous", payload["detail"])
         self.assertIn("experiments", payload["detail"])
+
+    def test_verifys_local_remedies_not_written_reads_the_mapping_too(self):
+        """5.4: `local_remedies_not_written` must read `local_reach` on the
+        SAME per-document evidence `cmd_handoff` uses. `doc1-local-
+        unwritten` names document 1 alone; document 1's own text cites its
+        locus zero times under document 1's own pattern (genuinely local),
+        while document 0's own text cites the SAME numeral twice under
+        document 0's own pattern -- the value the OLD, unthreaded call
+        (`finding_impact(f, source or "")`, no `sources_by_document`)
+        would read regardless of which document the finding actually
+        names, silently excluding it as `structural`."""
+        box = self._build_box(self.VERIFY_FINDINGS_SOURCE, "_verify")
+        verify = self.run_cli(
+            box, "verify", "--target", str(box), "--name", self.PACKAGE,
+            "--revision", self.REVISION)
+        self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+        payload = json.loads(verify.stdout)
+        self.assertIn(
+            "doc1-local-unwritten", payload["audit"]["localRemediesNotWritten"],
+            "expected to be included on document 1's own per-document "
+            "reading, not excluded by document 0's own scalar reading")
 
 
 if __name__ == "__main__":
