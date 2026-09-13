@@ -15738,7 +15738,7 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # documented semantics (spec), not by oversight.
     local_remedies_not_written = [
         f["id"] for f in findings
-        if local_reach(finding_impact(f, source or ""))
+        if local_reach(finding_impact(f, source or "", verify_sources_by_document))
         and not f.get("remedy_block")
         and adoption_state(f, source or "")["state"] != "adopted"
     ]

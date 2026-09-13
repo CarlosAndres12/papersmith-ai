@@ -105,7 +105,7 @@
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "aad7eba6de61f04dd1f99fac2a21545b329d0a8a3550b7a1d7c79b570a38116f"
+    "sha256": "3f936b58e08c8aada67e1177b55cef75bcf468d8297fb9aba4473e6619e3849d"
   },
   "settle": {
     "bytes": 2826,
@@ -123,9 +123,9 @@
     "sha256": "e7587be77f3214c2266149e05f83d7f1be791535f08cfc172e4dce022be9ea44"
   },
   "verify-a-declared": {
-    "bytes": 21964,
+    "bytes": 21318,
     "exit": 0,
-    "sha256": "2a17a16eac32b7c57a771fe0d558779776b388a6352816042a19b620cc348bad"
+    "sha256": "a5d7834074df23b14aa5ca7d6813a950e14b330ba730fd88550940ec9008cd54"
   },
   "verify-b": {
     "bytes": 20743,
@@ -133,14 +133,14 @@
     "sha256": "e7587be77f3214c2266149e05f83d7f1be791535f08cfc172e4dce022be9ea44"
   },
   "verify-b-declared": {
-    "bytes": 21988,
+    "bytes": 21342,
     "exit": 0,
-    "sha256": "1f48199edbee143b739e58b72b389a8bc0e19d202c378f0183aecf7ef11cd0a3"
+    "sha256": "40ffb0bf11ea440216196e20bb32c40d6c2b8a33162635ca2aedd4ddde839365"
   },
   "verify-b-undeclared": {
-    "bytes": 21964,
+    "bytes": 21318,
     "exit": 0,
-    "sha256": "7135c7b92cb9e33fe7d645ffdab799835e58621992ce52dc07c6ffd2521c5c62"
+    "sha256": "e087d2f5e02923a9a2c69f354a7c41279e0d003b6fafa1413fa78ee6bd41ca7e"
   },
   "verify-t": {
     "bytes": 18561,
