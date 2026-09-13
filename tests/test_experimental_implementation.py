@@ -1067,6 +1067,92 @@ class CrossingStateTests(unittest.TestCase):
         self.assertEqual(seal_diff.returncode, 0)
 
 
+class FindingImpactPerDocumentUnitTests(unittest.TestCase):
+    """`the-agreement-nothing-computes` (Slice D, design.md D10, tasks.md
+    5.5/5.6): `finding_impact`'s own per-document mapping, confirmed
+    directly (spec `implementation-document-binding`'s three scenarios --
+    already implemented by Slice C; this phase's own consumer gives the
+    mapping its first real reader, so this re-confirms the representation
+    itself rather than assuming it still holds). Two documents, distinct
+    `citation_pattern`s, a fresh in-process engine -- no subprocess
+    needed, `finding_impact` is a pure function of its arguments."""
+
+    def _engine(self):
+        doc0_dir = Path(tempfile.mkdtemp(prefix="impact-doc0-"))
+        self.addCleanup(shutil.rmtree, doc0_dir, ignore_errors=True)
+        doc1_dir = Path(tempfile.mkdtemp(prefix="impact-doc1-"))
+        self.addCleanup(shutil.rmtree, doc1_dir, ignore_errors=True)
+        engine, tmp_dir = _engine_with_documents([
+            # Document 0 declares its OWN vocabulary overlay explicitly
+            # (never left to inherit the real experimental-implementation
+            # profile's own top-level "experiments"/"Exp." values, which
+            # `document_vocabulary(0)` would otherwise fall back to) --
+            # `REMEDY_LOCUS_KEY` (module-level, from `document_vocabulary
+            # (0)`) is therefore "remedy_equations" here, matching every
+            # finding built below.
+            {"directory": doc0_dir, "label": "proposal", "dataset_marker": None,
+             "block_locator": _block_locator(), "cross_citation": None,
+             "claim_key": "equations", "locus_key": "equations",
+             "remedy_locus_key": "remedy_equations",
+             "notation_keys": {"locus": "equations",
+                               "remedyLocus": "remedyEquations",
+                               "unknown": "unknownEquations"},
+             "citation_pattern": (
+                 r"Ecs?\.?\s*\(?(\d+)\)?|Eq\.?\s*\(?(\d+)\)?|"
+                 r"Ecuaciones?\s*\((\d+)\)")},
+            {"directory": doc1_dir, "label": "experiments", "dataset_marker": None,
+             "block_locator": _block_locator(), "cross_citation": None,
+             "claim_key": "experiments", "locus_key": "experiments",
+             "remedy_locus_key": "remedy_experiments",
+             "notation_keys": {"locus": "experiments",
+                               "remedyLocus": "remedyExperiments",
+                               "unknown": "unknownExperiments"},
+             "citation_pattern": (
+                 r"Exps?\.?\s*\(?(\d+)\)?|Experiment\.?\s*\(?(\d+)\)?|"
+                 r"Experimentos?\s*\((\d+)\)")},
+        ])
+        self.addCleanup(shutil.rmtree, tmp_dir, ignore_errors=True)
+        return engine
+
+    def test_a_finding_against_one_document_maps_to_that_document_alone(self):
+        engine = self._engine()
+        finding = {"document": "proposal", "remedy_equations": ["9"],
+                   "introduces": []}
+        impact = engine.finding_impact(
+            finding, "Ec.(9) cited once.",
+            {"proposal": "Ec.(9) cited once.", "experiments": "no citation here"})
+        self.assertEqual(impact["class"], {"proposal": "local"})
+
+    def test_a_finding_against_both_documents_carries_both_uninterpreted(self):
+        engine = self._engine()
+        finding = {"document": ["proposal", "experiments"],
+                   "remedy_equations": ["9"], "introduces": []}
+        impact = engine.finding_impact(
+            finding, "Ec.(9) once, Ec.(9) twice, Ec.(9) thrice.",
+            {"proposal": "Ec.(9) once, Ec.(9) twice, Ec.(9) thrice.",
+             "experiments": "no citation of this locus at all"})
+        self.assertEqual(
+            impact["class"], {"proposal": "structural", "experiments": "local"},
+            "one class per named document, no combined or summarized verdict")
+
+    def test_each_named_documents_citations_are_matched_by_its_own_pattern(self):
+        """Document 0 ('Ec.') and document 1 ('Exp.') declare different
+        patterns; a citation spelled in document 1's own syntax must never
+        be visible under document 0's."""
+        engine = self._engine()
+        finding = {"document": ["proposal", "experiments"],
+                   "remedy_equations": ["9"], "introduces": []}
+        impact = engine.finding_impact(
+            finding, "no Ec. citation here at all",
+            {"proposal": "no Ec. citation here at all",
+             "experiments": "Exp.(9) cited, Exp.(9) again, Exp.(9) a third time"})
+        self.assertEqual(impact["class"]["proposal"], "local")
+        self.assertEqual(
+            impact["class"]["experiments"], "structural",
+            "document 1's own three citations, under its own pattern, "
+            "must be visible -- never cross-applied from document 0's")
+
+
 class LocalReachUnitTests(unittest.TestCase):
     """`the-agreement-nothing-computes` (Slice D, design.md D10, tasks.md
     5.2): `local_reach`'s own shape table, pure -- no profile dependency,
