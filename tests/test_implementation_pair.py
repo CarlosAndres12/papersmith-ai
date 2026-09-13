@@ -2149,5 +2149,92 @@ class HandoffLocalReachTests(unittest.TestCase):
             "reading, not excluded by document 0's own scalar reading")
 
 
+_Z9_OLD = "local_reach(impact)"
+_Z9_MUTATED = 'impact["class"] == "local"'
+_Z9_VERIFY_OLD = (
+    'local_reach(finding_impact(f, source or "", verify_sources_by_document))')
+_Z9_VERIFY_MUTATED = (
+    'finding_impact(f, source or "", verify_sources_by_document)'
+    '["class"] == "local"')
+
+
+class LocalReachRevertMutationTests(unittest.TestCase):
+    """Z9 (design.md Mutation Plan, tasks.md 5.7/5.8): revert `local_reach`
+    to the bare `impact["class"] == "local"` comparison at all FOUR sites
+    (three `local_reach(impact)` call sites in `cmd_handoff`, plus
+    `cmd_verify`'s own `local_reach(finding_impact(...))`) -- on the REAL
+    engine file, restored byte-identical. Confirms the two-document
+    handoff routing case (5.3) dies under the mutation, and that a
+    single-document profile is unaffected (there, `impact["class"]` is
+    always a plain string, so the bare comparison and `local_reach` agree
+    by construction)."""
+
+    def test_reverting_to_the_bare_comparison_breaks_two_document_routing_but_not_one_document(self):
+        original = ENGINE.read_text(encoding="utf-8")
+        #: The bare comparison spelling also appears once, harmlessly, in
+        #: `local_reach`'s own docstring (naming what it replaces) -- the
+        #: anchor discipline below counts CALL SITES only (three, exactly),
+        #: not the mutated spelling's total occurrences anywhere.
+        original_bare_total = original.count(_Z9_MUTATED)
+        self.assertEqual(
+            original.count(_Z9_OLD), 3,
+            "the local_reach(impact) anchor's own count moved -- the "
+            "mutation this test runs depends on exactly three call sites")
+        self.assertEqual(
+            original.count(_Z9_VERIFY_OLD), 1,
+            "cmd_verify's own local_reach call site moved or was duplicated")
+        self.assertEqual(original.count(_Z9_VERIFY_MUTATED), 0,
+                         "the mutated verify spelling already appears -- anchor invalid")
+
+        mutated = original.replace(_Z9_OLD, _Z9_MUTATED)
+        mutated = mutated.replace(_Z9_VERIFY_OLD, _Z9_VERIFY_MUTATED)
+        self.assertEqual(mutated.count(_Z9_OLD), 0)
+        self.assertEqual(mutated.count(_Z9_MUTATED), original_bare_total + 3)
+        self.assertEqual(mutated.count(_Z9_VERIFY_OLD), 0)
+        self.assertEqual(mutated.count(_Z9_VERIFY_MUTATED), 1)
+        ENGINE.write_text(mutated, encoding="utf-8")
+
+        def restore():
+            ENGINE.write_text(original, encoding="utf-8")
+            restored = ENGINE.read_text(encoding="utf-8")
+            self.assertEqual(restored, original,
+                             "the engine file was not restored byte-identical")
+            self.assertEqual(restored.count(_Z9_OLD), 3)
+            self.assertEqual(restored.count(_Z9_VERIFY_OLD), 1)
+        self.addCleanup(restore)
+
+        # The two-document routing case (5.3) dies: `both-local-ambiguous`
+        # names both documents, each resolving `local` via the mapping --
+        # under the mutation, comparing the MAPPING to the bare string
+        # `"local"` answers `False` for every branch, so the finding
+        # silently falls to `deferToOwnSession` again (`deferredBecause:
+        # "structural-reach"`), never reaching `_single_named_document_
+        # index` at all -- `COMPOSE_AMBIGUOUS_DOCUMENT` does NOT fire.
+        case = HandoffLocalReachTests()
+        case.setUp()
+        try:
+            box = case._build_box(case.BOTH_FINDINGS_SOURCE, "_z9")
+            handoff = case.run_cli(
+                box, "handoff", "--target", str(box), "--name", case.PACKAGE,
+                "--revision", case.REVISION)
+            self.assertEqual(handoff.returncode, 0, handoff.stdout + handoff.stderr)
+            payload = json.loads(handoff.stdout)
+            deferred_ids = [item["id"] for item in payload["deferToOwnSession"]]
+            self.assertIn(
+                "both-local-ambiguous", deferred_ids,
+                "under the mutation, the two-document routing case must "
+                "silently fall back to deferToOwnSession -- COMPOSE_"
+                "AMBIGUOUS_DOCUMENT no longer fires")
+
+            # Single-document behavior is unaffected: the sibling's own 28
+            # sealed digests, byte-identical -- there, impact["class"] is
+            # always a plain string, so the mutation changes nothing.
+            seal_diff = subprocess.run(
+                ["git", "diff", "--exit-code", "tests/seal/"], cwd=FORGE)
+            self.assertEqual(seal_diff.returncode, 0)
+        finally:
+            case.doCleanups()
+
+
 if __name__ == "__main__":
     unittest.main()
