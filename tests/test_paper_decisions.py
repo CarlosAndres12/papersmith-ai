@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parent.parent
-SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
+SKILL_SCRIPTS = FORGE_ROOT / "skills" / "paper-writing" / "scripts"
 CLI = SKILL_SCRIPTS / "paper_cli.py"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_block  # noqa: E402
@@ -34,7 +34,7 @@ import paper_declarations  # noqa: E402
 import paper_provenance  # noqa: E402
 import paper_cli  # noqa: E402
 
-sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
+sys.path.insert(0, str(FORGE_ROOT / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "tests"))

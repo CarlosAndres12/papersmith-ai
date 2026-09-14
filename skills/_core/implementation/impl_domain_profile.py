@@ -4,7 +4,7 @@ that finds it.
 The moved engine (`_core/implementation/engine/implementation_engine.py`)
 serves no domain of its own: it resolves its host from
 `IMPLEMENTATION_DOMAIN_PROFILE` and refuses to start without one, mirroring
-`.claude/skills/_core/deliberation/engine/domain-profile.ts`'s resolver
+`skills/_core/deliberation/engine/domain-profile.ts`'s resolver
 properties exactly -- no default, fails closed at import, absolute path
 required, nested required-key validation, path values validated, named
 refusal codes.
@@ -212,8 +212,8 @@ def _resolve() -> Mapping[str, Any]:
     # reasoning verbatim: a relative path resolves against the working
     # directory, and the engine does not control that. A child process
     # launched with its cwd inside the engine would turn
-    # `.claude/skills/.../impl_profile.py` into
-    # `<engine>/.claude/skills/.../impl_profile.py` and die on a path
+    # `skills/.../impl_profile.py` into
+    # `<engine>/skills/.../impl_profile.py` and die on a path
     # nobody wrote. Every launcher that sets this variable already knows an
     # absolute path.
     path = Path(configured)

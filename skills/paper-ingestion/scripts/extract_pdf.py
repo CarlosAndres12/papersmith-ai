@@ -58,10 +58,10 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import yaml
 
-# .../skills/paper-ingestion/scripts/extract_pdf.py -> repo root is parents[3]
-REPO_ROOT = Path(__file__).resolve().parents[3]
+# .../skills/paper-ingestion/scripts/extract_pdf.py -> repo root is parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 CONFIG_PATH = REPO_ROOT / "papersmith.yaml"
-SETUP_SCRIPT = "python scripts/setup_env.py install"
+SETUP_SCRIPT = "./skills/paper-ingestion/setup.sh"
 
 VALID_MODES = ("fast", "balanced")
 VALID_ENGINES = ("marker",)
@@ -370,9 +370,8 @@ def build_converter(mode: str | None):
     except ImportError as exc:
         raise EngineError(
             f"the Marker engine is not available in this interpreter ({exc}). "
-            f"Provision it with `{SETUP_SCRIPT}` and run it through the "
-            "'papersmith' environment "
-            "(`micromamba run -n papersmith python skills/paper-ingestion/scripts/extract_pdf.py`)"
+            f"Provision it with {SETUP_SCRIPT} and run the script through "
+            "skills/paper-ingestion/.venv/bin/python"
         ) from None
 
     cli: dict = {"output_format": "markdown"}
@@ -513,10 +512,6 @@ def main() -> int:
         "--into", metavar="TOPIC",
         help="the topic folder --file moves into, created when it does not exist yet",
     )
-    parser.add_argument(
-        "--mode", choices=VALID_MODES, default=None,
-        help="override papersmith.yaml's conversion mode for this run",
-    )
     args = parser.parse_args()
 
     if bool(args.file) != bool(args.into):
@@ -525,7 +520,7 @@ def main() -> int:
 
     try:
         cfg = load_config()
-        mode = args.mode if args.mode is not None else cfg.get("mode")
+        mode = cfg.get("mode")  # None -> Marker auto-selects by device
         strip_refs = bool(cfg.get("strip_references", True))
         # Filing is not ingestion: it moves one PDF into a topic and loads no model,
         # so it answers and exits before anything here can displace anything else.

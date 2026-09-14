@@ -86,13 +86,13 @@ import impl_steps  # noqa: E402
 # hole for prose. `remote-execution`'s `*_module_names_no_service` family is
 # where that audit fact is pinned.
 REMOTE_EXECUTION_LEDGER_SCRIPT = (
-    FORGE_ROOT / ".claude" / "skills" / "remote-execution" / "scripts" / "ledger.py"
+    FORGE_ROOT / "skills" / "remote-execution" / "scripts" / "ledger.py"
 )
 REMOTE_EXECUTION_CLI_SCRIPT = (
-    FORGE_ROOT / ".claude" / "skills" / "remote-execution" / "scripts" / "remote_cli.py"
+    FORGE_ROOT / "skills" / "remote-execution" / "scripts" / "remote_cli.py"
 )
 REMOTE_EXECUTION_SHARD_IO_SCRIPT = (
-    FORGE_ROOT / ".claude" / "skills" / "remote-execution" / "scripts" / "shard_io.py"
+    FORGE_ROOT / "skills" / "remote-execution" / "scripts" / "shard_io.py"
 )
 
 #: Named by the host, never derived from this file's own location -- see PROFILE above.
@@ -1142,7 +1142,7 @@ def prose_state(target: Path, revision: str | None,
     for file in sorted(target.rglob("*")):
         # Hidden *inside* the target, not hidden anywhere in the absolute path. The
         # first version tested every part, so pointing this at a directory living
-        # under a dotted one — `.claude/skills/…`, say — silently skipped every
+        # under a dotted one — `skills/…`, say — silently skipped every
         # file and reported nothing found. It read as a clean tree and was a check
         # that never ran.
         inside = file.relative_to(target)
@@ -15353,11 +15353,11 @@ def cmd_defect(args: argparse.Namespace) -> dict:
 
     Check order at declaration, each narrower than the one before it
     (`_verify_gate_authorization`'s own ordering discipline): resolve the
-    path, non-strict -> containment under `FORGE_ROOT/.claude/skills`
+    path, non-strict -> containment under `FORGE_ROOT/skills`
     (`DEFECT_FILE_NOT_FORGE_OWNED`) -> existence as a regular file
     (`DEFECT_FILE_ABSENT`) -> digest. Containment precedes existence on
     purpose -- this command never reports on the existence of anything
-    outside `.claude/skills/`.
+    outside `skills/`.
 
     `DEFECT_FILE_ABSENT` is design decision 1's whole point: an already-
     absent `--file` is refused, never recorded with `ABSENT_FILE_DIGEST`.
@@ -15373,7 +15373,7 @@ def cmd_defect(args: argparse.Namespace) -> dict:
     require_named_product_dir(target, name)
 
     resolved = Path(args.file).expanduser().resolve()
-    skills_root = (FORGE_ROOT / ".claude" / "skills").resolve()
+    skills_root = (FORGE_ROOT / "skills").resolve()
     try:
         resolved.relative_to(skills_root)
     except ValueError:
@@ -16150,14 +16150,14 @@ def _crashing_forge_file(exc: BaseException) -> Path | None:
     """The forge module that owns a crash, chosen from `exc`'s own traceback
     (design decision 6, `maintenance-blocks-it-does-not-mix`): walk every
     frame from `exc.__traceback__` toward where it was raised and keep the
-    LAST one whose `co_filename` resolves under `FORGE_ROOT/.claude/skills`
+    LAST one whose `co_filename` resolves under `FORGE_ROOT/skills`
     -- never the deepest frame outright, because the deepest frame can be
     stdlib (a mocked callable's own `side_effect` raise, for one), and the
     forge frame that called into it is the one actually responsible. `None`
     when no frame ever qualifies, so a caller with nothing to name records
     nothing rather than guessing.
     """
-    skills_root = (FORGE_ROOT / ".claude" / "skills").resolve()
+    skills_root = (FORGE_ROOT / "skills").resolve()
     qualifying = None
     frame = exc.__traceback__
     while frame is not None:
@@ -19010,7 +19010,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--file", required=True,
                            help="path to the forge file this declares "
                                 "broken; must resolve under "
-                                ".claude/skills/. Refused "
+                                "skills/. Refused "
                                 "DEFECT_FILE_NOT_FORGE_OWNED outside that "
                                 "tree, DEFECT_FILE_ABSENT if it is not a "
                                 "regular file -- containment is checked "

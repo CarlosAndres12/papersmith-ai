@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parents[1]
-SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
+SKILL_SCRIPTS = FORGE_ROOT / "skills" / "paper-writing" / "scripts"
 SECTIONS_DIR = FORGE_ROOT / "sections"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_contract  # noqa: E402
@@ -41,7 +41,7 @@ import paper_figure  # noqa: E402
 import paper_obligation  # noqa: E402
 import paper_cli  # noqa: E402
 
-sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
+sys.path.insert(0, str(FORGE_ROOT / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "tests"))
@@ -993,7 +993,7 @@ class CLIWiringTests(unittest.TestCase):
         self.assertEqual(payload["code"], "MANDATORY_DIAGRAM_ABSENT")
 
 
-_SKILL_MD = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "SKILL.md"
+_SKILL_MD = FORGE_ROOT / "skills" / "paper-writing" / "SKILL.md"
 _DIAGRAM_AUTHOR_MD = FORGE_ROOT / ".claude" / "agents" / "diagram-author.md"
 
 #: Declared, not discovered -- the ONE render flag this suite itself

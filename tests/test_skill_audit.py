@@ -1440,7 +1440,7 @@ class RemoteExecutionMinInterpreterTests(unittest.TestCase):
     means this now derives, the way it already does when `PATH` happens to
     put a >=3.10 `python3` first."""
 
-    REMOTE_EXECUTION = FORGE / ".claude" / "skills" / "remote-execution"
+    REMOTE_EXECUTION = FORGE / "skills" / "remote-execution"
     ACCEPTED_OPS_SPEC = PROBES / "remote-execution.accepted-operations.json"
     SMOKE_SUBS_SPEC = PROBES / "remote-execution.smoke-subcommands.json"
 
@@ -8898,9 +8898,9 @@ class RosterProbeEnvironmentTests(unittest.TestCase):
     is worse than a wrong count: it is the wrong subject, silently.
     """
 
-    SUBJECT = FORGE / ".claude" / "skills" / "experimental-implementation"
+    SUBJECT = FORGE / "skills" / "experimental-implementation"
     SPEC = PROBES / "experimental-implementation.accepted-operations.json"
-    SIBLING_PROFILE = (FORGE / ".claude" / "skills"
+    SIBLING_PROFILE = (FORGE / "skills"
                        / "proposal-implementation" / "impl_profile.py")
 
     def test_an_ambient_domain_profile_cannot_redirect_the_subject(self):
@@ -8935,7 +8935,7 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
     still the subject's own words, never a second parser of its source.
     """
 
-    SKILLS = FORGE / ".claude" / "skills"
+    SKILLS = FORGE / "skills"
 
     #: (subject directory name, expected accepted-operations count). The
     #: count is asserted rather than re-derived here, for the same reason
@@ -8946,7 +8946,7 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
     _CASES = (
         ("paper-ingestion", 3),
         ("experimental-deliberation", 9),
-        ("experimental-implementation", 21),
+        ("experimental-implementation", 22),
         ("kaggle-accounts", 5),
         ("paper-writing", 17),
     )

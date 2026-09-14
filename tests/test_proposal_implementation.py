@@ -9793,7 +9793,7 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
              / "engine/revision-lifecycle-store.ts")
     #: The marker's declaration, on the side that declares it. The store reads it
     #: from here now, so this is where the two languages meet.
-    PROFILE = FORGE / ".claude/skills/proposal-deliberation/profile.ts"
+    PROFILE = FORGE / "skills/proposal-deliberation/profile.ts"
 
     DECLARATION = (
         "__benchmark__ = {\n"

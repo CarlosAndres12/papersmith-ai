@@ -312,7 +312,7 @@ Full request shapes and a worked transcript are in [usage examples](references/u
 **Open one `--serve` process for the whole deliberation.** The acceptance token lives only in that process's memory, and the host's cold start is paid once per process rather than once per call:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs --serve
+node skills/experimental-deliberation/cli.mjs --serve
 ```
 
 **Resolve the real entry ID first.** Send `RESOLVE_TARGET` on that same stdin. Write the query as distinctive words from the target's *heading*, not as a sentence: no punctuation (the query truncates at the first `,;:.`), no section number, accents exactly as the heading spells them. If it comes back `blocked`, **remove words, never add them** — every extra word matches more headings. If it comes back `SUCCESSOR_TARGET_NOT_FOUND`, you described the section's content instead of its title.
@@ -393,7 +393,7 @@ This skill **does not run experiments**, **does not ingest real results**, and *
 
 ## Limits
 
-- **Launch only through this skill's own `cli.mjs`.** The shared core refuses to start without a domain profile, so an instruction to invoke the core's own launcher directly is an instruction that errors. `node .claude/skills/experimental-deliberation/cli.mjs` is the entry point, and it is the only one.
+- **Launch only through this skill's own `cli.mjs`.** The shared core refuses to start without a domain profile, so an instruction to invoke the core's own launcher directly is an instruction that errors. `node skills/experimental-deliberation/cli.mjs` is the entry point, and it is the only one.
 - The environment the engine reads is `PROPOSAL_DELIBERATION_PROJECT_ROOT` (defaults to cwd) and `PROPOSAL_DELIBERATION_SESSION_ID` — shared core names, not renamed for this domain. No `ANTHROPIC_API_KEY` and no model configuration is ever required: no call on this path reaches a network or a model.
 - `CREATE_INITIAL_REVISION` is the only way to create a managed revision, and only when none exists.
 - If more than one active managed revision resolves, the engine reports `MULTIPLE_ACTIVE_REVISIONS` with the candidate list — never silently pick one.

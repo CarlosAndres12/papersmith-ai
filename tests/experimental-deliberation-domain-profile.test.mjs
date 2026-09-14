@@ -1,7 +1,7 @@
 // This skill's own domain profile, exercised through the shared core that reads it.
 //
 // Every scenario here spawns a FRESH Node process with `DELIBERATION_DOMAIN_PROFILE`
-// pointed at `.claude/skills/experimental-deliberation/profile.ts`. The whole suite
+// pointed at `skills/experimental-deliberation/profile.ts`. The whole suite
 // run is fixed to ONE profile by `package.json`'s `test` script, and
 // `domain-profile.ts` reads the variable once, at module-import time, so a second
 // `jiti.import()` in this process would silently answer for the other domain --

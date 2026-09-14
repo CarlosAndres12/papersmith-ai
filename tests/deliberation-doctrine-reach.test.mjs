@@ -25,7 +25,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const ENGINE_PATH = path.resolve('skills/_core/deliberation/engine/cli.mjs');
-const SKILLS_DIR = path.resolve('.claude/skills');
+const SKILLS_DIR = path.resolve('skills');
 const AGENTS_DIR = path.resolve('.claude/agents');
 const engine = await readFile(ENGINE_PATH, 'utf8');
 

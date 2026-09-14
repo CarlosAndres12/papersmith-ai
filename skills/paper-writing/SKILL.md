@@ -56,7 +56,7 @@ Run `status` before touching anything. It lists every block's id, digest and
 byte region, and writes nothing:
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py status
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py status
 ```
 
 (Every verb accepts `--paper <dir>` to override the default `paper/` at the
@@ -224,9 +224,9 @@ resolution (one of the ten fact ids). Recording either fixes it immediately
 `--reopen <id>` clears exactly that entry.
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py declare \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py declare \
     --declaration repository-url --value https://example.org/repo
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py declare \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py declare \
     --reopen repository-url
 ```
 
@@ -241,7 +241,7 @@ the declarations region's current generation. A block substituted without
 `--contract` is reported `unprovenanced`, never assumed current.
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py substitute \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py substitute \
     --block intro --body body.tex --contract sections/introduction.md
 ```
 
@@ -250,7 +250,7 @@ fill state, and provenance state (`current`, `drifted`, `unprovenanced`) —
 in one call, and writes nothing anywhere:
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py plan
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py plan
 ```
 
 | Verb | What it does | Refuses |
@@ -290,7 +290,7 @@ metadata over stdlib `urllib`, keyless, and caches the result on disk keyed
 by its own digest.
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py resolve \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py resolve \
     --identifier 10.1000/example --resolver openalex --role resolution
 ```
 
@@ -314,7 +314,7 @@ a span is real, byte for byte; it never decides what the span means.
 cached resolved metadata — never appended, never hand-typed:
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py bib build
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py bib build
 ```
 
 | Verb | What it does | Refuses |
@@ -332,7 +332,7 @@ then check the block's round-bounded satisfaction, and write only when
 every claim the block has evidence for holds:
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py validate \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py validate \
     --block intro.claim --claim "the dataset holds 12000 labeled examples" \
     --quote "holds 12,000 labeled examples" --source-md guidance/06-introduction/paper1.md \
     --verdict holds --cite-key smith2024 --body body.tex
@@ -370,7 +370,7 @@ it — the same shuttle shape `write --draft <path>` already establishes for
 the redactor's account, never trusting an agent's account unjudged.
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py observe \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py observe \
     --report insumos-observer-report.json
 ```
 
@@ -398,7 +398,7 @@ is the judge that sequences both — **it never drafts and never audits
 anything itself.**
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write \
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py write \
     --section 01-materials-and-methods --block mm-proposal \
     --draft draft.json --audit audit.json --evidence evidence.json
 ```
@@ -589,7 +589,7 @@ never writes a byte, under any input, including every refusal path, and it
 never repairs anything it finds — `skill-audit`'s own shape, reused here.
 
 ```bash
-.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py verify
+.venv/bin/python skills/paper-writing/scripts/paper_cli.py verify
 ```
 
 | Verb | What it does | Refuses |

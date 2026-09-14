@@ -5,7 +5,7 @@ See [SKILL.md](../SKILL.md) for the tutor-role conditioning, the canonical form,
 Every request below is sent through this skill's own launcher, which is what supplies the domain profile:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs
+node skills/experimental-deliberation/cli.mjs
 ```
 
 None of it requires `ANTHROPIC_API_KEY` or any model configuration — no call on this path reaches a network or a model. The response shapes shown are the ones the engine's own public projection emits; treat field names as exact and field values as illustrative.
@@ -15,7 +15,7 @@ None of it requires `ANTHROPIC_API_KEY` or any model configuration — no call o
 Read-only, keyless, no model call. Run it before reading a source, loading a document, or touching anything in `experiments/`:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs '{ "operation": "STATUS" }'
+node skills/experimental-deliberation/cli.mjs '{ "operation": "STATUS" }'
 ```
 
 Against an `experiments/` directory holding a managed `v01`/`v02` pair, one managed-looking-but-unmarked `v03` (missing the artifact marker, so it does **not** count as managed), and an unrelated `draft-plan.md`:
@@ -38,7 +38,7 @@ Against an `experiments/` directory holding a managed `v01`/`v02` pair, one mana
 Pass `sourceFilename` to classify one candidate base in the same call:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs '{ "operation": "STATUS", "sourceFilename": "experiments-domain-shift-baseline-sweep-v01.md" }'
+node skills/experimental-deliberation/cli.mjs '{ "operation": "STATUS", "sourceFilename": "experiments-domain-shift-baseline-sweep-v01.md" }'
 ```
 
 ```json
@@ -60,7 +60,7 @@ guidance/area-benchmark/<name>/<name>.md            (optional)
 Because [v1 is checked, not exempt](../SKILL.md#creating-v1-checked-by-the-same-gate-as-every-successor), the idea text itself must already carry both of this domain's declared labels, `**Dataset:** …` and `**Validation scheme:** …`, and **each on its own line**: both rules match at line start, so folding a declaration into the middle of a sentence does not satisfy them.
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs '{
+node skills/experimental-deliberation/cli.mjs '{
   "operation": "CREATE_INITIAL_REVISION",
   "instruction": "Domain shift baseline sweep. Testing whether the proposed adaptation term improves held-out accuracy under domain shift without target labels. Claim C1: the method needs no target labels. Claim C2: the gain survives a reduced labelled budget.\n\n**Dataset:** domain-shift-benchmark (standard train/validation/test split as distributed).\n\n**Validation scheme:** paired Wilcoxon signed-rank test, 5 seeds, 3 repetitions per seed."
 }'
@@ -116,7 +116,7 @@ Driven for real: a source fragment containing one bare URL and nothing else wron
 The acceptance token lives only in that process's memory, and the host's cold start is paid once per process. Resolve, preview and accept are three calls; send all three — and every later version's calls — down the same stdin:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs --serve
+node skills/experimental-deliberation/cli.mjs --serve
 ```
 
 Every example below is one JSON line to that process.
@@ -400,7 +400,7 @@ Every operation except `STATUS` and `RESOLVE_TARGET` requires a non-empty `instr
 ## Managed revision lifecycle
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs '{
+node skills/experimental-deliberation/cli.mjs '{
   "operation": "WITHDRAW_REVISION",
   "instruction": "Withdraw the superseded plan.",
   "sourceFilename": "experiments-domain-shift-baseline-sweep-v03.md",
@@ -411,7 +411,7 @@ node .claude/skills/experimental-deliberation/cli.mjs '{
 Omit `withdrawalOperationId` — the engine generates and returns it with the audited backup location. The **base revision cannot be withdrawn**: aiming this at `…-v01.md` answers `blocked` with the warning `BASE_REVISION_WITHDRAWAL_BLOCKED` and changes nothing (measured). To restore:
 
 ```bash
-node .claude/skills/experimental-deliberation/cli.mjs '{
+node skills/experimental-deliberation/cli.mjs '{
   "operation": "RESTORE_WITHDRAWN_REVISION",
   "instruction": "Restore the withdrawn plan.",
   "sourceFilename": "experiments-domain-shift-baseline-sweep-v03.md"

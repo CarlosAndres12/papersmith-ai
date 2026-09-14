@@ -102,7 +102,7 @@ class RealRootsAreResolvableTests(unittest.TestCase):
 
     def test_every_skills_scripts_directory_is_covered(self) -> None:
         derived = set(orphan_sweep.SWEEP_ROOTS)
-        on_disk = set((orphan_sweep.FORGE_ROOT / ".claude" / "skills").glob("*/scripts"))
+        on_disk = set((orphan_sweep.FORGE_ROOT / "skills").glob("*/scripts"))
         self.assertTrue(on_disk, "no skill scripts directories found at all")
         self.assertTrue(on_disk <= derived, f"not covered: {on_disk - derived}")
 

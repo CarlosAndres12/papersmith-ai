@@ -27,7 +27,7 @@ import uuid
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parents[1]
-SKILL_SCRIPTS = FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "scripts"
+SKILL_SCRIPTS = FORGE_ROOT / "skills" / "paper-writing" / "scripts"
 SECTIONS_DIR = FORGE_ROOT / "sections"
 sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_scaffold  # noqa: E402
@@ -44,14 +44,14 @@ import paper_coupling_evidence  # noqa: E402
 import paper_verify  # noqa: E402
 import paper_objective  # noqa: E402
 
-sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
+sys.path.insert(0, str(FORGE_ROOT / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "tests"))
 from paper_mutation import _run_against_mutant  # noqa: E402
 
 CLI = SKILL_SCRIPTS / "paper_cli.py"
-CORE_IMPLEMENTATION = FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"
+CORE_IMPLEMENTATION = FORGE_ROOT / "skills" / "_core" / "implementation"
 
 
 #: Guarded, module-scoped `subprocess.Popen` monitor
@@ -1585,7 +1585,7 @@ class SkillMdModeCountAccuracyTests(unittest.TestCase):
     """
 
     SKILL_MD = (
-        FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "SKILL.md"
+        FORGE_ROOT / "skills" / "paper-writing" / "SKILL.md"
     )
 
     def _real_corpus_count(self) -> tuple[int, int]:

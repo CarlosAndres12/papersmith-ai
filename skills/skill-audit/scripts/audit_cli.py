@@ -718,7 +718,7 @@ def interpolate_gate_token(text, repo, subject, box, candidate):
 #: half of that soundness condition. `assert_no_subject_reference` below is
 #: the other half, for a recipe that embeds the subject's path directly
 #: rather than through the token -- the exact shape of the tar recipe this
-#: change replaces (`git archive HEAD:.claude/skills/skill-audit`, no
+#: change replaces (`git archive HEAD:skills/skill-audit`, no
 #: `{subject}` token in sight).
 FROM_ZERO_TOKENS = STRUCTURE_TOKENS - {"subject"}
 
@@ -848,7 +848,7 @@ def assert_no_subject_reference(text, subject, repo):
 
     This is what actually catches the tar recipe's own defect: its argv
     never used `{subject}`, it spelled the path out by hand
-    (`HEAD:.claude/skills/skill-audit`). Refusing the token alone would
+    (`HEAD:skills/skill-audit`). Refusing the token alone would
     have missed it.
     """
     subject_abs = str(subject)

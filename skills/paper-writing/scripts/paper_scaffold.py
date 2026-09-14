@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implemen
 from impl_refusals import Refused  # noqa: E402
 
 #: Five path components up from this file to the repository root:
-#: `<root>/.claude/skills/paper-writing/scripts/paper_scaffold.py`. Same
+#: `<root>/skills/paper-writing/scripts/paper_scaffold.py`. Same
 #: convention `_core/implementation/impl_layout.py` uses for its own
 #: `FORGE_ROOT`, at the same directory depth from root — measured, not
 #: assumed; a test pins the value this returns.

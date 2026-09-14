@@ -15,7 +15,7 @@ This skill is the SECOND host built on the shared implementation engine
 (`_core/implementation/engine/implementation_engine.py`) -- the same engine
 `proposal-implementation` already serves, changed by **zero bytes** to add this
 domain. Everything here is a profile
-(`.claude/skills/experimental-implementation/impl_profile.py`), a byte-identical
+(`skills/experimental-implementation/impl_profile.py`), a byte-identical
 launcher copy, this doctrine, two agents, and this skill's own sealed corpus.
 
 **Two declared documents, each with its own claim vocabulary.** `documents[0]`
@@ -237,7 +237,7 @@ narrowed to what this domain actually has:
 ## Entry command
 
 ```bash
-.claude/skills/experimental-implementation/scripts/implementation_cli.py <command> [args...]
+skills/experimental-implementation/scripts/implementation_cli.py <command> [args...]
 ```
 
 A concrete, runnable example -- this exact line runs verbatim, unedited, from
@@ -245,7 +245,7 @@ the forge's own root (`tests/test_experimental_implementation.py`'s own
 published-commands test proves it):
 
 ```bash
-.claude/skills/experimental-implementation/scripts/implementation_cli.py name --name Trial
+skills/experimental-implementation/scripts/implementation_cli.py name --name Trial
 ```
 
 The launcher is a byte-for-byte copy of `proposal-implementation`'s own launcher

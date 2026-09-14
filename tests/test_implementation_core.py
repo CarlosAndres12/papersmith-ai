@@ -199,7 +199,7 @@ class NonForgeInterpreterGuardTests(unittest.TestCase):
         self.addCleanup(setattr, sys, "prefix", self._original_prefix)
 
     def test_a_forge_owned_venv_prefix_is_refused(self):
-        sys.prefix = str(impl_layout.FORGE_ROOT / ".claude" / "some-skill" / ".venv")
+        sys.prefix = str(impl_layout.FORGE_ROOT / "skills" / "some-skill" / ".venv")
         with self.assertRaises(impl_refusals.Refused) as caught:
             impl_guards.require_non_forge_interpreter()
         self.assertEqual(caught.exception.code, "FORGE_INTERPRETER")

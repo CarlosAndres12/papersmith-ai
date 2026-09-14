@@ -30,11 +30,11 @@ _FORGE = Path(__file__).resolve().parents[2]
 #: invoked path (meaning 1), read back out of the engine's own profile-
 #: derived `CLI_PATH`. Import route only; argv still derives from
 #: `impl.CLI_INVOCATION`, unedited.
-_ENGINE_DIR = (_FORGE / ".claude" / "skills" / "_core" / "implementation"
+_ENGINE_DIR = (_FORGE / "skills" / "_core" / "implementation"
               / "engine")
 os.environ.setdefault(
     "IMPLEMENTATION_DOMAIN_PROFILE",
-    str(_FORGE / ".claude" / "skills" / "proposal-implementation"
+    str(_FORGE / "skills" / "proposal-implementation"
        / "impl_profile.py"))
 if str(_ENGINE_DIR) not in sys.path:
     sys.path.insert(0, str(_ENGINE_DIR))
