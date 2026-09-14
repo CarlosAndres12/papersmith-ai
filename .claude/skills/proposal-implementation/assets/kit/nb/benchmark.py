@@ -218,15 +218,6 @@ def reduce_split(dataset, fraction: float, classes: int, seed: int):
     return Subset(dataset, stratified_indices(list(targets), fraction, classes, generator))
 
 
-def resolve_device() -> torch.device:
-    """Whatever this machine has, in the order that costs least to try."""
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
 def synchronize(device: torch.device) -> None:
     """Wait for the device before reading the clock.
 

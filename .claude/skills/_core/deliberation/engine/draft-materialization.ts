@@ -9,7 +9,12 @@ import { documentPath } from './artifact-naming.js';
 const DEFAULT_DRAFT_DIRECTORY = 'drafts';
 const DEFAULT_ALLOWED_EXTENSIONS = ['.md'] as const;
 const MAX_DRAFT_BYTES = 256 * 1024;
-const MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+// Finding M7: this file used to also declare a hardcoded
+// `MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n')`
+// here. Unlike `patch-compiler.ts`'s copy, this one had zero readers anywhere in the
+// file -- dead from the moment it was written, not merely wrong for a domain that
+// changed its marker. Deleted rather than rewired to `artifact.marker`, since wiring a
+// value nothing reads would still leave a declaration with no reason to exist.
 const SAFE_METADATA_PART = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export type DraftDocumentMetadata = {

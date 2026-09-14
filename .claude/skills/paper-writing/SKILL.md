@@ -450,8 +450,8 @@ distinguish "no style channel wanted" from "nothing to sample yet."
 `argument` — at section level (the default) or block level (overriding
 it), transcribed from the contract's own prose exactly like an `after`
 edge (`{"value": ..., "source": {"file", "quote"}}`). A header declaring
-neither is schema-valid — none of the ten shipped contracts carry `mode`
-yet — but `write` refuses `MODE_ABSENT` rather than assuming one for any
+neither is schema-valid — ten of the ten shipped contracts carry `mode`
+today — but `write` refuses `MODE_ABSENT` rather than assuming one for any
 block it resolves to `None`.
 
 `transposition` admits only `fact`/`structural`/`resolution`-class

@@ -18,6 +18,13 @@ from pathlib import Path
 
 RULING_PATH = Path(__file__).with_name("admissibility.json")
 
+#: The revision this kit was scaffolded against -- the same token
+#: `test_smoke.py` checks every module's own `__provenance__["revision"]`
+#: against. `require_admissible` reads it too, so a ruling made against a
+#: revision this suite was not written for is refused at measure time
+#: instead of only surfacing later, at `verify`'s sha256 staleness check.
+CURRENT_REVISION = "{{REVISION}}"
+
 
 def _ruling() -> dict:
     if not RULING_PATH.exists():
@@ -28,7 +35,18 @@ def _ruling() -> dict:
 
 
 def require_admissible(finding_id: str) -> None:
-    """Refuse to measure a remedy that was not ruled admissible."""
+    """Refuse to measure a remedy that was not ruled admissible, or whose
+    ruling was made against a different revision than this suite is written
+    for. Without this, a stale ruling on disk is silently trusted at measure
+    time and the mismatch surfaces only later, at `verify`.
+    """
+    revision = ruled_revision()
+    if revision != CURRENT_REVISION:
+        raise AssertionError(
+            f"admissibility was ruled against revision {revision!r}, but "
+            f"this suite is written against {CURRENT_REVISION!r}; re-run "
+            f"`implementation_cli.py admit --revision {CURRENT_REVISION}` "
+            "before measuring any remedy")
     verdicts = _ruling().get("findings", {})
     if finding_id not in verdicts:
         raise AssertionError(f"{finding_id} was never ruled on; efficacy cannot be measured")

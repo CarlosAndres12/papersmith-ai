@@ -21,7 +21,13 @@ SWEEP_BASE = {{SEED}} * 10000
 
 
 def configuration(index: int) -> dict:
-    """One reproducible configuration of the proposal's objects."""
+    """One reproducible configuration of the proposal's objects.
+
+    Not `conftest.py`'s shared `rng` fixture: this is a plain function, never
+    a collected pytest item, so it cannot receive a fixture at all -- and it
+    needs a generator seeded per `index`, which the fixture's one fixed
+    `SEED` does not provide anyway. The two stay separate on purpose.
+    """
     rng = np.random.default_rng(SWEEP_BASE + index)  # noqa: F841
     raise NotImplementedError
 

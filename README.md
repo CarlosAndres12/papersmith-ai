@@ -125,7 +125,10 @@ Surya, ~1.5 GB, cacheados a partir de ahí.)
 |---------|------------|
 | `guidance/paper-guide/` | **Papers guía** — las referencias metodológicas / de estilo. `proposal-deliberation` las carga como contexto al inicio de cada deliberación. |
 | `guidance/reference-papers/` | **Corpus de referencia** — papers de apoyo, ingeridos a Markdown para consulta. No se cargan automáticamente en la deliberación. |
-| `guidance/data/` (paper del dataset) | **⏳ Pendiente — todavía no conectado.** El paper que describe la base de datos de la investigación. Planeado; dejar para más adelante. |
+| `guidance/data-paper/` | **Paper de datos — obligatorio para `experimental-deliberation`.** Describe la base de datos de la investigación y es el **techo**: acota qué se puede afirmar. Una afirmación que los datos no sostienen no es un experimento. Sin esta carpeta poblada, `CREATE_INITIAL_REVISION` no puede arrancar. |
+| `guidance/area-benchmark/` | **Benchmark del área — opcional.** Cuando está, es la fuente de verdad de métricas, splits, protocolo y baselines. Cuando falta, el documento declara los suyos: más débil, pero legal. |
+
+**Las cuatro carpetas viajan vacías.** Cada una llega a un clon con su `.gitkeep` y nada más: `guidance/*/*` está ignorado, con `!guidance/*/.gitkeep` como única escapatoria. El andamiaje se versiona, los PDFs y su Markdown no. `tests/test_forge_scaffolding.py` deriva las dos mitades —lo que los `profile.ts` declaran como fuente contra lo que git realmente rastrea— y se pone rojo si una carpeta declarada deja de viajar.
 
 ### Paso 2 — Ingerir los PDFs (PDF → Markdown)
 
@@ -233,23 +236,65 @@ verifica**. El agente propone un cambio; el motor comprueba que ese cambio no
 rompió nada y, si lo rompió, se niega. Un agente puede equivocarse. Un motor
 determinista no cambia de opinión.
 
-**Y cómo se encadenan.** Las cinco no son islas: cada una recibe algo concreto de
+**Y cómo se encadenan.** Las nueve no son islas: cada una recibe algo concreto de
 otra y le entrega algo concreto a la siguiente. Este es el mapa; cada skill explica
-su propia costura en detalle, en su apartado.
+su propia costura en detalle, en su apartado. Las flechas dicen **qué** pasa por la
+costura, no sólo que existe — y cada una de las etiquetas de abajo está leída de la
+declaración de la skill que la recibe, no inferida del nombre de la carpeta.
 
 ```mermaid
-flowchart LR
+flowchart TD
     PDF["PDFs que dejás en guidance/"] --> PI["1. paper-ingestion"]
-    PI -- "Markdown en paper-guide/" --> PD["2. proposal-deliberation"]
+
+    PI -- "guidance/paper-guide (opcional)" --> PD["2. proposal-deliberation"]
+    PI -- "guidance/data-paper (obligatoria)" --> ED["6. experimental-deliberation"]
+    PI -- "guidance/area-benchmark (opcional)" --> ED
+
+    PD -- "proposals/ — la revisión publicada" --> ED
     PD -- "STATUS + el texto de la revisión" --> IMP["3. proposal-implementation"]
+    ED -- "experiments/ — el protocolo publicado" --> EIM["7. experimental-implementation"]
+    PD -- "proposals/ — el documento 1 del par" --> EIM
+
     IMP -- "correcciones, detrás de compuerta" --> PD
+    EIM -- "correcciones, detrás de compuerta" --> ED
+
+    IMP -- "el repo destino en implementations/" --> EIM
     IMP -- "carpeta del trabajo en tools/" --> RE["5. remote-execution"]
-    KA["4. kaggle-accounts"] -- "worker + ruta, nunca el valor" --> RE
+    EIM -- "carpeta del trabajo en tools/" --> RE
+    KA["4. kaggle-accounts"] -- "worker + ruta al token, nunca el valor" --> RE
     RE -- "el registro, sólo lectura" --> IMP
+
+    PD -- "proposals/" --> PW["8. paper-writing"]
+    ED -- "experiments/" --> PW
+    EIM -- "el código del destino y lo que sus corridas devolvieron" --> PW
+    PW --> PAPER["paper/main.tex + Figures/"]
+
+    SA["9. skill-audit"] -. "informa, nunca cambia" .-> PI
+    SA -. " " .-> PD
+    SA -. " " .-> IMP
+    SA -. " " .-> KA
+    SA -. " " .-> RE
+    SA -. " " .-> ED
+    SA -. " " .-> EIM
+    SA -. " " .-> PW
+    SA -. "y a sí misma" .-> SA
 ```
 
-El lazo entre la 2 y la 3 es el corazón de la forja, y va en los dos sentidos: la
-matemática baja a código, y lo que el código descubre sube de vuelta al documento.
+**Tres cosas que el mapa dice y conviene leer despacio.**
+
+*Los dos lazos hacia arriba son el corazón de la forja.* La matemática baja a código
+y lo que el código descubre sube de vuelta al documento; lo mismo entre el protocolo
+experimental y su implementación. En los dos casos la vuelta pasa por una compuerta
+que **vos** abrís: el código propone la corrección, nunca la publica.
+
+*Las cuatro de en medio son dos pares sobre dos motores.* La 2 y la 6 comparten un
+motor de deliberación; la 3 y la 7, un motor de implementación. Lo único que cambia
+entre los dos huéspedes de cada par es su `profile.ts` o su `impl_profile.py` — por
+eso un defecto en un motor aparece en dos skills a la vez, y por eso las
+limitaciones del motor están anotadas en las dos.
+
+*La 8 es la única que lee de todo lo anterior a la vez*, y la 9 no está en la cadena:
+se para al costado y mira a cualquiera, incluida a sí misma.
 
 ---
 
@@ -282,6 +327,29 @@ consecuencia que conviene entender antes de usarla:
 instala el binario `llama-server` (el motor de OCR; no es un paquete de pip) y crea
 el entorno virtual con `marker-pdf` adentro. La primera ingesta real descarga los
 modelos (~1,5 GB) y los cachea; de ahí en más funciona offline.
+
+**Las etapas que declara.** El flujo no es la lista de comandos: es lo que cada
+etapa deja establecido, y cuándo podés darla por superada. Esta tabla está leída
+de `OBJECTIVE_FLOW` en el script, que un test mantiene igual al `SKILL.md`.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `filed` | El PDF está dentro de una carpeta temática propia — eso es lo que lo vuelve un paper y no una descarga | deja de aparecer entre los sueltos |
+| `extracted` | El Markdown existe al lado, con sus figuras escritas como archivos en vez de quedar dentro de la página | la carpeta del paper tiene el documento y sus imágenes |
+| `readable` | Las ecuaciones son LaTeX y las tablas son Markdown, así un lector posterior puede **citar** una fórmula en vez de describir una foto de una | es la llegada; no está detrás de nadie |
+
+**Llegada:** un documento que una persona puede leer y una sesión posterior puede
+citar — que un PDF no es. Sus ecuaciones son dibujos y sus tablas son tinta.
+
+**Una tensión declarada, que no es un error tuyo si la ves.** El campo
+`humanStops` de esta skill está **vacío**: ninguna *etapa* se detiene a esperar a
+una persona. Pero su Activation Contract dice *"Never ingest without asking
+first"*, y la confirmación de la Fase 2 es obligatoria. Las dos cosas conviven
+porque la confirmación ocurre **antes** de que el flujo arranque, y el script no
+tiene mecanismo de consentimiento propio — la regla vive en el `SKILL.md` y la
+hace cumplir el agente. Vale anotar que `kaggle-accounts`, que también escribe,
+sí declara *"consentir la validación"* como parada de una persona: las dos skills
+no describen igual el mismo consentimiento.
 
 **El flujo, paso a paso.** El punto clave es que **son dos comandos, no uno**, y esa
 división existe para que exista un momento de consentimiento.
@@ -443,6 +511,24 @@ listado del directorio puede mostrar archivos que el motor considera inválidos.
 modelo: el motor es keyless. El "modelo" de esta skill es el agente que ya está en la
 conversación — por eso el motor no necesita uno propio.
 
+**Las etapas que declara.** Leídas del campo `objective` de su propio
+`profile.ts`, que un test mantiene igual al `SKILL.md`. `STATUS` las reporta
+arriba del inventario, y las dos rutas de error del motor también las llevan.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `bound` | Cuál revisión es la actual y cuál entrada de ella toca el cambio | `STATUS` nombró la última y el objetivo resolvió a una entrada |
+| `deliberated` | El cambio se **discutió**, no se tipeó | **lo dijiste vos** — acá nada lo mide, y nada puede medirlo |
+| `composed` | El reemplazo existe escrito COMO matemática —la ecuación, con su tag— y no como una descripción de ella | existe un bloque que lleva la ecuación y el tag donde aterriza |
+| `published` | La sucesora existe con el marcador del artefacto y es la revisión actual | es la llegada; no está detrás de nadie |
+
+**Llegada:** la revisión sucesora publicada y actual, que es la única forma en la
+que viaja la matemática.
+
+**`deliberated` es la parada de una persona, y es deliberado que no se pueda
+medir.** El motor puede comprobar que existe un bloque; no puede comprobar que
+lo discutiste. Por eso esa etapa avanza sólo cuando vos lo decís.
+
 **El flujo, paso a paso.**
 
 1. **Arranque.** Lo primero que hace el agente es pedirle al motor `STATUS` —una
@@ -450,7 +536,13 @@ conversación — por eso el motor no necesita uno propio.
    `proposals/` por su cuenta.
 2. **Bifurcación.** Si no hay ninguna revisión gestionada, el camino es *crear la v1*.
    Si ya hay una (`r01`, `r05`, `r17`…), el camino es *editar*.
-3. **Crear la v1.** El agente te pide la idea y manda la creación inicial. El motor
+3. **Crear la v1.** El agente te pide la idea y manda la creación inicial. **Tu idea
+   necesita al menos dos oraciones**: el motor saca el título de la primera y el
+   encabezado de sección de la segunda, y con una sola los dos salen idénticos byte a
+   byte — lo que dejaría el documento imposible de editar después, porque toda consulta
+   que nombre un lugar sería ambigua. Con una sola oración se niega en el acto
+   (`INITIAL_IDEA_SINGLE_SENTENCE`) y no escribe nada. Una oración termina en `.`, `!`
+   o `?`; un salto de línea no alcanza. El motor
    carga los papers de `guidance/paper-guide/` **una sola vez** —acá y nunca más—,
    redacta el documento a partir de tu idea, toma un candado único de proyecto (para
    que dos ideas en paralelo no puedan crear dos v1) y escribe
@@ -505,6 +597,7 @@ La `r01` no se puede retirar nunca, ni tampoco una revisión que tenga descendie
 | Ciclo de vida | `revision-lifecycle-store.ts`, `revision-lifecycle-transaction.ts` | Retiro y restauración transaccionales, con reversión en orden inverso si algo falla a mitad. |
 | Concurrencia | `mutation-lock.ts` | Impide dos publicaciones simultáneas sobre el mismo archivo. |
 | Token de aceptación | `successor-acceptance-registry.ts` | Ata una vista previa a su aceptación. Vive en memoria, es de un solo uso y muere con el proceso: no se puede aceptar mañana una previa de hoy. |
+| Agente delegado | `.claude/agents/deliberation-publish.md` | El tramo **terminal**, y arranca recién después de que vos aceptaste: resuelve la entrada, compone el reemplazo sustituyendo **adentro** de ella en vez de devolver un bloque pelado, y publica. `Read`, `Bash`, `Glob`, `Grep` — **sin `Write` ni `Edit`**, porque sólo el motor escribe. La deliberación misma no está en su tramo y no puede estarlo: eso no lo cierra nada más que vos. |
 
 **Qué escribe en el disco.**
 
@@ -673,14 +766,14 @@ silencio, hasta que alguien nota que faltan recibos. **Cómo se arregla:** con u
 `stateRoot(root)` del que salgan los 21. Es un refactor chico y desbloquea las dos
 cosas de arriba.
 
-*Un campo obligatorio que el segundo dominio declara y nunca usa, y un import vivo por un
-`void`.* `proseReferenceText` está en los obligatorios —el motor se niega a arrancar sin
-él— y no tiene ningún lector en el núcleo: su único lector está del lado matemático. El
-otro host lo declara porque debe, y su proceso jamás lo invoca. En el mismo archivo de
-entrada, `cli.mjs` importa `pathToFileURL` y su última línea es `void pathToFileURL;`,
-que existe únicamente para que el import no se lea como no usado. **Cómo se arregla:**
-sacar el campo de los obligatorios o darle un lector en el núcleo; y borrar el import con
-su `void`.
+*Resuelto.* `proseReferenceText` era obligatorio a nivel de motor sin tener ningún lector
+en el núcleo —su único lector real siempre fue el lado matemático
+(`preservation-math.ts`)—, y el otro host lo declaraba porque debía, sin invocarlo jamás.
+Ahora es opcional en `domain-profile.ts`; `preservation-math.ts` exige su propia
+necesidad localmente (falla con `PROSE_REFERENCE_TEXT_REQUIRED` si no está), y el perfil
+experimental dejó de declararlo. En el mismo archivo de entrada, `cli.mjs` importaba
+`pathToFileURL` sin usarlo salvo por un `void pathToFileURL;` de cierre; ambos se
+borraron.
 
 **Diagrama.**
 
@@ -803,13 +896,49 @@ reporta un conteo. De ese pliegue sale el peldaño `poll-first`.
 **Qué necesita antes.** Una revisión publicada, y un repositorio destino bajo
 `implementations/` que ya sea un repositorio git.
 
-**Los comandos.** Nueve, todos con la misma forma:
+**El flujo, por etapas.** Esta sección no tenía ninguno. Las etapas están leídas
+de `OBJECTIVE_FLOW`, que un test mantiene igual al `SKILL.md`, y son
+deliberadamente **independientes de lo que haya en disco**: tienen que leerse
+igual en un repositorio vacío que en uno a mitad de campaña. Existen para el
+momento en que algo se rompe — una sesión que choca con un error se ubica acá,
+resuelve lo que la bloquea y se reengancha, en vez de improvisar hacia adelante.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `standing` | Un repositorio donde escribir la matemática: aislado bajo `implementations/`, con intérprete propio, con la disposición que esta skill espera, los destinos del kit materializados, y **aprobado el mapa** de objeto matemático a módulo | `structure` no reporta huecos de andamiaje y la declaración del benchmark lleva la revisión y las premisas con las que se aprobó el mapa — que es lo que `materialize --stage objects` se niega a hacer sin ellas |
+| `fidelity` | El código dice lo que dice la revisión ligada, y cada afirmación lleva un invariante con su test | `fidelity` está limpio y la suite propia del destino está verde bajo su propio intérprete |
+| `audit` | Qué cosas la formulación hace mal, establecido sobre el barrido declarado, **cada remedio juzgado admisible antes de medirlo** y validado después | `audit` deja de estar `incomplete` |
+| `declaration` | Qué compara el experimento, sobre qué unidad estadística, con qué métrica, y qué produce | la declaración del benchmark está contestada en vez de sentada en su valor vacío de andamiaje |
+| `rehearsal` | El flujo declarado corre punta a punta con sus propios notebooks, y el documento que lee una persona coincide con la corrida | el piloto está completo y `report` da `ok` |
+| `full-scale` | Cada paso ruteado a donde se decidió que corra, y ejecutado ahí a la escala que declara el protocolo | es la llegada; no está detrás de nadie |
+
+**Llegada:** corridas completas a la escala declarada, locales o remotas según
+lo declare cada paso, con el registro que dejan. **No** una verificación verde,
+**no** un ensayo que pasó.
+
+**Cuatro paradas son de una persona, y ninguna es un defecto a reparar.** Dos
+están en la primera etapa y una sesión que arranca de cero las encuentra antes
+que nada: **autorizar que se escriba código**, sin lo cual nada debajo de esa
+compuerta puede empezar, y **aprobar el mapa** de objeto matemático a módulo,
+con la revisión y las premisas anotadas al lado. Las otras dos están al final:
+**publicar el commit** que un worker clonaría, y **autorizar un lanzamiento**.
+Un agente que lea cualquiera de ellas como un bloqueo se va a trabar o la va a
+saltear — las dos cosas están mal.
+
+**Los comandos.** Todos con la misma forma:
 `python3 .../implementation_cli.py <comando> --target implementations/<repo> [--name <Name>] [--revision research-concept-rNN.md]`.
+**Ese `python3` tiene que ser 3.10 o más nuevo** — y no está forzado: bajo uno más viejo,
+`verify` alcanza el adaptador de `remote-execution`, que evalúa `tuple[int, int] | None` al
+importar, y el comando muere con un `TypeError` en vez de negarse. Peor: `main()` anota esa
+excepción como un defecto abierto, y un defecto abierto niega otros ocho comandos hasta que
+alguien lo cierre. No se cuentan acá a propósito: un número escrito a mano al lado de un
+roster que la máquina publica envejece la primera vez que alguien agrega un comando, y esta
+tabla decía nueve cuando ya eran veinte.
 
 | Comando | Qué hace |
 |---------|----------|
 | `env` | Crea y verifica el entorno virtual **del repositorio destino** (se niega si lo corrés desde un intérprete de la forja). Reporta también el estado de los punteros de Git LFS — acá, porque es el primer comando después de un clon, justo cuando un repositorio lleno de marcadores parece completo. |
-| `name` | Función pura, sin repositorio. Normaliza lo que escribiste a la forma de carpeta `<Name>/` y a la forma importable `src/<Package>/`. |
+| `name` | Función pura, sin repositorio. Normaliza lo que escribiste a la forma de carpeta `<Name>/` y a la forma importable `src/<Package>/`. **Rechaza cualquier carácter que no sea ASCII alfanumérico** (`NAME_NOT_ALPHANUMERIC`, nombrando el carácter): antes esos caracteres se caían en silencio y el nombre salía mutilado — `Ñandú` daba `And`. Separadores y camelCase siguen funcionando igual. |
 | `plan` | Plan de migración de **sólo lectura**: qué se renombra, qué se mueve, qué directorios faltan, qué referencias hay que reescribir, qué conflictos hay y qué archivos no sabe clasificar. Se niega sobre un árbol sucio. |
 | `apply` | Ejecuta un plan **ya aprobado** como un único commit atómico. Revalida que el plan no haya quedado viejo; ante cualquier falla revierte duro y reporta. Nunca deja un árbol a medio migrar. |
 | `admit` | Decide la **admisibilidad** de una corrección antes de medir si funciona: comprueba contra el texto de la revisión que la notación que cita exista de verdad. El veredicto se escribe en el destino; el texto de la propuesta se queda en la forja. |
@@ -905,6 +1034,19 @@ igual.
 | `assets/kit/nb/benchmark.py` | Entrena las dos implementaciones bajo una misma reducción acotada. Se niega a correr bajo un intérprete ajeno —porque el tiempo de pared y la memoria pico **son** la medición— y se niega a correr sin cableado declarado. |
 | `assets/kit/nb/verdict.py` | La lógica de juicio: sólo concede un ganador cuando las medias difieren más que el error estándar combinado, y por debajo de tres repeticiones **no da veredicto**, sólo imprime una estimación puntual. |
 | `assets/kit/nb/report_digest.py` | Hashea todo `src/` en un sello que el informe imprime y que `verify` recalcula, para poder probar que un informe está atado al código exacto que lo produjo. |
+| `.claude/agents/implementation-build.md` | El tramo **entre dos compuertas tuyas**: del mapa objeto-a-módulo aprobado al informe de hallazgos que vos decidís. Materializa el andamiaje, escribe un módulo por objeto matemático con su procedencia y sus tests de invariante, barre las configuraciones declaradas, y **falla sobre la admisibilidad de cada remedio ANTES de medirlo**. `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`. No decide ni pregunta: termina reportando qué encontró y cuánto costó establecerlo. |
+| `.claude/agents/implementation-walk.md` | El tramo **de las colocaciones ya decididas al lanzamiento que vos tenés que autorizar**: camina el flujo declarado acto por acto en su propio orden, corre los pasos locales, commitea el producto de cada uno, refresca la posición, y genera las carpetas de trabajo que un paso remoto necesita. `Read`, `Bash`, `Glob`, `Grep` — sin `Write`. **Se detiene en el lanzamiento y no tiene camino para enviar una campaña**, ni para ejecutar un ensayo: ningún acto del motor realiza un ensayo, y `walk` dejó de prometerlo — se detiene ahí y te dice que lo corras a mano, que es lo que la doctrina prescribió siempre. |
+| `walk` | Camina el flujo declarado hacia el rung al que apunta el encabezado de posición. Ejecuta los pasos locales, commitea el producto de cada uno y genera las carpetas de trabajo que un paso remoto necesita. **Se detiene en el lanzamiento**, y también en un ensayo: ningún acto del motor realiza uno. |
+| `step` | Corre **un** paso local declarado, aislado, bajo el venv del propio destino. Nunca el intérprete de la forja. |
+| `position` | El único escritor de la sección de posición de `<Name>/AGREED.md`. Marca qué se midió, qué falta y qué quedó sin medir, y ata cada marca a la revisión y a su sha256 — porque una revisión puede reescribirse en su lugar bajo el mismo nombre de archivo, y sólo el hash lo detecta. |
+| `discuss` | La discusión como una operación con valor de retorno: publica una pregunta y devuelve el bucket en el que cae, en vez de dejarla en la conversación. |
+| `settle` | Coloca **un** acuerdo saldado, y sólo uno, bajo un rótulo que nombra el llamador. |
+| `close` | La precondición de cierre: escribe la posición y deja el ciclo cerrado. Una segunda llamada no vuelve a cerrar. |
+| `propose` | La propuesta de campaña: qué trabajos, con qué workers, con qué justificación. Registra, no envía. |
+| `gate` | El registro de autorización de lanzamiento. Es la compuerta que separa "listo para correr" de "corriendo", y la abre una persona. |
+| `offer` | El menú de acciones derivado del estado: un conjunto cerrado de lo que puede pasar a continuación, calculado y no ofrecido de memoria. |
+| `defect` | Declara que algún archivo de la forja está roto ahora mismo. Mientras siga abierto, ocho comandos se niegan con `FORGE_DEFECT_OPEN`; `probe`, `verify`, `position`, `plan`, `compose`, `handoff`, `discuss` y `propose` siguen alcanzables. `main()` también lo anota solo, cuando cualquier otra excepción lo alcanza. |
+| `materialize` | Escribe el andamiaje aprobado por etapas (`scaffold`, `objects`, `harness`). `--plan` es una aprobación que da una persona, y `--seed` el número del que saca el experimento: ninguna skill elige eso por un repositorio. |
 
 **Qué escribe en el disco.**
 
@@ -1067,11 +1209,12 @@ arregla:** completándola, o borrando la enumeración y dejando sólo el puntero
 `references/usage.md` — un inventario que se mantiene solo es mejor que uno que hay que
 acordarse de actualizar.
 
-*Una ausencia se lee como "no está vieja".* Bajo dos documentos,
-`admissibility_record`'s staleness check hace `continue` cuando falta la entrada de un
-documento declarado o cuando su fuente no se puede leer — así que un registro incompleto
-pasa como vigente. La compatibilidad de doble forma está documentada; los `continue`
-silenciosos no. **Cómo se arregla:** que una ausencia responda `unknown` y no vigencia.
+*Resuelto: una ausencia ya no se lee como "no está vieja".* Bajo dos documentos,
+el chequeo de vigencia de `admissibility_record` hacía `continue` cuando faltaba la
+entrada de un documento declarado o cuando su fuente no se podía leer, y el registro
+incompleto caía al retorno de abajo como vigente. Ahora cada uno de esos dos casos
+responde `unknown` con su detalle. La forma de la falla es la que este repositorio
+más repite: **una ausencia que hereda el valor bueno**.
 
 *La rama "sin posición" devuelve una clave menos, y el candado que dice sostener la forma
 no puede verla.* `position_state` devuelve 13 claves cuando no hay posición y 14 cuando
@@ -1082,13 +1225,12 @@ retornos que son **diccionarios literales**, y esta rama devuelve un nombre. **C
 arregla:** que la rama ausente devuelva la clave, o que el candado sepa leer un `return
 <nombre>`.
 
-*Dos lectores de `__benchmark__`, con el desacuerdo que el resolver declara extinto.*
-`resolve_benchmark_declaration` se llama a sí mismo "el único lugar del que todo lector
-saca `__benchmark__`". El script `INTROSPECT`, que corre dentro del intérprete del
-destino, lo lee del atributo del módulo importado. Una declaración que vive en
-`config.py` y no se reexporta es real para el resolver e inexistente para `INTROSPECT`:
-un hecho, dos lectores, veredictos distintos. **Cómo se arregla:** que `INTROSPECT` pase
-por el resolver, o que el docstring deje de afirmar unicidad.
+*Resuelto: `__benchmark__` tiene un solo lector otra vez.* `resolve_benchmark_declaration`
+se llamaba a sí mismo "el único lugar del que todo lector saca `__benchmark__`" mientras
+el script `INTROSPECT`, que corre dentro del intérprete del destino, lo leía del atributo
+del módulo importado. Una declaración que vivía en `config.py` sin re-exportarse era real
+para el resolver e inexistente para `INTROSPECT`: un hecho, dos lectores, veredictos
+opuestos. `INTROSPECT` ahora sigue el mismo orden `__init__` → `config` que el resolver.
 
 *"El único lugar" donde se leen `accelerator`/`localBudget` era falso al nacer.*
 `cmd_gate` los arma por su cuenta desde su propio `run_config` y se los pasa al mismo
@@ -1096,24 +1238,24 @@ clasificador. Los dos sitios citan el mismo cambio de diseño, así que no es de
 cuantificador nunca fue cierto. Hoy leen el mismo archivo igual, y nada los ata.
 **Cómo se arregla:** un lector, o un test que falle si se separan.
 
-*El kit embarca dos defensas que nadie invoca.* `ruled_revision` devuelve la revisión
-contra la que se dictó la admisibilidad, para que un test de remedio pueda negarse a
-medir bajo otra: cero llamadores. `resolve_device`: cero referencias, incluidas las
-notebooks. Y el fixture `rng` de `conftest.py` no lo pide ningún test, mientras dos
-plantillas arman uno local marcado `# noqa: F841`. El motor sí detecta la obsolescencia,
-pero recién en `verify`; la defensa existía justo para la ventana anterior. **Cómo se
-arregla:** cablearlas o borrarlas — lo que no conviene es dejarlas.
+*Resuelto: las tres piezas sueltas del kit, cada una con su propia respuesta.*
+`ruled_revision` **se cableó**, porque cerraba una ventana real: `require_admissible`
+miraba el veredicto y nunca la revisión, así que un fallo viejo pasaba al medir y recién
+aparecía en `verify`. `resolve_device` **se borró**: cero referencias en toda la forja,
+incluidas las notebooks. Y el fixture `rng` **se cableó donde entra** —`test_synthetic.py`,
+que sí es un ítem que pytest recolecta— dejando el generador local de `sweep.py` con la
+razón escrita: es una función plana, no puede recibir un fixture, y necesita semilla por
+índice. Cablear, borrar y separar con su motivo son tres respuestas distintas a la misma
+forma, y elegir una sola habría sido el error.
 
-*Prosa que sobrevivió a su mecanismo, en seis sitios.* Seis comentarios del motor
-justifican el patrón de "devolver el detalle y que el llamador levante" apelando a
-`raised_refusal_codes`, un barrido que no veía un rechazo escondido dentro de un helper.
-Ese barrido ya fue reemplazado por `reachable_refusal_codes`, que sigue las referencias
-hasta cada función de nivel de módulo y toma los helpers enteros: hoy un rechazo
-helper-adentro se pone rojo hasta que se lo clasifique. La ubicación del patrón sigue
-siendo buena; la razón escrita al lado está muerta, seis veces, y el barrido viejo
-sobrevive sólo para probar lo que no puede ver. **Cómo se arregla:** borrar la
-justificación muerta antes que el código que justifica — un comentario falso es un defecto
-con vida propia, porque el próximo que pase le cree.
+*Resuelto: seis justificaciones muertas y seis imports muertos.* Cuatro docstrings del
+motor justificaban un patrón apelando a `raised_refusal_codes`, un barrido que no veía un
+rechazo escondido dentro de un helper — y que ya había sido reemplazado por
+`reachable_refusal_codes`, que sí lo ve. La ubicación del patrón estaba bien; la razón
+escrita al lado estaba muerta. **Un comentario falso es un defecto con vida propia**,
+porque el próximo que pasa le cree. Queda una pieza, y es de la misma clase: el test que
+mantiene vivo a `latest_revision` se justifica con "cinco tests unitarios **y un llamador
+de producción**", y ese llamador ya no existe.
 
 *Seis imports muertos, y un test que mantiene vivo un símbolo citando un llamador que no
 existe.* Tres líneas de import del motor traen siete nombres que no usa. Y
@@ -1195,6 +1337,27 @@ forma.
 **Qué necesita antes.** Python 3.10+ y red. **Nada más**: no hay entorno virtual, no hay
 `pip install kaggle`. Todo se hace con la biblioteca estándar y una llamada HTTPS cruda.
 
+**Las etapas que declara.** Leídas de `OBJECTIVE_FLOW`, que un test mantiene
+igual al `SKILL.md`. `list` contesta *dónde estoy*; esto contesta *para qué es*,
+que ninguna lista implica: una cuenta está en el almacén porque alguien la puso,
+no porque funcione.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `taken-in` | Lo que entregaste está en el almacén, **de a una fila por vez**, así una fila mala nunca cuesta las de al lado | el inbox soltó todo lo que tenía y se consumió, o quedó porque todavía hay filas adentro |
+| `proven` | Cada cuenta guardada se le preguntó al servicio, bajo cualquiera de los dos esquemas de token que use de verdad | cada cuenta lleva un veredicto **de esta corrida** |
+| `decided` | Qué pasa con las que dejaron de funcionar — que es tu decisión y nunca un efecto secundario de preguntar | es la llegada; no está detrás de nadie |
+
+**Llegada:** cada cuenta con un veredicto **actual**, y las que fallan
+respondidas, no apenas reportadas. Un veredicto se vence: los tokens se rotan y
+expiran, así que *"autenticó una vez"* tampoco es llegada. Una sesión que corre
+`validate`, ve un fallo reportado y para, **no llegó**.
+
+**Dos paradas son de una persona:** consentir la validación, porque escribe —
+guarda credenciales y consume el inbox—, y decidir qué pasa con una cuenta que
+dejó de funcionar. Una credencial muerta se reporta y **nunca se borra sola**,
+a propósito: borrarla es tu otra opción, no una consecuencia de preguntar.
+
 **El flujo.** Al activarse corre `list` en silencio para saber qué hay guardado, y
 después hace **una sola pregunta**: validar o eliminar. La opción de eliminar sólo
 aparece si hay algo que eliminar.
@@ -1230,7 +1393,7 @@ parcial por un typo es peor que no borrar nada.
 | Archivo | Qué hace y por qué existe |
 |---------|---------------------------|
 | `SKILL.md` | El contrato de conducta: cuándo preguntar, qué no leer nunca, cómo reportar. Sin esto, el agente no tendría motivo para preguntar antes de escribir. |
-| `scripts/accounts_cli.py` | La implementación entera, sin dependencias externas. Subcomandos: `list`, `discover`, `validate`, `remove`, y el no-interactivo de entrega. |
+| `scripts/accounts_cli.py` | La implementación entera, sin dependencias externas. Subcomandos: `list`, `discover`, `validate`, `remove` y `materialize`. Los cuatro primeros son para una persona; **`materialize` es para código**: escribe la credencial guardada de un worker a un archivo de texto plano y devuelve **dónde**, nunca **qué**. Ese es el contrato que deja que `remote-execution` use un token sin que ninguna skill lo lea ni lo imprima. |
 | `store/accounts.json` | El depósito. Permisos `0600`, escritura atómica. |
 | `store/.gitignore` | Ignora **todo** el contenido de `store/` por regla de contenido, no por nombre — así cubre también el temporal de la escritura atómica y cualquier archivo futuro. Está commiteado para que la regla exista *antes* de que se escriba la primera credencial. |
 | `store/workers/<usuario>/token` | Se crea recién en la primera entrega. Contiene sólo el token, sin envoltorio JSON: es la forma que el cliente de Kaggle espera. |
@@ -1250,14 +1413,15 @@ parcial por un typo es peor que no borrar nada.
 
 **Limitaciones conocidas.**
 
-*El auditor de la forja no la mira.* La validación toca la API real, así que lo que
-reporta es evidencia y no inferencia, y el punto flojo de la cadena está del otro lado de
-la costura, en el adaptador de `remote-execution` (ver su apartado). Pero esta skill
-maneja **credenciales vivas** y `skill-audit` no tiene **ni un probe** apuntado a ella:
-medido el 2026-09-13, `references/probes/` cubre cuatro de las nueve skills y sólo en la
-dimensión `roster`. Nada deriva qué operaciones acepta este CLI contra las que su propio
-`SKILL.md` promete. **Cómo se arregla:** una receta `accepted-operations` como la que ya
-existe para `remote-execution` — el mecanismo está escrito, falta apuntarlo acá.
+*El auditor la mira, pero sólo de un lado.* La validación toca la API real, así que lo
+que reporta es evidencia y no inferencia, y el punto flojo de la cadena está del otro lado
+de la costura, en el adaptador de `remote-execution` (ver su apartado). Esta skill ya tiene
+su receta `accepted-operations` en `skill-audit`, que deriva sus cinco operaciones del
+propio rechazo del CLI. Lo que todavía no tiene es la otra mitad: su `SKILL.md` declara ese
+conjunto en prosa y no en una tabla cerrada, así que el auditor responde
+`comparison: not-run` — deriva lo que el código acepta y no puede compararlo contra lo que
+el documento promete. **Cómo se arregla:** una tabla cerrada en el `SKILL.md`, como la que
+`remote-execution` ya tiene.
 
 **Diagrama.**
 
@@ -1327,6 +1491,32 @@ silencio. De ese pliegue sale su peldaño `poll-first`.
 **Qué necesita antes.** Python 3.10+, biblioteca estándar, sin entorno virtual. Para
 hablar con un servicio real hace falta un adaptador registrado y una credencial.
 
+**El flujo, por etapas.** Esta sección tampoco tenía uno. Leídas de
+`OBJECTIVE_FLOW`, independientes de todo ledger, carpeta de job o resultado en
+disco: `status` contesta *dónde estoy* plegando lo que pasó, esto contesta *para
+qué es*. Las catorce rutas de rechazo de este CLI la llevan, y para eso hubo que
+crear el único lugar por el que todas llegan a un lector.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `reachable` | Una carpeta de job **fijada a un commit que el remoto declarado puede servir de verdad**, que es lo que un worker clona | `generate-job` escribió la carpeta — prueba el pin contra el remoto **antes de escribir un byte**, así que una carpeta que existe es un pin que se publicó |
+| `wire` | Que este worker, en este pin, lleva corriente — pagado en minutos en vez de en las horas que cuesta una campaña | `readiness` dice listo, con un veredicto **derivado de la evidencia de un ensayo**, nunca afirmado |
+| `authorized` | Un lanzamiento atado a este commit, este entrypoint y esta lista de unidades, con un token acuñado para él y consumido una sola vez | un registro de `gate` coincide; un hecho ligado que se movió lo vuelve stale, que no es lo mismo que pasar el tiempo |
+| `sent` | La entrega salió y el ledger lo sabe, así ninguna segunda contesta una pregunta que ya se está contestando | el ledger lo tiene con un estado terminal |
+| `returned` | El resultado está en disco, actual, y no en cuarentena | es la llegada; no está detrás de nadie |
+
+**Llegada:** el resultado en disco y verificado como el actual — lo único de lo
+que alguien puede leer un número. **No** la entrega aceptada: una entrega que el
+servicio tomó es un recibo, no un resultado.
+
+**`reconcile` no es una etapa y nunca avanza ninguna.** Es el camino de vuelta
+cuando el ledger y el servicio dejan de coincidir —`drift`, o una línea que no
+se pudo leer— y devuelve a `sent`.
+
+**Dos paradas son de una persona:** **publicar el commit** que un worker
+clonaría, sin el cual `generate-job` se niega y lo nombra con precisión, y
+**autorizar el lanzamiento**, que son horas de la cuota de alguien.
+
 **Los comandos.**
 
 | Comando | Qué hace | Cuándo se usa |
@@ -1370,6 +1560,7 @@ exactamente 2".
 | `scripts/adapters/kaggle.py` | El **único** archivo de toda la skill autorizado a nombrar un servicio. Invoca el binario de línea de comandos; nunca importa el paquete. |
 | `assets/runner_bootstrap.py` | La celda 0 de todo cuaderno generado: valida la configuración, clona el commit fijado, pone `src/` en el path e importa los módulos declarados verificando que resuelvan **dentro del clon**. Corre en la máquina remota, antes que cualquier código tuyo. |
 | `assets/runner_invoke.py` | La celda 1: elige el bloque normal o el de ensayo y llama al punto de entrada declarado. |
+| `distribute` | Reparte las unidades declaradas entre los workers disponibles y devuelve el reparto, **sin enviar nada**. Es la respuesta a "¿en cuántos pedazos entra esto y quién corre cada uno?", separada de `submit` a propósito: decidir el reparto y gastar cuota son dos actos distintos. |
 
 **Qué escribe en el disco.**
 
@@ -1419,18 +1610,14 @@ vivo por primera vez, empezá a buscar ahí y no en el seam. **Cómo se arregla:
 ensayo real —para eso existe `submit --smoke`—, que es exactamente el camino más barato
 para descubrirlo antes de gastar una corrida grande.
 
-*Tres comandos imprimen sin red de contención, y el mismo bug ya pasó una vez.* `status`
-se arreglaba antes de cada `Path` anidado que apareciera, cambiando a
-`json.dumps(..., default=str)`. Ese arreglo llegó a cuatro de los nueve sitios de
-impresión: `distribute` (`remote_cli.py:2869`), `reconcile` (`:2971`) y `readiness`
-(`:3081`) siguen con la forma vieja, y los tres crashean con `TypeError: Object of type
-PosixPath is not JSON serializable` en cuanto su payload lleve uno — probado por mutación.
-Hoy no muerde, y sólo por una razón: `_staleness_for()` devuelve `str` en todos sus
-campos. Eso es un hecho sobre la forma actual de un helper, no una garantía que esos tres
-sitios sostengan por su cuenta — y `status` adquirió su `Path` anidado exactamente así,
-porque alguien agregó un sub-bloque y nadie tocó todos los sitios de impresión. **Cómo se
-arregla:** `default=str` en los cinco restantes, y un test de regresión por comando como
-el que ya protege a los cuatro arreglados.
+*Resuelto: los nueve sitios de impresión llevan red.* `status` reventaba con
+`TypeError: Object of type PosixPath is not JSON serializable` en cada invocación, porque
+alguien le agregó un sub-bloque anidado y nadie revisó los sitios de impresión. El arreglo
+—`json.dumps(..., default=str)`— llegó a cuatro de los nueve: **exactamente los cuatro que
+tenían test de regresión**. Los otros cinco quedaron pelados, y tres de ellos se probaron
+crasheables por mutación. Ahora los nueve tienen red y los nueve tienen su test. El
+defecto nunca fue "tres comandos pueden reventar": era **un arreglo aplicado donde había
+cobertura en vez de donde se repite la forma**.
 
 **Diagrama.**
 
@@ -1515,13 +1702,36 @@ revisión vigente". Nadie abre el directorio a ojo.
 usa `ANTHROPIC_API_KEY` — porque el "modelo" de esta deliberación es el agente ya sentado en la
 conversación.
 
+**Las etapas que declara.** Leídas del campo `objective` de su propio
+`profile.ts`. Este dominio **no** dice el norte de su hermano matemático, y la
+prueba es estructural: tiene una etapa, `validated`, de la que el hermano no
+tiene equivalente ninguno.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `bound` | Cuál revisión es la actual y cuál entrada de ella toca el cambio | `STATUS` nombró la última y el objetivo resolvió a una entrada |
+| `validated` | El protocolo, la métrica, el baseline, el dataset y el esquema están dichos y **salieron de una búsqueda, no de una suposición** | frena esta etapa: una URL sin tag fechado, un baseline sin repositorio o sin año de venue, una línea `**Dataset:**` no dada o dada dos veces, o un esquema que no muestre test, semillas o repeticiones |
+| `deliberated` | El cambio se discutió, no se tipeó | **lo dijiste vos** — nada acá lo mide, y nada puede |
+| `composed` | El reemplazo existe escrito **como el experimento**, no como una descripción de él | existe un bloque que lleva el experimento y lo que debe cumplir |
+| `published` | La sucesora existe con el marcador del artefacto y es la revisión actual | es la llegada; no está detrás de nadie |
+
+**Llegada:** la revisión sucesora publicada y actual, que es la única forma en la
+que viajan los experimentos.
+
+**`validated` es la etapa que justifica que esta skill exista aparte.** Un
+protocolo inventado de memoria se lee igual que uno buscado; la diferencia sólo
+aparece cuando alguien pide la fuente. Por eso la validación externa corre
+**antes de cualquier borrador**, no después.
+
 **El flujo.**
 
 1. **Arranque.** `STATUS` sobre `experiments/`, de sólo lectura. Nunca se mira el directorio a
    mano.
 2. **Bifurcación.** Cero revisiones gestionadas → crear v1. Ya hay una → editar.
 3. **Crear v1.** El motor carga las tres fuentes una sola vez, las incluye verbatim bajo
-   `## Paper Guide Reference`, y compone el documento a partir de tu idea de texto. **La idea
+   `## Reference Sources` (encabezado propio de este dominio; el motor compartido escribía
+   `## Paper Guide Reference` para cualquier dominio hasta que este perfil declaró el suyo,
+   finding L6), y compone el documento a partir de tu idea de texto. **La idea
    necesita al menos dos oraciones.** El título sale de la primera y el encabezado de sección de
    la segunda; con una sola oración las dos calculan el mismo texto, `# X` y `## X` quedan
    byte-idénticos, y cada consulta de locus posterior queda ambigua para siempre.
@@ -1565,7 +1775,7 @@ conversación.
 | `cli.mjs` | 13 líneas. Fija `DELIBERATION_DOMAIN_PROFILE` a este `profile.ts` y delega el resto entero — argumentos, modo stdin, códigos de salida — al `cli.mjs` del motor compartido. |
 | `.claude/agents/experimental-validation.md` | El tramo `validated`: busca y verifica, nunca compone. Termina cuando ningún hallazgo depende de la memoria en vez de una búsqueda de esta misma corrida. |
 | `.claude/agents/experimental-publish.md` | El tramo terminal: empieza donde el operador ya aceptó el cambio, termina con el sucesor publicado y vigente. No tiene `Write` ni `Edit` — sólo el motor escribe. |
-| `_core/deliberation/engine/` (~50 archivos TS) | El motor compartido con `proposal-deliberation`, sin cambios para admitir este dominio. Ver el desglose completo en la sección de `proposal-deliberation`; tres de esos archivos — `patch-compiler.ts`, `draft-materialization.ts`, `revision-lifecycle-store.ts` — todavía escriben el marcador de artefacto como literal en vez de leerlo del perfil (ver **Limitaciones conocidas**). |
+| `_core/deliberation/engine/` (~50 archivos TS) | El motor compartido con `proposal-deliberation`, sin cambios para admitir este dominio. Ver el desglose completo en la sección de `proposal-deliberation`; un solo archivo — `revision-lifecycle-store.ts` — todavía escribe el marcador de artefacto como literal, a propósito, para un guard Python de cruce de lenguaje (ver **Limitaciones conocidas**). |
 
 **Los seguros.**
 
@@ -1588,45 +1798,36 @@ conversación.
   búsqueda de esta corrida se marca `[pending-verification]`; una URL plausible es peor que una
   ausente, porque parece verificada.
 
-**Limitaciones conocidas.**
+**Limitaciones conocidas.** Las tres de abajo estaban abiertas y ya se resolvieron.
 
-*El marcador del artefacto sigue duplicado en tres archivos del motor.* `patch-compiler.ts:5`,
-`draft-materialization.ts:12` y `revision-lifecycle-store.ts:19` todavía escriben
-`<!-- proposal-workspace:artifact:v1 -->` como constante literal en vez de leerla de
-`DOMAIN.artifact.marker`, mientras los otros siete sitios del motor sí la leen del perfil. Hoy no
-muerde a nadie porque los dos dominios que existen copian el mismo byte a byte — el propio
-comentario de `profile.ts` (líneas 81-86) lo dice sin rodeos. Un tercer dominio que declarara su
-propio marcador tendría sus documentos escritos con una cadena y validados contra otra, y la
-falla sería silenciosa. **Cómo se arregla:** que esos tres archivos lean `DOMAIN.artifact.marker`
-igual que ya hacen `artifact-naming.ts`, `orchestrator.ts`, `initial-revision-creation.ts` y el
-resto.
+*Resuelto: el marcador del artefacto ya no está duplicado sin motivo.* `patch-compiler.ts` y
+`draft-materialization.ts` escribían `<!-- proposal-workspace:artifact:v1 -->` como constante
+literal en vez de leerla de `DOMAIN.artifact.marker` — el segundo, además, sin ningún lector: la
+constante estaba muerta. El primero ahora lee `artifact.marker` como los demás sitios del motor;
+el segundo perdió la constante entera. Sólo `revision-lifecycle-store.ts:19` sigue escribiendo el
+literal, y a propósito: un guard Python de cruce de lenguaje lo lee por regex.
 
-*El cargador del perfil de dominio acepta secciones enteras vacías.* `domain-profile.ts` revisa
-que `REQUIRED` no tenga claves de nivel superior `undefined`, y después vuelve a revisar
-`artifact.*` y `objective.*` explícitamente — con un comentario propio que dice por qué: la
-primera pasada dejaba pasar `artifact: {}` vacío. Esa misma lección no llegó a `vocabulary`,
-`preservation`, `references` ni `sources`: un perfil que declarara `vocabulary: {}` publicaría v1
-igual, y después no podría resolver ningún locus, con el mensaje culpando a la consulta en vez de
-al perfil. Y la comprobación que sí se agregó para `stages[].establishes`/`.behindWhen` sólo
-prueba `=== undefined`, así que una cadena vacía `""` la atraviesa sin marcar nada — exactamente
-el daño que el comentario de esa comprobación dice que existe para evitar. Esta skill no lo sufre
-— declara los ocho campos de `vocabulary` llenos — pero el motor no se lo exigiría a la próxima.
-**Cómo se arregla:** extender la comprobación de "no vacío" que ya existe para `artifact` y
-`objective` a las cuatro secciones restantes, y cambiar la prueba de los campos de `stages` de
-`=== undefined` a también rechazar la cadena vacía.
+*Resuelto: el cargador del perfil de dominio ya no acepta secciones enteras vacías.*
+`domain-profile.ts` revisaba que `REQUIRED` no tuviera claves de nivel superior `undefined`, y
+volvía a revisar `artifact.*`/`objective.*` explícitamente, pero la misma lección no llegaba a
+`vocabulary`, `preservation`, `references` ni `sources`, y la comprobación de `stages[].establishes`/
+`.behindWhen` sólo probaba `=== undefined` (una cadena vacía la atravesaba). Ahora los ocho campos
+de `vocabulary`, las funciones de `preservation`/`references`, una lista de `sources` no vacía y
+bien formada, y cadenas no vacías en `objective.arrival`/`.purpose`/`.humanStops`/`stages[].*` se
+revisan igual de explícitamente, con el mismo código de error nombrando el campo anidado. Esta
+skill nunca lo sufrió — declara los ocho campos de `vocabulary` llenos — pero el motor ya se lo
+exige a la próxima.
 
-*Siete contadores de auto-auditoría nacieron en cero y no tienen forma de dejar de estarlo.*
-`runtime-metrics.ts:47` define `recordScientificMetric`, y es la **única** ocurrencia del símbolo
-en todo el repositorio — nada lo llama, en ningún archivo de producción ni de test. Los siete
-contadores que alimenta (`entry`, `blocked`, `recovery_required`,
-`materialization_blocked`/`_recovery_required`/`_retry`, `recovery_diagnostic`) arrancan en 0 y
-viajan sin cambiar hasta el bloque `metrics` que devuelve cada auto-auditoría — el mismo bloque
-que tanto `SKILL.md` como los dos agentes le piden al operador que lea como `selfAuditStatus:
-"PASS"`. Su hermano `recordLifecycleMetric`, en el mismo archivo, sí tiene dos sitios de llamada
-reales y dos tests que afirman sus contadores; éste no tiene ninguno. **Cómo se arregla:** cablear
-las llamadas en los puntos donde el motor detecta cada evento — igual que ya existe para
-`recordLifecycleMetric` — o retirar el campo del reporte de auto-auditoría hasta que algo lo
-llame, para que un contador en cero dejara de leerse como una medición.
+*Resuelto (decisión tomada): los siete contadores de auto-auditoría que nacían en cero se
+retiraron.* `runtime-metrics.ts` definía `recordScientificMetric`, con cero llamadores de
+producción y cero tests — la única ocurrencia del símbolo era su propia definición. Los siete
+contadores que alimentaba viajaban sin cambiar hasta el bloque `metrics` que devuelve cada
+auto-auditoría, indistinguibles de una medición real. Se retiraron (`scientificMetrics`,
+`recordScientificMetric` y el tipo que los declaraba) en vez de inventarles sitios de llamada:
+decidir DÓNDE instrumentar cada uno es una pregunta de diseño real que este arreglo no puede
+responder por adivinanza, y una colocación equivocada seguiría siendo señal falsa, sólo que ya no
+visiblemente en cero. `recordLifecycleMetric` (dos sitios de llamada reales, dos tests) queda como
+el patrón a seguir si alguna vez se diseñan productores reales para estos siete.
 
 **Diagrama.**
 
@@ -1686,6 +1887,27 @@ documento por la misma compuerta que cualquier otro cambio.
 **Qué necesita antes.** Un protocolo de experimentos publicado, y un repositorio destino
 bajo `implementations/` que ya sea un repositorio git. Nada de entorno virtual propio de
 la forja: el `.venv` es siempre del destino.
+
+**Las etapas que declara.** Leídas de `OBJECTIVE_FLOW`, con la misma propiedad
+que el norte de `proposal-implementation`: independientes de lo que haya en
+disco, para que una sesión que chocó con un error se pueda ubicar y reenganchar.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `standing` | Un repositorio armado como esta skill espera, con intérprete propio y **los pasos declarados del protocolo puestos como comandos ejecutables** | `structure` no reporta huecos de andamiaje y el protocolo al que responde la corrida está nombrado y es legible |
+| `binding` | El código que corre dice lo que dice la revisión de experimentos ligada, con cada paso declarado trazado a un comando ejecutable | `fidelity` está limpio contra esa revisión y la suite propia del destino está verde bajo su propio intérprete |
+| `instrumentation` | **Cada medición que el protocolo declara tiene dónde aterrizar** — una métrica, un registro, un chequeo que pueda fallar | cada medición declarada resuelve a algo que se puede correr y volver a leer |
+| `rehearsal` | El flujo declarado corre punta a punta a escala chica, y el registro que deja coincide con el documento que lee una persona | el ensayo está completo y su propio reporte da `ok` |
+| `full-scale` | Cada paso ruteado a donde se decidió que corra, y ejecutado ahí a la escala que declara el protocolo | es la llegada; no está detrás de nadie |
+
+**Llegada:** corridas completas a la escala declarada por el protocolo, con un
+registro **contrastable contra la revisión de experimentos**. No una
+verificación verde, no un ensayo que pasó.
+
+**Cuatro paradas son de una persona, ninguna es un defecto a reparar:**
+autorizar que se escriba código, aprobar el mapa de pasos declarados a comandos
+ejecutables, publicar el commit que un worker clonaría, y autorizar un
+lanzamiento — que son horas de la cuota de alguien.
 
 **El flujo.** Esta skill **es** casi enteramente el motor compartido en
 `_core/implementation/engine/` —unas 21.000 líneas en 12 archivos, la misma base que
@@ -1803,13 +2025,12 @@ y el mismo patrón de prueba, hereda la misma ventana. **Cómo se arregla:** cam
 comprobación a `git status --porcelain` (o `git diff HEAD` más un chequeo de no
 rastreados), igual que se anota para el hermano.
 
-*El guardia de intérprete ajeno se puede silenciar sin que ninguna prueba lo note.*
-`require_non_forge_interpreter` —la doctrina que este `SKILL.md` llama "aislamiento no
-negociable"— tiene una única llamada de producción (`cmd_env`) y ninguna prueba que
-mute su condición y falle: aceptar en silencio un `sys.prefix` de la forja deja toda la
-suite en verde. Es del motor compartido, así que este huésped lo hereda tal cual.
-**Cómo se arregla:** una prueba de mutación dedicada sobre esa condición, en vez de
-sólo comprobar que la excepción exista en el código fuente.
+*Resuelto: el guardia de intérprete ajeno ya se puede poner en rojo.*
+`require_non_forge_interpreter` —la doctrina que los dos `SKILL.md` llaman "aislamiento no
+negociable"— tenía una única llamada de producción y ninguna prueba capaz de fallar: se
+podía retargetear su condición, dejando el `raise` intacto en el código fuente para que los
+barridos de roster no lo notaran, y aceptaba en silencio un `sys.prefix` de la forja con
+todas las suites verdes. Ahora hay un test que muta exactamente eso y se pone rojo.
 
 *El módulo de reescritura de referencias puede volverse un no-op y ninguna suite lo
 nota.* `scan_reference_updates`, `scan_stale_references` y el patrón de referencia
@@ -1821,15 +2042,14 @@ vive en el motor compartido, este huésped hereda la misma ventana ciega que el 
 **Cómo se arregla:** una prueba que mute cada una de las tres piezas por separado y
 verifique que alguna suite se rompa.
 
-*Un refusal que no puede disparar sigue publicado como si pudiera.* `NAME_NOT_ALPHANUMERIC`
-—compartido por el motor y por lo tanto alcanzable también desde este huésped a través de
-`name`— está escrito detrás de un patrón que sólo puede emitir tokens ya alfanuméricos, así
-que la comprobación que lo dispara nunca se cumple; un carácter Unicode simplemente se
-descarta en vez de rechazarse. El hermano lo publica en su propio `SKILL.md` como uno de
-cuatro refusals en vivo; esta skill no re-documenta el roster de `name`, pero comparte el
-código y por lo tanto el mismo refusal inalcanzable. **Cómo se arregla:** o bien la
-condición se corrige para que pueda dispararse sobre entrada no-ASCII, o el refusal se
-retira de donde se lo publica como vigente.
+*Resuelto: ese refusal ahora puede disparar, y lo que arreglaba era peor que publicarlo
+de más.* `NAME_NOT_ALPHANUMERIC` estaba detrás de un patrón que sólo emitía tokens ya
+alfanuméricos, así que no podía alcanzarse. El daño no era el refusal de adorno: los
+caracteres que ningún patrón capturaba **se caían en silencio**, y el nombre salía
+mutilado — `Ñandú` se convertía en `And`, `münchen` en `M-Nchen`, `test@here` en
+`Testhere`. Se hizo alcanzable en vez de retirarlo, porque perder letras sin avisar es
+peor que rechazar el nombre. Con un detalle que sin él no arreglaba nada: `str.isalnum()`
+es Unicode-aware y aceptaba `é`, así que la comprobación necesitó `isascii()` además.
 
 **Diagrama.**
 
@@ -1899,6 +2119,29 @@ $ paper_cli.py resolve --identifier 10.1038/nature14539 --resolver crossref
 {"status": "ok", "title": "Deep learning", "doi": "10.1038/nature14539", ...}
 ```
 
+**El flujo, por grupos de verbos.** Esta skill no declara una tabla de etapas:
+declara **diecisiete verbos detrás de una sola puerta** (`scripts/paper_cli.py`),
+y el flujo es el orden en que esos grupos se habilitan entre sí.
+
+| Grupo | Verbos | Qué deja establecido |
+|---|---|---|
+| El documento existe | `scaffold`, `status` | `paper/main.tex`, `refs.bib`, `Figures/`. `scaffold` es idempotente: una segunda corrida **nunca toca un byte existente**, ediciones a mano incluidas |
+| El contrato de sección | `contract`, `readiness`, `order` | Qué debe cumplir cada sección. El contrato es **dato, no código** |
+| Las decisiones del paper | `declare`, `observe`, `plan` | Lo que el paper decide sobre sí mismo. `observe` valida un informe de `insumos-observer` contra el esquema **antes** de que una persona corra `declare` |
+| La evidencia que sostiene | `resolve`, `bib build`, `validate` | Resolución de citas, bibliografía con fuente, y la compuerta de veredicto/colocación: **ninguna afirmación sin una fuente que la sostenga** |
+| Escribir y dibujar | `write`, `render`, `place` | Redacción atada a evidencia, auditoría de contrato y prueba de fuga de estilo. `render`/`place`: un diagrama que compila o dice por qué, con su presupuesto de reparación |
+| Comprobar | `verify` | Verificación de acoplamientos de sólo lectura, integridad de citas y vigencia del contrato |
+
+**El motor de sustitución son cuatro de esos diecisiete** —`scaffold`, `status`,
+`open`, `substitute`— y tienen una regla que conviene saber: **no existe
+`--force`**. Nada acá descarta jamás el texto en disco de una persona a favor de
+un cuerpo entrante. La única salida de un bloque editado a mano es `--adopt`,
+que rebasa el digest y **deja el cuerpo intacto**.
+
+**Y nunca afirma que el documento compile.** Un `substitute` exitoso siempre
+agrega `"rendering": "unproven"`: este motor no tiene toolchain de LaTeX y no
+hace ninguna afirmación sobre cómo queda la página.
+
 **El flujo.** Siete etapas, declaradas en `paper_objective.OBJECTIVE_FLOW` y
 leídas por los tests de los agentes, no por prosa suelta: `scaffold` crea
 `paper/main.tex`, `refs.bib` y `Figures/` de forma idempotente, sin pisar jamás
@@ -1948,6 +2191,8 @@ donde nada quedó afirmado sin que una corrida lo haya chequeado.
 | `scripts/paper_verify.py` | Siete chequeos puros sobre esa evidencia — cero I/O propio, reporte de sólo lectura. |
 | `scripts/paper_objective.py` | El norte declarado: `OBJECTIVE_FLOW`, leído por `tests/test_agents.py` vía `ast.literal_eval` — literales puros, sin llamadas ni imports. |
 | `sections/*.md` | Los diez contratos reales, versionados: front-matter JSON + prosa. Entrada real, no fixture. |
+| `.claude/agents/insumos-observer.md` | Lee las **cuatro fuentes declaradas** del paper —`proposals/`, `experiments/`, el código del repo destino y lo que devolvieron sus corridas— y reporta, por cada hecho observable, si está satisfecho y **con qué evidencia**. `Read`, `Glob`, `Grep`. **Nunca decide un valor y nunca corre `declare`**: su informe es lo que una persona lee antes de correrlo ella. El informe se pasa por archivo y `observe` lo valida contra el esquema — nunca se le cree a un agente su propia cuenta. |
+| `.claude/agents/style-sampler.md` | Resuelve el bloque equivalente, **entero**, de cada carpeta de `guidance/` que el registro clasifica como `style-reference`, y lo devuelve **verbatim, nunca recortado**. `Read`, `Glob`, `Grep`. Lo que devuelve es el único material contra el cual una prueba posterior de solapamiento puede comparar un borrador con estilo: si recortara, la prueba compararía contra algo que nadie escribió. |
 
 **Los seguros.**
 
@@ -2075,6 +2320,28 @@ opcional de `structure`. La negativa sin shell no es una falla del audit, es
 su salida correcta — un audit cuyas afirmaciones son puras lecturas no le dice
 al usuario nada que no pudiera haber leído solo.
 
+**El flujo, por etapas.** Una auditoría diferencial contra un segundo sujeto
+corre en **seis etapas, de la más barata a la más cara**. Cada una es una fila de
+una tabla, nunca un encabezado numerado, y **todo informe lleva las seis filas**,
+sea diferencial o no.
+
+| # | Etapa | Modelos que gasta | Qué exige |
+|---|---|---|---|
+| 0 | Congelar el sujeto | 0 | `frozen` |
+| 1 | Decidir por herramienta | 0 | `undecidable` |
+| 2 | Manejarlo desde la ignorancia | 1 | `user-drive` |
+| 3 | Dos lecturas ciegas, sólo sobre esa lista | 2 | `reading-diff` |
+| 4 | Manejo diferencial: una caja con la skill y una sin ella | 2 | `drives` |
+| 5 | Partir las dos transcripciones | 1 | `found-by` |
+
+**Seis corridas de modelo en total**, y sólo si cada etapa después de las tres
+primeras efectivamente corre. Las dos primeras no gastan ninguna: el orden existe
+para que lo que se puede decidir con una herramienta nunca cueste un modelo.
+
+**La etapa 2 no es diferencial.** Exige que el sujeto se maneje desde la
+ignorancia siempre que haya algo alcanzable que manejar — es lo que separa *"la
+documentación dice X"* de *"el código hace X"*.
+
 **El flujo.** `roster` es el verbo central y el que reconstruye las dos
 mitades: `probe_code_side` (`audit_cli.py:308-372`) corre el argv propio del
 sujeto con un nonce que no puede aceptar (`__AUDIT_NONCE__`), y saca el roster
@@ -2135,18 +2402,16 @@ iteración de cada chequeo declarado está acotada o deriva del sujeto.
 
 **Limitaciones conocidas.**
 
-*La cobertura contra `remote-execution` es roster-only.* Sólo hay dos recetas
-para ese sujeto (`remote-execution.accepted-operations.json`,
-`remote-execution.smoke-subcommands.json`, confirmado con `ls
-references/probes/`), y ambas cubren la dimensión `roster`. Las otras cinco
-dimensiones que esta skill sabe correr —`structure`, `sensitivity`,
-`inversion`, `exits`, `enumeration-reach`— sólo tienen receta contra
-`skill-audit` auditándose a sí misma. `kaggle-accounts`, que maneja
-credenciales vivas, no tiene **ninguna** receta: cero archivos
-`kaggle-accounts.*.json` en `references/probes/`. **Cómo se arregla:** escribir
-recetas de las cinco dimensiones restantes contra `remote-execution`, y al
-menos una receta `roster` contra `kaggle-accounts`, aunque sea para confirmar
-que su superficie de comandos coincide con lo que `accounts_cli.py` acepta.
+*Una de nueve skills se audita entera; las otras ocho, a medias.* Medido el 2026-09-13
+manejando cada receta: sólo `remote-execution` responde `comparison: run` —nueve
+operaciones del código contra nueve de su tabla, sin sobrantes ni fantasmas—. Las otras
+ocho responden `comparison: not-run` y nombran el motivo, `no-closed-roster`: sus
+documentos declaran el roster **en prosa**, y la prosa es justo de donde el lado
+documentado no puede leerse. Conviene leer bien lo que eso significa: el `unregistered: []`
+que aparece al lado **no es un veredicto limpio**, es un campo vacío de una comparación que
+nunca corrió. El auditor es honesto; lo que falta es la otra mitad del sujeto. **Cómo se
+arregla:** cada `SKILL.md` publicando su roster en una tabla cerrada — trabajo dentro de
+cada skill, no del auditor.
 
 *Una receta ata una mutación a un número de línea exacto.*
 `references/probes/skill-audit.self-guarded-facts.json` fija la mutación de

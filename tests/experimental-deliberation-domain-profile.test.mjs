@@ -22,9 +22,17 @@ const skillDir = path.join(repoRoot, '.claude/skills/experimental-deliberation')
 const profilePath = path.join(skillDir, 'profile.ts');
 const piRoot = '/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent';
 
-// Exactly the top-level keys `domain-profile.ts` refuses a profile for omitting,
-// plus the six nested `artifact.*` fields it checks separately.
-const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'proseReferenceText', 'vocabulary', 'artifact', 'preservation', 'references', 'sources', 'objective'];
+// Exactly the top-level keys `domain-profile.ts` refuses a profile for omitting (finding
+// M6 fixed this to actually match the comment below: `vocabulary.*` used to be listed here
+// with no core enforcement behind it at all -- `domain-profile.ts` refused a profile for
+// NONE of these eight fields, so this constant only ever proved this PROFILE declares them,
+// never that the core would refuse one that did not; see
+// `tests/proposal-deliberation-domain-profile-vocabulary.test.mjs` for that refusal proven
+// directly against the core), plus the six nested `artifact.*` fields it checks separately.
+// `proseReferenceText` is deliberately absent (finding L5): it is optional now, and this
+// profile no longer declares a renderer it never invoked -- `preservation-experimental.ts`
+// has no "ref" atom kind and `reference-experimental.ts` needs only the raw matched value.
+const REQUIRED = ['deriveBase', 'baseLabel', 'baseLabelLong', 'exampleSlug', 'names', 'proseReferencePattern', 'vocabulary', 'artifact', 'preservation', 'references', 'sources', 'objective'];
 const ARTIFACT_REQUIRED = ['directory', 'stem', 'revisionPattern', 'revisionLabel', 'sidecarRoot', 'marker'];
 const VOCABULARY_REQUIRED = ['conceptualTerms', 'expertPattern', 'displayNounPattern', 'displayNounStripPattern', 'subjectPattern', 'subjectTerms', 'subjectLocusDescription', 'subjectEvidenceLabel'];
 
@@ -151,21 +159,27 @@ test('the managed document and its sidecars land under this skill\'s own namespa
     assert.equal(result.receiptPath, `.experimental-deliberation/receipts/experiments-${LINEAGE}-v01.md.json`);
 });
 
-test('the artifact marker is byte-identical to the literal the core still spells in three places', async () => {
+test('this domain declares its own artifact marker and no core file spells one', async () => {
     const result = await loaded();
+    // This test used to assert the opposite: that the profile COPIES a literal
     // `patch-compiler.ts`, `draft-materialization.ts` and `revision-lifecycle-store.ts`
-    // still write this literal rather than reading `DOMAIN.artifact.marker`, so a domain
-    // that declares any other marker is silently broken by all three.
+    // each spelled, "byte for byte". That was the defect written down as a lock -- a
+    // second domain was required to copy a hardcode, and any domain that declared a
+    // different marker was silently broken by all three sites.
+    //
+    // All three now read the profile, so there is nothing left to copy and nothing to
+    // keep in sync. What is left to check is that no core file has quietly grown a
+    // fourth copy, and that this domain's own declaration is a real marker.
     const spelled = [];
     for (const file of ['patch-compiler.ts', 'draft-materialization.ts', 'revision-lifecycle-store.ts']) {
         const source = await readFile(path.join(engineDir, file), 'utf8');
-        const match = source.match(/Buffer\.from\('(<!--[^']*)'\)/);
-        assert.ok(match, `${file} no longer spells a marker literal this test can read`);
-        spelled.push(match[1].replace(/\\n/g, '\n'));
+        const code = source.split('\n').filter((line) => !line.trimStart().startsWith('//')).join('\n');
+        if (/Buffer\.from\('<!--/.test(code)) spelled.push(file);
     }
-    assert.deepEqual([...new Set(spelled)], [result.marker], 'the profile must copy the core literal exactly, byte for byte');
+    assert.deepEqual(spelled, [], `core files spelling a marker literal again: ${spelled.join(', ')}`);
+    assert.ok(result.marker.startsWith('<!--') && result.marker.endsWith('-->\n'),
+        `this domain's declared marker is not a comment ending in a newline: ${JSON.stringify(result.marker)}`);
 });
-
 test('the change header renders its own heading line and ends with a trailing blank line', async () => {
     const result = await loaded();
     assert.equal(result.header.split('\n', 1)[0].replace(/^#{1,6}\s+/, '').trim(), result.heading);

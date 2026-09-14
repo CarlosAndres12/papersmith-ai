@@ -68,7 +68,7 @@ export const profile: DeliberationDomainProfile = {
 	},
 	preservation: { extractAtoms: () => new Map(), violations: () => [] },
 	references: { declares: () => [], cites: () => [] },
-	sources: [],
+	sources: [{ path: "guidance", required: false }],
 	// A pure detector, self-contained domain knowledge (mirrors preservation-math.ts's own
 	// hardcoded canonical-form rules, per domain-profile.ts's own doc comment): a "VALUE: N"
 	// above 100 in the candidate contradicts the fixed "declared bound is 100" assertion this

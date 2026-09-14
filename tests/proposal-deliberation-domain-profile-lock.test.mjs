@@ -274,7 +274,12 @@ function buildDenylist(profileList) {
 //   treatment design already prescribes for the first residue.
 const PINNED_RESIDUE = new Set(['equation', 'proposal']);
 const EQUATION_RESIDUE = { substringCount: 124, files: ['cleanup-planner.ts', 'document-index.ts', 'edit-planner.ts', 'lifecycle-service.ts', 'orchestrator.ts', 'patch-compiler.ts', 'proposal-workspace.ts', 'reference-index.ts', 'target-resolver.ts', 'types.ts'] };
-const PROPOSAL_RESIDUE = { wordBoundaryCount: 192, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'chat-draft-registry.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'preservation.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
+// 192 -> 191: `revision-lifecycle-store.ts` stopped declaring the artifact marker as
+// its own literal and reads `artifactConfig.marker` like every other core site. The
+// literal carried one `proposal` (its own marker bytes), so the count shrank by one.
+// Recorded rather than absorbed, in either direction: an unexplained move looks
+// exactly like a rename campaign from outside.
+const PROPOSAL_RESIDUE = { wordBoundaryCount: 191, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'chat-draft-registry.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'preservation.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
 
 test('C-3 vacuity guard: the denylist is non-empty, or this check would be vacuous', () => {
 	const denylist = buildDenylist(profiles);

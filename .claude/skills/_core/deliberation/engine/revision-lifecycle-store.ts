@@ -8,15 +8,16 @@ import { artifact as artifactConfig, managedRevisionFilename, parseManagedRevisi
 const MANAGED=strictManagedRevision;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA=/^[0-9a-f]{64}$/;
-// NOT routed through `artifactConfig.marker` (unlike every other marker site in core): the
-// Python cross-language guard `tests/test_proposal_implementation.py`'s
-// `test_the_marker_is_the_one_the_publisher_writes` reads this EXACT literal declaration by
-// regex (`const MARKER=Buffer\.from\('(.*?)'\);`) as the canonical source of truth to catch
-// drift against its own independent Python re-implementation of the marker bytes. `marker` is
-// deliberately NOT one of the extended lock's three scanned artifact values (only
-// `stem`/`directory`/`sidecarRoot`; see the lock test), precisely so this one site can keep
-// declaring it. Every OTHER site in core still reads `artifact.marker` instead of a second copy.
-const MARKER=Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+// The marker comes from the profile, like every other site in core. It was a literal
+// here, justified by a Python cross-language guard that read THIS FILE by regex as the
+// canonical source of truth -- a choice of where the guard looks, not a constraint: the
+// profile's artifact config was already in scope (`artifactConfig`, above). The copy cost
+// behaviour, not tidiness: `markerOwned` recognition compared against the literal while
+// the rest of the engine recognised through the profile, so a domain declaring its own
+// marker got an inventory holding a managed revision while nothing was the latest, and
+// no decision tree has a branch for that. The guard now reads the profile's own
+// declaration, which is what both languages actually have to agree about.
+const MARKER=Buffer.from(artifactConfig.marker);
 const METADATA_KEYS=['schemaVersion','operationId','operationTimestamp','requestedFilename','revision','documentSha256','sourceRevision','sourceFilename','reason','artifacts','inventoryDigest','preWithdrawalLatestFilename'];
 
 export type ManagedRevisionIdentity={filename:string;lineage:string;revision:string;revisionNumber:number;sourceFilename:string;sourceRevision:string};

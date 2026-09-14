@@ -72,7 +72,6 @@
 import { createInterface } from 'node:readline';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createJiti } from 'jiti';
 
 const engineDir = path.dirname(new URL(import.meta.url).pathname);
@@ -398,5 +397,3 @@ if (args.includes('--serve')) {
 		process.exit(1);
 	}
 }
-
-void pathToFileURL;

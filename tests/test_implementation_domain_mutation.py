@@ -792,18 +792,35 @@ class KitLockHonestyTests(unittest.TestCase):
 
 
 class SealCorpusUntouchedTests(unittest.TestCase):
-    """14.7: `git diff --exit-code tests/seal/` exits 0 at the end of this
+    """14.7: `tests/seal/` carries no uncommitted changes at the end of this
     phase -- asserted here via the same mechanism, in-process, rather than
-    shelling out from inside the suite."""
+    shelling out from inside the suite.
+
+    TANDA B M5: `git diff --exit-code` reads worktree against the index and
+    never reports an untracked path, since it is in neither. `git status
+    --porcelain` reads both states, so a stray file beside the seal is
+    reported the same way a modified one already was."""
 
     def test_the_seal_corpus_directory_has_no_uncommitted_changes(self):
         import subprocess
         proc = subprocess.run(
-            ["git", "diff", "--exit-code", "--", "tests/seal/"],
+            ["git", "status", "--porcelain", "--", "tests/seal/"],
             cwd=str(FORGE), capture_output=True, text=True)
         self.assertEqual(
-            proc.returncode, 0,
+            proc.stdout, "",
             f"tests/seal/ has uncommitted changes:\n{proc.stdout}")
+
+    def test_an_untracked_file_beside_the_seal_is_caught(self):
+        import subprocess
+        planted = FORGE / "tests/seal/PLANTED_extra_M5.json"
+        planted.write_text("{}\n", encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain", "--", "tests/seal/"],
+                cwd=str(FORGE), capture_output=True, text=True)
+            self.assertIn("PLANTED_extra_M5.json", proc.stdout)
+        finally:
+            planted.unlink()
 
 
 import test_implementation_domain_lock as domain_lock  # noqa: E402  (path set above)
