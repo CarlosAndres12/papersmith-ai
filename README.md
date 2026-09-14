@@ -125,7 +125,10 @@ Surya, ~1.5 GB, cacheados a partir de ahí.)
 |---------|------------|
 | `guidance/paper-guide/` | **Papers guía** — las referencias metodológicas / de estilo. `proposal-deliberation` las carga como contexto al inicio de cada deliberación. |
 | `guidance/reference-papers/` | **Corpus de referencia** — papers de apoyo, ingeridos a Markdown para consulta. No se cargan automáticamente en la deliberación. |
-| `guidance/data/` (paper del dataset) | **⏳ Pendiente — todavía no conectado.** El paper que describe la base de datos de la investigación. Planeado; dejar para más adelante. |
+| `guidance/data-paper/` | **Paper de datos — obligatorio para `experimental-deliberation`.** Describe la base de datos de la investigación y es el **techo**: acota qué se puede afirmar. Una afirmación que los datos no sostienen no es un experimento. Sin esta carpeta poblada, `CREATE_INITIAL_REVISION` no puede arrancar. |
+| `guidance/area-benchmark/` | **Benchmark del área — opcional.** Cuando está, es la fuente de verdad de métricas, splits, protocolo y baselines. Cuando falta, el documento declara los suyos: más débil, pero legal. |
+
+**Las cuatro carpetas viajan vacías.** Cada una llega a un clon con su `.gitkeep` y nada más: `guidance/*/*` está ignorado, con `!guidance/*/.gitkeep` como única escapatoria. El andamiaje se versiona, los PDFs y su Markdown no. `tests/test_forge_scaffolding.py` deriva las dos mitades —lo que los `profile.ts` declaran como fuente contra lo que git realmente rastrea— y se pone rojo si una carpeta declarada deja de viajar.
 
 ### Paso 2 — Ingerir los PDFs (PDF → Markdown)
 
