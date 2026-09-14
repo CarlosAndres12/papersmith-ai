@@ -80,7 +80,12 @@ export class InitialRevisionRenderer {
 		const sections = [`# ${canonicalMetadata.title}`, '', `## ${canonicalMetadata.sectionHeading}`, '', idea, ''];
 		const guideFragments = input.guideFragments ?? [];
 		if (guideFragments.length > 0) {
-			sections.push('## Paper Guide Reference', '');
+			// Finding L6: was a hardcoded `'## Paper Guide Reference'`, regardless of domain --
+			// accurate for a domain whose one source really is a paper guide, wrong for a
+			// domain whose declared sources never are. `DOMAIN.artifact.sourceReferenceHeading`
+			// defaults to the exact prior literal when undeclared, so this is zero migration
+			// for a domain that never opts in.
+			sections.push(`## ${DOMAIN.artifact.sourceReferenceHeading ?? 'Paper Guide Reference'}`, '');
 			for (const fragment of guideFragments) sections.push(`### ${fragment.path}`, '', fragment.content.trim(), '');
 		}
 		if (DOMAIN.artifact.changeHeader) sections.push(DOMAIN.artifact.changeHeader.render(INITIAL_CHANGE_SUMMARY), '');

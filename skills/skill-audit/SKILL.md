@@ -811,6 +811,11 @@ the same change.
 | `references/probes/remote-execution.accepted-operations.json` | `remote-execution`'s top-level `roster` recipe — pre-existing gap, committed without this row |
 | `references/probes/remote-execution.smoke-subcommands.json` | `remote-execution`'s nested `smoke record` `roster` recipe |
 | `references/probes/proposal-implementation.accepted-operations.json` | `proposal-implementation`'s `roster` recipe — same finding, over 2045 lines |
+| `references/probes/experimental-deliberation.accepted-operations.json` | `experimental-deliberation`'s `roster` recipe — `proposal-deliberation`'s sibling engine, previously unaudited |
+| `references/probes/experimental-implementation.accepted-operations.json` | `experimental-implementation`'s `roster` recipe — `proposal-implementation`'s sibling engine, previously unaudited |
+| `references/probes/kaggle-accounts.accepted-operations.json` | `kaggle-accounts`'s `roster` recipe — handles live credentials, previously unaudited |
+| `references/probes/paper-writing.accepted-operations.json` | `paper-writing`'s `roster` recipe — largest, newest skill in the forge, previously unaudited |
+| `references/probes/paper-ingestion.accepted-operations.json` | `paper-ingestion`'s `roster` recipe, over its flag surface rather than a subcommand (the script takes no subcommand) — previously unaudited |
 
 `references/probes/remote-execution.accepted-operations.json` shipped one commit
 before this pair of rows was added, itself undeclared here the whole time —

@@ -1556,6 +1556,77 @@ class CorpusModeCitationsAdmissibilityTests(unittest.TestCase):
         self.assertIn("transposition", output, output)
 
 
+#: Maps the number words `SKILL.md` prose is free to use for this count
+#: (including the historical "none") to an integer, so the check below
+#: reads *whatever the prose currently claims* rather than a hand-picked
+#: expectation, and still catches the count going stale in either
+#: direction.
+_MODE_COUNT_WORDS = {
+    "none": 0, "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+_SKILL_MD_MODE_COUNT_RE = re.compile(
+    r"(\w+) of the (\w+) shipped contracts carry `mode`"
+)
+
+
+class SkillMdModeCountAccuracyTests(unittest.TestCase):
+    """`M17`: `SKILL.md`'s `### \\`mode\\`: how a block is licensed to argue`
+    section states how many of the shipped `sections/*.md` contracts
+    already declare `mode`. That count is prose sitting beside data that
+    can be read directly -- the defect class this guard exists for is the
+    prose going stale while the corpus moves on, exactly as it did when
+    coverage went from 0/10 to 10/10 across `d99ee93`/`9986e11` and the
+    sentence was never revisited. Both sides are derived here: the corpus
+    side by parsing every `sections/*.md` header for a section-level
+    `mode`, the prose side by regexing the live `SKILL.md` text -- neither
+    is hand-listed or hardcoded to today's value.
+    """
+
+    SKILL_MD = (
+        FORGE_ROOT / ".claude" / "skills" / "paper-writing" / "SKILL.md"
+    )
+
+    def _real_corpus_count(self) -> tuple[int, int]:
+        paths = sorted(SECTIONS_DIR.glob("*.md"))
+        with_mode = 0
+        for path in paths:
+            header, _body = paper_contract.parse(path.read_bytes())
+            if header.mode is not None:
+                with_mode += 1
+        return with_mode, len(paths)
+
+    def _claimed_count(self) -> tuple[int, int]:
+        text = self.SKILL_MD.read_text(encoding="utf-8")
+        match = _SKILL_MD_MODE_COUNT_RE.search(text)
+        self.assertIsNotNone(
+            match,
+            "SKILL.md no longer states a '<n> of the <n> shipped contracts "
+            "carry `mode`' sentence -- update this test's regex to match "
+            "wherever that claim now lives before trusting it again.",
+        )
+        claimed_raw, total_raw = match.group(1), match.group(2)
+        for raw in (claimed_raw, total_raw):
+            self.assertIn(
+                raw.lower(), _MODE_COUNT_WORDS,
+                f"unrecognized count word {raw!r} in SKILL.md's mode-count "
+                f"sentence -- extend _MODE_COUNT_WORDS to read it.",
+            )
+        return _MODE_COUNT_WORDS[claimed_raw.lower()], _MODE_COUNT_WORDS[total_raw.lower()]
+
+    def test_skill_md_mode_count_matches_the_real_corpus(self) -> None:
+        real_with_mode, real_total = self._real_corpus_count()
+        claimed_with_mode, claimed_total = self._claimed_count()
+        self.assertEqual(
+            (claimed_with_mode, claimed_total), (real_with_mode, real_total),
+            f"SKILL.md claims {claimed_with_mode} of {claimed_total} shipped "
+            f"contracts carry `mode`, but sections/*.md actually shows "
+            f"{real_with_mode} of {real_total} -- the prose drifted from "
+            f"the corpus it describes.",
+        )
+
+
 _SAMPLE_DISQUALIFIER = "A symbol used without being declared."
 
 

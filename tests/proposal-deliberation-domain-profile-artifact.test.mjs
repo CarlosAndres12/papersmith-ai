@@ -52,7 +52,7 @@ function profileSource(artifactFieldsSource) {
 ${artifactFieldsSource}
 	preservation: { extractAtoms: () => new Map(), violations: () => [] },
 	references: { declares: () => [], cites: () => [] },
-	sources: [],
+	sources: [{ path: "guidance", required: false }],
 	objective: {
 		purpose: "test purpose",
 		stages: [{ stage: "bound", establishes: "x", behindWhen: "x" }],

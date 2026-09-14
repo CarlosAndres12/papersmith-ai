@@ -75,7 +75,13 @@ export function extractAtoms(source: string): Map<string, PreservationAtom> {
 	for (const [, body] of prose.matchAll(/(?<!\$)\$([^$\n]+)\$(?!\$)/gu)) add("inline", short(collapse(body)), collapse(body));
 	for (const [, value] of source.matchAll(/\\tag\{([^}]+)\}/gu)) add("tag", value, `\\tag{${value}}`);
 	for (const [macro] of source.matchAll(/\\[A-Za-z]+/gu)) add("macro", macro, macro);
-	for (const [, value] of source.matchAll(proseRef)) add("ref", value, DOMAIN.proseReferenceText(value));
+	// Finding L5: `proseReferenceText` used to be mandatory at the ENGINE level (`domain-profile.ts`'s
+	// `REQUIRED`) even though this is its one reader anywhere -- `experimental-deliberation` had to
+	// declare a renderer it never invoked. Now optional there; this module is the one that actually
+	// needs it, so it enforces its own requirement, lazily, at the one call site that uses it.
+	const proseReferenceText = DOMAIN.proseReferenceText;
+	if (!proseReferenceText) throw new Error("PROSE_REFERENCE_TEXT_REQUIRED: this domain's preservation gate renders a citation atom's display text and must declare proseReferenceText.");
+	for (const [, value] of source.matchAll(proseRef)) add("ref", value, proseReferenceText(value));
 	return atoms;
 }
 

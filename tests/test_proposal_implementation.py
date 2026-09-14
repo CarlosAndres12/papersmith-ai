@@ -473,6 +473,85 @@ class NormalizeNameTests(unittest.TestCase):
             self.assertEqual(once["package"], twice["package"], raw)
 
 
+class NameRefusalRosterTests(unittest.TestCase):
+    """SKILL.md's `name` row publishes a CLOSED roster of four still-live
+    refusal codes. A roster that names a code the guard can no longer raise
+    is exactly the defect this file's other roster tests already close in
+    the opposite direction (a code raised but never documented) -- so this
+    holds it both ways: every documented code must actually fire, and
+    nothing fires that is not documented.
+
+    Held to one concrete trigger per code rather than to fuzzing: fuzzing
+    proves a rate, a trigger proves reachability, and reachability is the
+    only claim the roster makes.
+    """
+
+    ROW_MARKER = "| `name` |"
+
+    def name_row(self) -> str:
+        text = SKILL_MD.read_text(encoding="utf-8")
+        row = next((line for line in text.splitlines()
+                    if line.startswith(self.ROW_MARKER)), None)
+        self.assertIsNotNone(row, "SKILL.md carries no `name` row to read a roster from")
+        return row
+
+    def documented_codes(self) -> set[str]:
+        row = self.name_row()
+        sentence = row[row.index("Refuses"):]
+        return set(re.findall(r"`(NAME_[A-Z_]+)`", sentence))
+
+    #: One `raw` per documented code, chosen so `normalize_name` raises that
+    #: exact code and no other -- the reachability proof itself.
+    TRIGGERS = {
+        "NAME_EMPTY": "",
+        "NAME_HAS_NO_WORDS": "-_-",
+        "NAME_NOT_ALPHANUMERIC": "café",
+        "NAME_STARTS_WITH_DIGIT": "2tolla",
+    }
+
+    def raised_code(self, raw):
+        try:
+            impl.normalize_name(raw)
+        except impl.NameRefused as refused:
+            return str(refused).partition(":")[0]
+        return None
+
+    def test_the_documented_roster_is_exactly_the_four_name_codes(self):
+        self.assertEqual(
+            self.documented_codes(), set(self.TRIGGERS),
+            "SKILL.md's `name` row documents a different set of codes than "
+            "this test holds triggers for -- the roster and the fixture "
+            "must be updated together")
+
+    def test_every_documented_code_is_actually_reachable(self):
+        # This is the measured defect: NAME_NOT_ALPHANUMERIC's guard sat
+        # behind a tokenizer that only ever emitted already-alphanumeric
+        # tokens, so the guard two lines below it could never see a token
+        # that failed it. "café" is that reachability proof for the code
+        # that used to have none.
+        for code, raw in self.TRIGGERS.items():
+            with self.subTest(code=code):
+                self.assertEqual(
+                    self.raised_code(raw), code,
+                    f"SKILL.md publishes {code!r} as a live refusal on "
+                    f"`name`, but {raw!r} did not raise it")
+
+    def test_non_ascii_letters_are_refused_not_silently_dropped(self):
+        # The behaviour the reachable guard replaces: before this, a
+        # character no ASCII pattern matched simply vanished from the
+        # name instead of being refused -- "münchen" silently became
+        # "M-Nchen". Refusing is what "café" above already proves;
+        # this pins the corruption it replaces as the reason.
+        with self.assertRaises(impl.NameRefused):
+            impl.normalize_name("münchen")
+
+    def test_ascii_only_names_still_pass_the_alphanumeric_guard(self):
+        # The other direction: an ASCII-only name must not start failing
+        # the same guard that now also catches non-ASCII input.
+        for raw in ("fem tolla", "FEM-TOLLA", "femTolla", "tolla v2"):
+            impl.normalize_name(raw)  # must not raise
+
+
 class NameCommandTests(unittest.TestCase):
     def run_cli(self, *args):
         proc = subprocess.run([sys.executable, str(CLI), *args],
@@ -6173,6 +6252,14 @@ class ForgeVocabularyDefinitionTests(unittest.TestCase):
 #: the other fails on an admission whose file no longer carries the word, so an
 #: entry cannot outlive the argument that bought it.
 FORGE_FLOOR_SURFACE_ADMISSIONS: dict[str, dict[str, str]] = {
+    "skill-audit/SKILL.md": {
+        "kaggle": "one row of the asset table, naming the probe recipe whose "
+                  "SUBJECT is the skill three entries below -- the word is in "
+                  "that skill's own directory name, so an asset table listing "
+                  "the recipe cannot avoid it without ceasing to say which "
+                  "recipe it means. Not a loan from any research project: the "
+                  "auditor names what it audits",
+    },
     "kaggle-accounts/SKILL.md": {
         "kaggle": "this skill's entire subject is one hosted service's "
                   "accounts, named in its own directory name and its doctrine's "
@@ -7672,6 +7759,159 @@ class ScaffoldImportClosureTests(unittest.TestCase):
                          proc.stdout[-3000:])
         self.assertNotIn("error", proc.stdout.splitlines()[-1].lower(),
                          proc.stdout[-3000:])
+
+
+class AdmissibilityRevisionGuardTests(unittest.TestCase):
+    """L2: `ruled_revision` returned the revision an admissibility ruling was
+    made against and had zero callers anywhere in the kit -- `require_admissible`
+    checked the verdict but never the revision, so a remedy measured after the
+    proposal moved to a newer revision (without re-running `admit`) passed
+    silently. The mismatch only surfaced later, at `verify`'s sha256 check on
+    `admissibility_record`. Wired here: `require_admissible` now calls
+    `ruled_revision` itself and refuses immediately when it disagrees with
+    the revision this suite was scaffolded for.
+    """
+
+    KIT_TESTS = SKILL_ROOT / "assets" / "kit" / "tests"
+    REVISION = "r05"
+
+    def _module(self, box):
+        source = scaffold_substitute(
+            (self.KIT_TESTS / "admissibility.py").read_text(encoding="utf-8"),
+            revision=self.REVISION)
+        path = box / "admissibility.py"
+        path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(
+            f"kit_admissibility_{box.name}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _box(self, ruling):
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "admissibility.json").write_text(json.dumps(ruling), encoding="utf-8")
+        return box
+
+    def test_ruled_revision_reads_the_ruling_s_own_revision(self):
+        box = self._box({"revision": self.REVISION, "findings": {}})
+        module = self._module(box)
+        self.assertEqual(module.ruled_revision(), self.REVISION)
+
+    def test_measuring_under_a_stale_ruling_is_refused_immediately(self):
+        # Reachable red: before the wire, `require_admissible` never called
+        # `ruled_revision` at all, so a ruling made against "r04" measured
+        # a finding cleanly under a suite scaffolded for "r05".
+        box = self._box({"revision": "r04", "findings": {"f1": {"admissible": True}}})
+        module = self._module(box)
+        with self.assertRaises(AssertionError) as ctx:
+            module.require_admissible("f1")
+        message = str(ctx.exception)
+        self.assertIn("r04", message)
+        self.assertIn(self.REVISION, message)
+
+    def test_measuring_under_the_ruled_revision_still_works(self):
+        box = self._box({"revision": self.REVISION, "findings": {"f1": {"admissible": True}}})
+        module = self._module(box)
+        module.require_admissible("f1")  # must not raise
+
+    def test_an_inadmissible_finding_under_the_right_revision_still_refuses(self):
+        """The revision guard must not swallow the existing admissibility
+        check -- both refusals stay reachable, in either order."""
+        box = self._box({"revision": self.REVISION,
+                         "findings": {"f1": {"admissible": False, "reasons": ["nope"]}}})
+        module = self._module(box)
+        with self.assertRaises(AssertionError) as ctx:
+            module.require_admissible("f1")
+        self.assertIn("nope", str(ctx.exception))
+
+
+class BenchmarkDeviceSelectionAfterDeletionTests(unittest.TestCase):
+    """L2: `resolve_device` shipped in `nb/benchmark.py` with zero references
+    anywhere in the forge, including both notebooks -- the real run path reads
+    `reduction.device` (a config string, default `"cpu"`) straight into
+    `torch.device(...)`. Deleted rather than wired: unlike `ruled_revision`,
+    there is no real call site this could attach to; auto-detection was never
+    plumbed into the config the run actually reads. This proves the deletion
+    left the real path intact.
+    """
+
+    SOURCE = KIT / "nb" / "benchmark.py"
+
+    def test_resolve_device_no_longer_ships(self):
+        self.assertNotIn("resolve_device", self.SOURCE.read_text(encoding="utf-8"))
+
+    def test_the_module_still_parses_and_device_still_comes_from_config(self):
+        source = self.SOURCE.read_text(encoding="utf-8")
+        ast.parse(source)  # the cut must not leave a dangling reference behind
+        self.assertIn("device = torch.device(reduction.device)", source)
+
+
+class RngFixtureRequestedByTemplateTests(unittest.TestCase):
+    """L2: `conftest.py`'s `rng` fixture had no requester anywhere in the
+    kit -- `test_synthetic.py`'s own stub built an identical local generator
+    off the identical `SEED` instead of asking pytest for the shared one, and
+    `sweep.py` did too. Wired here: the synthetic stub now takes `rng` as a
+    parameter, and a live pytest run over the substituted pair proves the
+    fixture actually delivers the seeded generator, not just that the text
+    matches. `sweep.py`'s local stays -- it is a plain function, never a
+    pytest item, and needs a seed that varies by index; the comment left in
+    place there says so.
+    """
+
+    KIT_TESTS = SKILL_ROOT / "assets" / "kit" / "tests"
+    SEED = "7"
+
+    def _box(self, expectation, assertion, *, with_conftest=True):
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        if with_conftest:
+            conftest = scaffold_substitute(
+                (self.KIT_TESTS / "conftest.py").read_text(encoding="utf-8"),
+                seed=self.SEED)
+            (box / "conftest.py").write_text(conftest, encoding="utf-8")
+        synthetic = scaffold_substitute(
+            (self.KIT_TESTS / "test_synthetic.py").read_text(encoding="utf-8"),
+            seed=self.SEED)
+        synthetic = synthetic.replace("{{EXPECTATION}}", expectation)
+        synthetic = synthetic.replace("    raise NotImplementedError\n", assertion)
+        (box / "test_synthetic.py").write_text(synthetic, encoding="utf-8")
+        return box
+
+    def _run(self, box):
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", str(box)],
+            capture_output=True, text=True)
+
+    def test_the_stub_receives_the_fixture_conftest_actually_seeds(self):
+        """With `conftest.py` in scope, the wired stub runs and `rng` is the
+        generator the fixture seeds -- the ordinary, expected case."""
+        box = self._box(
+            "receives_the_shared_generator",
+            "    expected = np.random.default_rng(SEED)\n"
+            "    assert rng.integers(0, 10**9) == expected.integers(0, 10**9)\n")
+        proc = self._run(box)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_removing_the_fixture_breaks_the_stub_that_requests_it(self):
+        # Reachable red: before the wire, the stub built its OWN generator
+        # from `SEED` and needed no fixture at all, so a run with no
+        # `conftest.py` on the collection path still passed -- proof it was
+        # never actually asking pytest for `rng`. After the wire, the same
+        # run cannot even collect: `rng` has no provider.
+        box = self._box(
+            "needs_the_shared_generator",
+            "    assert isinstance(rng, np.random.Generator)\n",
+            with_conftest=False)
+        proc = self._run(box)
+        output = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, output)
+        self.assertIn("rng", output)
+
+    def test_the_stub_no_longer_shadows_the_fixture_with_a_private_copy(self):
+        source = (self.KIT_TESTS / "test_synthetic.py").read_text(encoding="utf-8")
+        self.assertNotIn("np.random.default_rng(SEED)", source)
+        self.assertRegex(source, r"def test_\{\{EXPECTATION\}\}\(rng\)")
 
 
 class ReportSealPlacementTests(unittest.TestCase):
@@ -9551,6 +9791,9 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
 
     STORE = (FORGE / "skills/_core/deliberation"
              / "engine/revision-lifecycle-store.ts")
+    #: The marker's declaration, on the side that declares it. The store reads it
+    #: from here now, so this is where the two languages meet.
+    PROFILE = FORGE / ".claude/skills/proposal-deliberation/profile.ts"
 
     DECLARATION = (
         "__benchmark__ = {\n"
@@ -9605,12 +9848,24 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
     # -- the marker is one contract in two languages -----------------------
 
     def test_the_marker_is_the_one_the_publisher_writes(self):
-        """Restating the bytes here would be a third copy of the rule. It is read
-        out of the store that writes them, so the day one side moves this goes
-        red instead of the two silently disagreeing again."""
-        published = re.search(r"const MARKER=Buffer\.from\('(.*?)'\);",
-                              self.STORE.read_text(encoding="utf-8"))
-        self.assertTrue(published, "the deliberation store declares no MARKER")
+        """Restating the bytes here would be a third copy of the rule, so it is read
+        out of the other side instead -- the day one moves, this goes red rather
+        than the two silently disagreeing again.
+
+        Read from the PROFILE, not from the store. The store used to declare the
+        bytes as its own literal and this guard pointed at that literal, which is
+        what kept the copy alive: the store compared `markerOwned` against it while
+        the rest of the engine recognised through the profile, so a domain declaring
+        its own marker got an inventory holding a managed revision while nothing was
+        the latest. The profile's single-line declaration is what both languages
+        actually have to agree about, and it is the same anchored shape
+        `tests/test_agents.py` already reads a profile with.
+        """
+        published = re.search(r'^\s*marker:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$',
+                              self.PROFILE.read_text(encoding="utf-8"),
+                              re.MULTILINE)
+        self.assertTrue(published,
+                        "the deliberation profile declares no single-line `marker`")
         expected = published.group(1).encode("utf-8").decode("unicode_escape")
 
         self.assertEqual(impl.MANAGED_ARTIFACT_MARKER, expected.encode("utf-8"))

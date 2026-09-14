@@ -417,7 +417,7 @@ def probe_code_side(recipe, subject, timeout=30):
         # semicolon must reach the subject as one literal argument, not as two
         # commands. There is no shell in this path to interpret it.
         completed = subprocess.run(
-            argv, cwd=str(where), shell=False,
+            argv, cwd=str(where), shell=False, env=probe_child_env(),
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
         raise Unprobeable(f"the recipe's argv[0] is not executable: {error}")
@@ -510,7 +510,7 @@ def drive_guard_candidate(drive, candidate, subject, timeout):
                 "--subject")
     try:
         completed = subprocess.run(
-            argv, cwd=str(where), shell=False,
+            argv, cwd=str(where), shell=False, env=probe_child_env(),
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
         raise Unprobeable(
@@ -749,6 +749,34 @@ BOX_STEP_KINDS = ("exec", "driver")
 #: credential whose name matches neither pattern.
 DRIVER_ENV_ALLOWLIST = ("HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR",
                         "USER")
+
+
+def probe_child_env():
+    """The environment a PROBED subject is driven under: `DRIVER_ENV_ALLOWLIST`
+    and nothing else.
+
+    Same allowlist as `constructed_child_env` below, same stated reason -- to
+    keep a child from inheriting the whole environment. It was applied to
+    driven steps and not to the two probe paths, which ran with no `env=` at
+    all. That is where it mattered most: an ambient variable deciding which
+    domain a shared engine serves made the auditor drive the SIBLING and report
+    its roster under this subject's name. Measured: 21 accepted operations with
+    a clean environment, 20 with the sibling's profile inherited, because one
+    verb is registered only where a second document exists.
+
+    No `names` parameter, unlike its sibling: a probe drives the subject as an
+    ordinary process, and there is no recipe field for it to ask for more. An
+    audit whose subject is chosen by ambient state is not deriving from the
+    subject.
+
+    Delegates rather than repeating the comprehension, because
+    `ChildEnvConstructionSweepTests` holds `constructed_child_env` as the one
+    place a child environment is built -- and it caught this function's first
+    draft doing exactly that.
+    """
+    env, _missing = constructed_child_env(
+        DRIVER_ENV_ALLOWLIST, "a probed subject")
+    return env
 
 
 def constructed_child_env(names, label, hint=""):

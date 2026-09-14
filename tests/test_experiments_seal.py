@@ -94,16 +94,32 @@ class RosterAndUnsealedCoverageTests(unittest.TestCase):
 
 
 class SealCorpusUntouchedTests(unittest.TestCase):
-    """Task 2.5: `git diff --exit-code tests/seal/` exits 0 -- this
-    corpus lands BESIDE the existing 28 sealed digests, never inside them."""
+    """Task 2.5: this corpus lands BESIDE the existing 28 sealed digests,
+    never inside them.
+
+    TANDA B M5: `git diff --exit-code` never reports an untracked path --
+    that verb reads worktree against the index, and an untracked file is in
+    neither. `git status --porcelain` reads both states, so a stray file
+    beside the seal is reported the same way a modified one already was."""
 
     def test_the_existing_seal_corpus_has_no_uncommitted_changes(self):
         proc = subprocess.run(
-            ["git", "diff", "--exit-code", "--", "tests/seal/"],
+            ["git", "status", "--porcelain", "--", "tests/seal/"],
             cwd=str(FORGE), capture_output=True, text=True)
         self.assertEqual(
-            proc.returncode, 0,
+            proc.stdout, "",
             f"tests/seal/ has uncommitted changes:\n{proc.stdout}")
+
+    def test_an_untracked_file_beside_the_seal_is_caught(self):
+        planted = SEAL_DIR / "PLANTED_extra_M5.json"
+        planted.write_text("{}\n", encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                ["git", "status", "--porcelain", "--", "tests/seal/"],
+                cwd=str(FORGE), capture_output=True, text=True)
+            self.assertIn("PLANTED_extra_M5.json", proc.stdout)
+        finally:
+            planted.unlink()
 
 
 class DigestComparisonTests(unittest.TestCase):

@@ -54,7 +54,7 @@ function profileSource(objectiveFieldsSource) {
 	},
 	preservation: { extractAtoms: () => new Map(), violations: () => [] },
 	references: { declares: () => [], cites: () => [] },
-	sources: [],
+	sources: [{ path: "guidance", required: false }],
 ${objectiveFieldsSource}
 };
 `;
@@ -154,6 +154,46 @@ test('a stage missing behindWhen fails, naming objective.stages', async () => {
 	assert.equal(result.ok, false);
 	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
 	assert.match(result.stderr, /objective\.stages/);
+});
+
+// Finding M6: this exact guard used to test `=== undefined` only, which is the shape
+// the guard's own comment says it exists to prevent ("a stage this domain declares by
+// name would silently establish nothing and close on no condition at all") and NOT the
+// harm: `""` is not `undefined`, so it passed. Measured, then fixed to reject an empty
+// string the same way an omitted field is rejected.
+test('a stage with establishes: "" fails, naming objective.stages (an empty string is not `undefined` and used to slip through)', async () => {
+	const result = await runWithProfile(objectiveBlockSource({ stagesSource: '[{ stage: "bound", establishes: "", behindWhen: "x" }]' }));
+	assert.equal(result.ok, false);
+	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
+	assert.match(result.stderr, /objective\.stages/);
+});
+
+test('a stage with behindWhen: "" fails, naming objective.stages', async () => {
+	const result = await runWithProfile(objectiveBlockSource({ stagesSource: '[{ stage: "bound", establishes: "x", behindWhen: "" }]' }));
+	assert.equal(result.ok, false);
+	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
+	assert.match(result.stderr, /objective\.stages/);
+});
+
+test('objective.humanStops: [] fails startup -- asserting that NOTHING is a person\'s decision is not a north', async () => {
+	const result = await runWithProfile(objectiveBlockSource({ humanStopsSource: '[]' }));
+	assert.equal(result.ok, false, 'humanStops presence alone (OBJECTIVE_REQUIRED) does not rule out an empty array');
+	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
+	assert.match(result.stderr, /objective\.humanStops/);
+});
+
+test('objective.arrival: "" fails startup -- an empty string is not `undefined` and used to slip through', async () => {
+	const result = await runWithProfile(objectiveBlockSource({ arrival: '' }));
+	assert.equal(result.ok, false);
+	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
+	assert.match(result.stderr, /objective\.arrival/);
+});
+
+test('objective.purpose: "" fails startup', async () => {
+	const result = await runWithProfile(objectiveBlockSource({ purpose: '' }));
+	assert.equal(result.ok, false);
+	assert.match(result.stderr, /DELIBERATION_DOMAIN_PROFILE_INCOMPLETE/);
+	assert.match(result.stderr, /objective\.purpose/);
 });
 
 test('a complete objective block loads successfully', async () => {

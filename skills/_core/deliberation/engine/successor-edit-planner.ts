@@ -1,6 +1,7 @@
 import type { CreateSuccessorPayloadV1, MaterializationClaimProvenance, RevisionEvidence } from './revision-domain.js';
 import { sha256, type DocumentState, type EditAction, type EditPlan, type StructuralEntry } from './types.js';
 import { materializeCompositeTarget, resolveSuccessorTarget } from './target-resolver.js';
+import { DOMAIN } from './domain-profile.js';
 
 function sameRevision(state: DocumentState, expected: RevisionEvidence) {
 	return state.filename === expected.filename && state.revision === expected.revision && state.documentSha256 === expected.documentSha256;
@@ -105,10 +106,14 @@ function validClaims(claims: readonly MaterializationClaimProvenance[]) {
 }
 
 function tailBlockContent(decisions: readonly MaterializationClaimProvenance[]): string {
+	// Finding L6: was a hardcoded `'## Accepted scientific decisions'`, undeclared by any
+	// profile. `DOMAIN.artifact.acceptedDecisionsHeading` defaults to the exact prior
+	// literal when undeclared, so this is zero migration for either shipped host.
+	const heading = DOMAIN.artifact.acceptedDecisionsHeading ?? 'Accepted scientific decisions';
 	return [
 		'',
 		'',
-		'## Accepted scientific decisions',
+		`## ${heading}`,
 		'',
 		...decisions.flatMap((claim) => [`### ${claim.decisionId}`, '', claim.summary.trim(), '']),
 	].join('\n');
