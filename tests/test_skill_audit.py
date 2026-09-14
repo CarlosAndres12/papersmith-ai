@@ -8944,7 +8944,7 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
     #: subject's own refusal names today, and a real change to that number
     #: is exactly what a hardcoded count exists to catch.
     _CASES = (
-        ("paper-ingestion", 3),
+        ("paper-ingestion", 4),
         ("experimental-deliberation", 9),
         ("experimental-implementation", 22),
         ("kaggle-accounts", 5),

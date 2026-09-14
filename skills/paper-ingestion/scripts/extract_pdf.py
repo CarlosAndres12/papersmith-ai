@@ -58,8 +58,8 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 import yaml
 
-# .../skills/paper-ingestion/scripts/extract_pdf.py -> repo root is parents[4]
-REPO_ROOT = Path(__file__).resolve().parents[4]
+# skills/paper-ingestion/scripts/extract_pdf.py -> repo root is parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 CONFIG_PATH = REPO_ROOT / "papersmith.yaml"
 SETUP_SCRIPT = "./skills/paper-ingestion/setup.sh"
 
@@ -495,6 +495,10 @@ OBJECTIVE_FLOW = {
 
 
 def main() -> int:
+    # Keep the usage line on one screen row: the skill-audit probe derives
+    # its closed flag roster from this single line, and a wrapped usage would
+    # bury a flag behind a newline the roster's own split cannot see.
+    os.environ.setdefault("COLUMNS", "240")
     parser = argparse.ArgumentParser(description="Per-paper-folder PDF -> Markdown ingestion (Marker).")
     parser.add_argument(
         "pdf", nargs="*", help="the loose PDFs to ingest (default: every loose PDF found)"
@@ -512,6 +516,10 @@ def main() -> int:
         "--into", metavar="TOPIC",
         help="the topic folder --file moves into, created when it does not exist yet",
     )
+    parser.add_argument(
+        "--mode", choices=VALID_MODES, default=None,
+        help="override papersmith.yaml's conversion mode for this run",
+    )
     args = parser.parse_args()
 
     if bool(args.file) != bool(args.into):
@@ -520,7 +528,7 @@ def main() -> int:
 
     try:
         cfg = load_config()
-        mode = cfg.get("mode")  # None -> Marker auto-selects by device
+        mode = args.mode if args.mode is not None else cfg.get("mode")  # None -> Marker auto-selects by device
         strip_refs = bool(cfg.get("strip_references", True))
         # Filing is not ingestion: it moves one PDF into a topic and loads no model,
         # so it answers and exits before anything here can displace anything else.
