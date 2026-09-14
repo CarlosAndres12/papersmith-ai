@@ -1869,10 +1869,30 @@ class DeadImportAndStaleCallerCitationTests(unittest.TestCase):
     file does not own (`test_proposal_implementation.py`), and is only
     reported here, never edited."""
 
-    UNUSED = ("WORKSPACE", "LFS_POINTER_PREFIX", "TEXT_EXT",
-              "read_text", "text_files", "is_nesting")
+    #: Five, not six. `LFS_POINTER_PREFIX` was removed with them and put back:
+    #: `tests/test_proposal_implementation.py:691` reads it as
+    #: `impl.LFS_POINTER_PREFIX`, so the engine re-exports it on purpose.
+    #: Reaching a name through this module's namespace is a consumer, and a
+    #: search for uses INSIDE the engine cannot see one -- which is exactly how
+    #: it got called dead.
+    UNUSED = ("WORKSPACE", "TEXT_EXT", "read_text", "text_files", "is_nesting")
+    REEXPORTED = ("LFS_POINTER_PREFIX",)
 
-    def test_the_engine_imports_none_of_the_six_dead_names(self):
+    def test_the_engine_still_reexports_what_a_test_reads_through_it(self):
+        source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(source)
+        imported = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    imported.add(alias.asname or alias.name)
+        missing = [name for name in self.REEXPORTED if name not in imported]
+        self.assertEqual(
+            missing, [],
+            f"a test reads these through the engine and they are gone: {missing}")
+
+    def test_the_engine_imports_none_of_the_five_dead_names(self):
         source = ENGINE_DIR.joinpath("implementation_engine.py").read_text(
             encoding="utf-8")
         tree = ast.parse(source)

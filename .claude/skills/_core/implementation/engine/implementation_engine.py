@@ -51,7 +51,11 @@ from pathlib import Path
 # the shared core is simply its own parent directory -- no longer host-supplied.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from impl_domain_profile import PROFILE  # noqa: E402
-from impl_layout import FORGE_ROOT, IGNORED_DIRS  # noqa: E402
+# `LFS_POINTER_PREFIX` is re-exported on purpose: nothing in here uses it, but
+# `tests/test_proposal_implementation.py` reads it as `impl.LFS_POINTER_PREFIX`.
+# Reaching a name through this namespace is a consumer, and a search for uses
+# INSIDE the engine cannot see one -- which is how it got called dead.
+from impl_layout import FORGE_ROOT, IGNORED_DIRS, LFS_POINTER_PREFIX  # noqa: E402
 from impl_refusals import NameRefused, Refused  # noqa: E402
 from impl_gitops import git, lfs_state, present_files, tracked_files  # noqa: E402
 from impl_guards import require_clean_worktree, require_non_forge_interpreter, resolve_target  # noqa: E402

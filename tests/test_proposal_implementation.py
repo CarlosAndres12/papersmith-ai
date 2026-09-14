@@ -9783,6 +9783,9 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
 
     STORE = (FORGE / ".claude/skills/_core/deliberation"
              / "engine/revision-lifecycle-store.ts")
+    #: The marker's declaration, on the side that declares it. The store reads it
+    #: from here now, so this is where the two languages meet.
+    PROFILE = FORGE / ".claude/skills/proposal-deliberation/profile.ts"
 
     DECLARATION = (
         "__benchmark__ = {\n"
@@ -9837,12 +9840,24 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
     # -- the marker is one contract in two languages -----------------------
 
     def test_the_marker_is_the_one_the_publisher_writes(self):
-        """Restating the bytes here would be a third copy of the rule. It is read
-        out of the store that writes them, so the day one side moves this goes
-        red instead of the two silently disagreeing again."""
-        published = re.search(r"const MARKER=Buffer\.from\('(.*?)'\);",
-                              self.STORE.read_text(encoding="utf-8"))
-        self.assertTrue(published, "the deliberation store declares no MARKER")
+        """Restating the bytes here would be a third copy of the rule, so it is read
+        out of the other side instead -- the day one moves, this goes red rather
+        than the two silently disagreeing again.
+
+        Read from the PROFILE, not from the store. The store used to declare the
+        bytes as its own literal and this guard pointed at that literal, which is
+        what kept the copy alive: the store compared `markerOwned` against it while
+        the rest of the engine recognised through the profile, so a domain declaring
+        its own marker got an inventory holding a managed revision while nothing was
+        the latest. The profile's single-line declaration is what both languages
+        actually have to agree about, and it is the same anchored shape
+        `tests/test_agents.py` already reads a profile with.
+        """
+        published = re.search(r'^\s*marker:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$',
+                              self.PROFILE.read_text(encoding="utf-8"),
+                              re.MULTILINE)
+        self.assertTrue(published,
+                        "the deliberation profile declares no single-line `marker`")
         expected = published.group(1).encode("utf-8").decode("unicode_escape")
 
         self.assertEqual(impl.MANAGED_ARTIFACT_MARKER, expected.encode("utf-8"))
