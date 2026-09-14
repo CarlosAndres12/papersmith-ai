@@ -272,11 +272,12 @@ sibling's.
 
 ## What this skill has not written down
 
-Same as the sibling's own recorded gap: `.implementation/` is a required
-`.gitignore` entry, so neither a launch authorization nor a deliberation
-record reaches a clone. Nothing here separates the two; recorded rather than
-resolved, for the same reason the sibling records it rather than fixing it
-here.
+Same as the sibling, and settled the same way: `.implementation/` is a required
+`.gitignore` entry, so neither a launch authorization nor a deliberation record
+reaches a clone. **Settled by the operator on 2026-09-14: that is correct and
+the ledger is not split.** What the forge needs to do its own work stays home;
+the reasoning behind the agreements travels in the paper. Do not re-raise it as
+an open gap -- see the sibling's own section for the full wording.
 
 ## Non-negotiable isolation
 

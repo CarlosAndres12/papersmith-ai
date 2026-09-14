@@ -12,20 +12,22 @@ mathematics is.
 
 ## What this skill has not written down
 
-**The ledger is ignored whole, and half of it deserves better.** `.implementation/`
-is a required `.gitignore` entry, so nothing under it reaches a clone. That is
-right for one half of what it holds: a `gate` event is a launch authorization,
-and an approval that arrives in a clone is an approval nobody in that clone
-gave. It is wrong for the other half. Since `discuss` and `settle` landed, the
-same file also carries the deliberation -- what was asked, what was answered,
-and what was placed into the record because of it. That is project history, and
-a clone gets none of it.
+**The ledger is ignored whole, and that is the decision.** `.implementation/` is a
+required `.gitignore` entry, so nothing under it reaches a clone. It holds two
+different things: a `gate` event is a launch authorization, and since `discuss`
+and `settle` landed the same file also carries the deliberation -- what was
+asked, what was answered, and what was placed into the record because of it.
 
-Nothing here separates the two. A future version should: the authorizations are
-machine-local state, the deliberation is the reason the agreements say what they
-say, and one `.gitignore` line currently decides both. Recorded rather than
-resolved, because splitting a ledger is a change to what every reader of it
-already expects to find in one place.
+An earlier version of this section argued that the second half deserved to
+travel and that a future version should split the ledger in two. **Settled by
+the operator on 2026-09-14: it does not travel, and the ledger is not split.**
+`.implementation/` is what the forge needs to do its own work; somebody reading
+this repository wants the implementation, not the transcript of how it was
+agreed. The reasoning behind the agreements already travels, in the paper.
+
+This is recorded here rather than left silent because the previous wording
+argued the opposite convincingly enough that a reader with no memory of that
+decision would have implemented the split. Do not re-raise it as an open gap.
 
 ## Non-negotiable isolation
 
