@@ -6252,6 +6252,14 @@ class ForgeVocabularyDefinitionTests(unittest.TestCase):
 #: the other fails on an admission whose file no longer carries the word, so an
 #: entry cannot outlive the argument that bought it.
 FORGE_FLOOR_SURFACE_ADMISSIONS: dict[str, dict[str, str]] = {
+    "skill-audit/SKILL.md": {
+        "kaggle": "one row of the asset table, naming the probe recipe whose "
+                  "SUBJECT is the skill three entries below -- the word is in "
+                  "that skill's own directory name, so an asset table listing "
+                  "the recipe cannot avoid it without ceasing to say which "
+                  "recipe it means. Not a loan from any research project: the "
+                  "auditor names what it audits",
+    },
     "kaggle-accounts/SKILL.md": {
         "kaggle": "this skill's entire subject is one hosted service's "
                   "accounts, named in its own directory name and its doctrine's "
