@@ -8304,65 +8304,33 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
             }
             inline.append(item)
         else:
-            # M2 doctrine tension (design.md, recorded unresolved, NOT fixed
-            # here): moving this hardcoded Spanish prose into `vocabulary` is
-            # correct for the extraction -- but `SKILL.md`'s own doctrine
-            # ("Speak the language the user is speaking") is violated by it
-            # being hardcoded Spanish at all, regardless of source. Cut 2
-            # hardens that violation into a contract shape rather than
-            # resolving it: translating it here would be a behavioural delta
-            # the seal must refuse.
+            # The tongue a person is spoken to in is not knowable to a program:
+            # nothing hands one to this file, so it may not pick one. It gives
+            # up what it holds -- the machine code below, the numbers in
+            # `impact`, and the domain's own nouns further down this payload --
+            # the agent, which was spoken to and does know, does the speaking.
+            # Until 2026-09-14 this branch also emitted a sentence of its own,
+            # in one fixed human tongue, next to the identical machine code:
+            # a second copy that could only ever be right for one reader.
             if local_reach(impact) and not own_remedy:
-                # Local by measurement only because it names no locus at all.
-                # There is no locus to resolve in the document, so there is
-                # nothing the deliberation could be asked to replace.
-                reason = (
-                    f"Este hallazgo mide como local, pero no declara qué {SUBJECT_SINGULAR_ES} "
-                    f"reescribiría (`{own_remedy_key}` está vacío), así que no hay "
-                    "un locus que resolver en el documento.")
+                # No locus at all, so there is nothing the deliberation could
+                # be asked to swap out. The key it left blank travels too, so
+                # the agent can say which one without guessing at it.
                 item["deferredBecause"] = "remedy-locus-missing"
+                item["blankKey"] = own_remedy_key
             elif local_reach(impact):
-                # Local reach, but nobody wrote the corrected block. Deferring is
-                # the honest outcome; saying "not local" here would be false.
-                reason = (
-                    "Este cambio es de alcance local, pero el hallazgo no trae el "
-                    "bloque corregido escrito (`remedy_block`). La redacción de la "
-                    f"{SUBJECT_COLLECTIVE_ES} es la decisión, y no se infiere de la prosa.")
+                # Nobody put the corrected block in. Deferring is honest;
+                # calling it wide would not be.
                 item["deferredBecause"] = "remedy-text-missing"
             elif (isinstance(impact["class"], dict)
                     and "local" in impact["class"].values()):
                 # `the-agreement-nothing-computes` (Slice D, design.md D10):
-                # a fourth branch, in the SAME hardcoded Spanish as its three
-                # neighbours (M2 stays recorded and unresolved -- translating
-                # one of four would make the output bilingual, a behavioural
-                # delta the seal must refuse). Local in one named document
-                # and structural in another -- `local_reach`'s own union
-                # already refused to treat this as settleable, but the
-                # generic "not local at all" reason below would be false
-                # here: at least one document genuinely reads local.
-                reason = (
-                    "Este cambio es local en un documento pero estructural en "
-                    f"otro (mide {impact['class']!r}), así que no puede "
-                    "resolverse dentro de un solo documento. Merece una "
-                    "sesión propia.")
+                # one document reads narrow, its sibling does not, so no single
+                # document holds the whole of it. `impact["class"]` on the item
+                # already spells which is which.
                 item["deferredBecause"] = "structural-in-another-document"
             else:
-                reason = (
-                    f"Este cambio NO es local: reescribe {impact[NOTATION_KEYS['locus']]} "
-                    f"{SUBJECT_SINGULAR_ES}(es), "
-                    f"agrega {impact['introducesNotation']} símbolo(s) de notación y toca "
-                    f"{SUBJECT_PLURAL_ES} citadas {impact['citedElsewhere']} vez/veces en el resto del "
-                    "documento. Merece una sesión propia.")
                 item["deferredBecause"] = "structural-reach"
-            item["prompt"] = (
-                f"Deliberar sobre {args.revision}: {finding['id']}.\n\n"
-                f"{reason}\n\n"
-                f"DEFECTO ({finding.get('kind')}, {finding.get('status')} — "
-                f"{finding.get('rate')}):\n{finding.get('statement')}\n\n"
-                f"CORRECCIÓN PROPUESTA (validada, no adoptada):\n{finding.get('remedy')}\n\n"
-                f"NOTACIÓN QUE AGREGARÍA: {', '.join(finding.get('introduces', [])) or 'ninguna'}\n"
-                f"{SUBJECT_PLURAL_ES.upper()} A TOCAR: "
-                f"{', '.join(own_remedy or [])}")
             deferred.append(item)
 
     # Diagnostic and costless (design decision 7): a new report key, never a
@@ -8385,6 +8353,18 @@ def cmd_handoff(args: argparse.Namespace) -> dict:
         "openDefects": [{"file": e.get("file"), "session": e.get("session"),
                          "detail": e.get("detail"), "at": e.get("at")}
                         for e in open_defects],
+        # The domain's own nouns, handed over once next to the findings rather
+        # than baked into a sentence this file has no business composing. An
+        # agent addressing a person puts these into whichever tongue it was
+        # addressed in; both spellings travel so neither has to be invented.
+        "vocabulary": {
+            "subjectSingular": SUBJECT_SINGULAR,
+            "subjectPlural": SUBJECT_PLURAL,
+            "subjectCollective": SUBJECT_COLLECTIVE,
+            "subjectSingularEs": SUBJECT_SINGULAR_ES,
+            "subjectPluralEs": SUBJECT_PLURAL_ES,
+            "subjectCollectiveEs": SUBJECT_COLLECTIVE_ES,
+        },
         "note": "This skill proposes; proposal-deliberation decides and publishes.",
     }
 

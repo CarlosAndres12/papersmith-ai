@@ -63,9 +63,9 @@
     "sha256": "608db93c85fad42be8acb1d4137d061426113f8d61c12eb9b0c8efa0887537a9"
   },
   "handoff-e1": {
-    "bytes": 3890,
+    "bytes": 3038,
     "exit": 0,
-    "sha256": "94ba4dd6f52332637baf41c1e832a047f4c78f2a936b5f2b72edbd155964a717"
+    "sha256": "caacf0640d00bfbc974fcb11de2428a531c746a876ac3f8977b6ca5145944fd5"
   },
   "materialize": {
     "bytes": 580,

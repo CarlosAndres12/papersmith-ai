@@ -2180,7 +2180,7 @@ text cites those equations. Nothing is judged — all three are read.
 | class | condition | what happens |
 | --- | --- | --- |
 | `local` | one equation, no new notation, cited at most once elsewhere | `settleInline`: an agenda item for the current deliberation |
-| `structural` | anything wider | `deferToOwnSession`: a ready prompt saying why it needs its own session |
+| `structural` | anything wider | `deferToOwnSession`: the reason code and the numbers behind it, for the agent to put into the reader's own language |
 
 A deferred item says why in `deferredBecause`:
 

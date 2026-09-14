@@ -354,6 +354,13 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: either domain's `vocabulary.names` (which Lock B already holds to zero).
 #: Two profiles on disk today: `experimental-implementation` (this change)
 #: and `proposal-implementation`. Five denylist words measured genuinely
+#: 2026-09-14, M2 closed: `cmd_handoff` stopped composing a sentence of
+#: its own in one fixed human tongue, so the prose that carried `local`,
+#: `measurement`, `named`, `recorded` and `remedy` is gone and five pins
+#: SHRINK (40->30, 43->42, 178->177, 77->75, 55->54). A shrink is what
+#: this lock permits deliberately; it is recorded here so the next reader
+#: knows which change took them down and does not restore them by hand.
+#:
 #: ABSENT from the engine and need no pin at all: `formulation`,
 #: `mathematical`, `mathematics`, `statistical`, `traced` -- the first three
 #: are also members of `proposal-implementation`'s own `vocabulary.names`,
@@ -431,12 +438,12 @@ M5_PINNED_RESIDUE: dict[str, int] = {
     "command": 268, "commands": 18, "compares": 23, "declaration": 191,
     "destinations": 37, "empty": 113, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
-    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 40,
+    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 30,
     "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 141, "measurement": 43, "module": 189, "named": 178,
+    "measured": 141, "measurement": 42, "module": 189, "named": 177,
     "notebooks": 107, "object": 28, "objects": 19, "pilot": 119,
     "place": 51, "premises": 7, "produces": 44, "rather": 332,
-    "readable": 23, "recorded": 77, "refuses": 93, "remedy": 55,
+    "readable": 23, "recorded": 75, "refuses": 93, "remedy": 54,
     "remote": 55, "reported": 142, "resolves": 31, "ruled": 8,
     "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
     "something": 69, "stage": 82, "steps": 133, "sweep": 7,
