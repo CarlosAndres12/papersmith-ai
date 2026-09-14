@@ -16657,6 +16657,20 @@ def cmd_materialize(args: argparse.Namespace) -> dict:
         if not args.plan:
             raise Refused("PLAN_REQUIRED", "--stage requires --plan <approved plan JSON>.")
         _materialize_plan_gate(target, name, args.plan)
+        # A domain may ship no kit at all, and one of them says exactly that in
+        # its own doctrine. The bytes below were read unguarded, so a property
+        # this forge had already written down reached a person as a raw
+        # traceback instead of a refusal with a name. Placed at this point, one
+        # line past the gate above, so an approval problem still wins: a caller
+        # holding a stale approval hears about it first, and that is true of
+        # them independently of any kit.
+        if not (SKILL_ROOT / "assets" / "kit").is_dir():
+            raise Refused(
+                "KIT_UNAVAILABLE",
+                f"{SKILL_ROOT.name} ships no `assets/kit/`, so there is nothing "
+                "here to copy. This is a declared property of the domain and "
+                "not a broken install: read its own SKILL.md for what it "
+                "publishes and why. A target under it is set up by hand.")
         # `--seed` substitutes `{{SEED}}`, and only `scaffold`/`objects`
         # templates carry that token (`tests/test_smoke.py`,
         # `tests/test_synthetic.py`); `harness`'s three carry `{{SEEDS}}`
@@ -17012,6 +17026,10 @@ GATING_REFUSALS: dict[str, str] = {
     # check's own two codes, both work states -- nothing the caller can
     # retype clears a documents disagreement or an undeclared crossing;
     # somebody has to change one of the two documents.
+    # A work state, never a retype: the domain ships no kit, and no argument a
+    # caller can spell changes it.
+    "KIT_UNAVAILABLE": WORK_STATE,
+
     "AGREEMENT_CROSSING_UNDECLARED": WORK_STATE,
     "AGREEMENT_DOCUMENTS_DISAGREE": WORK_STATE,
 }
@@ -17790,6 +17808,11 @@ _WORK_STATE_RESOLUTIONS = {
               "write one, or record why the step cannot run, and why?"),
 
     # --- agree (`the-agreement-nothing-computes`, Slice D, design.md D7) ----
+    "KIT_UNAVAILABLE": lambda args: _refusal_question(
+        args, "this domain publishes a verb it ships no kit for, which its own "
+              "doctrine already states; set the target up by hand, or decide "
+              "that this domain should ship a kit, and why?"),
+
     "AGREEMENT_CROSSING_UNDECLARED": lambda args: _refusal_question(
         args, "document 0 declares no crossing into the target document at "
               "all (the refusal detail names which side is silent); read "

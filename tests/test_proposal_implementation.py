@@ -28633,6 +28633,14 @@ _ENGLISH_COUNTS = {
     # (design.md guessed 117; the real delta off 114 is +2, not +3).
     67: "Sixty-seven",
     116: "One hundred and sixteen",
+    # 2026-09-14: `KIT_UNAVAILABLE` joins as a work state. A domain may ship no
+    # kit at all and one says so in its own doctrine; the code read those bytes
+    # unguarded, so a documented "this is not available here" reached a person
+    # as a raw traceback. One new work-state code, so sixty-seven becomes
+    # sixty-eight and the total one hundred and sixteen becomes one hundred and
+    # seventeen -- measured by running the derivation, never predicted.
+    68: "Sixty-eight",
+    117: "One hundred and seventeen",
 }
 
 
@@ -29024,7 +29032,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         115 as this phase's starting point, but D1 measured 114, unmoved;
         this phase's own delta is +2, not +3).
         """
-        self.assertEqual(len(reachable_refusal_codes()), 116)
+        self.assertEqual(len(reachable_refusal_codes()), 117)
 
     def test_agree_joins_gating_commands_unconditionally_never_this_profiles_own_commands(self):
         """`the-agreement-nothing-computes` (Slice D, design.md D9, tasks.md
