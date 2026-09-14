@@ -487,7 +487,13 @@ conversación — por eso el motor no necesita uno propio.
    `proposals/` por su cuenta.
 2. **Bifurcación.** Si no hay ninguna revisión gestionada, el camino es *crear la v1*.
    Si ya hay una (`r01`, `r05`, `r17`…), el camino es *editar*.
-3. **Crear la v1.** El agente te pide la idea y manda la creación inicial. El motor
+3. **Crear la v1.** El agente te pide la idea y manda la creación inicial. **Tu idea
+   necesita al menos dos oraciones**: el motor saca el título de la primera y el
+   encabezado de sección de la segunda, y con una sola los dos salen idénticos byte a
+   byte — lo que dejaría el documento imposible de editar después, porque toda consulta
+   que nombre un lugar sería ambigua. Con una sola oración se niega en el acto
+   (`INITIAL_IDEA_SINGLE_SENTENCE`) y no escribe nada. Una oración termina en `.`, `!`
+   o `?`; un salto de línea no alcanza. El motor
    carga los papers de `guidance/paper-guide/` **una sola vez** —acá y nunca más—,
    redacta el documento a partir de tu idea, toma un candado único de proyecto (para
    que dos ideas en paralelo no puedan crear dos v1) y escribe
@@ -847,7 +853,7 @@ reporta un conteo. De ese pliegue sale el peldaño `poll-first`.
 | Comando | Qué hace |
 |---------|----------|
 | `env` | Crea y verifica el entorno virtual **del repositorio destino** (se niega si lo corrés desde un intérprete de la forja). Reporta también el estado de los punteros de Git LFS — acá, porque es el primer comando después de un clon, justo cuando un repositorio lleno de marcadores parece completo. |
-| `name` | Función pura, sin repositorio. Normaliza lo que escribiste a la forma de carpeta `<Name>/` y a la forma importable `src/<Package>/`. |
+| `name` | Función pura, sin repositorio. Normaliza lo que escribiste a la forma de carpeta `<Name>/` y a la forma importable `src/<Package>/`. **Rechaza cualquier carácter que no sea ASCII alfanumérico** (`NAME_NOT_ALPHANUMERIC`, nombrando el carácter): antes esos caracteres se caían en silencio y el nombre salía mutilado — `Ñandú` daba `And`. Separadores y camelCase siguen funcionando igual. |
 | `plan` | Plan de migración de **sólo lectura**: qué se renombra, qué se mueve, qué directorios faltan, qué referencias hay que reescribir, qué conflictos hay y qué archivos no sabe clasificar. Se niega sobre un árbol sucio. |
 | `apply` | Ejecuta un plan **ya aprobado** como un único commit atómico. Revalida que el plan no haya quedado viejo; ante cualquier falla revierte duro y reporta. Nunca deja un árbol a medio migrar. |
 | `admit` | Decide la **admisibilidad** de una corrección antes de medir si funciona: comprueba contra el texto de la revisión que la notación que cita exista de verdad. El veredicto se escribe en el destino; el texto de la propuesta se queda en la forja. |
@@ -944,7 +950,7 @@ igual.
 | `assets/kit/nb/verdict.py` | La lógica de juicio: sólo concede un ganador cuando las medias difieren más que el error estándar combinado, y por debajo de tres repeticiones **no da veredicto**, sólo imprime una estimación puntual. |
 | `assets/kit/nb/report_digest.py` | Hashea todo `src/` en un sello que el informe imprime y que `verify` recalcula, para poder probar que un informe está atado al código exacto que lo produjo. |
 | `.claude/agents/implementation-build.md` | El tramo **entre dos compuertas tuyas**: del mapa objeto-a-módulo aprobado al informe de hallazgos que vos decidís. Materializa el andamiaje, escribe un módulo por objeto matemático con su procedencia y sus tests de invariante, barre las configuraciones declaradas, y **falla sobre la admisibilidad de cada remedio ANTES de medirlo**. `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`. No decide ni pregunta: termina reportando qué encontró y cuánto costó establecerlo. |
-| `.claude/agents/implementation-walk.md` | El tramo **de las colocaciones ya decididas al lanzamiento que vos tenés que autorizar**: camina el flujo declarado acto por acto en su propio orden, corre los pasos locales, commitea el producto de cada uno, refresca la posición, y genera las carpetas de trabajo que un paso remoto necesita. `Read`, `Bash`, `Glob`, `Grep` — sin `Write`. **Se detiene en el lanzamiento y no tiene camino para enviar una campaña**, ni para ejecutar un ensayo: ese acto no lo realiza nadie acá (ver **Limitaciones conocidas**). |
+| `.claude/agents/implementation-walk.md` | El tramo **de las colocaciones ya decididas al lanzamiento que vos tenés que autorizar**: camina el flujo declarado acto por acto en su propio orden, corre los pasos locales, commitea el producto de cada uno, refresca la posición, y genera las carpetas de trabajo que un paso remoto necesita. `Read`, `Bash`, `Glob`, `Grep` — sin `Write`. **Se detiene en el lanzamiento y no tiene camino para enviar una campaña**, ni para ejecutar un ensayo: ningún acto del motor realiza un ensayo, y `walk` dejó de prometerlo — se detiene ahí y te dice que lo corras a mano, que es lo que la doctrina prescribió siempre. |
 
 **Qué escribe en el disco.**
 
@@ -1107,11 +1113,12 @@ arregla:** completándola, o borrando la enumeración y dejando sólo el puntero
 `references/usage.md` — un inventario que se mantiene solo es mejor que uno que hay que
 acordarse de actualizar.
 
-*Una ausencia se lee como "no está vieja".* Bajo dos documentos,
-`admissibility_record`'s staleness check hace `continue` cuando falta la entrada de un
-documento declarado o cuando su fuente no se puede leer — así que un registro incompleto
-pasa como vigente. La compatibilidad de doble forma está documentada; los `continue`
-silenciosos no. **Cómo se arregla:** que una ausencia responda `unknown` y no vigencia.
+*Resuelto: una ausencia ya no se lee como "no está vieja".* Bajo dos documentos,
+el chequeo de vigencia de `admissibility_record` hacía `continue` cuando faltaba la
+entrada de un documento declarado o cuando su fuente no se podía leer, y el registro
+incompleto caía al retorno de abajo como vigente. Ahora cada uno de esos dos casos
+responde `unknown` con su detalle. La forma de la falla es la que este repositorio
+más repite: **una ausencia que hereda el valor bueno**.
 
 *La rama "sin posición" devuelve una clave menos, y el candado que dice sostener la forma
 no puede verla.* `position_state` devuelve 13 claves cuando no hay posición y 14 cuando
@@ -1122,13 +1129,12 @@ retornos que son **diccionarios literales**, y esta rama devuelve un nombre. **C
 arregla:** que la rama ausente devuelva la clave, o que el candado sepa leer un `return
 <nombre>`.
 
-*Dos lectores de `__benchmark__`, con el desacuerdo que el resolver declara extinto.*
-`resolve_benchmark_declaration` se llama a sí mismo "el único lugar del que todo lector
-saca `__benchmark__`". El script `INTROSPECT`, que corre dentro del intérprete del
-destino, lo lee del atributo del módulo importado. Una declaración que vive en
-`config.py` y no se reexporta es real para el resolver e inexistente para `INTROSPECT`:
-un hecho, dos lectores, veredictos distintos. **Cómo se arregla:** que `INTROSPECT` pase
-por el resolver, o que el docstring deje de afirmar unicidad.
+*Resuelto: `__benchmark__` tiene un solo lector otra vez.* `resolve_benchmark_declaration`
+se llamaba a sí mismo "el único lugar del que todo lector saca `__benchmark__`" mientras
+el script `INTROSPECT`, que corre dentro del intérprete del destino, lo leía del atributo
+del módulo importado. Una declaración que vivía en `config.py` sin re-exportarse era real
+para el resolver e inexistente para `INTROSPECT`: un hecho, dos lectores, veredictos
+opuestos. `INTROSPECT` ahora sigue el mismo orden `__init__` → `config` que el resolver.
 
 *"El único lugar" donde se leen `accelerator`/`localBudget` era falso al nacer.*
 `cmd_gate` los arma por su cuenta desde su propio `run_config` y se los pasa al mismo
@@ -1136,24 +1142,24 @@ clasificador. Los dos sitios citan el mismo cambio de diseño, así que no es de
 cuantificador nunca fue cierto. Hoy leen el mismo archivo igual, y nada los ata.
 **Cómo se arregla:** un lector, o un test que falle si se separan.
 
-*El kit embarca dos defensas que nadie invoca.* `ruled_revision` devuelve la revisión
-contra la que se dictó la admisibilidad, para que un test de remedio pueda negarse a
-medir bajo otra: cero llamadores. `resolve_device`: cero referencias, incluidas las
-notebooks. Y el fixture `rng` de `conftest.py` no lo pide ningún test, mientras dos
-plantillas arman uno local marcado `# noqa: F841`. El motor sí detecta la obsolescencia,
-pero recién en `verify`; la defensa existía justo para la ventana anterior. **Cómo se
-arregla:** cablearlas o borrarlas — lo que no conviene es dejarlas.
+*Resuelto: las tres piezas sueltas del kit, cada una con su propia respuesta.*
+`ruled_revision` **se cableó**, porque cerraba una ventana real: `require_admissible`
+miraba el veredicto y nunca la revisión, así que un fallo viejo pasaba al medir y recién
+aparecía en `verify`. `resolve_device` **se borró**: cero referencias en toda la forja,
+incluidas las notebooks. Y el fixture `rng` **se cableó donde entra** —`test_synthetic.py`,
+que sí es un ítem que pytest recolecta— dejando el generador local de `sweep.py` con la
+razón escrita: es una función plana, no puede recibir un fixture, y necesita semilla por
+índice. Cablear, borrar y separar con su motivo son tres respuestas distintas a la misma
+forma, y elegir una sola habría sido el error.
 
-*Prosa que sobrevivió a su mecanismo, en seis sitios.* Seis comentarios del motor
-justifican el patrón de "devolver el detalle y que el llamador levante" apelando a
-`raised_refusal_codes`, un barrido que no veía un rechazo escondido dentro de un helper.
-Ese barrido ya fue reemplazado por `reachable_refusal_codes`, que sigue las referencias
-hasta cada función de nivel de módulo y toma los helpers enteros: hoy un rechazo
-helper-adentro se pone rojo hasta que se lo clasifique. La ubicación del patrón sigue
-siendo buena; la razón escrita al lado está muerta, seis veces, y el barrido viejo
-sobrevive sólo para probar lo que no puede ver. **Cómo se arregla:** borrar la
-justificación muerta antes que el código que justifica — un comentario falso es un defecto
-con vida propia, porque el próximo que pase le cree.
+*Resuelto: seis justificaciones muertas y seis imports muertos.* Cuatro docstrings del
+motor justificaban un patrón apelando a `raised_refusal_codes`, un barrido que no veía un
+rechazo escondido dentro de un helper — y que ya había sido reemplazado por
+`reachable_refusal_codes`, que sí lo ve. La ubicación del patrón estaba bien; la razón
+escrita al lado estaba muerta. **Un comentario falso es un defecto con vida propia**,
+porque el próximo que pasa le cree. Queda una pieza, y es de la misma clase: el test que
+mantiene vivo a `latest_revision` se justifica con "cinco tests unitarios **y un llamador
+de producción**", y ese llamador ya no existe.
 
 *Seis imports muertos, y un test que mantiene vivo un símbolo citando un llamador que no
 existe.* Tres líneas de import del motor traen siete nombres que no usa. Y
@@ -1290,14 +1296,15 @@ parcial por un typo es peor que no borrar nada.
 
 **Limitaciones conocidas.**
 
-*El auditor de la forja no la mira.* La validación toca la API real, así que lo que
-reporta es evidencia y no inferencia, y el punto flojo de la cadena está del otro lado de
-la costura, en el adaptador de `remote-execution` (ver su apartado). Pero esta skill
-maneja **credenciales vivas** y `skill-audit` no tiene **ni un probe** apuntado a ella:
-medido el 2026-09-13, `references/probes/` cubre cuatro de las nueve skills y sólo en la
-dimensión `roster`. Nada deriva qué operaciones acepta este CLI contra las que su propio
-`SKILL.md` promete. **Cómo se arregla:** una receta `accepted-operations` como la que ya
-existe para `remote-execution` — el mecanismo está escrito, falta apuntarlo acá.
+*El auditor la mira, pero sólo de un lado.* La validación toca la API real, así que lo
+que reporta es evidencia y no inferencia, y el punto flojo de la cadena está del otro lado
+de la costura, en el adaptador de `remote-execution` (ver su apartado). Esta skill ya tiene
+su receta `accepted-operations` en `skill-audit`, que deriva sus cinco operaciones del
+propio rechazo del CLI. Lo que todavía no tiene es la otra mitad: su `SKILL.md` declara ese
+conjunto en prosa y no en una tabla cerrada, así que el auditor responde
+`comparison: not-run` — deriva lo que el código acepta y no puede compararlo contra lo que
+el documento promete. **Cómo se arregla:** una tabla cerrada en el `SKILL.md`, como la que
+`remote-execution` ya tiene.
 
 **Diagrama.**
 
@@ -1459,18 +1466,14 @@ vivo por primera vez, empezá a buscar ahí y no en el seam. **Cómo se arregla:
 ensayo real —para eso existe `submit --smoke`—, que es exactamente el camino más barato
 para descubrirlo antes de gastar una corrida grande.
 
-*Tres comandos imprimen sin red de contención, y el mismo bug ya pasó una vez.* `status`
-se arreglaba antes de cada `Path` anidado que apareciera, cambiando a
-`json.dumps(..., default=str)`. Ese arreglo llegó a cuatro de los nueve sitios de
-impresión: `distribute` (`remote_cli.py:2869`), `reconcile` (`:2971`) y `readiness`
-(`:3081`) siguen con la forma vieja, y los tres crashean con `TypeError: Object of type
-PosixPath is not JSON serializable` en cuanto su payload lleve uno — probado por mutación.
-Hoy no muerde, y sólo por una razón: `_staleness_for()` devuelve `str` en todos sus
-campos. Eso es un hecho sobre la forma actual de un helper, no una garantía que esos tres
-sitios sostengan por su cuenta — y `status` adquirió su `Path` anidado exactamente así,
-porque alguien agregó un sub-bloque y nadie tocó todos los sitios de impresión. **Cómo se
-arregla:** `default=str` en los cinco restantes, y un test de regresión por comando como
-el que ya protege a los cuatro arreglados.
+*Resuelto: los nueve sitios de impresión llevan red.* `status` reventaba con
+`TypeError: Object of type PosixPath is not JSON serializable` en cada invocación, porque
+alguien le agregó un sub-bloque anidado y nadie revisó los sitios de impresión. El arreglo
+—`json.dumps(..., default=str)`— llegó a cuatro de los nueve: **exactamente los cuatro que
+tenían test de regresión**. Los otros cinco quedaron pelados, y tres de ellos se probaron
+crasheables por mutación. Ahora los nueve tienen red y los nueve tienen su test. El
+defecto nunca fue "tres comandos pueden reventar": era **un arreglo aplicado donde había
+cobertura en vez de donde se repite la forma**.
 
 **Diagrama.**
 
@@ -1836,13 +1839,12 @@ y el mismo patrón de prueba, hereda la misma ventana. **Cómo se arregla:** cam
 comprobación a `git status --porcelain` (o `git diff HEAD` más un chequeo de no
 rastreados), igual que se anota para el hermano.
 
-*El guardia de intérprete ajeno se puede silenciar sin que ninguna prueba lo note.*
-`require_non_forge_interpreter` —la doctrina que este `SKILL.md` llama "aislamiento no
-negociable"— tiene una única llamada de producción (`cmd_env`) y ninguna prueba que
-mute su condición y falle: aceptar en silencio un `sys.prefix` de la forja deja toda la
-suite en verde. Es del motor compartido, así que este huésped lo hereda tal cual.
-**Cómo se arregla:** una prueba de mutación dedicada sobre esa condición, en vez de
-sólo comprobar que la excepción exista en el código fuente.
+*Resuelto: el guardia de intérprete ajeno ya se puede poner en rojo.*
+`require_non_forge_interpreter` —la doctrina que los dos `SKILL.md` llaman "aislamiento no
+negociable"— tenía una única llamada de producción y ninguna prueba capaz de fallar: se
+podía retargetear su condición, dejando el `raise` intacto en el código fuente para que los
+barridos de roster no lo notaran, y aceptaba en silencio un `sys.prefix` de la forja con
+todas las suites verdes. Ahora hay un test que muta exactamente eso y se pone rojo.
 
 *El módulo de reescritura de referencias puede volverse un no-op y ninguna suite lo
 nota.* `scan_reference_updates`, `scan_stale_references` y el patrón de referencia
@@ -1854,15 +1856,14 @@ vive en el motor compartido, este huésped hereda la misma ventana ciega que el 
 **Cómo se arregla:** una prueba que mute cada una de las tres piezas por separado y
 verifique que alguna suite se rompa.
 
-*Un refusal que no puede disparar sigue publicado como si pudiera.* `NAME_NOT_ALPHANUMERIC`
-—compartido por el motor y por lo tanto alcanzable también desde este huésped a través de
-`name`— está escrito detrás de un patrón que sólo puede emitir tokens ya alfanuméricos, así
-que la comprobación que lo dispara nunca se cumple; un carácter Unicode simplemente se
-descarta en vez de rechazarse. El hermano lo publica en su propio `SKILL.md` como uno de
-cuatro refusals en vivo; esta skill no re-documenta el roster de `name`, pero comparte el
-código y por lo tanto el mismo refusal inalcanzable. **Cómo se arregla:** o bien la
-condición se corrige para que pueda dispararse sobre entrada no-ASCII, o el refusal se
-retira de donde se lo publica como vigente.
+*Resuelto: ese refusal ahora puede disparar, y lo que arreglaba era peor que publicarlo
+de más.* `NAME_NOT_ALPHANUMERIC` estaba detrás de un patrón que sólo emitía tokens ya
+alfanuméricos, así que no podía alcanzarse. El daño no era el refusal de adorno: los
+caracteres que ningún patrón capturaba **se caían en silencio**, y el nombre salía
+mutilado — `Ñandú` se convertía en `And`, `münchen` en `M-Nchen`, `test@here` en
+`Testhere`. Se hizo alcanzable en vez de retirarlo, porque perder letras sin avisar es
+peor que rechazar el nombre. Con un detalle que sin él no arreglaba nada: `str.isalnum()`
+es Unicode-aware y aceptaba `é`, así que la comprobación necesitó `isascii()` además.
 
 **Diagrama.**
 
@@ -2170,18 +2171,16 @@ iteración de cada chequeo declarado está acotada o deriva del sujeto.
 
 **Limitaciones conocidas.**
 
-*La cobertura contra `remote-execution` es roster-only.* Sólo hay dos recetas
-para ese sujeto (`remote-execution.accepted-operations.json`,
-`remote-execution.smoke-subcommands.json`, confirmado con `ls
-references/probes/`), y ambas cubren la dimensión `roster`. Las otras cinco
-dimensiones que esta skill sabe correr —`structure`, `sensitivity`,
-`inversion`, `exits`, `enumeration-reach`— sólo tienen receta contra
-`skill-audit` auditándose a sí misma. `kaggle-accounts`, que maneja
-credenciales vivas, no tiene **ninguna** receta: cero archivos
-`kaggle-accounts.*.json` en `references/probes/`. **Cómo se arregla:** escribir
-recetas de las cinco dimensiones restantes contra `remote-execution`, y al
-menos una receta `roster` contra `kaggle-accounts`, aunque sea para confirmar
-que su superficie de comandos coincide con lo que `accounts_cli.py` acepta.
+*Una de nueve skills se audita entera; las otras ocho, a medias.* Medido el 2026-09-13
+manejando cada receta: sólo `remote-execution` responde `comparison: run` —nueve
+operaciones del código contra nueve de su tabla, sin sobrantes ni fantasmas—. Las otras
+ocho responden `comparison: not-run` y nombran el motivo, `no-closed-roster`: sus
+documentos declaran el roster **en prosa**, y la prosa es justo de donde el lado
+documentado no puede leerse. Conviene leer bien lo que eso significa: el `unregistered: []`
+que aparece al lado **no es un veredicto limpio**, es un campo vacío de una comparación que
+nunca corrió. El auditor es honesto; lo que falta es la otra mitad del sujeto. **Cómo se
+arregla:** cada `SKILL.md` publicando su roster en una tabla cerrada — trabajo dentro de
+cada skill, no del auditor.
 
 *Una receta ata una mutación a un número de línea exacto.*
 `references/probes/skill-audit.self-guarded-facts.json` fija la mutación de
