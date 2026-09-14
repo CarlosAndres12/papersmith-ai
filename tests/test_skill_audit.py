@@ -8880,6 +8880,46 @@ class EnumerationReachCardinalityTests(unittest.TestCase):
              "filtered-subset"})
 
 
+class RosterProbeEnvironmentTests(unittest.TestCase):
+    """A roster probe must derive from its SUBJECT, not from whatever the
+    parent process happens to be carrying.
+
+    `constructed_child_env` exists for exactly this and says so: "this
+    allowlist exists to keep a driver from inheriting the whole environment".
+    It was applied to driven steps and never to `probe_code_side`, which
+    called `subprocess.run` with no `env=` at all -- so the subject inherited
+    everything, including the variable that decides which domain a shared
+    engine serves.
+
+    Measured before this test existed: the two-document host's own refusal
+    names 21 verbs, and 20 under an inherited sibling profile, because `agree`
+    is registered only where `len(DOCUMENTS) > 1`. The auditor reported the
+    sibling's behaviour under this subject's name and called it derived. That
+    is worse than a wrong count: it is the wrong subject, silently.
+    """
+
+    SUBJECT = FORGE / ".claude" / "skills" / "experimental-implementation"
+    SPEC = PROBES / "experimental-implementation.accepted-operations.json"
+    SIBLING_PROFILE = (FORGE / ".claude" / "skills"
+                       / "proposal-implementation" / "impl_profile.py")
+
+    def test_an_ambient_domain_profile_cannot_redirect_the_subject(self):
+        previous = os.environ.get("IMPLEMENTATION_DOMAIN_PROFILE")
+        os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.SIBLING_PROFILE)
+        try:
+            _result, payload = roster_json(self.SPEC, self.SUBJECT)
+        finally:
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_DOMAIN_PROFILE", None)
+            else:
+                os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = previous
+        self.assertIn(
+            "agree", payload.get("code", []),
+            "the subject was driven under an inherited profile: `agree` is "
+            "registered only where a second document exists, so its absence "
+            "means the auditor read the sibling and reported it as this one")
+
+
 class NewlyCoveredSubjectRosterTests(unittest.TestCase):
     """M16: the auditor barely audited the forge -- four of nine skills held
     an `accepted-operations` recipe, and `paper-ingestion`,
