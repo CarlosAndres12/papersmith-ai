@@ -269,10 +269,15 @@ flowchart TD
     EIM -- "el código del destino y lo que sus corridas devolvieron" --> PW
     PW --> PAPER["paper/main.tex + Figures/"]
 
-    SA["9. skill-audit"] -. "audita a cualquiera: informa, nunca cambia" .-> PI
+    SA["9. skill-audit"] -. "informa, nunca cambia" .-> PI
     SA -. " " .-> PD
     SA -. " " .-> IMP
+    SA -. " " .-> KA
     SA -. " " .-> RE
+    SA -. " " .-> ED
+    SA -. " " .-> EIM
+    SA -. " " .-> PW
+    SA -. "y a sí misma" .-> SA
 ```
 
 **Tres cosas que el mapa dice y conviene leer despacio.**
@@ -322,6 +327,29 @@ consecuencia que conviene entender antes de usarla:
 instala el binario `llama-server` (el motor de OCR; no es un paquete de pip) y crea
 el entorno virtual con `marker-pdf` adentro. La primera ingesta real descarga los
 modelos (~1,5 GB) y los cachea; de ahí en más funciona offline.
+
+**Las etapas que declara.** El flujo no es la lista de comandos: es lo que cada
+etapa deja establecido, y cuándo podés darla por superada. Esta tabla está leída
+de `OBJECTIVE_FLOW` en el script, que un test mantiene igual al `SKILL.md`.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `filed` | El PDF está dentro de una carpeta temática propia — eso es lo que lo vuelve un paper y no una descarga | deja de aparecer entre los sueltos |
+| `extracted` | El Markdown existe al lado, con sus figuras escritas como archivos en vez de quedar dentro de la página | la carpeta del paper tiene el documento y sus imágenes |
+| `readable` | Las ecuaciones son LaTeX y las tablas son Markdown, así un lector posterior puede **citar** una fórmula en vez de describir una foto de una | es la llegada; no está detrás de nadie |
+
+**Llegada:** un documento que una persona puede leer y una sesión posterior puede
+citar — que un PDF no es. Sus ecuaciones son dibujos y sus tablas son tinta.
+
+**Una tensión declarada, que no es un error tuyo si la ves.** El campo
+`humanStops` de esta skill está **vacío**: ninguna *etapa* se detiene a esperar a
+una persona. Pero su Activation Contract dice *"Never ingest without asking
+first"*, y la confirmación de la Fase 2 es obligatoria. Las dos cosas conviven
+porque la confirmación ocurre **antes** de que el flujo arranque, y el script no
+tiene mecanismo de consentimiento propio — la regla vive en el `SKILL.md` y la
+hace cumplir el agente. Vale anotar que `kaggle-accounts`, que también escribe,
+sí declara *"consentir la validación"* como parada de una persona: las dos skills
+no describen igual el mismo consentimiento.
 
 **El flujo, paso a paso.** El punto clave es que **son dos comandos, no uno**, y esa
 división existe para que exista un momento de consentimiento.
@@ -482,6 +510,24 @@ listado del directorio puede mostrar archivos que el motor considera inválidos.
 **Qué necesita antes.** Nada más que Node. No usa claves de API ni llama a ningún
 modelo: el motor es keyless. El "modelo" de esta skill es el agente que ya está en la
 conversación — por eso el motor no necesita uno propio.
+
+**Las etapas que declara.** Leídas del campo `objective` de su propio
+`profile.ts`, que un test mantiene igual al `SKILL.md`. `STATUS` las reporta
+arriba del inventario, y las dos rutas de error del motor también las llevan.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `bound` | Cuál revisión es la actual y cuál entrada de ella toca el cambio | `STATUS` nombró la última y el objetivo resolvió a una entrada |
+| `deliberated` | El cambio se **discutió**, no se tipeó | **lo dijiste vos** — acá nada lo mide, y nada puede medirlo |
+| `composed` | El reemplazo existe escrito COMO matemática —la ecuación, con su tag— y no como una descripción de ella | existe un bloque que lleva la ecuación y el tag donde aterriza |
+| `published` | La sucesora existe con el marcador del artefacto y es la revisión actual | es la llegada; no está detrás de nadie |
+
+**Llegada:** la revisión sucesora publicada y actual, que es la única forma en la
+que viaja la matemática.
+
+**`deliberated` es la parada de una persona, y es deliberado que no se pueda
+medir.** El motor puede comprobar que existe un bloque; no puede comprobar que
+lo discutiste. Por eso esa etapa avanza sólo cuando vos lo decís.
 
 **El flujo, paso a paso.**
 
@@ -849,6 +895,35 @@ reporta un conteo. De ese pliegue sale el peldaño `poll-first`.
 
 **Qué necesita antes.** Una revisión publicada, y un repositorio destino bajo
 `implementations/` que ya sea un repositorio git.
+
+**El flujo, por etapas.** Esta sección no tenía ninguno. Las etapas están leídas
+de `OBJECTIVE_FLOW`, que un test mantiene igual al `SKILL.md`, y son
+deliberadamente **independientes de lo que haya en disco**: tienen que leerse
+igual en un repositorio vacío que en uno a mitad de campaña. Existen para el
+momento en que algo se rompe — una sesión que choca con un error se ubica acá,
+resuelve lo que la bloquea y se reengancha, en vez de improvisar hacia adelante.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `standing` | Un repositorio donde escribir la matemática: aislado bajo `implementations/`, con intérprete propio, con la disposición que esta skill espera, los destinos del kit materializados, y **aprobado el mapa** de objeto matemático a módulo | `structure` no reporta huecos de andamiaje y la declaración del benchmark lleva la revisión y las premisas con las que se aprobó el mapa — que es lo que `materialize --stage objects` se niega a hacer sin ellas |
+| `fidelity` | El código dice lo que dice la revisión ligada, y cada afirmación lleva un invariante con su test | `fidelity` está limpio y la suite propia del destino está verde bajo su propio intérprete |
+| `audit` | Qué cosas la formulación hace mal, establecido sobre el barrido declarado, **cada remedio juzgado admisible antes de medirlo** y validado después | `audit` deja de estar `incomplete` |
+| `declaration` | Qué compara el experimento, sobre qué unidad estadística, con qué métrica, y qué produce | la declaración del benchmark está contestada en vez de sentada en su valor vacío de andamiaje |
+| `rehearsal` | El flujo declarado corre punta a punta con sus propios notebooks, y el documento que lee una persona coincide con la corrida | el piloto está completo y `report` da `ok` |
+| `full-scale` | Cada paso ruteado a donde se decidió que corra, y ejecutado ahí a la escala que declara el protocolo | es la llegada; no está detrás de nadie |
+
+**Llegada:** corridas completas a la escala declarada, locales o remotas según
+lo declare cada paso, con el registro que dejan. **No** una verificación verde,
+**no** un ensayo que pasó.
+
+**Cuatro paradas son de una persona, y ninguna es un defecto a reparar.** Dos
+están en la primera etapa y una sesión que arranca de cero las encuentra antes
+que nada: **autorizar que se escriba código**, sin lo cual nada debajo de esa
+compuerta puede empezar, y **aprobar el mapa** de objeto matemático a módulo,
+con la revisión y las premisas anotadas al lado. Las otras dos están al final:
+**publicar el commit** que un worker clonaría, y **autorizar un lanzamiento**.
+Un agente que lea cualquiera de ellas como un bloqueo se va a trabar o la va a
+saltear — las dos cosas están mal.
 
 **Los comandos.** Todos con la misma forma:
 `python3 .../implementation_cli.py <comando> --target implementations/<repo> [--name <Name>] [--revision research-concept-rNN.md]`.
@@ -1262,6 +1337,27 @@ forma.
 **Qué necesita antes.** Python 3.10+ y red. **Nada más**: no hay entorno virtual, no hay
 `pip install kaggle`. Todo se hace con la biblioteca estándar y una llamada HTTPS cruda.
 
+**Las etapas que declara.** Leídas de `OBJECTIVE_FLOW`, que un test mantiene
+igual al `SKILL.md`. `list` contesta *dónde estoy*; esto contesta *para qué es*,
+que ninguna lista implica: una cuenta está en el almacén porque alguien la puso,
+no porque funcione.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `taken-in` | Lo que entregaste está en el almacén, **de a una fila por vez**, así una fila mala nunca cuesta las de al lado | el inbox soltó todo lo que tenía y se consumió, o quedó porque todavía hay filas adentro |
+| `proven` | Cada cuenta guardada se le preguntó al servicio, bajo cualquiera de los dos esquemas de token que use de verdad | cada cuenta lleva un veredicto **de esta corrida** |
+| `decided` | Qué pasa con las que dejaron de funcionar — que es tu decisión y nunca un efecto secundario de preguntar | es la llegada; no está detrás de nadie |
+
+**Llegada:** cada cuenta con un veredicto **actual**, y las que fallan
+respondidas, no apenas reportadas. Un veredicto se vence: los tokens se rotan y
+expiran, así que *"autenticó una vez"* tampoco es llegada. Una sesión que corre
+`validate`, ve un fallo reportado y para, **no llegó**.
+
+**Dos paradas son de una persona:** consentir la validación, porque escribe —
+guarda credenciales y consume el inbox—, y decidir qué pasa con una cuenta que
+dejó de funcionar. Una credencial muerta se reporta y **nunca se borra sola**,
+a propósito: borrarla es tu otra opción, no una consecuencia de preguntar.
+
 **El flujo.** Al activarse corre `list` en silencio para saber qué hay guardado, y
 después hace **una sola pregunta**: validar o eliminar. La opción de eliminar sólo
 aparece si hay algo que eliminar.
@@ -1394,6 +1490,32 @@ silencio. De ese pliegue sale su peldaño `poll-first`.
 
 **Qué necesita antes.** Python 3.10+, biblioteca estándar, sin entorno virtual. Para
 hablar con un servicio real hace falta un adaptador registrado y una credencial.
+
+**El flujo, por etapas.** Esta sección tampoco tenía uno. Leídas de
+`OBJECTIVE_FLOW`, independientes de todo ledger, carpeta de job o resultado en
+disco: `status` contesta *dónde estoy* plegando lo que pasó, esto contesta *para
+qué es*. Las catorce rutas de rechazo de este CLI la llevan, y para eso hubo que
+crear el único lugar por el que todas llegan a un lector.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `reachable` | Una carpeta de job **fijada a un commit que el remoto declarado puede servir de verdad**, que es lo que un worker clona | `generate-job` escribió la carpeta — prueba el pin contra el remoto **antes de escribir un byte**, así que una carpeta que existe es un pin que se publicó |
+| `wire` | Que este worker, en este pin, lleva corriente — pagado en minutos en vez de en las horas que cuesta una campaña | `readiness` dice listo, con un veredicto **derivado de la evidencia de un ensayo**, nunca afirmado |
+| `authorized` | Un lanzamiento atado a este commit, este entrypoint y esta lista de unidades, con un token acuñado para él y consumido una sola vez | un registro de `gate` coincide; un hecho ligado que se movió lo vuelve stale, que no es lo mismo que pasar el tiempo |
+| `sent` | La entrega salió y el ledger lo sabe, así ninguna segunda contesta una pregunta que ya se está contestando | el ledger lo tiene con un estado terminal |
+| `returned` | El resultado está en disco, actual, y no en cuarentena | es la llegada; no está detrás de nadie |
+
+**Llegada:** el resultado en disco y verificado como el actual — lo único de lo
+que alguien puede leer un número. **No** la entrega aceptada: una entrega que el
+servicio tomó es un recibo, no un resultado.
+
+**`reconcile` no es una etapa y nunca avanza ninguna.** Es el camino de vuelta
+cuando el ledger y el servicio dejan de coincidir —`drift`, o una línea que no
+se pudo leer— y devuelve a `sent`.
+
+**Dos paradas son de una persona:** **publicar el commit** que un worker
+clonaría, sin el cual `generate-job` se niega y lo nombra con precisión, y
+**autorizar el lanzamiento**, que son horas de la cuota de alguien.
 
 **Los comandos.**
 
@@ -1580,6 +1702,27 @@ revisión vigente". Nadie abre el directorio a ojo.
 usa `ANTHROPIC_API_KEY` — porque el "modelo" de esta deliberación es el agente ya sentado en la
 conversación.
 
+**Las etapas que declara.** Leídas del campo `objective` de su propio
+`profile.ts`. Este dominio **no** dice el norte de su hermano matemático, y la
+prueba es estructural: tiene una etapa, `validated`, de la que el hermano no
+tiene equivalente ninguno.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `bound` | Cuál revisión es la actual y cuál entrada de ella toca el cambio | `STATUS` nombró la última y el objetivo resolvió a una entrada |
+| `validated` | El protocolo, la métrica, el baseline, el dataset y el esquema están dichos y **salieron de una búsqueda, no de una suposición** | frena esta etapa: una URL sin tag fechado, un baseline sin repositorio o sin año de venue, una línea `**Dataset:**` no dada o dada dos veces, o un esquema que no muestre test, semillas o repeticiones |
+| `deliberated` | El cambio se discutió, no se tipeó | **lo dijiste vos** — nada acá lo mide, y nada puede |
+| `composed` | El reemplazo existe escrito **como el experimento**, no como una descripción de él | existe un bloque que lleva el experimento y lo que debe cumplir |
+| `published` | La sucesora existe con el marcador del artefacto y es la revisión actual | es la llegada; no está detrás de nadie |
+
+**Llegada:** la revisión sucesora publicada y actual, que es la única forma en la
+que viajan los experimentos.
+
+**`validated` es la etapa que justifica que esta skill exista aparte.** Un
+protocolo inventado de memoria se lee igual que uno buscado; la diferencia sólo
+aparece cuando alguien pide la fuente. Por eso la validación externa corre
+**antes de cualquier borrador**, no después.
+
 **El flujo.**
 
 1. **Arranque.** `STATUS` sobre `experiments/`, de sólo lectura. Nunca se mira el directorio a
@@ -1744,6 +1887,27 @@ documento por la misma compuerta que cualquier otro cambio.
 **Qué necesita antes.** Un protocolo de experimentos publicado, y un repositorio destino
 bajo `implementations/` que ya sea un repositorio git. Nada de entorno virtual propio de
 la forja: el `.venv` es siempre del destino.
+
+**Las etapas que declara.** Leídas de `OBJECTIVE_FLOW`, con la misma propiedad
+que el norte de `proposal-implementation`: independientes de lo que haya en
+disco, para que una sesión que chocó con un error se pueda ubicar y reenganchar.
+
+| Etapa | Qué deja establecido | La tenés detrás cuando |
+|---|---|---|
+| `standing` | Un repositorio armado como esta skill espera, con intérprete propio y **los pasos declarados del protocolo puestos como comandos ejecutables** | `structure` no reporta huecos de andamiaje y el protocolo al que responde la corrida está nombrado y es legible |
+| `binding` | El código que corre dice lo que dice la revisión de experimentos ligada, con cada paso declarado trazado a un comando ejecutable | `fidelity` está limpio contra esa revisión y la suite propia del destino está verde bajo su propio intérprete |
+| `instrumentation` | **Cada medición que el protocolo declara tiene dónde aterrizar** — una métrica, un registro, un chequeo que pueda fallar | cada medición declarada resuelve a algo que se puede correr y volver a leer |
+| `rehearsal` | El flujo declarado corre punta a punta a escala chica, y el registro que deja coincide con el documento que lee una persona | el ensayo está completo y su propio reporte da `ok` |
+| `full-scale` | Cada paso ruteado a donde se decidió que corra, y ejecutado ahí a la escala que declara el protocolo | es la llegada; no está detrás de nadie |
+
+**Llegada:** corridas completas a la escala declarada por el protocolo, con un
+registro **contrastable contra la revisión de experimentos**. No una
+verificación verde, no un ensayo que pasó.
+
+**Cuatro paradas son de una persona, ninguna es un defecto a reparar:**
+autorizar que se escriba código, aprobar el mapa de pasos declarados a comandos
+ejecutables, publicar el commit que un worker clonaría, y autorizar un
+lanzamiento — que son horas de la cuota de alguien.
 
 **El flujo.** Esta skill **es** casi enteramente el motor compartido en
 `_core/implementation/engine/` —unas 21.000 líneas en 12 archivos, la misma base que
@@ -1955,6 +2119,29 @@ $ paper_cli.py resolve --identifier 10.1038/nature14539 --resolver crossref
 {"status": "ok", "title": "Deep learning", "doi": "10.1038/nature14539", ...}
 ```
 
+**El flujo, por grupos de verbos.** Esta skill no declara una tabla de etapas:
+declara **diecisiete verbos detrás de una sola puerta** (`scripts/paper_cli.py`),
+y el flujo es el orden en que esos grupos se habilitan entre sí.
+
+| Grupo | Verbos | Qué deja establecido |
+|---|---|---|
+| El documento existe | `scaffold`, `status` | `paper/main.tex`, `refs.bib`, `Figures/`. `scaffold` es idempotente: una segunda corrida **nunca toca un byte existente**, ediciones a mano incluidas |
+| El contrato de sección | `contract`, `readiness`, `order` | Qué debe cumplir cada sección. El contrato es **dato, no código** |
+| Las decisiones del paper | `declare`, `observe`, `plan` | Lo que el paper decide sobre sí mismo. `observe` valida un informe de `insumos-observer` contra el esquema **antes** de que una persona corra `declare` |
+| La evidencia que sostiene | `resolve`, `bib build`, `validate` | Resolución de citas, bibliografía con fuente, y la compuerta de veredicto/colocación: **ninguna afirmación sin una fuente que la sostenga** |
+| Escribir y dibujar | `write`, `render`, `place` | Redacción atada a evidencia, auditoría de contrato y prueba de fuga de estilo. `render`/`place`: un diagrama que compila o dice por qué, con su presupuesto de reparación |
+| Comprobar | `verify` | Verificación de acoplamientos de sólo lectura, integridad de citas y vigencia del contrato |
+
+**El motor de sustitución son cuatro de esos diecisiete** —`scaffold`, `status`,
+`open`, `substitute`— y tienen una regla que conviene saber: **no existe
+`--force`**. Nada acá descarta jamás el texto en disco de una persona a favor de
+un cuerpo entrante. La única salida de un bloque editado a mano es `--adopt`,
+que rebasa el digest y **deja el cuerpo intacto**.
+
+**Y nunca afirma que el documento compile.** Un `substitute` exitoso siempre
+agrega `"rendering": "unproven"`: este motor no tiene toolchain de LaTeX y no
+hace ninguna afirmación sobre cómo queda la página.
+
 **El flujo.** Siete etapas, declaradas en `paper_objective.OBJECTIVE_FLOW` y
 leídas por los tests de los agentes, no por prosa suelta: `scaffold` crea
 `paper/main.tex`, `refs.bib` y `Figures/` de forma idempotente, sin pisar jamás
@@ -2132,6 +2319,28 @@ estándar. No toca red, con una sola excepción declarada: el paso `driver`
 opcional de `structure`. La negativa sin shell no es una falla del audit, es
 su salida correcta — un audit cuyas afirmaciones son puras lecturas no le dice
 al usuario nada que no pudiera haber leído solo.
+
+**El flujo, por etapas.** Una auditoría diferencial contra un segundo sujeto
+corre en **seis etapas, de la más barata a la más cara**. Cada una es una fila de
+una tabla, nunca un encabezado numerado, y **todo informe lleva las seis filas**,
+sea diferencial o no.
+
+| # | Etapa | Modelos que gasta | Qué exige |
+|---|---|---|---|
+| 0 | Congelar el sujeto | 0 | `frozen` |
+| 1 | Decidir por herramienta | 0 | `undecidable` |
+| 2 | Manejarlo desde la ignorancia | 1 | `user-drive` |
+| 3 | Dos lecturas ciegas, sólo sobre esa lista | 2 | `reading-diff` |
+| 4 | Manejo diferencial: una caja con la skill y una sin ella | 2 | `drives` |
+| 5 | Partir las dos transcripciones | 1 | `found-by` |
+
+**Seis corridas de modelo en total**, y sólo si cada etapa después de las tres
+primeras efectivamente corre. Las dos primeras no gastan ninguna: el orden existe
+para que lo que se puede decidir con una herramienta nunca cueste un modelo.
+
+**La etapa 2 no es diferencial.** Exige que el sujeto se maneje desde la
+ignorancia siempre que haya algo alcanzable que manejar — es lo que separa *"la
+documentación dice X"* de *"el código hace X"*.
 
 **El flujo.** `roster` es el verbo central y el que reconstruye las dos
 mitades: `probe_code_side` (`audit_cli.py:308-372`) corre el argv propio del
