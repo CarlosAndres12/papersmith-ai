@@ -2339,7 +2339,11 @@ papersmith-ai/
 │   ├── paper-ingestion/        # Marker + Surya OCR + llama-server extraction pipeline
 │   ├── proposal-deliberation/  # Formal TypeScript AST verification & state machine
 │   ├── proposal-implementation/# Reproducible research code & test generators
+│   ├── experimental-deliberation/ # Second domain; same engine, different north
+│   ├── experimental-implementation/ # Second implementation host, two documents, one engine
+│   ├── paper-writing/          # Section contracts to PDF, nothing assumed
 │   ├── remote-execution/       # Distributed compute dispatch (Kaggle T4/P100 / local)
+│   ├── kaggle-accounts/        # Credential guardian; identities, never values
 │   └── skill-audit/            # Meta-auditor ensuring zero lexicon leaks and surface drift
 ├── guidance/                   # Reference papers & domain guidelines
 ├── tests/                      # Full Node.js + pytest test suites (meta-audits)
