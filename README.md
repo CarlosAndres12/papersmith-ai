@@ -2488,3 +2488,27 @@ situaciones en las que puede caer un clon, más el ciclo completo hasta publicar
 revisión que produce un hallazgo— construido para cerrar la v1.5 y retirado al cerrarla.
 Era andamiaje, no parte de la forja. Queda en la historia: el commit que lo saca lo dice,
 y `git revert` lo trae de vuelta si alguna vez hay que volver a correrlo.
+
+## Limitaciones conocidas
+
+Lo que este repositorio sabe de sí mismo y decidió no arreglar todavía. Está acá para
+que nadie lo vuelva a descubrir desde cero y lo reporte como si fuera nuevo.
+
+**La skill de auditoría no prueba contención por contenido.** Dos comandos quedaron
+fuera por presupuesto y siguen fuera:
+
+- `manifest --root <dir> [--baseline <f>]` — huella `sha256` por archivo sobre una
+  carpeta declarada, y contra una foto previa, qué se agregó, se borró y cambió.
+- `counts --before <f> --after <f>` — conteo de tests antes y después, **por separado
+  en las dos suites**, con el número que no sube tratado como hallazgo.
+
+**Qué falta mientras no estén.** Hoy la prueba de que una carpeta de trabajo quedó
+limpia y de que `implementations/Domain_Adaptation` no se tocó descansa en
+`git status`, que sobre un directorio ignorado sale vacío **por construcción**: no
+prueba contención, solo la parece. Y "la suite quedó verde" sigue valiendo como
+evidencia de que se agregó cobertura, cuando lo que la prueba es que el conteo suba.
+
+La decisión de diferirlos está registrada en el cambio archivado
+`the-skill-that-audits-the-others`, y es explícita: *"The budget decision is made — do
+not reopen."* El cambio de seguimiento que iba a recogerlos nunca se creó, y esa nota
+apuntaba a la nada; esta sección la reemplaza.
