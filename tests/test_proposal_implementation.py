@@ -9870,6 +9870,40 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
 
         self.assertEqual(impl.MANAGED_ARTIFACT_MARKER, expected.encode("utf-8"))
 
+    def test_every_domain_that_declares_the_marker_declares_the_same_one(self):
+        """The sibling guard above reads ONE profile, so a second domain could
+        declare its own spelling and nothing would notice: the engine would keep
+        recognising through its own bytes while that domain published documents
+        carrying different ones, and `markerOwned` would read `False` on a
+        revision the system itself had just written. That failure is silent and
+        indistinguishable from a legitimate hand-dropped draft, which is exactly
+        why nobody would trace it back here.
+
+        The roster is DERIVED, never listed: every `profile.ts` under
+        `.claude/skills/` that declares a single-line `marker` joins this check by
+        existing, so a third domain added tomorrow is covered without anyone
+        remembering to extend a literal.
+        """
+        declarantes = {}
+        for profile in sorted((FORGE / ".claude/skills").glob("*/profile.ts")):
+            found = re.search(r'^\s*marker:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$',
+                              profile.read_text(encoding="utf-8"), re.MULTILINE)
+            if found:
+                declarantes[profile.parent.name] = (
+                    found.group(1).encode("utf-8").decode("unicode_escape")
+                    .encode("utf-8"))
+
+        self.assertGreaterEqual(
+            len(declarantes), 2,
+            "fewer than two domains declare a marker -- this guard has nothing "
+            f"to compare and would pass vacuously; found {sorted(declarantes)}")
+
+        for domain, spelling in declarantes.items():
+            self.assertEqual(
+                spelling, impl.MANAGED_ARTIFACT_MARKER,
+                f"{domain} declares a marker the engine does not recognise; "
+                "documents it publishes would read as unmanaged")
+
     def test_the_marker_is_a_leading_prefix_and_not_a_mention(self):
         """The store compares `bytes.subarray(0, MARKER.length)`. A document that
         quotes the marker further down is not a published artifact, and reading
