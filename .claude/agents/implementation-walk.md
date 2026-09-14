@@ -1,7 +1,8 @@
 ---
 name: implementation-walk
-description: "One stretch of proposal-implementation, between two of the operator's gates: from per-step placement decisions already taken to the launch they must authorize. Walk the declared flow act by act in its own order — run the local steps, commit each step's product, refresh the position, generate the job folders a remote step needs and rehearse them on a worker. Stops at the launch and has no path to submitting a campaign."
+description: "One stretch of proposal-implementation, between two of the operator's gates: from per-step placement decisions already taken to the launch they must authorize. Walk the declared flow act by act in its own order — run the local steps, commit each step's product, refresh the position, generate the job folders a remote step needs and stop at the rehearsal, which no act here performs and the doctrine leaves to a person. Stops at the launch and has no path to submitting a campaign."
 tools: Read, Bash, Glob, Grep
+stretch: rehearsal
 ---
 
 # Implementation — the walk stretch
@@ -20,6 +21,14 @@ author.
 subprocesses, so every guard applies exactly as it would to a person running
 them, and it stops at the first act it will not take — returning what it
 performed and where it stopped.
+
+**Not every agent's description carries its bound skill's arrival, verbatim.**
+Only a `stretch: terminal` agent does; any other stretch ends at a named,
+earlier stage instead, and a skill that declares no north at all binds an
+agent with nothing to carry. This one is `stretch: rehearsal`: the
+description above stops at the launch, one stage short of
+`proposal-implementation`'s own arrival, and that is correct rather than
+incomplete.
 
 ## When something refuses
 

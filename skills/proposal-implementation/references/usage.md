@@ -11,7 +11,7 @@ forge virtualenv, so it can never hand the forge's interpreter to a target venv.
 ## 0. Bind the revision
 
 ```bash
-node skills/proposal-deliberation/cli.mjs '{ "operation": "STATUS" }'
+node .claude/skills/proposal-deliberation/cli.mjs '{ "operation": "STATUS" }'
 ```
 
 Take `latest` (e.g. `research-concept-r05.md`). That string is what modules
@@ -54,7 +54,7 @@ a hyphen is legal in exactly one of them. `name` answers that before anything is
 created, which is the only moment the answer is free:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py name \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py name \
   --name "Example-Method"
 ```
 
@@ -69,7 +69,7 @@ renaming afterwards is a migration and this is a question.
 ## 2. The isolated environment
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py env \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py env \
   --target implementations/<repo> [--python python3.12]
 ```
 
@@ -104,7 +104,7 @@ code goes through the returned `interpreter`.
 ## 3. Plan the migration (read-only)
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py plan \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py plan \
   --target implementations/<repo> --name Example-Method > /tmp/plan.json
 ```
 
@@ -212,7 +212,7 @@ is a result, not a dataset.
 ## 4. Apply, as one separate commit
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py apply \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py apply \
   --target implementations/<repo> --name Example-Method --plan /tmp/plan.json
 ```
 
@@ -344,7 +344,7 @@ stay uncommitted for review, then commit.
 ## Materialize the scaffold
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py materialize \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py materialize \
   --target implementations/<repo> --name Example-Method \
   --stage scaffold --plan /tmp/plan.json --seed 7
 ```
@@ -370,7 +370,7 @@ genuine race of a file appearing between that computation and the write.
 ## Materialize the object scaffolding
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py materialize \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py materialize \
   --target implementations/<repo> --name Example-Method \
   --stage objects --plan /tmp/plan.json --seed 7
 ```
@@ -392,7 +392,7 @@ the three so `verify` stops reading them as drift.
 ## Materialize the harness
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py materialize \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py materialize \
   --target implementations/<repo> --name Example-Method \
   --stage harness --plan /tmp/plan.json
 ```
@@ -412,7 +412,7 @@ deliberately no clean-worktree requirement, because the file they name is by
 definition an uncommitted edit:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py materialize \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py materialize \
   --target implementations/<repo> --name Example-Method \
   --authored src/Example_Method/module.py
 ```
@@ -425,7 +425,7 @@ place; that path is adopted, not re-sealed. The release is per-declaration:
 a second silent edit after this drifts again.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py materialize \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py materialize \
   --target implementations/<repo> --name Example-Method \
   --adopt tests/test_smoke.py
 ```
@@ -479,7 +479,7 @@ a value to make it disappear produces a suite that passes while asserting nothin
 
 ```bash
 implementations/<repo>/.venv/bin/python -m pytest -q
-python3 skills/proposal-implementation/scripts/implementation_cli.py verify \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py verify \
   --target implementations/<repo> --name Example-Method --revision research-concept-r05.md
 ```
 
@@ -513,7 +513,7 @@ subdirectory each, every one holding its own `shard.json` stamp. Hand `verify`
 that directory and it checks what the declaration said had to be identical:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py verify \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py verify \
   --target implementations/<repo> --name <Name> --shards <Name>/Results/shards
 ```
 
@@ -633,7 +633,7 @@ in Eq. (38) itself, not in the fix.
 ### `admit` — admissibility is ruled on first
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py admit \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py admit \
   --target implementations/<repo> --name <Name> --revision research-concept-r05.md
 ```
 
@@ -650,6 +650,13 @@ The ruling is written into the target and the remedy suite reads it before
 measuring anything: without it every `test_remedy_<id>` fails immediately, and a
 finding ruled inadmissible is never measured while the others still run. Only
 the verdict travels — the revision's text stays in the forge.
+
+Refuses `REVISION_UNREADABLE` when the pinned document 0 revision cannot be
+read, and, under a profile declaring more than one document,
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond it has no
+readable revision of its own (no family found, ambiguous families, or a
+discovered name that does not read) — the same code and cause every other
+binding-write command shares.
 
 Order is the whole point. A remedy that cites a missing equation or leans on
 undefined notation would otherwise be swept over 200 configurations, and those
@@ -687,7 +694,7 @@ entry's own text rather than handing back the bare block, so every neighbouring
 line the entry carries survives:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py compose \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py compose \
   --target implementations/<repo> --finding <finding-id> --entry-text -
 ```
 
@@ -975,7 +982,7 @@ block is already there, touching nothing else about it — not the item text,
 not the order, not which witness each one names.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py position \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py position \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id>
 ```
@@ -1127,7 +1134,7 @@ echo '[{"text": "Search for the governing value.",
        {"text": "Rehearse the campaign job.",
         "witness": {"kind": "rehearsal", "operand": "governing-search",
                     "twostate": false}}]' \
-  | python3 skills/proposal-implementation/scripts/implementation_cli.py position \
+  | python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py position \
       --target implementations/<repo> --name <Name> \
       --revision research-concept-r05.md --session <your-session-id> \
       --target-level local --sequence -
@@ -1155,7 +1162,7 @@ For a target that already has notebooks, job folders and a declared search
 but no position section yet:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py position \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py position \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id> \
   --target-level local --reconcile
@@ -1186,7 +1193,7 @@ instead. It never gates — an unanswered question is a reported `status`,
 not a refusal.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py discuss \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py discuss \
   --target implementations/<repo> --name <Name> \
   --about "rehearsal governing-search" \
   --question "Should this job rehearse before the campaign?"
@@ -1224,7 +1231,7 @@ refuses, and writes. It never authors the text and never ticks the box: the
 mark placed is always `[ ]`, and the text placed is `--text`, verbatim.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py settle \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py settle \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --about "notebook Notebooks/verification.ipynb" \
   --text "the free scalar stays at its neutral and identical across arms" \
@@ -1298,7 +1305,7 @@ re-`settle`ing it (which would write a fresh `[ ]` line and un-tick
 whatever was already reached). `--attach` closes that gap:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py settle \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py settle \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --attach \
   --text "the free scalar stays at its neutral and identical across arms" \
@@ -1355,7 +1362,7 @@ line's own bytes outright, including its trailing newline, and touching
 no other byte in the document:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py settle \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py settle \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --remove \
   --text "the free scalar stays at its neutral and identical across arms"
@@ -1406,7 +1413,7 @@ command could write one. `--reverse` closes that gap by writing the `##
 Reversed` entry and performing the deletion in the SAME call:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py settle \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py settle \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --reverse \
   --text "the free scalar stays at its neutral and identical across arms" \
@@ -1469,7 +1476,7 @@ agreement a real target carries was typed by hand. `--done` closes that
 gap:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py settle \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py settle \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --done \
   --text "the free scalar stays at its neutral and identical across arms"
@@ -1523,7 +1530,7 @@ other hand edit this file does not itself perform.
 
 Records that some file this forge itself ships is currently wrong — a bug in
 `implementation_cli.py`, a stale claim in `SKILL.md`, anything under
-`skills/`. While it stays open, `step`, `gate`, `offer`, `close`,
+`.claude/skills/`. While it stays open, `step`, `gate`, `offer`, `close`,
 `settle`, `apply` and `admit` all refuse `FORGE_DEFECT_OPEN` for this exact
 `<target>/<name>`; `probe`, `verify`, `position`, `plan`, `compose`,
 `handoff` and `discuss` stay reachable throughout. `main()` also appends this
@@ -1532,21 +1539,21 @@ OTHER exception reaches it while dispatching a command — see SKILL.md's
 "When the forge itself crashes mid-flow".
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py defect \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py defect \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
-  --file skills/proposal-implementation/scripts/implementation_cli.py \
+  --file .claude/skills/proposal-implementation/scripts/implementation_cli.py \
   --detail "cmd_step ignores STEP_MALFORMED for an entry missing 'function'"
 ```
 
 ```json
 { "command": "defect", "target": "<repo>", "name": "<Name>",
-  "file": "skills/proposal-implementation/scripts/implementation_cli.py",
+  "file": ".claude/skills/proposal-implementation/scripts/implementation_cli.py",
   "fileSha256": "<64-char hex>", "session": "<your-session-id>",
   "at": "2026-08-27T00:00:00Z",
   "detail": "cmd_step ignores STEP_MALFORMED for an entry missing 'function'" }
 ```
 
-`--file` must resolve under `FORGE_ROOT/skills/`; a path outside that
+`--file` must resolve under `FORGE_ROOT/.claude/skills/`; a path outside that
 tree refuses `DEFECT_FILE_NOT_FORGE_OWNED`, checked BEFORE existence, so this
 command never reports on the existence of anything outside it. A path that
 does not resolve to a regular file refuses `DEFECT_FILE_ABSENT` — declaring
@@ -1565,7 +1572,7 @@ strongest possible change, not a bypass that needs closing.
 ## Probe — what stands between this repository and a benchmark
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py probe \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py probe \
   --target implementations/<repo> --name <Name> --revision research-concept-r05.md
 ```
 
@@ -1611,16 +1618,16 @@ invocations, in the shape this flow reaches them:
 
 ```bash
 # a submission is out and its answer has not come back — `nextStep: "poll-first"`
-python3 skills/remote-execution/scripts/remote_cli.py poll \
+python3 .claude/skills/remote-execution/scripts/remote_cli.py poll \
   --submission-id <id> --backend <backend>
 
 # the ledger and the service disagree — `remoteExecution` reporting drift or unreliable
-python3 skills/remote-execution/scripts/remote_cli.py reconcile \
+python3 .claude/skills/remote-execution/scripts/remote_cli.py reconcile \
   --target implementations/<repo> --entrypoint <Name>/Notebooks/<notebook>.ipynb \
   --worker <worker> --backend <backend>
 
 # there is no job folder for the campaign about to be offered
-python3 skills/remote-execution/scripts/remote_cli.py generate-job \
+python3 .claude/skills/remote-execution/scripts/remote_cli.py generate-job \
   --target implementations/<repo> --service <service> --job-name <job> \
   --product <Name> --commit <sha> --repo-url <url> --repo-ref <ref> \
   --clone-path src --run-module <module> --run-function <function>
@@ -1823,7 +1830,7 @@ edges (if any) and a human-authored rationale: the four facts the spec's
 "One Proposal Per Campaign" requirement names.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py propose \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py propose \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --job governing-search --job ablation-a \
   --worker worker-1 --worker worker-2 \
@@ -1879,7 +1886,7 @@ write an agent could run believing itself still inside the "what should the
 contract still add" conversation this branch is meant to open.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py offer \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py offer \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id> \
   --answer yes
@@ -1893,9 +1900,13 @@ is even read; the refusal is identical whether the target's ledger holds no
 appends a new event — it is never compared against, or deduplicated against,
 any prior `offer` event's answer. Refuses `OFFER_ANSWER_NOT_A_TOKEN` when
 `--answer` is given something other than `yes`/`no`, and
-`REVISION_UNREADABLE` when the pinned revision cannot be read. It does not
-touch a token an earlier `offer` already minted; see `gate`'s own closing
-paragraph for that gap, stated in full there.
+`REVISION_UNREADABLE` when the pinned revision cannot be read, and
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond document 0
+has no readable revision of its own — no family found in its own
+directory, more than one family found there (ambiguous), or a discovered
+name that does not read; the detail names the index, label, directory and
+cause. It does not touch a token an earlier `offer` already minted; see
+`gate`'s own closing paragraph for that gap, stated in full there.
 
 Every published `launch` action's `binding` carries a minted `authorization`
 token — a digest over the engine's own re-derived binding (job, commit,
@@ -1922,7 +1933,7 @@ instead name a token an earlier `offer` publish already minted — copy it
 from that `launch` action's own `command` string or `binding.authorization`.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py gate \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py gate \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id> \
   --job governing-search --worker <account> \
@@ -1939,7 +1950,7 @@ token, and records `worker: null`: a campaign names no single account.
 `--worker` and `--unit` are mutually exclusive.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py gate \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py gate \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id> \
   --job governing-search --unit shard-0 --unit shard-1 --unit shard-2 \
@@ -1953,7 +1964,7 @@ job classifies `optional` (`classify_remote_necessity`'s own verdict — the
 recorded facts do not decide), a matching human election:
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py gate \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py gate \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id> \
   --job ablation-a --worker w1 \
@@ -2031,7 +2042,7 @@ Writing the position becomes a precondition of finishing, not a courtesy:
 which one, rather than always succeeding.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py close \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py close \
   --target implementations/<repo> --name <Name> \
   --revision research-concept-r05.md --session <your-session-id>
 ```
@@ -2067,7 +2078,7 @@ by that interpreter's own directory so a notebook's kernelspec resolves it
 rather than whatever `python` happens to be first on the inherited `PATH`.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py step \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py step \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --step verification
 ```
@@ -2078,7 +2089,7 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py step \
 order the flow declares, and stops at the first act a person has to take.
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py walk \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py walk \
   --target implementations/<repo> --name <Name> --session <your-session-id> \
   --revision research-concept-r17.md
 ```
@@ -2224,7 +2235,7 @@ loaders, and a `kind: "step"` line is invisible to
 ## `handoff` — back to the deliberation, sized by reach
 
 ```bash
-python3 skills/proposal-implementation/scripts/implementation_cli.py handoff \
+python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py handoff \
   --target implementations/<repo> --name <Name> --revision research-concept-r05.md
 ```
 
@@ -2318,19 +2329,24 @@ state, alongside the scenarios — not verified by hand once.
 Every refusal leaves the CLI through one handler and prints the same JSON:
 `status`, `code`, `detail`, exit `2`, nothing appended anywhere. Refusals a call
 to one of the ten **gating** commands can reach — `apply`, `admit`, `gate`,
-`offer`, `close`, `step`, `settle`, `materialize`, `position`, `adopt` — carry one more
-thing, and which ones carry it is itself the answer to a question:
+`offer`, `close`, `step`, `settle`, `materialize`, `position`, `agree` — carry
+one more thing. `agree` is on that roster but not on this skill's command line:
+it is registered only for a profile declaring more than one document, and this
+one declares a single document. Its codes are reachable here in the sense the
+roster means — derivable from a module-level function — and unreachable in the
+sense a reader cares about, which is that no invocation of this skill raises
+them. Which refusals carry the extra key is itself the answer to a question:
 
 > Can the caller clear this by changing the invocation alone, without touching
 > the repository?
 
 **Yes — an invocation defect.** The detail already names the flag, the token or
-the mutual exclusion. Fifty codes, and nothing is published beside them:
+the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `SETTLE_STDIN_CONFLICT`, `OFFER_ANSWER_NOT_A_TOKEN`, `MATERIALIZE_MODE_REQUIRED`,
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-four codes, including
+carries a `resolve` key saying what. Sixty-seven codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

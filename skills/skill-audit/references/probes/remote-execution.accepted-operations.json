@@ -5,6 +5,7 @@
   "cwd": ".",
   "stream": "stderr",
   "exit": 2,
+  "minInterpreterVersion": "3.10",
   "extract": "choose from (?P<roster>[^)]+)",
   "split": ", ",
   "doctrineSites": [

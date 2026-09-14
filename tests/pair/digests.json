@@ -1,0 +1,12 @@
+{
+  "pair-second-document-missing-directory-refuses": {
+    "bytes": 0,
+    "exit": 1,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "pair-two-documents-resolve": {
+    "bytes": 90,
+    "exit": 0,
+    "sha256": "acd0432da2a92828489be4cf470ad9f396b3c38e7b780b39c34635f7bff46247"
+  }
+}

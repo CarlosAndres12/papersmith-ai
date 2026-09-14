@@ -9,16 +9,19 @@ Invoking this skill does not just call a tool — it conditions **you, the runni
 
 ## The objective flow
 
-**Why this skill was invoked, and where it has to arrive.** Declared here and in
-the engine's `OBJECTIVE_FLOW`, held equal by a test, and independent of any
-document on disk. `STATUS` answers *where am I* by listing what has been
-published; this answers *what is this for*, which no listing implies. Every
-refusal the engine raises carries it, and `STATUS` reports it above the
-inventory.
+**Why this skill was invoked, and where it has to arrive.** Declared here and
+in this skill's own `profile.ts` `objective` field, held equal by a test, and
+independent of any document on disk. `STATUS` answers *where am I* by listing
+what has been published; this answers *what is this for*, which no listing
+implies. `STATUS` reports it above the inventory, and both of the engine's
+CLI-level error paths carry it too — that is its complete reach. A typed
+refusal returned as a value from `tool.execute` does not carry it; run
+`STATUS` to recover it.
 
-It lives in the engine and not in a domain profile, and that is derived rather
-than chosen: a profile says what this domain is called and which notation it
-uses, and would say the same north whichever domain asked.
+The north's *structure* lives in the engine — its shape, its presence at
+those three sites — and not its text: the text is this domain's own, declared
+in `profile.ts` alongside every other domain value, because a second domain
+measurably does not say the same north this one does.
 
 **Purpose:** carry the mathematics that was discussed as far as a published
 managed revision — not a good conversation, a document that exists and is the
@@ -132,7 +135,7 @@ Restoring is the same procedure in reverse — move the `.md` and both sidecars 
 2. **You have a path in mind, and `sourceClassification` is `OLDER_MANAGED`.** `newerRevisionNumbers` lists the revision(s) that exist above it in the same lineage (`r(N+1)…rM`). Ask the user: move those newer revisions to `backup/proposals/<timestamp>/` and resume work from `rN` (the path you had in mind), or keep working on the actual current latest (`rM`) instead? On "move," relocate exactly `r(N+1)…rM` (and their sidecars) and treat `rN` as the latest from now on. On "keep," drop the older path and continue on the real latest.
 3. **You have a path in mind, and it does not match the managed format (`sourceClassification` is `UNMANAGED`).** Ask the user: move the current managed revision(s) to `backup/proposals/<timestamp>/` and START FRESH, using that file's content as the new v1 base — or ADOPT it as v1 directly, by adding the marker and renaming it to `research-concept-r01.md`? Adoption preserves the file's real structure and is the better choice for an already-rich, developed document, versus re-rendering a generic seed from scratch. Either choice is the user's call — never default silently.
 4. **No path in mind, and a latest managed revision exists (`latest` is non-null, `multipleActive: false`).** Work on `latest` directly.
-5. **No path in mind, zero managed revisions, and `proposals/` is otherwise empty (`nonManagedFiles: []`).** A pure initial creation — ask the user for their idea and proceed to `CREATE_INITIAL_REVISION`.
+5. **No path in mind, zero managed revisions, and `proposals/` is otherwise empty (`nonManagedFiles: []`).** A pure initial creation — ask the user for their idea and proceed to `CREATE_INITIAL_REVISION`. **Their idea needs at least two sentences.** The engine takes the document's title from the first and its section heading from the second; with no second sentence both come out byte-identical, every later attempt to name a place in that document is ambiguous, and the revision can never be edited. `CREATE_INITIAL_REVISION` refuses that outright — `code: 'INITIAL_IDEA_SINGLE_SENTENCE'`, nothing written. A sentence ends with `.`, `!` or `?`; a line break is not a sentence boundary.
 6. **No path in mind, zero managed revisions, and exactly one non-managed file exists.** Ask the user: "is `<that file>` your initial idea/base for this proposal?" — do not assume it.
 7. **No path in mind, zero managed revisions, and several non-managed files exist.** Ask the user which one (by name or path) to start from — never guess among them.
 

@@ -376,7 +376,7 @@ class TestDeliberate(unittest.TestCase):
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             rc = main(["deliberate", str(workspace), "--action", "init",
-                       "--instruction", "E2E deliberate probe"])
+                       "--instruction", "E2E deliberate probe. The workspace continues by its own engine."])
         assert rc == 0
         created = json.loads(buffer.getvalue())
         assert created["status"] == "created"
@@ -406,7 +406,7 @@ class TestDeliberate(unittest.TestCase):
             buffer = io.StringIO()
             with contextlib.redirect_stdout(buffer):
                 rc = main(["deliberate", str(workspace), "--action", "init",
-                           "--instruction", "E2E keyless probe"])
+                           "--instruction", "E2E keyless probe. The run stays keyless on purpose."])
             assert rc == 0, "deliberate init must be keyless with no model call"
             created = json.loads(buffer.getvalue())
             assert (workspace / "proposals" / created["targetFilename"]).is_file()
@@ -431,7 +431,7 @@ class TestImplement(unittest.TestCase):
         buffer = io.StringIO()
         with contextlib.redirect_stdout(buffer):
             assert main(["deliberate", str(workspace), "--action", "init",
-                         "--instruction", "E2E implement probe"]) == 0
+                         "--instruction", "E2E implement probe. The second leg walks on its own."]) == 0
         _make_demo_target(workspace)
         return workspace
 
@@ -643,7 +643,7 @@ class TestRunJourney(unittest.TestCase):
         init_buf = io.StringIO()
         with contextlib.redirect_stdout(init_buf):
             assert main(["deliberate", str(workspace), "--action", "init",
-                         "--instruction", "E2E journey probe"]) == 0
+                         "--instruction", "E2E journey probe. The journey continues in one workspace."]) == 0
         revision = json.loads(init_buf.getvalue())["targetFilename"]
         status_buf = io.StringIO()
         with contextlib.redirect_stdout(status_buf):

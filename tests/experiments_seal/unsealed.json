@@ -1,0 +1,4 @@
+{
+  "materialize": "excluded by design (design.md M3, task 2.2): the `--stage scaffold` kit destinations this command materializes come from `assets/kit/`, which this domain does not ship.",
+  "propose": "propose's own campaign-proposal digest (cmd_propose's `digest` field) is sha256 over a JSON payload that embeds `_now_iso8601()` (the `at` field) at second precision, so it differs across two immediate runs even with source/session/job/rationale fixed -- measured directly this session (two runs, same argv, digests disagreed). Included in the roster (its exit status and shape are still exercised) but excluded from the comparison suite's byte-exact digest check, mirroring `tests/seal/unsealed.json`'s own recorded reason for the same command."
+}

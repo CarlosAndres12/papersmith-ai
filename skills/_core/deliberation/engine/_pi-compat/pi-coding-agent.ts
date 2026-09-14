@@ -11,6 +11,8 @@
 // `getApiKeyAndHeaders` were removed as unreferenced once `production-runtime.ts`
 // -- their only consumer -- was deleted).
 
+import type { Static, TSchema } from 'typebox';
+
 export interface SessionManager {
 	getSessionId(): string;
 }
@@ -31,8 +33,34 @@ export type SessionStartEvent = Record<string, unknown>;
 
 type ExtensionEventHandler = (event: any, ctx: ExtensionContext) => unknown | Promise<unknown>;
 
+/** The result shape every registered tool's `execute` resolves to. */
+export type ToolExecuteResult = { content: Array<{ type: string; text: string }>; details: Record<string, unknown> };
+
+/**
+ * The tool shape `registerTool` accepts. `params` is the static type of the tool's own
+ * `parameters` schema, so a handler declared inline needs no separate annotation.
+ * `registerTool` keeps an `unknown` overload for tools built elsewhere whose hand-written
+ * parameter types do not line up structurally with `Static<>` of their schema.
+ */
+export interface RegisteredTool<Schema extends TSchema = TSchema> {
+	name: string;
+	label: string;
+	description: string;
+	promptSnippet?: string;
+	promptGuidelines?: readonly string[];
+	parameters: Schema;
+	execute(
+		toolCallId: string,
+		params: Static<Schema>,
+		signal: AbortSignal | undefined,
+		onUpdate: unknown,
+		ctx: ExtensionContext,
+	): Promise<ToolExecuteResult>;
+}
+
 /** The registration surface an extension factory uses. */
 export interface ExtensionAPI {
+	registerTool<Schema extends TSchema>(tool: RegisteredTool<Schema>): void;
 	registerTool(tool: unknown): void;
 	on(event: string, handler: ExtensionEventHandler): void;
 }

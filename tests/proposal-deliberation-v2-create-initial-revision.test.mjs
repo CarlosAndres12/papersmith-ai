@@ -88,13 +88,47 @@ function fakePublicationPort() {
 test('creates a managed v1 in memory when no managed proposal exists, and never touches a real filesystem', async () => {
 	const fake = fakePublicationPort();
 	const service = new v2.InitialRevisionCreationService(fakeExistingProposalPort(false), fake.port);
-	const result = await service.execute({ idea: 'Bounded refutation loop for a mathematical tutor.' });
+	const result = await service.execute({ idea: 'Bounded refutation loop for a mathematical tutor. It refutes each weak step before the next.' });
 	assert.equal(result.status, 'created');
 	assert.match(result.filename, /^research-concept-[a-z0-9-]+-r01\.md$/);
 	assert.equal(result.revision, 'r01');
 	assert.equal(fake.published.length, 1);
 	assert.equal(fake.published[0].filename, result.filename);
 	assert.match(fake.published[0].markdown, /Bounded refutation loop for a mathematical tutor\./);
+});
+
+test('refuses a one-sentence idea instead of writing a v1 that can never be edited', async () => {
+	// `deriveCanonicalMetadataFromIdea`: `title` is `sentences[0] ?? idea` and
+	// `sectionHeading` is `sentences[1] ?? sentences[0] ?? idea` -- so with no
+	// second sentence the two resolve to the same bytes by construction, and the
+	// document goes out with `# X` and `## X` identical.
+	//
+	// Measured consequence, and why this is a refusal and not a cosmetic note:
+	// on `proposal-deliberation` every locus query against that document is
+	// ambiguous and blocked, forever, and a second CREATE is refused
+	// MANAGED_PROPOSAL_ALREADY_EXISTS -- the only exit is moving files by hand
+	// outside the engine. On `experimental-deliberation` the renderer's
+	// triplication trips that domain's own canonical form, so an idea obeying
+	// every stated rule cannot become v1 at all, and the refusal blames the
+	// author for a repetition the engine introduced.
+	//
+	// A refusal rather than an invented second heading: the engine cannot write
+	// a section heading the author did not.
+	const fake = fakePublicationPort();
+	const service = new v2.InitialRevisionCreationService(fakeExistingProposalPort(false), fake.port);
+	const result = await service.execute({ idea: 'Bounded refutation loop for a mathematical tutor.' });
+	assert.equal(result.status, 'blocked');
+	assert.equal(result.code, 'INITIAL_IDEA_SINGLE_SENTENCE');
+	assert.equal(fake.published.length, 0, 'nothing may be written');
+});
+
+test('a two-sentence idea still creates, so the refusal above is not a blanket one', async () => {
+	const fake = fakePublicationPort();
+	const service = new v2.InitialRevisionCreationService(fakeExistingProposalPort(false), fake.port);
+	const result = await service.execute({ idea: 'Bounded refutation loop. It refutes weak proofs for a mathematical tutor.' });
+	assert.equal(result.status, 'created');
+	assert.notEqual(result.canonicalMetadata.title, result.canonicalMetadata.sectionHeading);
+	assert.equal(fake.published.length, 1);
 });
 
 test('refuses (does not overwrite or duplicate) when a managed proposal already exists, and never calls publish', async () => {
@@ -120,7 +154,7 @@ test('threads paper-guide fragments through to the rendered candidate passed to 
 	const fake = fakePublicationPort();
 	const service = new v2.InitialRevisionCreationService(fakeExistingProposalPort(false), fake.port);
 	await service.execute({
-		idea: 'A concept that reuses the paper guide notation conventions.',
+		idea: 'A concept that reuses the paper guide notation conventions. It follows the guide rather than restating it.',
 		guideFragments: [{ path: 'guidance/paper-guide/normalized/notation.md', content: 'Use bold for vectors.' }],
 	});
 	assert.match(fake.published[0].markdown, /Use bold for vectors\./);
@@ -150,7 +184,7 @@ async function fixture() {
 test('CREATE_INITIAL_REVISION is reachable via the registered tool and produces a managed r01 when no managed proposal exists, independent of the scientific-workflow flag', async () => {
 	const run = await fixture();
 	try {
-		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that catches unjustified inference steps in a proof draft.' });
+		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that catches unjustified inference steps in a proof draft. It names the step it doubts.' });
 		assert.equal(result.status, 'created', JSON.stringify(result));
 		assert.match(result.targetFilename, /^research-concept-[a-z0-9-]+-r01\.md$/);
 		assert.equal(result.targetRevision, 'r01');
@@ -173,7 +207,7 @@ test('CREATE_INITIAL_REVISION is reachable via the registered tool and produces 
 test('CREATE_INITIAL_REVISION writes derived-state and receipt sidecars in the same layout as ordinary materialization, so a fresh r01 yields a CONSISTENT inventory', async () => {
 	const run = await fixture();
 	try {
-		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that verifies each induction step explicitly.' });
+		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A tutor that verifies each induction step explicitly. It refuses to advance past one it cannot check.' });
 		assert.equal(result.status, 'created', JSON.stringify(result));
 
 		const stateBytes = await readFile(path.join(run.projectRoot, '.proposal-deliberation', 'state', `${result.targetFilename}.json`), 'utf8');
@@ -204,7 +238,7 @@ test('CREATE_INITIAL_REVISION refuses and does not overwrite when a managed prop
 		await mkdir(path.join(run.projectRoot, 'proposals'), { recursive: true });
 		const existingPath = path.join(run.projectRoot, 'proposals', 'research-concept-r01.md');
 		await writeFile(existingPath, `${MARKER}# Existing base\n\nOriginal content.\n`);
-		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A second unrelated idea that must not overwrite the first.' });
+		const result = await run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A second unrelated idea that must not overwrite the first. It exists only to be refused.' });
 		assert.equal(result.status, 'blocked', JSON.stringify(result));
 		assert.equal(result.blockers[0].code, 'MANAGED_PROPOSAL_ALREADY_EXISTS');
 		assert.equal(result.mutations, 0);
@@ -227,8 +261,8 @@ test('CREATE_INITIAL_REVISION: two concurrent creates with two different ideas h
 	const run = await fixture();
 	try {
 		const [first, second] = await Promise.all([
-			run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'Formalizing entropy bounds for adaptive samplers.' }),
-			run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A new proof strategy for convergence under noise.' }),
+			run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'Formalizing entropy bounds for adaptive samplers. It bounds the sampler before it adapts.' }),
+			run.execute({ operation: 'CREATE_INITIAL_REVISION', instruction: 'A new proof strategy for convergence under noise. It treats the noise as part of the statement.' }),
 		]);
 		const results = [first, second];
 		const created = results.filter((result) => result.status === 'created');

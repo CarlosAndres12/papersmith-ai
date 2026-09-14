@@ -28,6 +28,13 @@ If you cannot execute — no shell, or the subject cannot be driven as a real
 process — you are not in a position to adjudicate anything. Say so and stop
 rather than reporting a documented roster as if both halves had been derived.
 
+**Not every agent's description carries its bound skill's arrival, verbatim.**
+Only a `stretch: terminal` agent does; any other stretch ends at a named,
+earlier stage instead, and a skill that declares no north at all binds an
+agent with nothing to carry. `skill-audit` declares no north, so this
+agent carries neither a `stretch:` nor an arrival — the description above is
+this stretch's own end and nothing more.
+
 ## When something refuses
 
 Read what the refusal says and do not work around it. An audit that cannot ask

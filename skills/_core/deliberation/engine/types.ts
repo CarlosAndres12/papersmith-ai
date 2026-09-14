@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 
-export const PARSER_VERSION = 'proposal-deliberation/1';
+// Bumped for change 6 (`table`/`figure_placeholder` first-class entries): retyping a GFM
+// table from `paragraph` to `table` changes its entryId (`${type}:${sha256(...)}`), so this
+// is a genuine re-parse, not a same-output rename -- it must NOT be added to
+// `SUPERSEDED_PARSER_VERSIONS` below (see that constant's own doc comment).
+export const PARSER_VERSION = 'proposal-deliberation/2';
 /**
  * Identifiers this parser answered to before, which derived state committed under them may still carry.
  *
@@ -77,11 +81,21 @@ export type RevisionLifecycleResult = {
  selfAuditStatus:'PASS'|'WARN'|'FAIL'|'NOT_RUN';
  warnings:string[];
 };
-export type EntryType = 'document'|'section'|'subsection'|'heading'|'paragraph'|'display_equation'|'inline_math_region'|'list'|'code_block'|'definition'|'theorem'|'algorithm'|'figure_reference'|'table_reference'|'composite';
+export type EntryType = 'document'|'section'|'subsection'|'heading'|'paragraph'|'display_equation'|'inline_math_region'|'list'|'code_block'|'definition'|'theorem'|'algorithm'|'table'|'figure_placeholder'|'composite';
 export type Position = 'before'|'after'|'inside_start'|'inside_end';
 export type DerivedStateStatus = 'VALID'|'STALE'|'MISSING'|'BUILDING'|'FAILED'|'COMMITTED';
 export type CleanupLevel = 'NONE'|'STRUCTURAL'|'SEMANTIC'; export type MoveMode = 'LITERAL'|'ADAPTIVE';
 export const sha256 = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+/**
+ * The preservation gate's domain-neutral vocabulary (change 4): an atom is anything a
+ * profile's own extractor recognizes as something that must not vanish silently,
+ * whatever the domain calls it. `kind` is intentionally a bare `string`: only the
+ * profile knows what its own atom kinds are.
+ */
+export type PreservationAtomKind = string;
+export type PreservationAtom = { id: string; kind: PreservationAtomKind; text: string };
+export type PreservationDelta = { lost: PreservationAtom[]; added: PreservationAtom[] };
+export type PreservationViolation = { rule: string; line: number; detail: string };
 export type StructuralEntry = { entryId:string; type:EntryType; startByte:number; endByte:number; textSha256:string; parentId?:string; childIds:string[]; ordinal:number; headingPath:string[]; labels:string[]; tags:string[]; lexicalTerms:string[]; deterministicAliases:string[]; neighboringEntryIds:string[]; sectionReplacement?:SectionReplacementContract };
 export type StructuralIndex = { entries: StructuralEntry[]; byId: Record<string, StructuralEntry> };
 export type ReferenceIndex = { labels:Record<string,string>; tags:Record<string,string>; references:{kind:string; value:string; entryId:string}[]; missing:string[]; duplicates:string[] };
@@ -200,7 +214,7 @@ export type SemanticEditPlanner = {
  plan(input:SemanticPlannerInput):Promise<Partial<EditPlan>&{transformedContent?:string; sourceEntryIds?:string[]; destinationEntryId?:string; position?:Position; actions?:EditAction[]}>;
 };
 export type EditModel = { plan?(input:any):Promise<Partial<EditPlan>>; validate?(input:{plan:EditPlan; candidate:string}):Promise<{ok:boolean; reason?:string}> };
-export type RevisionReceipt = { sourceRevision:string; targetRevision:string; sourceFilename:string; targetFilename:string; intent:Intent; operation:Intent|CreateSuccessorOperation; instructionHash:string; documentShaBefore:string; documentShaAfter:string; resolvedEntryIds:string[]; patchIds:string[]; patchCount:number; cleanupLevel:CleanupLevel; derivedStateStatus:DerivedStateStatus; modelCalls:number; roleAuthorizations:number; inputTokens:number; outputTokens:number; elapsedMs:number; parallelTasks:number; validationResults:Record<string,boolean> };
+export type RevisionReceipt = { sourceRevision:string; targetRevision:string; sourceFilename:string; targetFilename:string; intent:Intent; operation:Intent|CreateSuccessorOperation; instructionHash:string; documentShaBefore:string; documentShaAfter:string; resolvedEntryIds:string[]; patchIds:string[]; patchCount:number; cleanupLevel:CleanupLevel; derivedStateStatus:DerivedStateStatus; modelCalls:number; roleAuthorizations:number; inputTokens:number; outputTokens:number; elapsedMs:number; parallelTasks:number; validationResults:Record<string,boolean>; /** Change 8, option (b): the header block is overwritten each version, so the receipt chain is where full change-summary history lives. Present only when `profile.artifact.changeHeader` is declared and the caller supplied one. */ changeSummary?:{what:string;why:string} };
 export type OperationRisk='LOW'|'MEDIUM'|'HIGH';
 export type EffectiveOperationProfile={intent:Intent;cleanupLevel:CleanupLevel;maxModelCalls:number;maxPlannerCalls:number;maxRoleAuthorizations:number;maxMutations:number;maxPatchCount:number;maxCleanupRanges:number;requiresTutor:boolean;requiresReviewer:boolean;operationRisk:OperationRisk};
 export type LifecycleV1RecordState='ACTIVE'|'SUPERSEDED'|'WITHDRAWN';

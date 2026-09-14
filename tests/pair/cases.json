@@ -1,0 +1,16 @@
+[
+  {
+    "id": "pair-two-documents-resolve",
+    "command": "name",
+    "fixture": null,
+    "proposals": false,
+    "argv": ["--name", "Method"]
+  },
+  {
+    "id": "pair-second-document-missing-directory-refuses",
+    "command": "name",
+    "fixture": null,
+    "proposals": false,
+    "argv": ["--name", "Method"]
+  }
+]

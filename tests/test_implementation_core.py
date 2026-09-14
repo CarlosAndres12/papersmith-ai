@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,12 @@ import impl_references  # noqa: E402
 import impl_refusals  # noqa: E402
 
 CLI_SCRIPT = REPOSITORY_ROOT / "skills/proposal-implementation/scripts/implementation_cli.py"
+#: The engine source (meaning 2, design.md M2): what `CoreNamesNoDomainTests`
+#: reads for `PRODUCT_DIRS`/`SOURCE_ROOTS` -- the launcher above exposes
+#: none of the engine's attributes (design.md D1), so this lock must load
+#: the engine directly, never the launcher it used to be the same file as.
+ENGINE_SCRIPT = (REPOSITORY_ROOT
+                 / "skills/_core/implementation/engine/implementation_engine.py")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -213,7 +220,11 @@ class CoreNamesNoDomainTests(unittest.TestCase):
 
     @staticmethod
     def _cli_module():
-        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", CLI_SCRIPT)
+        os.environ.setdefault(
+            "IMPLEMENTATION_DOMAIN_PROFILE",
+            str(REPOSITORY_ROOT
+               / "skills/proposal-implementation/impl_profile.py"))
+        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", ENGINE_SCRIPT)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -241,6 +252,27 @@ class CoreNamesNoDomainTests(unittest.TestCase):
         self.assertTrue((impl_layout.FORGE_ROOT / "skills").is_dir())
         self.assertEqual(impl_layout.WORKSPACE,
                          REPOSITORY_ROOT / "implementations")
+
+
+class ZeroBareDataLiteralTests(unittest.TestCase):
+    """F5's class finished (`a-data-directory-somebody-can-owe`, B1,
+    design.md D6, task 5.2): `PRODUCT_DATA` taken off the CLI -- never
+    hardcoded here -- and asserted to appear quoted exactly once in the
+    engine's own source: the `PRODUCT_DIRS` tuple. Every other former
+    bare `"Data"` site (`classify`, `build_plan`'s `with_data`
+    expression, `cmd_verify`) now reads `PRODUCT_DATA`, never the
+    literal; derived from the CLI rather than restated, this holds a
+    fifth product category to the same rule the day one appears."""
+
+    def test_the_quoted_literal_appears_exactly_once(self):
+        cli = CoreNamesNoDomainTests._cli_module()
+        needle = f'"{cli.PRODUCT_DATA}"'
+        source = ENGINE_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(needle), 1,
+            f"{needle!r} must appear quoted exactly once in the engine's "
+            "own source -- the PRODUCT_DIRS tuple -- with every other "
+            "bare-Data site reading PRODUCT_DATA instead")
 
 
 class UnbackedTickTests(unittest.TestCase):
