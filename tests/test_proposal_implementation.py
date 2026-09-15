@@ -1642,7 +1642,7 @@ class ReportDigestHereRelocationTests(unittest.TestCase):
             package_dir.mkdir(parents=True)
             placed = package_dir / "report_digest.py"
             shutil.copy(
-                FORGE / (".claude/skills/proposal-implementation/assets/kit"
+                FORGE / ("skills/proposal-implementation/assets/kit"
                          "/nb/report_digest.py"),
                 placed)
             spec = importlib.util.spec_from_file_location(
@@ -12154,12 +12154,12 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
         why nobody would trace it back here.
 
         The roster is DERIVED, never listed: every `profile.ts` under
-        `.claude/skills/` that declares a single-line `marker` joins this check by
+        `skills/` that declares a single-line `marker` joins this check by
         existing, so a third domain added tomorrow is covered without anyone
         remembering to extend a literal.
         """
         declarantes = {}
-        for profile in sorted((FORGE / ".claude/skills").glob("*/profile.ts")):
+        for profile in sorted((FORGE / "skills").glob("*/profile.ts")):
             found = re.search(r'^\s*marker:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$',
                               profile.read_text(encoding="utf-8"), re.MULTILINE)
             if found:
@@ -22474,7 +22474,7 @@ class DiscussCommandTests(unittest.TestCase):
                          "code, DISCUSS_DECISION_NOT_A_TOKEN, never offer's")
         offer_source = " ".join(inspect.getsource(impl.cmd_offer).split())
         self.assertIn(
-            "no code path under `.claude/skills/**/*.py` ever reads a "
+            "no code path under `skills/**/*.py` ever reads a "
             "`kind: \"offer\"` event's fields back into a later decision",
             offer_source)
 
