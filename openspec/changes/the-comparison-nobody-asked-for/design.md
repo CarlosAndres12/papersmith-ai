@@ -499,8 +499,9 @@ is a function this engine already has, and the section that maps onto
 | `arm` | `wiring_proposal`'s `new` half: the package's modules with their provenance `sections`/`CLAIM_KEY`/`invariants`, and its `needs` (which modules carry the trainable terms, where the backbone enters, what the head predicts over) | what has to be made runnable — **one arm, no rival**. The `baseline` half is dropped; that is the whole difference |
 | `data` | `baseline_environment(target, baselines, name)` — backbones, datasets, weights, entry points, acquisition, read statically | where a real setting already exists on disk. Its own docstring's reason transfers exactly: *"the one that already has meaning is the baseline's — it is where its results were obtained"*, and this run is what is there today **without the rival arm** |
 | `scale` | the target's own `__levels__`, the lowest rung above the floor; **asked** when `__levels__` is empty | small scale, in the repository's own words — never a number the forge picked |
+| `placement` | `__steps__`' own `placement`/`job`/`service` keys, and the knobs `generate-job` accepts | **where it runs** — local or remote, named with both consequences and defaulted to neither (D11a) |
 | `evidence` | a proposed `__records__` entry shape: name, path under the product folder, `requiredScale` | where the record lands and what grades it. `@record:level` witnesses already read that shape — **existing machinery, no new artefact** |
-| `needs` | asked, never guessed | the reference figure the document reports and the tolerance around it (D17), and what a failure would look like |
+| `needs` | asked, never guessed | the reference figure the document reports and the tolerance around it (D14b), what a failure would look like, and the `service` a remote placement would run under (D11a) |
 
 `baselines` is non-empty by construction at this rung — the decline was only
 reachable because `previous_implementations` returned something, or the ladder
@@ -521,6 +522,119 @@ and `SUBJECT_COLLECTIVE` from the profile. Nothing here spells "proposal",
 "equation" or "paper" as a literal — `tests/test_implementation_domain_lock.py`
 exists precisely to catch that, and `experimental-implementation` shares this
 engine.
+
+### D11a — `placement` is its own draft section, and it proposes nothing
+
+> **Owner addition (revision 4).** *"Al igual que en el de benchmark, se debe
+> habilitar las opciones de remote, eso es importante."* The acid test is a real run
+> that spends machine time, so it must be able to go to a worker — **and the offer
+> must say so**, not leave the machinery reachable by accident.
+
+**It is its own section**, not folded into `scale` and not buried in `needs`. Four
+reasons, in order of weight:
+
+1. **`flow_acts` BLOCKS on it.** A `__steps__` entry with no `placement` yields
+   `ACT_BLOCKED` carrying `PLACEMENT_UNDECLARED_CONSEQUENCE` — *"the flow stops at
+   it rather than choosing, and a choice made by default is the one nobody would
+   have approved."* A field that halts the walk is not a nicety to nest inside
+   another section.
+2. **`scale` and `placement` are different declarations.** `scale` answers *how
+   big*, `placement` answers *where*. The live target's `__levels__`
+   (`["none", "pilot", "remote"]`) happens to spell a placement word as a rung name,
+   which is exactly why folding the two would re-create that conflation inside the
+   forge instead of leaving it in one repository's vocabulary.
+3. **Burying it in `needs` would make it a question with no draft beside it** — the
+   opposite of the shape the owner pointed at, where the comparison publishes a
+   draft *and* the open question.
+4. It is where the remote knobs `generate-job` already accepts get named, so the
+   operator meets them at the point of decision rather than discovering them later.
+
+**And it proposes neither option.** The section names `local` and `remote` with the
+consequence of each and picks nothing — `flow_acts`' own docstring is the rule:
+*"Routing by default is how a campaign measured in days ends up somewhere nobody
+chose."* A draft that defaulted the routing would be the defect this engine already
+refuses, one layer up.
+
+| Key the section covers | Who answers it | Why |
+|---|---|---|
+| `placement` | the human | both options named with their cost (D11c); never defaulted |
+| `job` | **proposed** by the draft — a folder name derived from the step's own name | `flow_acts` blocks a remote step whose `job` names nothing; the name is mechanical, so proposing it costs the human nothing and unblocks the walk |
+| `service` | **asked, never guessed** | the forge's own containment rule: it may read a service name to walk a directory and must reduce it to a count before returning anything, and it cannot discover one either — adapters register lazily, so the registry is empty until somebody names one |
+| the accelerator / environment / budget knobs `generate-job` accepts | named as available, answered by the human | naming them is documentation; choosing one would be the forge picking a machine |
+
+### D11b — the remote path needs no new machinery, and that is measured
+
+**Question: does generating a remote job folder differ for a single-arm run?
+Answer: no. The work is documentation only.** Evidence, read this phase:
+
+| Mechanism | What it reads | Does it know about arms? |
+|---|---|---|
+| `flow_acts` | a `__steps__` entry's `placement`, `job`, `service`; then `ACT_GENERATE_JOB` → `ACT_REHEARSE` → `ACT_LAUNCH` by the job folder's own state | **No.** It is generic over any declared step; nothing in it distinguishes a comparison step from any other |
+| `jobfolder.generate_job` | `service`, `job_name`, `product`, `repo_url`, `repo_ref`, `clone_paths`, and **either** `run_module`/`run_function` **or** `run_notebook` | **No.** Its whole contract is module-or-notebook; it names no arm, no benchmark package, no comparison |
+| `resolve_clone_paths()` | cross-checks declared clone paths **against what the declared entry modules actually import** | **It adapts by itself.** One arm imports fewer packages, so fewer clone paths are required — validated by the identical check, with no single-arm branch |
+| `--run-notebook` | exists *"so that what a worker runs can be the notebook the pilot ran, rather than a second implementation of it"* | **It is the acid test's own shape**: D15a says the acid test uses the notebooks already chosen, and this is the flag that carries exactly that |
+
+So a single-arm step produces a job folder identically to a comparison step. **No
+change to `remote-execution` is needed and none is proposed** — no blocker was
+found there.
+
+**Where the job folder lands, and why D15a is satisfied.**
+`jobfolder` builds `<target>/tools/<service>/<job-name>/` (`TOOLS_DIRNAME`). That
+path is **outside all three `materialize` stage lists** — it is `remote-execution`'s
+own output, not a kit destination — so generating a job folder for an acid test
+cannot touch `harness_destinations()` even in principle. `tools/` is added to
+D15a's positive domain below.
+
+> **Adjacency, reported and deliberately not designed.** `generate_job` accepts
+> `environment_requirements` / `environment_index_url`, and the live target's unread
+> `__environment__` literal (§1.1) holds exactly `install.requirements`. That is
+> almost certainly its intended consumer, and the acid test's remote path is where a
+> future change would wire it. **Out of scope here** — wiring it is a reader for a
+> literal this change deliberately does not give one. Named so the next person
+> finds it.
+
+### D11c — what the offer must state about cost
+
+The repository's own doctrine is that a choice made without its consequence is not a
+decision, and the comparison's gate states its cost before the choice. The acid-test
+offer states, in the published question:
+
+- that it is a **real run on real data** and spends machine time — the fact that
+  separates it from the invariant tests, which spend none;
+- **local**: it occupies this machine for the duration;
+- **remote**: it spends **metered quota on a service account**;
+- that the scale being offered is the small one named in `scale`, and that a larger
+  run is a **different decision** — so accepting this is not accepting the campaign;
+- that declining later costs nothing to unwind, because D15a means no
+  comparison-named structure was created.
+
+**It states no number, and that is a rule rather than an omission.** The forge
+cannot know how long this target's run takes, it may not print a service name, and
+this repository already has the failure on record: its one weekly-quota figure lived
+in a comment nothing read and did not match reality. A number the forge invented
+would be that defect with a fresh timestamp. What the question *does* carry is
+derived: the axes of the proposed `requiredScale` and the rung from `scale`, named
+as `_search_first_publication` already names its axes with their values. **The cost's
+shape is stated; its magnitude is the human's to estimate.**
+
+### D11d — an empty `__levels__` does not constrain placement
+
+**It means the scale is asked. It does not mean the acid test cannot go remote.**
+The two are independent declarations, and this was read rather than assumed:
+
+- `flow_acts` takes `placement` from the **step entry**, and consults `levels` only
+  for the `_rung_reaches` comparison. Its own fallback line proves the
+  independence: with no levels declared it grades by `row["walk"] == "walked"` and
+  routes by `placement` exactly as before.
+- `resolve_levels_declaration`'s docstring says a step with no `:level` marker is
+  two-state and *"never reads this list at all"*.
+
+So with `__levels__` empty: placement is fully available, `job`/`service` behave
+identically, and the only difference is that the walk grades the step
+walked/not-walked rather than by rung — a **reporting** difference, not a capability
+one. The draft's `scale` section asks for the rung; the `placement` section is
+unaffected and says so, rather than letting a reader infer that an empty ladder
+rules out a worker.
 
 ### D12 — roster classification, re-ruled: `experiment`
 
@@ -795,6 +909,7 @@ structure for a non-comparison is the same defect wearing the opposite mask.
 | `tests/*.py` | scaffold + objects stages | the agent |
 | `<Name>/Notebooks/verification.ipynb`, and whichever notebooks are chosen for the run | scaffold stage | the agent |
 | `<Name>/Results/…` — the record the run produces, at a path that does **not** borrow the comparison's name | the product folder already exists | the run |
+| `tools/<service>/<job-name>/` — a job folder, when placement is `remote` | `remote-execution`'s own output root (`TOOLS_DIRNAME`), **outside all three `materialize` stage lists** | `remote_cli generate-job` (D11b) |
 | the other packages already in `src/` | they are the prior work already on disk | nothing — read only |
 
 **The invariant is satisfied by construction, not by a guard bolted on**, and that
@@ -963,7 +1078,10 @@ the proof obligation; "untouched" rows are proof that the blast radius stops.
 | `PROBE_NEXT_STEPS` | thirteen entries, keys `kind`/`wiring`/`publish` | **fifteen** entries (`declined`, `validate`), keys `kind`/**`drafts`**/`publish` (D12) | adjusted |
 | `NextStepPublicationRosterTests.test_the_experiment_steps_are_the_ones_that_spend_machine_time` | asserts `["benchmark","piloted","search-first"]` | **four** — `validate` joins; docstring's "Three answers reach that point" changes with it (D12) | adjusted |
 | `usage.md` "Three answers reach that point" | a transcribed count | four, or derived (§1.3's class, one more instance) | adjusted |
-| `harness_destinations` / `harness_gaps` / the harness stage | written only by an accepted comparison | **identical** — D15a forbids the acid test from reaching any of it | untouched, and asserted |
+| `harness_destinations` / `harness_gaps` / the harness stage | written only by an accepted comparison | **identical** — D15a forbids the acid test from reaching any of it, including via a job folder, which lands under `tools/` | untouched, and asserted |
+| `flow_acts` / `_step_placement` / `_step_job` / `_step_service` / `ACT_GENERATE_JOB`/`REHEARSE`/`LAUNCH` | route any declared step by its own `placement` | **identical** — generic over `__steps__`; an acid-test step walks the same acts (D11b) | untouched, and asserted |
+| `remote-execution` (`remote_cli generate-job`/`submit`, `jobfolder.generate_job`, `resolve_clone_paths`) | module-or-notebook contract, clone paths cross-checked against real imports | **identical, no change proposed** — one arm imports fewer packages and the existing check adapts by itself | untouched, and asserted against an unmodified skill |
+| `__environment__` | read by nothing (§1.1) | **still read by nothing** — its likely consumer (`generate_job`'s `environment_requirements`) is named as adjacency, not wired | untouched, deliberately |
 | `next_step_publication` | `KeyError` on unrostered | identical | untouched |
 | `cmd_probe`'s `proposal = wiring_proposal(...) if ...["wiring"]` | one literal flag | loop over `entry["drafts"]` against `PROBE_DRAFTS` | adjusted |
 | `cmd_probe` payload `"wiring"` | the trainability draft or `None` | **identical** for every existing rung; sibling `"validation"` key added | untouched |
@@ -990,7 +1108,7 @@ the proof obligation; "untouched" rows are proof that the blast radius stops.
 | `proposal-implementation/assets/kit/nb/verification.ipynb` | Modify | import line |
 | `proposal-implementation/assets/kit/nb/probe.ipynb` | Modify | import line (its `HARNESS` path is untouched) |
 | `proposal-implementation/assets/kit/src_benchmark/__init__.py` | Modify | seven blocks → five; the three sibling literals leave |
-| `proposal-implementation/SKILL.md` | Modify | step 5 table, step 8 (path + `--authored` re-seal), step 9 gate prose, the seven-block section, Decision Gates, "Conversion, then benchmark", count literals — **and a new `### nextStep: "validate"` section** (D12/D15a: what the acid test is, what it may write to, and that it never creates benchmark-named structure), the kit `__steps__` example's package name, plus the Flow B prose telling the agent to report both standing decisions and their dates |
+| `proposal-implementation/SKILL.md` | Modify | step 5 table, step 8 (path + `--authored` re-seal), step 9 gate prose, the seven-block section, Decision Gates, "Conversion, then benchmark", count literals — **and a new `### nextStep: "validate"` section** (D12/D15a: what the acid test is, what it may write to, and that it never creates benchmark-named structure; D11a–d: that it can go to a worker, what placement costs, and that `service` is the operator's to name), the kit `__steps__` example's package name, plus the Flow B prose telling the agent to report both standing decisions and their dates |
 | `proposal-implementation/references/usage.md` | Modify | worked scaffold list, `OBJECT_MAP_NOT_APPROVED` row, the ladder counts (already stale by two, now by four), the `resolve`/`null` terminal list, **"Three answers reach that point"** (now four — D12), and the `wiring` → `drafts`/`validation` payload description |
 | `README.md` | Modify | **not named upstream** — the `nextStep` ladder and the `src/` tree |
 | `experimental-implementation/impl_profile.py` | Modify | `OBJECTIVE_FLOW` "standing" stage |
@@ -1098,7 +1216,11 @@ when the live target has been migrated.
 | Unit | draft/payload isolation | on `validate` the payload's `"wiring"` is `None` and `"validation"` is the draft; on `wiring-first` the reverse — the wrong-draft failure D12 rejects is what this pins |
 | Integration | the three-way decline branch | unanswered → `benchmark`; comparison answered → `validate` with a draft; both answered → `declined` with both dates |
 | Integration | **nothing materializes on acceptance** (D15b) | answering the acid-test question writes no file, adds no receipt entry, and leaves `scaffold_gaps`/`object_gaps`/`harness_gaps` byte-identical |
-| Integration | **no benchmark-named structure, ever** (D15a) | after answering, wiring **and running** the acid test: no path under `src/<Package>_Benchmark/` exists, `harness_gaps()` is unchanged, no receipt entry carries `stage: "harness"`, and no written destination appears in `harness_destinations(name)` — asserted **against the list**, not against a literal path, so a fourth harness destination cannot become a quiet route |
+| Integration | **no benchmark-named structure, ever** (D15a) | after answering, wiring **and running** the acid test: no path under `src/<Package>_Benchmark/` exists, `harness_gaps()` is unchanged, no receipt entry carries `stage: "harness"`, and no written destination appears in `harness_destinations(name)` — asserted **against the list**, not against a literal path, so a fourth harness destination cannot become a quiet route. **Run once with `placement: "local"` and once with `placement: "remote"`**, so generating a job folder is proved not to be a back door into the harness stage |
+| Unit | the offer names placement (D11a) | the published question and draft name both `local` and `remote` with their consequences, propose a `job` name, and **ask** for `service`; the draft picks neither placement — a test that would go red if a default were introduced |
+| Unit | the offer states cost, not a number (D11c) | the question names the metered-quota consequence for `remote` and the machine-occupancy one for `local`, carries the proposed scale's axes, and contains **no invented duration, quota figure or service name** |
+| Integration | a single-arm step generates a job folder identically (D11b) | an acid-test `__steps__` entry with `placement: "remote"` walks `ACT_GENERATE_JOB` → `ACT_REHEARSE` → `ACT_LAUNCH` through the unmodified `flow_acts`, and `generate_job` accepts it with one arm's clone paths — asserted against `remote-execution` **unchanged**, so the claim "documentation only" is held by a test rather than by this document |
+| Unit | empty `__levels__` does not block remote (D11d) | with `__levels__ = []`, a step declaring `placement: "remote"` still routes; only the rung grading falls back to walked/not-walked |
 | Integration | no cross-skill reach | the validation path imports, reads and invokes nothing outside this skill and the shared engine — asserted, because "not a bridge" is the owner's ruling and prose cannot hold it |
 | Integration | shadow enumeration (D13) | with `status == "absent"`, each of `declare-first` (both branches), `env-first`, `wiring-first`, `poll-first`, `search-first`, `report-first` is shown unreachable; `pilot-first`/`pilot-decisions` are shown to still outrank the pair |
 | Unit | neutrality | the validation question and draft spell no domain word; `test_implementation_domain_lock.py` and the `experimental-implementation` pair test both stay green |
@@ -1129,11 +1251,22 @@ through the existing `discuss` surface. The one process-adjacent edge —
 pre-existing and is preserved unchanged (D9), not widened. Recorded as **N/A with a
 reason**; no manufactured tasks.
 
-**Movement 5 does not change this.** `validation_proposal` reads the repository and
-composes a dict; it executes nothing, spawns nothing, and reaches no other skill
-(D15, and the owner's ruling that this is not a bridge). The exercise itself runs
-through `pytest` and `cmd_step`, both pre-existing surfaces with their own
-pre-existing guards, neither of which this change touches.
+**Movement 5 does not change this, including its remote half.**
+`validation_proposal` reads the repository and composes a dict; it executes nothing,
+spawns nothing, and reaches no other skill (D15, and the owner's ruling that this is
+not a bridge). The exercise itself runs through `pytest`, `cmd_step` and — when
+placement is `remote` — `remote_cli generate-job`/`submit`, **all pre-existing
+surfaces with their own pre-existing guards, none of which this change touches**
+(D11b). `flow_acts` is explicitly pure and issues nothing: *"A function that both
+decided and dispatched would be a launch path with no `gate` standing in front of
+it."* The acid test names acts; it never takes them.
+
+One row of the matrix is worth marking `Applicable` rather than `N/A` on the
+strength of that: **process integration exists here, and it is inherited unchanged.**
+The design adds no new subprocess, no new command construction, and no new
+argument path — it names, in prose the human reads, commands that already exist and
+that the operator runs. The planned check is D11b's integration test, which asserts
+the remote walk against an **unmodified** `remote-execution`.
 
 ---
 
@@ -1154,7 +1287,7 @@ ladder's decline branch half-built across the riskiest unit in the change.
 | 1 | The seal leaves the benchmark package | `materialize.py` becomes a loop over the engine's lists (D9) rather than two edited sites | Revert restores the old destination. Targets scaffolded in between hold the seal at the new path; recovery is re-running the idempotent scaffold stage, which subtracts what exists and writes the old path back. No data loss — the seal is kit-sourced. Stamps go stale again (P1); re-execute. |
 | 2 | The declaration leaves the benchmark package | **grows**: `__levels__`/`__steps__`/`__records__` travel with it (D2), `cmd_verify`'s two revision readers move (D3), `authored_package_init` grows the template (D10), `materialize.py`'s third site (D9) | Revert restores the bench-package read. Targets scaffolded in between carry the literals in the package init; the reverted resolvers read the bench package, find nothing, and the gate refuses loudly — a visible, correct refusal, never a silent pass. Recovery is moving four literals back. |
 | 4 | A declined comparison is remembered | Purely additive, plus the `_answered_discussions` wrapper refactor; the `_Benchmark` exclusion stays in this commit | Reverts with no on-disk consequence. One bucket key stops being read; the ledger event stays and is re-read if the unit lands again. |
-| 4b | **The acid test** (Movement 5) | new: `validation_proposal` (single-arm run draft, D11), `_validation_offer_question` (D14/D14a), `_validate_publication`, `PROBE_DRAFTS`, the roster's `wiring` → `drafts` migration across every entry, `validate` as a fourth **experiment** (D12) with its own SKILL.md section, the three-way decline branch, `decisions`' second member, the D15a no-benchmark-structure invariant and its test, the kit `__steps__` example's package name, usage.md's payload + experiment-list counts, both corpora regenerated again | Purely additive over unit 4. Reverting drops one rung and one draft; the decline collapses back to unit 4's two-way branch and stays correct. Any acid-test answer already in a ledger is simply no longer read — buckets are never retired, so it is re-read if the unit lands again. **No on-disk consequence, by D15a+D15b together**: acceptance materialized nothing, and what an accepted acid test did write lives in the method's own package and the product folder, never in benchmark-named structure — so a revert unwinds a rung, never a directory. |
+| 4b | **The acid test** (Movement 5) | new: `validation_proposal` (single-arm run draft, D11) **with its `placement` section** (D11a), `_validation_offer_question` (D14/D14a), `_validate_publication` **stating cost without a number** (D11c), `PROBE_DRAFTS`, the roster's `wiring` → `drafts` migration across every entry, `validate` as a fourth **experiment** (D12) with its own SKILL.md section, the three-way decline branch, `decisions`' second member, the D15a no-benchmark-structure invariant and its local+remote test, the kit `__steps__` example's package name, usage.md's payload + experiment-list counts, both corpora regenerated again. **No change to `remote-execution`** (D11b) | Purely additive over unit 4. Reverting drops one rung and one draft; the decline collapses back to unit 4's two-way branch and stays correct. Any acid-test answer already in a ledger is simply no longer read — buckets are never retired, so it is re-read if the unit lands again. **No on-disk consequence, by D15a+D15b together**: acceptance materialized nothing, and what an accepted acid test did write lives in the method's own package and the product folder, never in benchmark-named structure — so a revert unwinds a rung, never a directory. |
 | 3 | The first flow stops creating the benchmark package | **grows**: the `declare-first` condition narrows to `"undeclared"` (D4), `README.md` joins the sweep, the stale ladder counts join the sweep (§1.3), both sealed corpora regenerate (§1.4) | The only unit that changes what exists on disk after Flow A. Reverting restores the bench `__init__.py` to the scaffold list; units 1, 2, 4 and 4b stay correct without it, because the relocated seal and the relocated declaration do not depend on the benchmark package existing. |
 
 **Forecast, restated.** The proposal's ~1930 was already low before this addition —
@@ -1170,16 +1303,24 @@ number:
 | 1 — the seal leaves | ~360 | ~400 (D9's loop) |
 | 2 — the declaration leaves | ~450 | ~750 (D2 + D3 + D10) |
 | 4 — a decline is remembered | ~480 | ~560 (one fold + corpus) |
-| 4b — the acid test | — | ~650 (D11 + D12's roster migration + D15a's invariant and test) |
+| 4b — the acid test | — | ~720 (D11 + D11a–d + D12's roster migration + D15a's invariant and test) |
 | 3 — the package stops being scaffolded | ~640 | ~800 (D4 + README + counts + both corpora) |
-| **Total** | ~1930 | **~3150** |
+| **Total** | ~1930 | **~3220** |
 
-**Revision 3 moved the composition of unit 4b, not its size.** The draft was
-rebuilt rather than extended (D11), and the key was re-derived to something
-*simpler* than revision 2's — no invariant scan, two declared values. Against that,
-the `experiment` classification (D12) adds two more count sites and a roster test,
-and D15a adds an invariant with a real integration test that wires and runs the
-exercise. Net: **+50**, inside the noise of an order-of-magnitude figure.
+**Revision 3 moved the composition of unit 4b, not its size** (draft rebuilt, key
+re-derived to something simpler; offset by the `experiment` classification's extra
+count sites and D15a's invariant test). Net +50.
+
+**Revision 4 adds ~70 to unit 4b, and the number is small for a measured reason.**
+The remote capability itself needs **no new machinery** (D11b, evidence-backed), so
+what 4b absorbs is: one more draft section (`placement`), the cost sentence in the
+published question, the `local`/`remote` split in the integration test, and the
+`### nextStep: "validate"` section gaining a remote paragraph. Had `generate-job`
+turned out to need a single-arm branch, this would have been a much larger number
+and would have argued for splitting 4b; it does not, so it does not.
+
+**Unit 4b remains one unit** at ~720, comfortably inside the 1400-line budget on its
+own. `sdd-tasks` owns the final number.
 
 Against a 1400-line budget that is **Budget risk: High**, **Chained PRs
 recommended: Yes**, **Decision needed before apply: Yes** — answered by five
@@ -1212,6 +1353,13 @@ split unit 2 or 3 further; nothing here authorises dropping a movement to fit.
 - [x] ~~`validate-first` as the rung's name.~~ **Renamed `validate`**, following the
       experiment family (`benchmark`, `piloted`) rather than the repair family's
       `*-first`. Closed by D12.
+- [x] ~~Does the remote path differ for a single-arm run?~~ **Measured: no.**
+      `flow_acts`, `jobfolder.generate_job` and `resolve_clone_paths` are all
+      generic; one arm imports fewer packages and the existing cross-check adapts by
+      itself. No `remote-execution` change proposed, no blocker found there. The
+      work is documentation plus one draft section. Closed by D11b.
+- [x] ~~Does an empty `__levels__` block remote placement?~~ **No** — placement and
+      the rung ladder are independent declarations. Closed by D11d.
 - [ ] **`premises` in the bucket key: I am asking `sdd-spec` to adjust** (D14a).
       Its raw-verbatim-text choice needs source-slicing machinery the engine does
       not have — the resolver hands over a parsed value — and it re-asks a settled

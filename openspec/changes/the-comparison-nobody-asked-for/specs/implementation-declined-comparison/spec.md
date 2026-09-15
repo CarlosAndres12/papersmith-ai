@@ -38,14 +38,22 @@ benchmark package or run the harness stage: a single-arm run is not a
 comparison, and naming it one would reintroduce this change's own defect
 wearing the opposite mask.
 
+The acid test is a real run on real data and spends machine time, exactly
+like the comparison — so, like the comparison, it MUST be able to go to a
+remote worker, and the offer MUST say so rather than leave that reachable
+only by accident. Where it runs is decided in its own dedicated section of
+the draft, deciding neither option, and the offer states what each option
+costs without ever inventing a number the forge cannot know.
+
 **Budget note.** This spec exceeds 650 words for the same reason as its
 sibling `implementation-comparison-deferral`: the owner's directive requires
 full coverage and no regression, and the migration-adjacent one-time re-fire
 must be specified as correct behaviour or it will be mistaken for a defect
-the first time anyone observes it. The acid-test follow-up adds two
+the first time anyone observes it. The acid-test follow-up adds three
 non-negotiable requirements of its own — nothing may materialize before an
-offer is accepted, and even once accepted, nothing benchmark-named may ever
-be created — for the identical reason this whole change exists.
+offer is accepted, nothing benchmark-named may ever be created even once
+accepted, and that prohibition must hold across both placements it may now
+run under — for the identical reason this whole change exists.
 
 ## Requirements
 
@@ -373,6 +381,157 @@ figure from.
 - THEN no figure is parsed out of that prose; the reference figure is
   supplied only by the person, in response to being asked
 
+### Requirement: The Acid-Test Draft Names Placement As Its Own Section, Deciding Neither Option
+
+Where the acid test runs MUST be its own draft section — never folded into
+the scale section, and never buried inside a question the draft asks
+without a section of its own. It MUST name `local` and `remote` with the
+consequence of each, and MUST decide neither: a run whose placement is
+undeclared cannot be routed once the flow leaves rehearsal scale, so a
+default here would be exactly the choice the walk already refuses to make
+silently. Placement and scale are independent declarations answering
+different questions — scale answers how big, placement answers where — and
+MUST NOT be conflated on the strength of a coincidence: one repository's own
+declared rung ladder happens to spell a scale point `"remote"`, and that
+target-authored word names a scale, never a placement.
+
+#### Scenario: The draft names both placements without choosing
+- GIVEN the acid-test offer's published draft
+- WHEN its placement section is inspected
+- THEN both `local` and `remote` are named, each with its own consequence,
+  and neither is selected
+
+#### Scenario: An undeclared placement is never defaulted
+- GIVEN the acid-test draft as accepted and wired
+- WHEN its `placement` entry is inspected
+- THEN it carries exactly what the person chose; a test that would go red on
+  a silently-introduced default catches one if added
+
+#### Scenario: A target's own scale-rung name does not read as a placement
+- GIVEN a target whose own declared rung ladder happens to name a rung
+  `"remote"`
+- WHEN the acid-test draft's placement section and scale section are
+  compared
+- THEN the two remain distinct: the rung name is read only as a point on
+  the scale, never as a placement decision
+
+### Requirement: The Acid-Test Draft Proposes The Job Name And Asks For The Service, Never Guessing Either
+
+Within the placement section, the draft MUST propose a job name — derived
+mechanically from the step's own name, costing the person nothing to accept
+— because a remote step whose job names nothing cannot be routed either.
+The draft MUST NOT propose or guess a service: it MUST be asked of the
+person, because the engine may not name a service it has not been told
+(reducing any known service to a count is the extent of what it may do with
+one) and cannot discover one either. Any accelerator, environment, or budget
+knob the remote path accepts MUST be named as available and answered by the
+person, never chosen by the draft.
+
+#### Scenario: A job name is proposed, not left for the person to invent
+- GIVEN the acid-test draft's placement section
+- WHEN it is inspected
+- THEN a job name derived from the step's own name is already proposed
+
+#### Scenario: The service is asked, never guessed
+- GIVEN the same section
+- WHEN it is inspected
+- THEN no service name is proposed or invented; the person is asked to
+  supply one
+
+#### Scenario: Remote knobs are named as available, not pre-selected
+- GIVEN a remote placement's accelerator, environment, or budget knobs
+- WHEN the draft is inspected
+- THEN they are listed as available for the person to answer, and none is
+  pre-selected by the draft
+
+### Requirement: The Acid-Test Offer States Cost's Shape, Never Its Magnitude
+
+The offer MUST state, in its published question: that the acid test is a
+real run on real data and spends machine time — the fact separating it from
+the invariant tests, which spend none; that a local run occupies the
+machine for its duration; that a remote run spends metered quota on a
+service account; that the scale on offer is the small one named in the
+draft's scale section, and accepting it is not accepting a larger campaign,
+which is a different decision; and that declining later costs nothing to
+unwind, because no comparison-named structure was ever created. The offer
+MUST carry the proposed scale's axes, derived from the declaration. It MUST
+NOT state a duration, a quota figure, or a service name: the engine cannot
+know how long a run takes or what quota it costs, and this repository has
+already lived through the failure of a forge-invented figure — a weekly
+quota number that once lived in a comment nothing read and did not match
+reality. A number the offer invented would be that same defect with a fresh
+timestamp.
+
+#### Scenario: The offer states each placement's cost
+- GIVEN the acid-test offer's published question
+- WHEN it is inspected
+- THEN it names machine-time spending, local's machine occupancy, and
+  remote's metered-quota cost
+
+#### Scenario: Accepting the small scale is distinguished from accepting a campaign
+- GIVEN the same offer
+- WHEN it is inspected
+- THEN it states that the scale offered is the small one, and that a larger
+  run is a separate decision
+
+#### Scenario: The offer never states a number it cannot know
+- GIVEN the same offer
+- WHEN it is inspected
+- THEN it contains no duration, no quota figure, and no service name — only
+  the proposed scale's own declared axes
+
+### Requirement: An Empty Declared Rung Ladder Does Not Constrain Placement
+
+An empty `__levels__` and the placement decision are independent. An empty
+ladder means the scale is asked for directly and the walk grades the step
+walked/not-walked rather than by rung — a reporting difference, not a
+capability one. It MUST NOT be read, stated, or implemented as ruling out a
+remote placement.
+
+#### Scenario: Remote placement is available with an empty rung ladder
+- GIVEN a target whose `__levels__` is empty
+- WHEN an acid-test step declares `placement: "remote"`
+- THEN it routes exactly as it would with a populated ladder; only the
+  grading changes, from by-rung to walked/not-walked
+
+#### Scenario: The draft's placement section says so explicitly
+- GIVEN the same empty-ladder target
+- WHEN the acid-test draft's placement section is inspected
+- THEN it does not read, or let a reader infer, that the empty ladder rules
+  out a worker
+
+### Requirement: A Remote Acid-Test Step Reaches A Worker Through The Existing, Unmodified Remote-Execution Path
+
+An acid-test step declaring `placement: "remote"` MUST route through the
+same generic step-routing machinery every other declared step already uses,
+reaching a generated job folder with no acid-test-specific branch anywhere
+in that path. The check that validates a job folder's declared clone paths
+against what its entry modules actually import MUST adapt to a single arm's
+smaller import surface using the identical check every other step uses,
+with no special-cased branch for a single arm. This is a testable, provable
+claim, not an assertion of compatibility to be taken on faith.
+
+#### Scenario: A remote acid-test step generates a job folder identically to a comparison step
+- GIVEN an acid-test step declaring `placement: "remote"`, a `job`, and a
+  `service`
+- WHEN it is walked
+- THEN it reaches the same generate/rehearse/launch progression a
+  comparison step reaches, through machinery this change leaves unmodified
+
+#### Scenario: The clone-path check needs no single-arm branch
+- GIVEN the acid test's single arm imports fewer packages than a two-arm
+  comparison would
+- WHEN its declared clone paths are validated against its entry modules'
+  actual imports
+- THEN the same check that validates any other step's clone paths applies,
+  with no separate code path written for a single arm
+
+#### Scenario: The remote run carries the notebook already chosen, not a second implementation
+- GIVEN a remote acid-test job folder
+- WHEN it is generated
+- THEN it carries the notebook already chosen for this run, never a
+  second, remote-only implementation of it
+
 ### Requirement: An Accepted Acid Test Writes Only Into The Method's Own Surfaces, Never Into Benchmark-Named Structure
 
 Accepting the acid test MUST NEVER create `src/<Package>_Benchmark/` and
@@ -383,18 +542,36 @@ declared prediction is not a benchmark, and naming it one would reintroduce
 this change's own defect wearing the opposite mask. What an accepted acid
 test MAY write to is exactly: the method's own package declaration (a flow,
 record, or scale entry describing the run), the method's own modules, its
-own tests, its own notebooks, and a record under the product folder at a
-path that does not borrow the comparison's name. Every other existing
-package under `src/` is read-only to it.
+own tests, its own notebooks, a record under the product folder at a path
+that does not borrow the comparison's name, and — when placement is
+remote — a job folder under this repository's own remote-execution output
+root, which is not a member of any materialization stage list and cannot
+reach the harness destinations even in principle. Every other existing
+package under `src/` is read-only to it. **This prohibition MUST hold
+identically whether placement is local or remote** — a remote job folder is
+not a back door around it.
 
-#### Scenario: No benchmark package exists after an accepted, wired, and run acid test
-- GIVEN the acid test is accepted, wired, and run
+#### Scenario: No benchmark package exists after an accepted, wired, and run acid test, placed locally
+- GIVEN the acid test is accepted, wired, and run with `placement: "local"`
 - WHEN `src/` is inspected afterward
 - THEN no `<Package>_Benchmark` directory exists anywhere under it
 
-#### Scenario: No harness destination is written
-- GIVEN the same accepted, wired, and run acid test
+#### Scenario: No benchmark package exists after an accepted, wired, and run acid test, placed remotely
+- GIVEN the acid test is accepted, wired, and run with `placement: "remote"`,
+  generating its own job folder
+- WHEN `src/` is inspected afterward
+- THEN no `<Package>_Benchmark` directory exists anywhere under it
+
+#### Scenario: No harness destination is written, placed locally
+- GIVEN the same accepted, wired, and run acid test, placed locally
 - WHEN the harness destination list is checked against what was written
+- THEN none of it was written by the acid test, and the harness stage's own
+  gap count is unchanged by the acid test's activity
+
+#### Scenario: No harness destination is written, placed remotely
+- GIVEN the same accepted, wired, and run acid test, placed remotely
+- WHEN the harness destination list is checked against what was written,
+  including the contents of its generated job folder
 - THEN none of it was written by the acid test, and the harness stage's own
   gap count is unchanged by the acid test's activity
 
@@ -492,3 +669,18 @@ the follow-up MUST NOT hide work the flow already agreed to.
   still owes an unfinished step
 - WHEN `probe` runs
 - THEN it reports the owed repair, not the acid-test offer
+
+## Boundary (explicitly not built here)
+
+A remote run accepts environment-provisioning input — packages to install
+before the run starts. Separately, at least one already-scaffolded target
+carries its own top-level declaration of exactly that shape, unread by
+anything in the forge (see `implementation-comparison-deferral`'s migration
+requirement, which is what carries it forward rather than dropping it).
+Wiring that declaration through as the remote path's environment input is
+almost certainly what it was meant for, and this capability's remote
+placement is where that wiring would eventually live. **It is not built
+here.** Doing so would give a reader to a literal this change deliberately
+leaves without one, which is its own decision and not a side effect of
+adding remote placement. Named so the next person finds it rather than
+rediscovering it.
