@@ -672,7 +672,7 @@ date. Drift is Flow B's fourth step, not a reason to start over.
    | `pyproject.toml [tool.pytest.ini_options] pythonpath` | `assets/pyproject.template.toml`, or the anchor appended to the existing file |
    | `src/<Package>/__init__.py` | authored: exports the target's own modules, and step 9 has written none of them yet, so it exports nothing |
    | `src/<Package>_Benchmark/__init__.py` | `assets/kit/src_benchmark/__init__.py`, copied verbatim and never populated |
-   | `src/<Package>_Benchmark/report_digest.py` | `assets/kit/nb/report_digest.py` |
+   | `src/<Package>/report_digest.py` | `assets/kit/nb/report_digest.py` |
    | `tests/test_smoke.py` | `assets/kit/tests/test_smoke.py` |
    | `tests/findings.py` | `assets/kit/tests/findings.py` |
    | `tests/conftest.py` | `assets/kit/tests/conftest.py` |

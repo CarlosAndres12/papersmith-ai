@@ -1540,6 +1540,48 @@ class ReportDigestJoinTests(unittest.TestCase):
             self.assertEqual(recovered, impl.source_digest(root, "Method"))
 
 
+class ReportDigestHereRelocationTests(unittest.TestCase):
+    """`_here()` deduces the repository and the package from its own path.
+
+    design.md D7 measured (not assumed) that `package_dir.parents[1]` is the
+    repository root at both the old home (`src/<P>_Benchmark/`) and the new
+    one (`src/<P>/`) -- the depth is identical either way -- so relocating
+    this file breaks nothing about the repository half of the pair. What
+    DOES become dead weight is `.removesuffix("_Benchmark")`: a package
+    directory named plainly (no `_Benchmark` suffix) already survives that
+    call as a no-op, so simplifying it to the bare `package_dir.name`
+    changes no value this test can observe. The genuinely RED half of this
+    pair is `KitSurfaceLanguageTests.test_the_translation_touched_no_code`,
+    pinned to `_here()`'s own source: it fails until the suffix-strip is
+    actually removed from the shipped asset, which is what confirms this
+    behavioural twin is checking the post-change code, not a coincidence.
+    """
+
+    def test_here_resolves_the_repository_and_package_at_the_relocated_path(self):
+        with tempfile.TemporaryDirectory() as raw:
+            # Resolved once here so it matches `_here()`'s own
+            # `Path(__file__).resolve()`: on macOS the temp root itself is a
+            # symlink (`/var/folders/...` -> `/private/var/folders/...`),
+            # and comparing an unresolved path against a resolved one would
+            # fail for a reason that has nothing to do with `_here()`.
+            root = Path(raw).resolve()
+            package_dir = root / "src" / "Method"
+            package_dir.mkdir(parents=True)
+            placed = package_dir / "report_digest.py"
+            shutil.copy(
+                FORGE / (".claude/skills/proposal-implementation/assets/kit"
+                         "/nb/report_digest.py"),
+                placed)
+            spec = importlib.util.spec_from_file_location(
+                "relocated_report_digest", placed)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+
+            found_repository, found_package = module._here()
+            self.assertEqual(found_repository, root)
+            self.assertEqual(found_package, "Method")
+
+
 class SuiteDigestTests(unittest.TestCase):
     """`suite_digest` (design "`suite_digest` walks `*.py`, not
     `test_*.py`", spec "Suite Digest Covers Source, Tests, and the
@@ -7926,15 +7968,17 @@ class ReportSealPlacementTests(unittest.TestCase):
     does not contain it — and every notebook that would import it cannot.
 
     `assets/kit/nb/` is a staging folder, not a mirror of where its contents
-    end up: `benchmark.py` and `verdict.py` already ship out of it into
-    `src/<Package>_Benchmark/`. So the repair is a row, and the file does not
-    move.
+    end up: `benchmark.py` and `verdict.py` still ship out of it into
+    `src/<Package>_Benchmark/`, while `report_digest.py` (design.md D7) ships
+    beside the method's own package instead, so Flow A can stamp before any
+    comparison is ever offered. So the repair is a row, and the file does not
+    move again just because this class was written against the old one.
     """
 
     NAME = "Example-Method"
     PACKAGE = "Example_Method"
     SEED = "7"
-    DESTINATION = "src/Example_Method_Benchmark/report_digest.py"
+    DESTINATION = "src/Example_Method/report_digest.py"
 
     def test_the_seal_is_placed_where_a_notebook_can_import_it(self):
         """Reachable red: a scaffold built from exactly the gaps `scaffold_gaps`
@@ -7951,8 +7995,9 @@ class ReportSealPlacementTests(unittest.TestCase):
         The seal is only worth placing if the string it stamps is the string
         `verify` recomputes. Loading it from where the scaffold puts it also
         proves the placement itself: `_here()` resolves the repository as
-        `parents[1]` of its own directory, which is only the target's root when
-        the file sits in `src/<Package>_Benchmark/`.
+        `parents[1]` of its own directory, which is the target's root at this
+        depth regardless of which sibling package under `src/` holds it —
+        `src/<Package>/`, after D7's relocation.
         """
         import importlib.util
 
@@ -7976,6 +8021,49 @@ class ReportSealPlacementTests(unittest.TestCase):
              str(box), self.NAME, self.SEED], check=True, capture_output=True)
         self.assertTrue((box / self.DESTINATION).is_file(),
                         "`materialize.py` writes no report seal")
+
+
+class MaterializeScaffoldAgreementTests(unittest.TestCase):
+    """design.md D9 / spec "Both Scaffold Mappings Agree": `scripts
+    /materialize.py` no longer re-implements the scaffold stage at three
+    separate imperative sites — it loops over `scaffold_destinations(name)`
+    directly, so the two lists agree by construction rather than by review.
+    The agreement is still asserted, over what the script actually WRITES to
+    disk rather than over its own source text, so a future edit that reads
+    the list but writes something else is still caught."""
+
+    NAME = "Example-Method"
+    SEED = "7"
+
+    def materialized_paths(self, box):
+        subprocess.run(
+            [sys.executable, str(SKILL_ROOT / "scripts/materialize.py"),
+             str(box), self.NAME, self.SEED], check=True, capture_output=True)
+        return {str(path.relative_to(box)) for path in box.rglob("*")
+                if path.is_file()
+                and path.name not in ("pyproject.toml", ".gitignore")}
+
+    def test_agreement_holds_when_both_sites_update_together(self):
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        self.assertEqual(self.materialized_paths(box),
+                         set(impl.scaffold_destinations(self.NAME)))
+
+    def test_disagreement_is_caught_and_names_the_divergent_entry(self):
+        """Reachable red, produced on demand rather than by accident: with
+        one entry withheld from the expected side, the same comparison both
+        fails and names exactly the path that diverged — proving the check
+        is live, not vacuously true because both sides already agree."""
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        written = self.materialized_paths(box)
+        missing = f"src/{impl.package_name(self.NAME)}/report_digest.py"
+        self.assertIn(missing, written)
+        divergent = written - {missing}
+
+        with self.assertRaises(AssertionError) as caught:
+            self.assertEqual(written, divergent)
+        self.assertIn(missing, str(caught.exception))
 
 
 class NotebookSealAgreementTests(unittest.TestCase):
@@ -8114,9 +8202,10 @@ class NotebookSealAgreementTests(unittest.TestCase):
                     if isinstance(node, ast.ImportFrom)
                     and any(alias.name == "report_digest" for alias in node.names)]
         self.assertEqual(
-            [node.module for node in imported], [f"{self.PACKAGE}_Benchmark"],
-            "the notebook must import the seal from the package the scaffold "
-            "places it in")
+            [node.module for node in imported], [self.PACKAGE],
+            "the notebook must import the seal from the method's own "
+            "package, where design.md D7 relocates it — the scaffold "
+            "places it there before any comparison is ever offered")
         self.assertIn("sys.path.insert", source,
                       "the import only resolves once `src/` is on the path")
 
@@ -8258,7 +8347,7 @@ class NotebookSealAgreementTests(unittest.TestCase):
         imported = [node.module for node in ast.walk(tree)
                     if isinstance(node, ast.ImportFrom)
                     and any(alias.name == "report_digest" for alias in node.names)]
-        self.assertEqual(imported, [f"{self.PACKAGE}_Benchmark"])
+        self.assertEqual(imported, [self.PACKAGE])
         self.assertNotIn("subprocess", source,
                          "stamping adds no process; the harness cell is untouched")
 
@@ -8734,8 +8823,7 @@ class KitSurfaceLanguageTests(unittest.TestCase):
             "\n"
             "def _here() -> tuple[Path, str]:\n"
             "    package_dir = Path(__file__).resolve().parent\n"
-            "    return (package_dir.parents[1], "
-            "package_dir.name.removesuffix('_Benchmark'))\n"
+            "    return (package_dir.parents[1], package_dir.name)\n"
             "\n"
             "def stamp(repository: Path | None=None, package: str | None=None) -> str:\n"
             "    if repository is None or package is None:\n"
@@ -11252,6 +11340,31 @@ class MaterializeVerifyScaffoldDriftTests(MaterializeCommandFixture, unittest.Te
 
         structure = self._verify(box)
         self.assertEqual(sorted(structure["scaffoldDrift"]), sorted(targets))
+
+    def test_a_hand_edited_relocated_seal_is_drift_at_its_new_location(self):
+        """design.md D7 / spec "Materialization Receipt Machinery... Against
+        The New Destination Lists", scenario 1: the drift check has to follow
+        `report_digest.py` to its new home, `src/<Package>/`, not just keep
+        working for the destinations that never moved."""
+        box = self._fully_materialized("_drift_relocated_seal")
+        target_file = box / "src" / self.PACKAGE / "report_digest.py"
+        self.assertTrue(target_file.is_file(),
+                        "the relocated seal was not materialized at its new "
+                        "destination")
+        stat_before = target_file.stat()
+        original = target_file.read_bytes()
+        mutated = original.replace(b"MARKER", b"MARKXR", 1)
+        self.assertNotEqual(original, mutated,
+                            "the fixture no longer contains MARKER")
+        self.assertEqual(len(original), len(mutated),
+                         "the mutation must not change the byte length")
+        target_file.write_bytes(mutated)
+        os.utime(target_file, (stat_before.st_atime, stat_before.st_mtime))
+
+        structure = self._verify(box)
+        self.assertIn(f"src/{self.PACKAGE}/report_digest.py",
+                      structure["scaffoldDrift"])
+        self.assertNotEqual(structure["status"], "ok")
 
     def test_a_moved_kit_template_is_not_drift(self):
         """S6: the target's on-disk bytes are untouched, so nothing about a

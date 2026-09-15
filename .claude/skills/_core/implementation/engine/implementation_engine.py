@@ -4264,10 +4264,13 @@ def scaffold_destinations(name: str) -> list[str]:
     return [f"src/{package_name(name)}/__init__.py",
             f"src/{package_name(name)}_Benchmark/__init__.py",
             # The seal every notebook stamps by importing, rather than by
-            # hashing a tree of its own. It belongs inside the package because
-            # `_here()` reads the repository off its own path as `parents[1]`,
-            # and because producing the report is what the bench package does.
-            f"src/{package_name(name)}_Benchmark/report_digest.py",
+            # hashing a tree of its own. It sits beside the method's own
+            # `__init__.py` because `_here()` reads the repository off its
+            # own path as `parents[1]`, which is the target's root at this
+            # depth regardless of which sibling package holds it, and
+            # because Flow A must be able to stamp before any comparison is
+            # ever offered — see design D7.
+            f"src/{package_name(name)}/report_digest.py",
             "tests/test_smoke.py",
             # `conftest.py`, `sweep.py` and `admissibility.py` are not tests and
             # were never asked for, so a scaffold built from exactly this list
@@ -4453,7 +4456,7 @@ def scaffold_kit_source(destination: str, name: str) -> Path | None:
     mapping = {
         f"src/{package}_Benchmark/__init__.py":
             SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py",
-        f"src/{package}_Benchmark/{KIT_SEAL.name}": KIT_SEAL,
+        f"src/{package}/{KIT_SEAL.name}": KIT_SEAL,
         "tests/test_smoke.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_smoke.py",
         "tests/findings.py": SKILL_ROOT / "assets" / "kit" / "tests" / "findings.py",
         "tests/conftest.py": SKILL_ROOT / "assets" / "kit" / "tests" / "conftest.py",
