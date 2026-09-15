@@ -983,6 +983,221 @@ the single fold stays a single fold.
 
 ---
 
+## 3c. Movement 6 — a decision already taken can change
+
+> **Revision 5.** Units 1, 2, 4, 4b and 3 are applied and green
+> (`b493151` → `432da9f` → `45eae9d` → `cb965c4` → `330c5f1`). Movement 6 is
+> designed against **what the code now is**, per each unit's own reported
+> divergences — not against this document's earlier prose. Three corrections from
+> those reports are load-bearing below and are stated first.
+
+### D17 — what the shipped code actually does (read before designing)
+
+| Design prose said | The code does | Source |
+|---|---|---|
+| D13: the three-way branch sits "last among the overrides" | **True today** — but only because Unit 3 moved it there. Unit 4b shipped it **first**, which made `declined` beat every repair unconditionally; Unit 3 corrected it and added an explicit `resolved.status != "absent"` guard on `report-first`, the one repair override that reads the benchmark declaration without being naturally shielded when absent | Unit 3 report, task 3.14 |
+| D5b: acceptance = materializing the harness | **Shipped, and proved by a test that a bare re-answer alone does NOT reopen it.** That test is the exact hole Part A now fills | Unit 4 report, task 4.11 |
+| D11c/D14b: the published acid-test question carries `scale`'s axes | **It does not.** `_validation_offer_question` has a literal 4-parameter signature; the published question carries fixed cost-shape prose only, and the scale axes live in the draft | Unit 4b report, task 4b.5 |
+
+Movement 6 builds on the code as described in the right-hand column. Where this
+document's revision-4 prose disagrees with it, **the code wins** — that is the
+lesson Unit 4b learned expensively and Unit 3 acted on.
+
+### D18 — the reopening hole, and why my earlier reasoning was wrong
+
+Today `declined` means: the question was asked, an answer exists, nothing is built.
+A person who answers *"yes, let's compare"* and then does not build it — waiting on
+quota, away for a month — keeps being reported `declined` forever, because the
+bucket counts as answered. **The only exit is building the thing**, and nothing
+surfaces the contradiction between the report and their own decision.
+
+I dismissed this in revision 2 on the grounds that the engine does not parse prose.
+**That reasoning was false, and the counter-example is in this very skill**:
+`cmd_offer` takes `--answer yes|no`, refuses `OFFER_ANSWER_NOT_A_TOKEN` for anything
+else, and records the answer as a ledger event — a closed binary domain, machine-read,
+with no prose interpreted anywhere. The mechanism I said did not exist has existed
+the whole time, one command over.
+
+### D19 — the token goes on `discuss`, not on `offer`
+
+**`cmd_offer` must not be reused, and the reason is in its own docstring.**
+
+| Obstacle | Evidence |
+|---|---|
+| `offer` events are **deliberately never read back** | *"The appended event is write-only history: once written, no code path under `.claude/skills/**/*.py` ever reads a `kind: "offer"` event's fields back into a later decision."* Reading one back into the ladder would break a stated, deliberate invariant |
+| `offer` is bound to a **different question** | Its own text: *"continue the flow as it stands, or change the experiment contract first?"* It carries no question-text field, so two different questions recorded under one kind would have no discriminator — the one-spelling bucket discipline's failure, one layer down |
+| `offer` drags in unrelated preconditions | `_require_no_open_defect`, `require_named_product_dir`, a readable `--revision`, job-folder discovery, and **authorization minting**. A decline should not mint a launch authorization |
+
+**Chosen: `discuss` gains an optional closed token.** The prose answer stays in
+`answered` (unread by the engine, written for humans); a new `decision` field carries
+`yes`/`no`, refusing `DISCUSS_DECISION_NOT_A_TOKEN` for anything else — `cmd_offer`'s
+exact refusal shape and exact closed domain, on the surface that already owns these
+buckets. Everything Units 4 and 4b shipped is reused unchanged: `_discussion_buckets`,
+last-wins, the one-spelling key, `_benchmark_offer_question`,
+`_validation_offer_question`, `_answered_event_from`.
+
+**The engine still interprets no free text.** It reads one field whose domain is two
+tokens. That is the same act `offer` already performs, and it is not interpretation.
+
+### D20 — reading a bucket with no token: the migration rule
+
+Existing ledgers — the live target's included — hold answered `discuss` events with
+no `decision` field. The rule is **absent token reads as `no`**, and that is not a
+default chosen for convenience:
+
+- Today the **only reachable meaning** of an answered comparison/acid-test bucket is
+  "declined". Units 4 and 4b shipped it, tested it, and there is no way to express
+  "yes" at all. Reading a legacy event as `no` preserves exactly what the flow
+  already reports for it.
+- The alternative — absent token reads as undecided — would re-fire an offer the
+  person already declined, on every existing target, on the first pass after this
+  lands. That is the silence-becomes-noise failure `_answered_discussions`' own
+  docstring refuses in the opposite direction.
+
+So the token **adds the ability to say yes** and changes the meaning of nothing
+already written. Products row: no existing ledger event is reinterpreted (P4 holds).
+
+### D21 — `build-first`: one rung for "accepted, not built"
+
+With `decision: "yes"` recorded and nothing built, the ladder must not re-publish the
+offer — asking a question already answered is the mirror of the bug being fixed. It
+falls through to a new rung.
+
+**One rung, not two**, publishing a branching sentence. The comparison's act
+(`materialize --stage harness`) and the acid test's act (declare a `__steps__` entry,
+which **D15a forbids routing through the harness stage**) are different, but
+`_declare_first_publication` is the precedent for exactly this: one rung assigned from
+two conditions, whose publication names which state routed there, with the fact
+threaded from the branch rather than recomputed. Two rungs would mean two roster
+entries, two SKILL.md sections and twice the corpus churn for one idea.
+
+- `kind`: **`NEXT_STEP_REPAIR`**, `NEXT_STEP_REPAIR_CHOICE`. The decision is made; what
+  is owed is the wiring. That is the roster's own definition — *"work whose cost is
+  already settled … a run the flow already agreed to"* — and it is why `wiring-first`
+  is a repair rather than an experiment. `validate`'s `experiment` classification (D12)
+  is unaffected: that rung offers the decision, this one follows it.
+- `drafts`: `("wiring",)` when the comparison was accepted, `("validation",)` when the
+  acid test was — the draft that tells the person how to build what they agreed to.
+- It is **bare-literal assigned** (D5c) and **prescribes work**, so it needs its own
+  `### nextStep: "build-first"` section and must not join `NO_SECTION`.
+- Placement: inside the same last-among-the-overrides branch Unit 3 established, as a
+  fourth arm. **Unit 3's `report-first` guard and branch position are not touched** —
+  reordering the chain again is the one thing this unit must not do.
+
+```
+comparison bucket / acid-test bucket, benchmark package absent
+  ├─ unanswered ..................... benchmark  (the offer to compare)
+  ├─ decision "no", acid test open .. validate    (the offer to run one arm)
+  ├─ decision "no", both settled .... declined    (terminal, both dates)
+  └─ decision "yes", nothing built .. build-first (repair + the matching draft)
+```
+
+`decisions.comparison` / `decisions.validation` grow a `decision` member beside
+`state`/`at`/`asked`, carrying `"yes"`/`"no"`/`None`. The payload key Units 4 and 4b
+shipped keeps its shape and its name.
+
+### D22 — Part B up: test → comparison needs no new machinery
+
+A built acid test, and the person wants the comparison. This **adds** a rival arm; the
+question changes from "does it do what it said" to "which wins", and what was measured
+does not become wrong — it stops answering the new question.
+
+**The mechanism is D19's token and nothing else.** Re-answer the comparison bucket
+with `decision: "yes"` → `build-first` → materialize the harness. The bucket key
+already embeds the sorted baseline names, so it is already the right question. No new
+rung, no new constructor, no new state. Stated explicitly because the temptation is to
+build a "transition" surface for something two existing mechanisms already compose.
+
+### D23 — Part B down: comparison → test discards a question, not work
+
+A built comparison, and the person wants the acid test. Two decisions here, and the
+first is the one that matters.
+
+**D23a — the acid-test question must become reachable with a comparison present.**
+Today `validate` only fires when the benchmark package is absent, so from
+`already-benchmarked` it is unreachable. That is the gap.
+
+**D23b — and what it reports there is not an offer to build.** The owner's own
+reasoning: *a comparison already runs the method on that data, so what the acid test
+would ask is already measured inside it.* So in this state the rung does **not**
+propose a run. It names where the answer already lives — the comparison's own record
+and the arm that is the method — and asks whether to change the question being asked
+of it. Proposing a second run of a measurement already on disk would spend machine
+time to learn something the repository knows, which is this change's own defect class
+wearing a third mask.
+
+**D23c — a transition NEVER deletes. It stops asking.** The owner's word was
+"limpiar", clarified as removing the rival's arms. The ruling:
+
+| Operation | Verdict |
+|---|---|
+| Undeclare the rival arm — remove its entry from `__benchmark__["arms"]` | **This is the transition.** It stops the arm being exercised and stops it being reported, which is exactly "stop asking about it" |
+| Delete `<Name>/Results/…`, executed notebooks, stamps, ledger events | **Never, and not by the forge at all** |
+
+Three reasons, in order of weight:
+
+1. **Those measurements were paid for with machine time.** This change exists because
+   structure appeared for work nobody asked for; **its mirror-image failure is
+   destroying structure somebody earned.** A forge that did both would have learned
+   nothing.
+2. **The forge may not assume recoverability.** The live target happens to be its own
+   git repository with zero untracked files, so removals there stay in its history —
+   but that is *that target's* property, measured, not a guarantee about any target.
+   A destructive act justified by an assumption the forge cannot check is not
+   recoverable, it is lucky.
+3. **`flow_acts`' own rule**: *"A function that both decided and dispatched would be a
+   launch path with no `gate` standing in front of it."* The engine names acts; the
+   operator takes them. If a person genuinely wants files gone, that is their act with
+   their VCS, and the forge names the consequence without performing it.
+
+**Where the evidence of a run that happened continues to live**, stated because "stop
+asking" must not read as "lose": the `<Name>/Results/…` records, the executed notebooks
+and their `SOURCES-SHA256` seals, the `__records__` entries that grade them, and the
+position ledger. All untouched. An undeclared arm is invisible to `armsReached` and
+`unreachedModules`; it is not invisible to anybody reading the Results folder.
+
+**Discussed, never automatic** — same posture as every gate here. The transition is a
+`discuss` bucket with its own one-spelling constructor and D19's token.
+
+### D24 — Part C: the anti-leak lock, and a correction to the reported diagnosis
+
+**The reported diagnosis is wrong in its mechanism, and the real one is worse.** The
+brief says `derived_denylist()` cannot see the repository's directory name. It already
+does: `target_words` runs `words.update(self.split(target.name))` on every directory
+under `implementations/`. Three layers were measured this phase:
+
+1. **`split` decomposes the name, and the parts are legitimately forge vocabulary.**
+   `WORD_SPLIT_RE` breaks on punctuation and camel-case, so `Domain_Adaptation` becomes
+   `{"domain", "adaptation"}` — and **`"adaptation"` is the first entry in
+   `FORGE_LEXICON`**, admitted with a stated reason ("ordinary English in doctrine prose
+   about an arm with its adaptation switched off"). `derived_denylist` subtracts the
+   lexicon, so the parts are removed and **nothing target-specific survives**.
+   Decomposition destroyed the only identifying thing about the name: **the
+   composition.**
+2. **Even in the denylist, the compound would not match.** `leaks()` searches
+   `\b{word}\b`, and `_` is a regex word character — so `\bdomain\b` does not match
+   inside `Domain_Adaptation`. Only the compound as its own denylist word matches it.
+3. **And the scan surface is `.claude/skills/` only** (`SCAN_ROOT = SKILLS_ROOT`), so
+   `tests/` is never looked at. That is why 28/28 passes with the mention sitting in
+   `tests/test_proposal_implementation.py`.
+
+**The class, stated properly**: *any target whose directory name is a compound of
+otherwise-ordinary words is invisible to Rule B* — `Domain_Adaptation`,
+`Image_Segmentation`, `Language_Model`. Teaching the walk to "see directory names"
+would fix nothing, because it already sees them.
+
+**The fix, therefore, is to derive the compound as a word in its own right, in addition
+to its parts.** A compound of admitted words can still identify a target, and each
+part's admission into the lexicon was argued on its own merits — arguments that do not
+extend to the whole. Layers 2 and 3 are named as separate, smaller deliverables so a
+future reader knows which of the three closed.
+
+The instance — the fixture comment Unit 2 added — is removed and reworded to say **"a
+live target"**, never which. Zero occurrences under `.claude/`, so the shipped skills
+are clean and this is a test-surface fix, not a doctrine leak.
+
+---
+
 ## 4. Consumer-by-consumer no-regression table
 
 Every reader, writer and asserter of everything being moved. "Adjusted" rows are
@@ -1322,6 +1537,53 @@ and would have argued for splitting 4b; it does not, so it does not.
 **Unit 4b remains one unit** at ~720, comfortably inside the 1400-line budget on its
 own. `sdd-tasks` owns the final number.
 
+### Revision 5 — Movement 6, forecast honestly rather than optimistically
+
+**What the chain actually measured**, which is the only calibration worth using:
+
+| Unit | Forecast | Actual | Ratio |
+|---|---|---|---|
+| 4b | ~720 | **~1805** | **2.5×** |
+| 3 | ~800 | ~837 | 1.05× |
+
+The difference between them is the whole lesson. Unit 3's work was mostly *new*
+surface plus one correction; Unit 4b's ripple ran through **already-shipped tests in
+other classes**. Unit 3's own overrun was likewise 446 lines of test file, because one
+placement correction touched seven pre-existing tests across two classes plus a class
+rewrite. **Test ripple across existing classes is what blows a forecast here, and every
+part of Movement 6 has it.**
+
+Part A changes the *meaning* of an answered bucket, which is read by
+`DeclinedComparisonTests`, `AcidTestShadowEnumerationTests`,
+`DeclareFirstBeforeTheRunTests`, both roster test classes and both sealed corpora —
+the exact profile that produced 2.5×. Forecasting it at its "new code" size would
+repeat Unit 4b's mistake with the evidence already in hand.
+
+| Part | New surface | Ripple | Forecast |
+|---|---|---|---|
+| **A** — the token, `build-first`, `decisions.decision` | `discuss --decision`, one refusal code, one rung, one publication, one section | heavy: 4 shipped test classes + roster tests + both corpora | **~1000** |
+| **B** — the two transitions | `validate` reachable from `already-benchmarked`, the D23b reporting state, one constructor, the arm-undeclaration doctrine | moderate: `validate`'s own class, the ladder tests, both corpora again | **~700** |
+| **C** — the lock | compound-word derivation, the `_`-boundary, the scan surface, one fixture comment | light and self-contained: one test class, no engine change | **~300** |
+| | | **Total** | **~2000** |
+
+**Movement 6 must be split. Three units, in this order:**
+
+1. **6c — the lock** (~300). Lands **first** and independently: it touches no engine
+   code, no ladder, no corpus, and nothing 6a or 6b will touch. Smallest, fully
+   isolated, and it closes a measured leak that is open right now. There is no reason
+   to hold it behind two larger units.
+2. **6a — a decision can be reopened** (~1000). Depends on nothing but the shipped
+   chain. Delivers D19–D21 whole; splitting the token from `build-first` would ship a
+   `yes` nobody can act on.
+3. **6b — the transitions** (~700). Depends on 6a: D22 *is* 6a's token, and D23's down
+   direction records its decision with the same field. Chaining it after 6a is what
+   keeps 6b small enough to be one unit.
+
+Each of the three is inside the 1400-line budget on its own; the ~2000 total is not.
+**Decision needed before apply: Yes. Chained PRs recommended: Yes. Budget risk: High.**
+`sdd-tasks` owns the final numbers — and should treat these as floors rather than
+estimates, since every forecast in this chain has been low and none has been high.
+
 Against a 1400-line budget that is **Budget risk: High**, **Chained PRs
 recommended: Yes**, **Decision needed before apply: Yes** — answered by five
 chained units, never by reduced coverage. `sdd-tasks` owns the final number and may
@@ -1360,6 +1622,23 @@ split unit 2 or 3 further; nothing here authorises dropping a movement to fit.
       work is documentation plus one draft section. Closed by D11b.
 - [x] ~~Does an empty `__levels__` block remote placement?~~ **No** — placement and
       the rung ladder are independent declarations. Closed by D11d.
+- [x] ~~D13's placement prose vs the shipped code.~~ **Closed by Unit 3** (task 3.14):
+      the branch now sits last among the overrides, matching D13's original text, with
+      an explicit `resolved.status != "absent"` guard on `report-first`. Unit 4b's
+      first-position placement was the divergence, and it was corrected rather than
+      implemented around. **Movement 6 must not reorder that chain again.**
+- [ ] **D5b is superseded by D19, not merely amended.** Unit 4 shipped "acceptance =
+      materializing the harness" and proved a bare re-answer does not reopen — which
+      is correct for a prose answer and is exactly the hole Part A fills. Once the
+      closed token exists, `decision: "yes"` reopens **without** the structure existing
+      first. The D5b open question in this list is therefore resolved *by being
+      replaced*; `sdd-spec` should confirm that reading rather than treating D5b as
+      still live.
+- [ ] **Does `validate` become reachable from `already-benchmarked` only, or from any
+      state with a benchmark package present?** (D23a.) I designed the narrower one —
+      a *current, complete* record is what makes the acid test's question already
+      answered. A stale or piloted record is a different case and I did not rule on it.
+      Named rather than guessed.
 - [ ] **`premises` in the bucket key: I am asking `sdd-spec` to adjust** (D14a).
       Its raw-verbatim-text choice needs source-slicing machinery the engine does
       not have — the resolver hands over a parsed value — and it re-asks a settled

@@ -45,6 +45,19 @@ only by accident. Where it runs is decided in its own dedicated section of
 the draft, deciding neither option, and the offer states what each option
 costs without ever inventing a number the forge cannot know.
 
+**A decision already taken can change, and the flow has to see it.** Two
+gaps in the lifecycle this capability governs are closed here. First: today,
+a person who accepts a decision but has not yet built it is left reporting
+a settled decline forever — the flow re-offers only when the situation
+materially changes, never when the person simply changes their mind before
+building anything. Answering again, through a closed token, MUST reopen the
+decision on the strength of that answer alone. Second: once an acid test
+and a comparison can each exist on their own, a person may want to move
+from one to the other. That transition is asymmetric — adding a rival arm
+is not the same operation as recognizing that a rival-inclusive run already
+measured what a single-arm run would have asked — and in neither direction
+does it delete anything a run already produced.
+
 **Budget note.** This spec exceeds 650 words for the same reason as its
 sibling `implementation-comparison-deferral`: the owner's directive requires
 full coverage and no regression, and the migration-adjacent one-time re-fire
@@ -53,7 +66,10 @@ the first time anyone observes it. The acid-test follow-up adds three
 non-negotiable requirements of its own — nothing may materialize before an
 offer is accepted, nothing benchmark-named may ever be created even once
 accepted, and that prohibition must hold across both placements it may now
-run under — for the identical reason this whole change exists.
+run under. The reopening and transition requirements add a fourth: no
+completed run's evidence may ever be deleted merely because the question
+being asked of the target changed — for the identical reason this whole
+change exists.
 
 ## Requirements
 
@@ -177,17 +193,67 @@ decide which of two same-second events wins.
   is informational only — swapping which same-second event carries the
   earlier or later `at` value does not change the outcome
 
-### Requirement: Answering The Same Question Again Reopens The Comparison With No Separate Reopening Step
+### Requirement: A Declined Decision Reopens On Its Own Answer Alone, Never On Waiting For Structure To Exist
 
-Re-running `discuss` on the identical question text with an accepting answer
-MUST make the comparison live again, proceeding exactly as if it had been
-accepted the first time. No dedicated reopening code path is introduced.
+Either standing decision — the comparison's or the acid test's — MAY be
+changed after a decline by answering it again through a **closed `yes`/`no`
+token**, never free text: the same discipline this codebase already applies
+elsewhere (a closed binary answer, refused as an unrecognized token when it
+is anything else). Answering `yes` MUST reopen the decision by the strength
+of that answer alone — it MUST NOT continue to be reported as declined
+merely because the corresponding structure (the benchmark package, or the
+wired acid test) has not yet been built. Answering `no` again MUST leave it
+declined. No dedicated reopening code path is introduced beyond reading the
+answer.
 
-#### Scenario: A changed answer flips the bucket
-- GIVEN a prior decline recorded against a stable question text
-- WHEN the identical question text is answered again with acceptance
-- THEN the bucket's last event wins, and probe proceeds toward the
-  comparison as though it had never been declined
+#### Scenario: Accepting reopens the decision before anything is built
+- GIVEN a prior decline recorded against either standing decision
+- WHEN that same decision is answered `yes` again
+- THEN the flow reports it as accepted immediately, with nothing yet built
+
+#### Scenario: An accepted-but-unbuilt decision is never reported as declined
+- GIVEN the decision above was answered `yes` and nothing has been built
+- WHEN `probe` runs
+- THEN it does not report that decision as declined; the reported decision
+  state reflects the acceptance, not silence about the contradiction
+
+#### Scenario: Declining again leaves it declined
+- GIVEN the same decision
+- WHEN it is answered `no` again
+- THEN it remains declined
+
+#### Scenario: An answer outside the closed domain is refused, never interpreted
+- GIVEN an attempt to change either decision with anything other than the
+  two closed tokens
+- WHEN it is submitted
+- THEN the engine refuses it as an unrecognized token; it never attempts to
+  interpret the text's meaning
+
+### Requirement: A Repair Whose Own Precondition Reads The Benchmark Declaration Does Not Preempt An Unoffered Comparison
+
+Any repair override whose own precondition reads the benchmark declaration
+MUST exclude a target whose declaration is entirely absent when that target
+has never even been offered a comparison. The three-way
+comparison/acid-test/settled branch MUST be evaluated after every other
+repair override, so that a genuinely owed repair always outranks an
+unresolved or settled decision — and, symmetrically, a target that has never
+been offered a comparison is never mistaken for one whose report disagrees
+with a run that was never made.
+
+#### Scenario: A never-offered target reports the comparison offer, not a report-reading repair
+- GIVEN a target whose benchmark declaration is entirely absent and which
+  has never been offered a comparison
+- WHEN `probe` runs
+- THEN it reports the comparison offer; it does not report a repair whose
+  own precondition assumes a report exists to disagree with a run
+
+#### Scenario: The three-way branch is evaluated last among the overrides
+- GIVEN a target with both an owed repair and an unresolved or settled
+  comparison decision
+- WHEN `probe` runs
+- THEN the owed repair is reported first; the comparison/acid-test/settled
+  branch is reached only once every other repair override's own
+  precondition is false
 
 ### Requirement: The Baseline-Finder Fix Causes Exactly One Expected Re-Fire On Landing, Not A Defect
 
@@ -669,6 +735,72 @@ the follow-up MUST NOT hide work the flow already agreed to.
   still owes an unfinished step
 - WHEN `probe` runs
 - THEN it reports the owed repair, not the acid-test offer
+
+### Requirement: Adding A Comparison After An Acid Test Adds A Rival Arm; It Answers A Different Question, Not A Better One
+
+When an acid test has already run and the person also wants a comparison,
+the transition MUST be discussed, never automatic, the same discipline
+every other gate in this lifecycle already uses. Building the comparison
+MUST add a rival arm; it MUST NOT invalidate, overwrite, or require
+re-running the acid test's own measurement. The acid test answered whether
+the method does what the proposal said; the comparison answers a different
+question — which of two arms wins. Gaining an answer to the second question
+does not retract the answer already given to the first.
+
+#### Scenario: Wanting a comparison after a run acid test is discussed, not automatic
+- GIVEN a target whose acid test has already run
+- WHEN the person also wants a comparison
+- THEN the transition is discussed before anything is built
+
+#### Scenario: The acid test's own record survives the addition of a rival
+- GIVEN the acid test's own record already exists
+- WHEN a comparison is subsequently built and run
+- THEN the acid test's own record is neither deleted nor overwritten, and it
+  continues to answer the question it was run to answer
+
+### Requirement: Treating An Existing Comparison As Also Answering The Acid Test Removes Nothing And Reuses What Already Ran
+
+When a comparison has already run and the person wants the acid test's own
+question answered too, no new run is required: a comparison already runs
+the method on the same data an acid test would use, so what the acid-test
+question asks is already measured inside the comparison's own record. This
+transition, too, MUST be discussed, never automatic, and it MUST NOT delete,
+diminish, or remove the rival's own arm or its measurements — ceasing to ask
+the comparison's question is not the same operation as erasing what the
+comparison already measured.
+
+#### Scenario: The acid-test question is answered from the existing comparison record
+- GIVEN a target with an already-run comparison
+- WHEN the acid-test question is asked afterward
+- THEN it is answered from the comparison's own existing record, with no new
+  run required
+
+#### Scenario: The rival's arm is not removed by the transition
+- GIVEN the same target
+- WHEN this transition is discussed and completed
+- THEN neither the rival's own arm nor its measurements are removed from
+  disk or from the record
+
+### Requirement: A Completed Run's Evidence Is Never Deleted When The Question Being Asked Changes
+
+Ceasing to ask about something and erasing it are different operations, and
+this capability MUST NOT conflate them. Neither transition above — test to
+comparison, or comparison to test — MUST delete, relocate out of its
+recorded location, or overwrite any record or arm's output a prior run
+already produced. A transition MAY change which question the flow is
+currently asking; it MUST NOT retract evidence that a run already happened
+and was paid for in machine time.
+
+#### Scenario: A rival's arm is never erased by a later transition
+- GIVEN a comparison whose rival arm has already run
+- WHEN the person later asks only about the acid test's own question
+- THEN the rival's own recorded output remains exactly where it was,
+  untouched
+
+#### Scenario: An acid test's record is never erased by a later comparison
+- GIVEN an acid test whose record already exists
+- WHEN a comparison is subsequently built
+- THEN the acid test's own record remains exactly where it was, untouched
 
 ## Boundary (explicitly not built here)
 

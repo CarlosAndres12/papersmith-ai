@@ -3,13 +3,18 @@
 > **Size note.** The `sdd-tasks` skill sets a 530-word default budget. The owner's
 > binding directives for this change — full coverage with nothing pending, explicit
 > no-regression verification rather than a note pointing at existing tests, and
-> chained units rather than reduced coverage against a ~3220-line forecast (design
-> revision 4) on a 1400-line budget — cannot be satisfied inside it. The same
-> explicit-contract override the proposal and design took applies here.
+> chained units rather than reduced coverage against a ~5220-line grand-total
+> forecast (design revision 5, Movement 6 included) on a 1400-line budget — cannot
+> be satisfied inside it. The same explicit-contract override the proposal and
+> design took applies here.
 
-**Ordering.** Units are numbered as the design names them (`1`, `2`, `4`, `4b`, `3`)
-so every cross-reference to the design and specs stays stable. They are **presented
-and MUST be delivered in execution order: 1 → 2 → 4 → 4b → 3.**
+**Ordering.** Units are numbered as the design names them (`1`, `2`, `4`, `4b`, `3`,
+`6c`, `6a`, `6b`) so every cross-reference to the design and specs stays stable.
+They are **presented and MUST be delivered in execution order:
+1 → 2 → 4 → 4b → 3 → 6c → 6a → 6b.** Units 1–3 are applied and green
+(`b493151` → `432da9f` → `45eae9d` → `cb965c4` → `330c5f1`); Movement 6 (`6c`,
+`6a`, `6b`) is designed against **what that shipped code now is** (design §D17),
+not against earlier design prose.
 
 **Threat matrix: N/A** (design §9). No routing of untrusted input, shell command,
 subprocess, VCS/PR automation, executable-file classification, or process
@@ -19,10 +24,10 @@ boundary is introduced or widened. No threat-matrix RED tasks apply.
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | ~3220 (design §10 revision 4; 400 + 750 + 560 + 720 + 800) |
+| Estimated changed lines | Units 1–3: ~3220 forecast, **~3990 actual** (400 + 750 + 560 + 1805 + 837 — 4b landed 2.5×, 3 landed 1.05×; see each unit's own "reported" section). Movement 6 (design §3c revision 5): **~2000 forecast, treated as a floor, not an estimate** — 6c ~300, 6a ~1000, 6b ~700. **Grand total forecast: ~5220** |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
-| Suggested split | PR 1 (Unit 1) → PR 2 (Unit 2) → PR 3 (Unit 4) → PR 4 (Unit 4b) → PR 5 (Unit 3) |
+| Suggested split | PR 1 (Unit 1) → PR 2 (Unit 2) → PR 3 (Unit 4) → PR 4 (Unit 4b) → PR 5 (Unit 3) → PR 6 (Unit 6c) → PR 7 (Unit 6a) → PR 8 (Unit 6b) |
 | Delivery strategy | ask-on-risk |
 | Chain strategy | pending — user decision required before apply |
 
@@ -41,7 +46,10 @@ Chain strategy: pending
 | 2 | Unit 2 — declaration leaves the benchmark package | `__implementation__`, `__levels__/__steps__/__records__` relocation (D1/D2); `cmd_verify`'s two revision readers (D3); migration path | ~750 | `pytest tests/test_proposal_implementation.py -k "declaration or verify or migration"` | `cmd_verify` against a migration-shaped fixture carrying an unread literal | Revert restores bench-package read; gate refuses loudly (`OBJECT_MAP_NOT_APPROVED`), never a silent pass |
 | 3 | Unit 4 — a declined comparison is remembered | Question-text constructor (D5a), `declined` terminal, `_Benchmark` exclusion, `decisions.comparison` | ~560 | `pytest tests/test_proposal_implementation.py -k "discuss or declined or previous_implementations"` | `cmd_probe` twice: decline, then re-probe; assert settled-declined | Purely additive; revert loses only the bucket read, ledger event persists |
 | 4 | Unit 4b — the acid test | `validation_proposal` (D11) with its `placement` section (D11a–d), `validate` rung (D12), canonical `premises` key (D14/D14a), D15 invariant proved local **and** remote | ~720 | `pytest tests/test_proposal_implementation.py -k "validat or PROBE_DRAFTS or NextStep or placement"` | `cmd_probe` → accept acid test → `cmd_step` wiring + running it, once local, once remote (job-folder generation via `remote_cli generate-job`) | Purely additive; D15a+D15b guarantee no on-disk residue under either placement — revert unwinds a rung, never a directory |
-| 5 | Unit 3 — first flow stops creating the benchmark package | Scaffold/harness list flip; `declare-first` narrows (D4); derived-count sweep (D8); doc sweep close-out | ~800 | `pytest tests/test_proposal_implementation.py` (full) + both seal suites | Full Flow A on a fresh target, E2E | Only unit changing Flow A's on-disk output; revert restores the scaffold list; Units 1/2/4/4b stay correct without it |
+| 5 | Unit 3 — first flow stops creating the benchmark package | Scaffold/harness list flip; `declare-first` narrows (D4); derived-count sweep (D8); doc sweep close-out | ~800 (actual: 837) | `pytest tests/test_proposal_implementation.py` (full) + both seal suites | Full Flow A on a fresh target, E2E | Only unit changing Flow A's on-disk output; revert restores the scaffold list; Units 1/2/4/4b stay correct without it |
+| 6 | Unit 6c — the anti-leak lock (Movement 6, Part C) | Derive the compound target-name as its own denylist word (D24); `re.IGNORECASE` in `leaks()`; widen the guard's scan to test commentary; reword the one live instance | ~300 (floor) | `pytest tests/test_implementation_domain_lock.py -k "leak or denylist or compound"` | N/A — no engine/CLI behavior; a test-suite-internal guard fix, no runtime scenario to exercise | Purely additive to the test suite; revert restores the narrower guard and the un-reworded fixture comment, no production code touched |
+| 7 | Unit 6a — a decision can be reopened (Movement 6, Part A) | `discuss --decision yes\|no` token (D19); absent-token-reads-as-`no` migration (D20); `build-first` rung as a fourth arm inside Unit 3's existing branch (D21) | ~1000 (floor) | `pytest tests/test_proposal_implementation.py -k "discuss_decision or build_first or DeclinedComparison"` | `cmd_probe` → decline → re-`discuss --decision yes` → confirm `build-first` reported with nothing yet built | Purely additive to `discuss`; `cmd_offer` untouched; revert restores the three-way branch, no ladder position changes |
+| 8 | Unit 6b — the transitions (Movement 6, Part B) | Comparison→test reuses D19's token (D22, no new machinery); test→comparison reachability + reporting-state publication (D23a/b); undeclare-not-delete (D23c) | ~700 (floor) | `pytest tests/test_proposal_implementation.py -k "transition or undeclare or already_benchmarked_validate"` | `cmd_probe` on an already-benchmarked target → discuss the acid-test transition → confirm rival arm undeclared, `Results/` untouched | Purely additive; revert leaves both transitions unreachable again, no prior unit's on-disk output affected |
 
 ---
 
@@ -279,6 +287,240 @@ Chain strategy: pending
 
 ---
 
+## Movement 6 — a decision already taken can change
+
+> Design §3c, revision 5 (D17–D24). Designed against **what units 1–3 shipped**
+> (`b493151` → `432da9f` → `45eae9d` → `cb965c4` → `330c5f1`), not against earlier
+> design prose — three corrections in D17 are load-bearing: the three-way branch
+> sits last among the overrides **only because Unit 3 moved it there**; D5b's
+> "acceptance = materializing the harness" **is shipped**, and is exactly the hole
+> Part A below fills; and the published acid-test question does **not** carry
+> `scale`'s axes (a literal 4-parameter signature, unlike D11c/D14b's prose).
+>
+> **Standing constraints, binding on every task below:**
+> - The engine interprets no free text, ever. The only new surface is one closed
+>   `yes`/`no` token on `discuss` (D19) — `cmd_offer`'s `OFFER_ANSWER_NOT_A_TOKEN`
+>   is **precedent only**; `cmd_offer` itself MUST NOT be reused (its own
+>   docstring states no code path ever reads an offer event's fields back into a
+>   later decision, and reuse would mint a launch authorization for a decline).
+> - **Absent-token migration rule (D20):** a legacy answered bucket with no
+>   `decision` field reads as `no`. Reading it as undecided would re-fire a
+>   declined offer on every existing target on the first pass.
+> - **Unit 3's ladder ordering is not to be touched.** The three-way branch stays
+>   last, `report-first`'s `resolved.status != "absent"` guard stays. `build-first`
+>   is a fourth arm inside that existing branch, never a new position, never a
+>   reorder.
+> - **A transition undeclares; it never deletes.** No destructive filesystem act
+>   may be justified by an assumption about recoverability the forge cannot check.
+> - No `Co-Authored-By` or AI attribution in any commit this movement produces.
+>
+> **Forecast discipline (owner's own instruction):** treat ~300/~1000/~700 as
+> **floors**, not estimates. In this chain 4b landed at 2.5× its forecast and 3 at
+> 1.05×; none has landed under. Test ripple through already-shipped classes
+> (`DeclinedComparisonTests`, `AcidTestShadowEnumerationTests`,
+> `DeclareFirstBeforeTheRunTests`, both roster classes, both sealed corpora) is
+> what blew every prior forecast, and Part A's token changes the *meaning* of an
+> already-answered bucket — the exact profile that produced 4b's 2.5×.
+
+### Unit 6c — the anti-leak lock (Part C, ~300 floor — lands first, independently)
+
+> Touches no engine code, no ladder, no corpus. Closes a measured leak that is
+> open right now. No reason to hold it behind the two larger units.
+
+- [ ] 6c.1 Fix the compound-word gap (D24, layer 1): wherever `target_words` calls
+      `words.update(self.split(target.name))`, also add the **undivided compound**
+      `target.name` itself (normalized) as its own candidate word — each split
+      part's lexicon admission was argued on its own merits, and those arguments
+      do not extend to the whole.
+- [ ] 6c.2 Test: a target named from two ordinary, individually-admitted words
+      (shaped after `Domain_Adaptation`) survives into `derived_denylist()`'s
+      output as its own compound word, even though both of its parts are
+      individually subtracted by `FORGE_LEXICON`.
+- [ ] 6c.3 Fix the case gap (D24, layer 2): add `re.IGNORECASE` to `leaks()`'s
+      `re.search(rf"\b{re.escape(word)}\b", text)` so a title-cased or
+      differently-cased mention still matches the lowercased denylist entry.
+- [ ] 6c.4 Explicit test, not an assumption (owner's own instruction — `\b` treats
+      `_` as a word character): once the compound is in the denylist, `leaks()`'s
+      `\b...\b` boundary actually matches a real `Domain_Adaptation`-shaped
+      mention. Do not infer this from the parts' own boundary behavior.
+- [ ] 6c.5 Test: a mention cased differently from the denylist's own lowercased
+      entry is still caught (spec "The Anti-Leak Guard's Word Comparison Does Not
+      Depend On Matching Case", scenario 1).
+- [ ] 6c.6 Test: a hypothetical second live target's compound name, planted in any
+      casing into a forge file as a test, is caught with no per-target exemption
+      list required (spec, scenario 2 — "the fix closes the class, not the one
+      instance").
+- [ ] 6c.7 Fix the scan-surface gap (D24, layer 3): widen the guard's scan (today
+      `SCAN_ROOT = SKILLS_ROOT`, `.claude/skills/` only) so test-file commentary —
+      fixture descriptions, comments, string content not meant as a neutral
+      placeholder — is included. Scope narrowly to commentary/fixture-description
+      content, not every string literal in every test, to avoid a false-positive
+      machine.
+- [ ] 6c.8 Test: a live target's repository directory name in a test file's own
+      comment is caught by the widened guard, naming the file and the word (spec
+      "No Live Target's Own Name Appears Anywhere In This Forge, In Any Casing",
+      scenario 1).
+- [ ] 6c.9 Test: a neutral, invented fixture name is not mistaken for a leak by the
+      widened scan (spec, scenario 2).
+- [ ] 6c.10 Remove and reword the one measured instance: the fixture comment Unit 2
+      added in `tests/test_proposal_implementation.py`, naming `Domain_Adaptation`
+      — reword to say "a live target", never which. Zero occurrences under
+      `.claude/` already; this is the test-surface instance, not a doctrine leak.
+- [ ] 6c.11 Run both suites (`npm test` and the Python unittest suites) green,
+      confirming the corrected guard passes on the repository as it now stands.
+
+### Unit 6a — a decision can be reopened (Part A, ~1000 floor)
+
+> Depends on nothing but the shipped chain (Units 1–3). Delivers D19–D21 whole —
+> splitting the token from `build-first` would ship a `yes` nobody can act on.
+
+- [ ] 6a.1 Add an optional `decision` field to `discuss`: closed domain
+      `yes`/`no`, refusing a new code `DISCUSS_DECISION_NOT_A_TOKEN` for anything
+      else — `cmd_offer`'s exact refusal shape and closed domain, reimplemented on
+      `discuss` (D19), never by reusing `cmd_offer`.
+- [ ] 6a.2 Test: `discuss --decision yes` / `discuss --decision no` are accepted
+      and recorded on the ledger event; any other value is refused
+      `DISCUSS_DECISION_NOT_A_TOKEN`, never interpreted (spec "A Declined Decision
+      Reopens On Its Own Answer Alone...", scenario "An answer outside the closed
+      domain is refused, never interpreted").
+- [ ] 6a.3 Test: `cmd_offer` itself is untouched by this unit — no code path reuses
+      it, and its own documented "never read back" invariant still holds.
+- [ ] 6a.4 Add the absent-token migration rule (D20) to `_answered_event_from`/the
+      bucket reader: an answered event with no `decision` field reads as `no`.
+      Test: a legacy answered bucket with no `decision` field is read as declined,
+      not undecided, on the first pass after landing — no re-fire from the
+      migration itself.
+- [ ] 6a.5 Test: no existing ledger event is reinterpreted or rewritten (P4 still
+      holds) — the migration rule changes only how an absent field is read.
+- [ ] 6a.6 Grow `decisions.comparison` and `decisions.validation`'s payload shape
+      with a `decision` member beside `state`/`at`/`asked`, carrying
+      `"yes"`/`"no"`/`None` — the same payload key Units 4 and 4b shipped keeps
+      its shape and name, only grows.
+- [ ] 6a.7 Test: `decisions.comparison.decision` / `decisions.validation.decision`
+      report `"yes"`/`"no"`/`None` correctly across unanswered / declined /
+      accepted-not-built states.
+- [ ] 6a.8 Add the `"build-first"` rung: `kind = NEXT_STEP_REPAIR`,
+      `choice = NEXT_STEP_REPAIR_CHOICE`; `drafts = ("wiring",)` when the
+      comparison's own decision is `"yes"`, `drafts = ("validation",)` when the
+      acid test's is — bare-literal assigned (D5c), the routing fact threaded from
+      the branch rather than recomputed (`_declare_first_publication`'s own
+      precedent, D21).
+- [ ] 6a.9 Wire the four-way branch as a **fourth arm inside Unit 3's existing
+      last-among-the-overrides branch** — same position, same
+      `resolved["status"] == "absent"` guard, **never a new position**:
+      unanswered → `benchmark`; decision "no", acid test open → `validate`;
+      decision "no", both settled → `declined`; decision "yes", nothing built →
+      `build-first`. Unit 3's `report-first` guard and this branch's own position
+      are **not to be touched** — the one thing this movement must not do.
+- [ ] 6a.10 Test: no reordering occurred — the shadow-enumeration class still
+      proves every repair override outranks the four-way branch, evaluated last,
+      exactly as Unit 3 left it.
+- [ ] 6a.11 Test: answering `decision: "yes"` reopens the decision immediately,
+      with nothing yet built — reported as accepted, not declined, not silent
+      about the contradiction (spec scenarios "Accepting reopens the decision
+      before anything is built", "An accepted-but-unbuilt decision is never
+      reported as declined").
+- [ ] 6a.12 Test: answering `decision: "no"` again after a prior `"yes"` leaves it
+      declined (spec scenario "Declining again leaves it declined").
+- [ ] 6a.13 Add `SKILL.md`'s new `### nextStep: "build-first"` section: what it
+      means, which draft it carries, that it prescribes work. Must **not** join
+      `NO_SECTION`.
+- [ ] 6a.14 Update `NextStepSectionCoverageTests.all_next_steps()`,
+      `NextStepPublicationRosterTests` (repair-step count grows by one;
+      `build-first` correctly excluded from `NO_SECTION`), and
+      `references/usage.md`'s ladder documentation for the new rung.
+- [ ] 6a.15 Record the D5b supersession explicitly (owner's own instruction — do
+      not answer this silently): update this file's "Notes carried forward" / "What
+      Unit 4 reported" annotations to state that **D5b is superseded by D19, not
+      merely amended.** Unit 4's "acceptance = materializing the harness" was
+      correct for a prose answer and is exactly the hole this unit fills — once
+      the closed token exists, `decision: "yes"` reopens the decision **without**
+      the structure existing first. Flag for the owner/`sdd-spec` to confirm this
+      reading rather than treating design's own still-unchecked `D5b vs sdd-spec`
+      open question as live.
+- [ ] 6a.16 Regenerate both sealed corpora for the token field, the `build-first`
+      rung, and the four-way branch — budget for this being the heaviest ripple in
+      the unit (the same profile that produced 4b's 2.5×): expect
+      `DeclinedComparisonTests`, `AcidTestShadowEnumerationTests`,
+      `DeclareFirstBeforeTheRunTests`, and both roster test classes to move. Read
+      the diff, account for every moved case.
+- [ ] 6a.17 Run both suites green before closing the unit.
+
+### Unit 6b — the transitions (Part B, ~700 floor)
+
+> Depends on 6a: D22 *is* 6a's token, and D23's down direction records its
+> decision with the same field. Chaining after 6a keeps this unit small enough to
+> be one.
+
+- [ ] 6b.1 Test (D22 — hold the "no new machinery" claim to a test, not prose):
+      re-answering the comparison bucket with `decision: "yes"` on a target whose
+      acid test has already run routes to `build-first` → `materialize --stage
+      harness`, using only 6a's token and rung — no new constructor, no new
+      state (spec "Adding A Comparison After An Acid Test...", scenario "Wanting a
+      comparison after a run acid test is discussed, not automatic").
+- [ ] 6b.2 Test: the acid test's own record is neither deleted nor overwritten
+      when a comparison is subsequently built and run, and continues to answer
+      the question it was run to answer (spec, scenario "The acid test's own
+      record survives the addition of a rival").
+- [ ] 6b.3 Measurement task (owner-handed, design's own open question, D23a — do
+      not assume, this chain has been burned twice by assumed answers): measure
+      whether `validate` should become reachable **only from `already-benchmarked`**
+      (a current, complete record) or from **any state with a benchmark package
+      present**, including a stale or piloted record. Design ruled the narrower
+      reading but explicitly did not settle the stale/piloted case; the spec does
+      not settle it either. Escalate to the owner/`sdd-spec` for an explicit
+      ruling before 6b.4 lands; do not silently pick one.
+- [ ] 6b.4 Make `validate` reachable from `already-benchmarked` (the narrower,
+      designed reading, pending 6b.3's confirmation) with a comparison-present
+      precondition (D23a).
+- [ ] 6b.5 Reshape what `validate` reports when reached from a completed
+      comparison (D23b): **not** an offer to build a run — a reporting state that
+      names where the answer already lives (the comparison's own record and the
+      arm that is the method) and asks whether to change the question being asked
+      of it. Branched publication under the same rung name, the
+      `_declare_first_publication` precedent again.
+- [ ] 6b.6 Test: the acid-test question, asked after a comparison has already run,
+      is answered from the comparison's own existing record with no new run
+      required (spec "Treating An Existing Comparison As Also Answering The Acid
+      Test...", scenario "The acid-test question is answered from the existing
+      comparison record").
+- [ ] 6b.7 Implement the down-transition (D23c): accepting the "treat the
+      existing comparison as also answering the acid test" discussion
+      **undeclares** the rival arm — removes its entry from
+      `__benchmark__["arms"]` — and does nothing else. Never delete
+      `<Name>/Results/…`, executed notebooks, stamps, or ledger events. Discussed
+      via a `discuss` bucket with its own one-spelling constructor and 6a's token
+      — never automatic.
+- [ ] 6b.8 Test: undeclaring the rival arm makes it invisible to
+      `armsReached`/`unreachedModules` going forward, while its own recorded
+      output remains exactly where it was on disk, untouched (spec "The rival's
+      arm is not removed by the transition").
+- [ ] 6b.9 Test: the transition never deletes, relocates, or overwrites any record
+      or arm's output a prior run already produced, in **either** direction —
+      test → comparison and comparison → test (spec "A Completed Run's Evidence
+      Is Never Deleted When The Question Being Asked Changes", both scenarios).
+- [ ] 6b.10 Regression-verification: the forge performs no destructive filesystem
+      act on the strength of an assumption about recoverability it cannot check
+      (D23c's second reason) — assert undeclaring an arm issues no delete/move/
+      overwrite call anywhere in its own code path (source scan), and that the
+      untouched files' own mtimes/hashes are unchanged before and after.
+- [ ] 6b.11 Test: both transitions are discussed, never automatic — no code path
+      performs either transition without an explicit `discuss` event recording it
+      first (spec scenario "Wanting a comparison after a run acid test is
+      discussed, not automatic").
+- [ ] 6b.12 Update `SKILL.md`'s `### nextStep: "validate"` (and/or
+      `"build-first"`) section(s) to describe both transitions, the
+      undeclare-not-delete rule, and `validate`'s branched reporting-state
+      publication when reached from a completed comparison.
+- [ ] 6b.13 Update `references/usage.md` and roster tests for `validate`'s
+      widened reachability precondition and its branched publication shape.
+- [ ] 6b.14 Regenerate both sealed corpora for the widened `validate` reachability
+      and its branched reporting-state publication. Read the diff, account for
+      every moved case.
+- [ ] 6b.15 Run both suites green — **this closes Movement 6 and the change.**
+
+---
+
 ## Notes carried forward, not tasks
 
 - The `AGREED.md`/`AGREEMENTS.md` naming drift is out of scope; fixed as a one-line edit inside 2.16, the commit that already touches that paragraph.
@@ -320,5 +562,35 @@ Chain strategy: pending
 - **README.md's own `nextStep` ladder enumeration is still stale beyond this unit's assigned scope** (five base rungs + four blocks, missing over half the values this change alone added: `declare-first`, `env-first`, `pilot-first`, `pilot-decisions`, `declined`, `validate`). Task 3.12's own wording scopes README's sweep to "the benchmark package from scaffold to harness" — done — not a full ladder rewrite spanning every prior unit's own additions. Named here per the mission's own "report it, don't implement around it" instruction rather than silently left or silently expanded past the assigned task.
 - **Both sealed corpora moved by the smallest margin yet**: `verify-a`/`verify-b`/`verify-t` (`tests/seal/`) and six `verify-*` cases (`tests/experiments_seal/`) each moved by exactly +4 bytes — read directly via `test_implementation_seal.py`'s own result cache, not assumed: the sole content change in every case is `src/<Package>_Benchmark/__init__.py` moving from `structure.unrecordedScaffold` to `structure.unrecordedHarness`, the precise, intended consequence of the list flip. `probe` itself did not move in either corpus — its own fixtures never exercise a byte-visible consequence of this unit's changes.
 - **One new environmental failure, confirmed same-class rather than assumed**: `FreshFlowATargetEndToEndTests.test_verification_notebook_executes_and_stamps` hits the identical `ModuleNotFoundError: No module named 'numpy'` at the identical source line every `NotebookSealAgreementTests` execution test already hits in this sandbox — the 32nd instance of the one confirmed-pre-existing class (missing `torch`/`numpy`/`pytest`/`requests`), not a new one. `test_remote_execution.py` itself does not import in this sandbox at all (`ModuleNotFoundError: No module named 'requests'`), confirmed identical on pristine HEAD via `git stash` — its 123 `_Benchmark` hits remain, re-measured, the single generic fixture literal Unit 1's own task 1.9 already found.
+- **This was the last unit of the originally-scoped change** — Movement 6 (below)
+  was added afterward, by the owner, as a distinct follow-on scope. Unit 3's own
+  "this closes the change" note (task 3.20) predates Movement 6 and should be read
+  as "closes the originally-scoped five units," not as a claim that no further
+  scope exists.
 - **Full verification**: `npm test` 640/640 (JS untouched throughout the whole change). `tests.test_proposal_implementation`: 1613 tests, 32 confirmed pre-existing/environmental failures (31 inherited + the one same-class notebook-execution instance above), every one individually confirmed via `git stash` A/B against pristine HEAD before exclusion — zero unexplained failures. `tests.test_implementation_seal` 72/72, `tests.test_experiments_seal` 71/72 (the one failure is the same "uncommitted seal corpus" mutation-proof control every prior unit documented, clears on commit). `tests.test_implementation_pair` 38/38. `tests.test_experimental_implementation` 63/63 green — its own `CrossingStateTests` mutation-proof control also referenced the uncommitted `tests/seal/` corpus and clears on commit identically. `tests.test_implementation_domain_lock` 28/28, `M5_PINNED_RESIDUE` recomputed twice (once for the main sweep, once more after the final `report-first` guard comment added one more `benchmark` occurrence after the first computation — caught by re-running the suite, not assumed stable).
 - **Authored-line count**: `git diff --stat` (staged, pre-commit) totals 875 changed lines (599 insertions/276 deletions) across 9 files; excluding the two generated-goldens seal corpora (38 lines, mechanically regenerated, not authored) that is **837 authored lines against the ~800 forecast** — about 5% over, the smallest overrun of any unit in this chain (Unit 4b landed at ~1805 against ~720). Most of it (446 lines) is `tests/test_proposal_implementation.py`: the D13 placement correction's own ripple (task 3.14) touched seven pre-existing tests across two classes plus one class rewrite (`AcidTestShadowEnumerationTests`), and the fixture repairs (task 3.15) touched five more classes individually — proportionate to the correction's real blast radius, not padding.
+
+### Movement 6 — added by the owner after Unit 3 closed
+
+- **This is a distinct follow-on scope, not a correction to Units 1–3.** Design §3c
+  (revision 5, D17–D24), the spec's seventh revision, and a new delta spec
+  (`implementation-engine-neutrality`, 2 requirements) all landed after the
+  original five units were applied and green. Movement 6 is designed against what
+  that shipped code **now is** (D17), with three corrections load-bearing: the
+  three-way branch sits last only because Unit 3 moved it there; D5b's
+  "acceptance = materializing" is shipped and is the hole Part A fills; and the
+  published acid-test question does not carry `scale`'s axes (a literal
+  4-parameter signature).
+- **Two open questions are deliberately left as tasks, not answers**: task 6a.15
+  records that D5b is superseded by D19 (not amended) and asks the owner/`sdd-spec`
+  to confirm; task 6b.3 is an explicit measurement of whether `validate` should be
+  reachable from `already-benchmarked` only or from any state with a benchmark
+  package present — design named this as unsettled rather than guessing, and this
+  file preserves that posture rather than silently picking one.
+- **Forecast discipline**: Movement 6's ~2000-line forecast (300 + 1000 + 700) is
+  stated as a **floor**, per the owner's own instruction, because every prior
+  forecast in this chain has landed low (4b at 2.5×, 3 at 1.05×) and none has
+  landed high. `sdd-apply` should expect Unit 6a in particular to blow its own
+  forecast the way 4b did — Part A changes the *meaning* of an already-answered
+  bucket, read by four already-shipped test classes and both sealed corpora, the
+  exact ripple profile that produced 4b's 2.5×.
