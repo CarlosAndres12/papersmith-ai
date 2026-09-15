@@ -423,62 +423,110 @@ Chain strategy: pending
 > Depends on nothing but the shipped chain (Units 1–3). Delivers D19–D21 whole —
 > splitting the token from `build-first` would ship a `yes` nobody can act on.
 
-- [ ] 6a.1 Add an optional `decision` field to `discuss`: closed domain
+- [x] 6a.1 Add an optional `decision` field to `discuss`: closed domain
       `yes`/`no`, refusing a new code `DISCUSS_DECISION_NOT_A_TOKEN` for anything
       else — `cmd_offer`'s exact refusal shape and closed domain, reimplemented on
       `discuss` (D19), never by reusing `cmd_offer`.
-- [ ] 6a.2 Test: `discuss --decision yes` / `discuss --decision no` are accepted
+- [x] 6a.2 Test: `discuss --decision yes` / `discuss --decision no` are accepted
       and recorded on the ledger event; any other value is refused
       `DISCUSS_DECISION_NOT_A_TOKEN`, never interpreted (spec "A Declined Decision
       Reopens On Its Own Answer Alone...", scenario "An answer outside the closed
       domain is refused, never interpreted").
-- [ ] 6a.3 Test: `cmd_offer` itself is untouched by this unit — no code path reuses
+- [x] 6a.3 Test: `cmd_offer` itself is untouched by this unit — no code path reuses
       it, and its own documented "never read back" invariant still holds.
-- [ ] 6a.4 Add the absent-token migration rule (D20) to `_answered_event_from`/the
+      - *`test_cmd_offer_is_untouched_by_the_discuss_decision_capability`:
+        static-source check (`cmd_discuss`'s own source never calls
+        `cmd_offer(...)` or reuses `"OFFER_ANSWER_NOT_A_TOKEN"`) plus a
+        confirmation that `cmd_offer`'s own write-only-history docstring
+        invariant is still stated.*
+- [x] 6a.4 Add the absent-token migration rule (D20) to `_answered_event_from`/the
       bucket reader: an answered event with no `decision` field reads as `no`.
       Test: a legacy answered bucket with no `decision` field is read as declined,
       not undecided, on the first pass after landing — no re-fire from the
       migration itself.
-- [ ] 6a.5 Test: no existing ledger event is reinterpreted or rewritten (P4 still
+      - *Implemented as a new pure reader, `_decision_token_from_event`, rather
+        than inside `_answered_event_from` itself — `_answered_event_from`
+        already has a stated, narrower contract (the bucket's own last event or
+        `None`) that several other callers depend on unchanged; the migration
+        rule lives one layer above it, in the function that actually interprets
+        the token.*
+- [x] 6a.5 Test: no existing ledger event is reinterpreted or rewritten (P4 still
       holds) — the migration rule changes only how an absent field is read.
-- [ ] 6a.6 Grow `decisions.comparison` and `decisions.validation`'s payload shape
+      - *`test_reopening_appends_never_rewrites_the_original_decline_event`
+        asserts the original decline's own ledger line is byte-identical after
+        a reopening answer is appended (append-only, never an edit-in-place).*
+- [x] 6a.6 Grow `decisions.comparison` and `decisions.validation`'s payload shape
       with a `decision` member beside `state`/`at`/`asked`, carrying
       `"yes"`/`"no"`/`None` — the same payload key Units 4 and 4b shipped keeps
       its shape and name, only grows.
-- [ ] 6a.7 Test: `decisions.comparison.decision` / `decisions.validation.decision`
+- [x] 6a.7 Test: `decisions.comparison.decision` / `decisions.validation.decision`
       report `"yes"`/`"no"`/`None` correctly across unanswered / declined /
       accepted-not-built states.
-- [ ] 6a.8 Add the `"build-first"` rung: `kind = NEXT_STEP_REPAIR`,
+- [x] 6a.8 Add the `"build-first"` rung: `kind = NEXT_STEP_REPAIR`,
       `choice = NEXT_STEP_REPAIR_CHOICE`; `drafts = ("wiring",)` when the
       comparison's own decision is `"yes"`, `drafts = ("validation",)` when the
       acid test's is — bare-literal assigned (D5c), the routing fact threaded from
       the branch rather than recomputed (`_declare_first_publication`'s own
       precedent, D21).
-- [ ] 6a.9 Wire the four-way branch as a **fourth arm inside Unit 3's existing
+      - *Divergence, measured and reported, not implemented around: a literal
+        reading of "`drafts` = `("wiring",)` or `("validation",)`" cannot be the
+        roster's own STATIC `PROBE_NEXT_STEPS["build-first"]["drafts"]` tuple,
+        because `NextStepPublicationRosterTests.test_every_entry_names_a_drafts_tuple_of_known_builders`
+        holds every entry to one fixed tuple, known at module-definition time —
+        and mutating that shape-lock test was out of this unit's own mandate
+        (D19-D21 only). Resolved by keeping the roster's own tuple empty
+        (`declare-first`'s own precedent: a repair whose published TEXT already
+        varies by a branch-threaded fact while its roster `drafts` stays `()`)
+        and resolving the ONE actual draft dynamically in `cmd_probe`, from the
+        identical `facts["buildFirstArm"]` fact `_build_first_publication`
+        itself reads. The OBSERVABLE behaviour matches the design's plain-English
+        sentence exactly — `test_build_first_never_publishes_both_drafts_at_once`
+        proves exactly one of `wiring`/`validation` is non-`null` at this rung,
+        never both — only the roster's own static declaration differs from a
+        literal-tuple reading. `NextStepPublicationRosterTests` needed zero
+        changes as a result (confirmed green, unmodified).*
+- [x] 6a.9 Wire the four-way branch as a **fourth arm inside Unit 3's existing
       last-among-the-overrides branch** — same position, same
       `resolved["status"] == "absent"` guard, **never a new position**:
       unanswered → `benchmark`; decision "no", acid test open → `validate`;
       decision "no", both settled → `declined`; decision "yes", nothing built →
       `build-first`. Unit 3's `report-first` guard and this branch's own position
       are **not to be touched** — the one thing this movement must not do.
-- [ ] 6a.10 Test: no reordering occurred — the shadow-enumeration class still
+      - *Verified untouched: `report-first`'s own `resolved["status"] != "absent"`
+        guard and every repair override's own `elif` line above the four-way
+        branch are byte-identical to Unit 3's own shipped code — the diff for
+        this task touches only the one `elif`/branch body that was already
+        `benchmark`/`validate`/`declined`.*
+- [x] 6a.10 Test: no reordering occurred — the shadow-enumeration class still
       proves every repair override outranks the four-way branch, evaluated last,
       exactly as Unit 3 left it.
-- [ ] 6a.11 Test: answering `decision: "yes"` reopens the decision immediately,
+      - *`AcidTestShadowEnumerationTests.test_every_repair_override_still_outranks_an_accepted_but_unbuilt_decision`
+        (new): every repair guard forced true simultaneously on a target that
+        already accepted the comparison (`decision: "yes"`, nothing built) still
+        reports the owed repair, never `build-first`.*
+- [x] 6a.11 Test: answering `decision: "yes"` reopens the decision immediately,
       with nothing yet built — reported as accepted, not declined, not silent
       about the contradiction (spec scenarios "Accepting reopens the decision
       before anything is built", "An accepted-but-unbuilt decision is never
       reported as declined").
-- [ ] 6a.12 Test: answering `decision: "no"` again after a prior `"yes"` leaves it
+- [x] 6a.12 Test: answering `decision: "no"` again after a prior `"yes"` leaves it
       declined (spec scenario "Declining again leaves it declined").
-- [ ] 6a.13 Add `SKILL.md`'s new `### nextStep: "build-first"` section: what it
+- [x] 6a.13 Add `SKILL.md`'s new `### nextStep: "build-first"` section: what it
       means, which draft it carries, that it prescribes work. Must **not** join
       `NO_SECTION`.
-- [ ] 6a.14 Update `NextStepSectionCoverageTests.all_next_steps()`,
+- [x] 6a.14 Update `NextStepSectionCoverageTests.all_next_steps()`,
       `NextStepPublicationRosterTests` (repair-step count grows by one;
       `build-first` correctly excluded from `NO_SECTION`), and
       `references/usage.md`'s ladder documentation for the new rung.
-- [ ] 6a.15 Record the D5b supersession explicitly (owner's own instruction — do
+      - *`all_next_steps()` itself needed no change (it scrapes `cmd_probe`'s own
+        source); only the explicit expected-set literal in
+        `test_every_value_the_cli_can_return_is_accounted_for` gained
+        `"build-first"`. `NextStepPublicationRosterTests`'s own assertions ran
+        green with zero edits — see 6a.8's own note for why the roster-shape
+        tests never needed to move. `references/usage.md`: the section list, the
+        `wiring`/`validation` reporting paragraph (now three/two answers, exactly
+        one non-`null` at `build-first`).*
+- [x] 6a.15 Record the D5b supersession explicitly (owner's own instruction — do
       not answer this silently): update this file's "Notes carried forward" / "What
       Unit 4 reported" annotations to state that **D5b is superseded by D19, not
       merely amended.** Unit 4's "acceptance = materializing the harness" was
@@ -487,13 +535,28 @@ Chain strategy: pending
       the structure existing first. Flag for the owner/`sdd-spec` to confirm this
       reading rather than treating design's own still-unchecked `D5b vs sdd-spec`
       open question as live.
-- [ ] 6a.16 Regenerate both sealed corpora for the token field, the `build-first`
+      - *Recorded under "What Unit 4 reported", below its own D5b note, per this
+        task's own instruction — see that section.*
+- [x] 6a.16 Regenerate both sealed corpora for the token field, the `build-first`
       rung, and the four-way branch — budget for this being the heaviest ripple in
       the unit (the same profile that produced 4b's 2.5×): expect
       `DeclinedComparisonTests`, `AcidTestShadowEnumerationTests`,
       `DeclareFirstBeforeTheRunTests`, and both roster test classes to move. Read
       the diff, account for every moved case.
-- [ ] 6a.17 Run both suites green before closing the unit.
+      - *Measured, not the forecast: the "heaviest ripple" landed narrower than
+        expected. `DeclinedComparisonTests` needed two dict-literal updates
+        (the new `decision` member); `AcidTestShadowEnumerationTests`,
+        `DeclareFirstBeforeTheRunTests` and both roster test classes needed
+        ZERO changes — every pre-existing assertion in those five classes
+        passed unmodified, because none of them compares the full `decisions`
+        dict by equality and the roster's own `build-first` entry carries an
+        empty `drafts` tuple (6a.8's note). Only `probe`/`discuss` moved in
+        either sealed corpus (`tests/seal/digests.json`,
+        `tests/experiments_seal/digests.json`) — regenerated via
+        `tests/seal_capture.py`/`tests/experiments_seal_capture.py`, diff read
+        case by case, nothing else moved.*
+- [x] 6a.17 Run both suites green before closing the unit.
+      - *See "What Unit 6a reported" below for full verification evidence.*
 
 ### Unit 6b — the transitions (Part B, ~700 floor)
 
@@ -588,6 +651,7 @@ Chain strategy: pending
 
 - **Unit 4** is committed on branch `unit4-a-declined-comparison-is-remembered`, chained off Unit 2 (`432da9f`). All 17 tasks (4.1–4.17) done.
 - **A design/spec tension on D5b was found and flagged, not silently resolved either way** — see task 4.11's own note above and the correction added to this file's earlier "resolved... no divergence remains" claim. Design revision 4's own `## 11. Open questions` still carries `D5b vs sdd-spec` unchecked; implemented per D5b's stated mechanism (acceptance = the harness stage materializing, which clears the `resolved.status == "absent"` guard by itself — genuinely "no dedicated reopening step", matching the spec requirement's own title), proved by a test that also proves a bare re-answer ALONE does not reopen it. The owner/`sdd-spec` should confirm this reading or override it; not arbitrated silently here.
+  - **Unit 6a resolution (owner instruction, task 6a.15): D5b is SUPERSEDED by D19, not merely amended.** D19 (design revision 5) introduces a closed `discuss --decision yes|no` token, read by the engine directly — the counter-example to Unit 4's own rev-2 reasoning that "the engine never parses free text" ruled reopening out entirely. D5b's "acceptance = materializing the harness" reading was CORRECT for a prose answer, and remains correct for one: it is exactly the hole D19's token exists to fill, not a mechanism D19 replaces for prose. Once the closed token exists, `decision: "yes"` reopens the standing decision by the answer alone, immediately, with nothing yet built — the opposite of D5b's "acceptance is expressed only by the act it authorizes" reading, for the one input D5b never covered (a closed token, as opposed to free text). The still-unchecked `D5b vs sdd-spec` open question in design.md §11 should now be read as closed by this supersession, not as a question `sdd-spec` still owes an answer to independent of Unit 6a's own landing.
 - **A measured, not assumed, consequence of D5b's guard ordering**: with no benchmark package on disk at all (`resolved.status == "absent"`) and no decline recorded, `probe`'s `nextStep` is `declare-first` today, not `benchmark` — the pre-existing `declare-first` override (still unnarrowed; Unit 3's D4 has not landed) already claims that state. `declined`'s own guard runs strictly before it and only intercepts once the exact current offer text has been answered; every "re-fire" scenario therefore reports `declare-first` again once the offer text stops matching, never `benchmark`. `decisions.comparison.state` (not `nextStep` alone) is the correct, stable signal that the offer stands unanswered — used throughout the re-fire and migration tests for exactly this reason.
 - **Both sealed corpora's `probe` case SHRANK, not grew**, despite the `decisions` payload key's own addition: the `_Benchmark`-suffix exclusion (4.4) also drops the corpora's own benchmark package out of their baseline lists, shortening the comparison offer's own published text by more bytes than the new key adds. Read directly, not assumed — see task 4.16's own note.
 
@@ -643,3 +707,76 @@ Chain strategy: pending
   forecast the way 4b did — Part A changes the *meaning* of an already-answered
   bucket, read by four already-shipped test classes and both sealed corpora, the
   exact ripple profile that produced 4b's 2.5×.
+
+### What Unit 6a reported
+
+- **Unit 6a** is committed on branch `unit6a-saying-yes-reopens`, chained off
+  Unit 6c (`f5c3511`), itself on Movement 6's planning commit (`8886fae`), on
+  top of Unit 3 (`330c5f1`). All 17 tasks (6a.1–6a.17) done.
+- **The forecast overshot the other direction this time, measured rather than
+  assumed.** Every prior unit in this chain landed AT or OVER its own
+  forecast (3 at 1.05×, 4b at 2.5×) — Unit 6a landed UNDER its own ~1000-line
+  floor. See task 6a.16's own note for the mechanism: the "heaviest ripple"
+  the design forecast against four already-shipped test classes plus both
+  roster classes materialized in only ONE of them
+  (`DeclinedComparisonTests`, two dict-literal updates for the new
+  `decision` member); `AcidTestShadowEnumerationTests`,
+  `DeclareFirstBeforeTheRunTests`, `NextStepSectionCoverageTests`'s own
+  roster test and `NextStepPublicationRosterTests` all passed with either
+  zero changes or one literal-set addition, because none of their existing
+  assertions compares the full `decisions` payload by equality and the new
+  `build-first` rung's own roster entry carries an empty `drafts` tuple
+  (task 6a.8's own note). The full suite was run twice, not once, to confirm
+  this rather than trust a partial read — see "Full verification" below.
+- **One divergence surfaced and flagged, not implemented around — task
+  6a.8's own note has the full account.** Design's literal "`drafts` =
+  `("wiring",)` or `("validation",)` by which was accepted" cannot be the
+  roster's own static `PROBE_NEXT_STEPS["build-first"]["drafts"]` tuple,
+  because `NextStepPublicationRosterTests.test_every_entry_names_a_drafts_tuple_of_known_builders`
+  holds every roster entry to exactly one fixed tuple — a shape-lock test
+  outside this unit's own mandate to alter. Resolved by keeping the
+  roster's own tuple empty (`declare-first`'s own precedent for a repair
+  whose published text already varies by a branch-threaded fact while its
+  roster `drafts` stays `()`) and resolving the one actual draft
+  dynamically in `cmd_probe`, from the identical `facts["buildFirstArm"]`
+  fact the publish function itself reads. The OBSERVABLE behaviour matches
+  the design's plain-English sentence exactly (`test_build_first_never_publishes_both_drafts_at_once`
+  proves it) — only the roster's own static declaration differs from a
+  literal-tuple reading.
+- **D5b is recorded as superseded by D19, not amended** (task 6a.15,
+  owner's own instruction) — see "What Unit 4 reported" above, where the
+  note now lives beside Unit 4's own original D5b account rather than
+  replacing it.
+- **Both sealed corpora moved by exactly two cases each**: `probe` and
+  `discuss` in both `tests/seal/digests.json` and
+  `tests/experiments_seal/digests.json` — regenerated via
+  `tests/seal_capture.py`/`tests/experiments_seal_capture.py`, diff read
+  case by case. Nothing else moved in either corpus.
+- **`M5_PINNED_RESIDUE` (the derived-vocabulary domain lock,
+  `tests/test_implementation_domain_lock.py`) needed eighteen pins
+  recounted, zero new admissions and zero removals**: `actually`,
+  `after`, `against`, `answered`, `before`, `beside`, `check`, `empty`,
+  `experiment`, `invariant`, `longer`, `makes`, `rather`, `recorded`,
+  `reported`, `value`, `whose`, `write` all grew by the new engine prose
+  (the closed-token discipline, the migration rule, the `build-first`
+  rung); `test_2_no_unpinned_denylist_word_appears_in_the_engine` confirmed
+  no new unpinned leak before any pin was touched.
+- **Full verification, run twice**: `npm test` 640/640 (JS untouched). The
+  full `tests.test_proposal_implementation` suite: 1636 tests, 32
+  confirmed pre-existing/environmental failures (25 failures + 7 errors) —
+  the exact same 32 test IDs, individually re-run against a `git stash`-clean
+  pristine HEAD, reproduced the identical 25 failures + 7 errors, 0
+  differing, confirming zero regressions. `tests.test_implementation_seal`
+  72/72, `tests.test_experiments_seal` 71/72 (the one failure is the same
+  "uncommitted seal corpus" mutation-proof control every prior unit
+  documented, clears on commit). `tests.test_implementation_domain_lock`
+  28/28 after the pin recount above.
+- **Authored-line count**: `git diff --numstat` totals 682 changed lines
+  (604 insertions/78 deletions) across 8 files; excluding the two
+  generated-goldens seal corpora (18 lines, mechanically regenerated, not
+  authored) that is **664 authored lines against the ~1000 floor** —
+  roughly two-thirds of the floor, not an overrun. Reported honestly
+  rather than padded: this unit's own measured ripple (above) was
+  genuinely smaller than the design's own worst-case forecast, which the
+  design itself named as a floor precisely because it could not rule out
+  the opposite.

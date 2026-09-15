@@ -1538,10 +1538,11 @@ which scrapes both directly from the source rather than carrying a count that
 can drift out of sync with it. Most values prescribe work and each has its own
 section in `SKILL.md` — `convert`, `declare-first`, `env-first`, `wiring-first`,
 `poll-first`, `pilot-first`, `pilot-decisions`, `search-first`, `report-first`,
-`benchmark` and `validate`. A few have no section: `nothing-to-compare` and
-`already-benchmarked` prescribe no work at all, `piloted`'s own rule keeps its
-question open rather than handing over a list of steps, and `declined` is this
-flow's own answer to "the person said no" — twice.
+`benchmark`, `validate` and `build-first`. A few have no section:
+`nothing-to-compare` and `already-benchmarked` prescribe no work at all,
+`piloted`'s own rule keeps its question open rather than handing over a list
+of steps, and `declined` is this flow's own answer to "the person said no" —
+twice.
 
 **Prescribing no section is not the same as publishing nothing.** Most values
 publish a `resolve` question or draft (below); only the terminal states that
@@ -1751,16 +1752,22 @@ whoever reads the output:
 
 `wiring` and `validation` are the two draft payloads `PROBE_DRAFTS` can
 publish (design D12, replacing a single `wiring: bool` flag). `wiring` is
-reported at two answers: `benchmark`, where the draft is the raw material the
-run offer is built from, and `wiring-first`, where an arm declares mathematics
-it never calls and the draft is the very thing that state is missing. It was
-guarded on `benchmark` alone, and because the `wiring-first` override runs
-before that guard, the one answer naming missing wiring came back with
-`wiring: null`. `validation` is reported at exactly one answer, `validate` —
-the acid test's own draft: the method's modules with no rival, the target's
-own `__levels__`, a `placement` section naming `local`/`remote` and deciding
-neither, and a proposed record entry. `null` at every other answer, the
-identical shape `wiring` keeps.
+reported at three answers: `benchmark`, where the draft is the raw material
+the run offer is built from; `wiring-first`, where an arm declares
+mathematics it never calls and the draft is the very thing that state is
+missing; and `build-first` (design D21), when it is the comparison's own
+decision that was reopened or freshly accepted. It was guarded on
+`benchmark` alone, and because the `wiring-first` override runs before that
+guard, the one answer naming missing wiring came back with `wiring: null`.
+`validation` is reported at two answers: `validate` — the acid test's own
+draft: the method's modules with no rival, the target's own `__levels__`, a
+`placement` section naming `local`/`remote` and deciding neither, and a
+proposed record entry — and `build-first`, when it is the acid test's own
+decision that was reopened or freshly accepted. `build-first` never
+publishes both at once: exactly one of `wiring`/`validation` is non-`null`
+there, by which decision routed to it (`decisions.comparison.decision` or
+`decisions.validation.decision`), the same discipline every other rung's
+`null`-elsewhere shape already keeps.
 
 - **`walk`** — where this repository stands in its own declared flow. Read it
   when you are opening a clean repository to run the flow from the top: it

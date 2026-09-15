@@ -510,23 +510,36 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: 152->153. One SHRANK: the three-way branch's own comment, rewritten for
 #: its new last-in-chain position, reads differently from what it
 #: replaced. `before` 239->238. None left the denylist; no new leak.
+#: `the-comparison-nobody-asked-for` (Unit 6a, design.md D19-D21): the
+#: closed `discuss --decision yes|no` token, its `DISCUSS_DECISION_NOT_A_TOKEN`
+#: refusal, the absent-token migration rule (D20), the `decisions.*.decision`
+#: payload member, and the `build-first` rung (fourth arm of the same
+#: last-among-the-overrides branch Unit 3 placed) are all new engine prose,
+#: not a domain word: eighteen words already exempted here read naturally
+#: inside it and grew. `actually` 78->80, `after` 87->89, `against`
+#: 188->189, `answered` 85->92, `before` 238->243, `beside` 98->99, `check`
+#: 151->153, `empty` 127->129, `experiment` 24->25, `invariant` 21->22,
+#: `longer` 51->53, `makes` 44->46, `rather` 359->366, `recorded` 76->78,
+#: `reported` 145->146, `value` 239->242, `whose` 153->154, `write`
+#: 107->109. None shrank and none left the denylist; `test_2` confirms no
+#: new unpinned leak either.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 78, "admissible": 3, "after": 87, "against": 188,
-    "agreed": 27, "answered": 85, "answers": 104, "approved": 28,
-    "audit": 15, "before": 238, "benchmark": 105, "beside": 98,
-    "check": 151, "checkable": 3, "claim": 36, "command": 268,
+    "actually": 80, "admissible": 3, "after": 89, "against": 189,
+    "agreed": 27, "answered": 92, "answers": 104, "approved": 28,
+    "audit": 15, "before": 243, "benchmark": 105, "beside": 99,
+    "check": 153, "checkable": 3, "claim": 36, "command": 268,
     "commands": 18, "compares": 24, "declaration": 207,
-    "destinations": 38, "empty": 127, "established": 4, "experiment": 24,
+    "destinations": 38, "empty": 129, "established": 4, "experiment": 25,
     "experiments": 6, "implementations": 2, "incomplete": 28,
-    "invariant": 21, "isolated": 5, "leave": 11, "leaves": 36,
-    "local": 37, "longer": 51, "makes": 44, "materialized": 12,
+    "invariant": 22, "isolated": 5, "leave": 11, "leaves": 36,
+    "local": 37, "longer": 53, "makes": 46, "materialized": 12,
     "measured": 142, "measurement": 42, "module": 194, "notebooks": 110,
     "object": 33, "pilot": 123, "place": 53, "produces": 51,
-    "rather": 359, "recorded": 76, "remedy": 54, "remote": 65,
-    "reported": 145, "resolves": 31, "ruled": 9, "runnable": 15,
+    "rather": 366, "recorded": 78, "remedy": 54, "remote": 65,
+    "reported": 146, "resolves": 31, "ruled": 9, "runnable": 15,
     "scaffolded": 11, "sitting": 9, "small": 8, "something": 71,
-    "steps": 139, "sweep": 7, "validated": 8, "value": 239, "whose": 153,
-    "write": 107, "wrong": 51,
+    "steps": 139, "sweep": 7, "validated": 8, "value": 242, "whose": 154,
+    "write": 109, "wrong": 51,
 }
 
 

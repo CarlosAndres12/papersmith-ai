@@ -43,9 +43,9 @@
     "sha256": "7401518be1f28f410c7587409f67e6524250fd07e94144e032b67cfe1cfbfa94"
   },
   "discuss": {
-    "bytes": 348,
+    "bytes": 368,
     "exit": 0,
-    "sha256": "273d4fc9e8b88a55108d66955a52045e48efb45ae0edf108ae9e90b416255b38"
+    "sha256": "8fc9246707815691f0ced4d21c3a88d512c7163759bf8f5498e47e34ba143893"
   },
   "env": {
     "bytes": 0,
@@ -98,14 +98,14 @@
     "sha256": "eae0ea68991005cb29f80ec6db41dc74eba78cf7a0cac63512456e52fe868e63"
   },
   "probe": {
-    "bytes": 9121,
+    "bytes": 9169,
     "exit": 0,
-    "sha256": "4ad92a9ad55e822482089e08e54048c7510280cb35dd97426c7a8440fa5dc8ba"
+    "sha256": "0e50891f5dfc8c281ae742911133553d2f45fd891ce43456e27f4b7f40cc3b1f"
   },
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "02f2d1dd911caf40d70bfcbcb7609d0dd2d26cb7387aea5db0bb007bad35293f"
+    "sha256": "96bc0ee8e362197a38626570016d326f485c6749a1ff531107f00b7d6e6c6310"
   },
   "settle": {
     "bytes": 2914,

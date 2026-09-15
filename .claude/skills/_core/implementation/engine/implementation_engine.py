@@ -3966,14 +3966,41 @@ def cmd_probe(args) -> dict:
     # `validate`'s own guard is additive on top of `declined`'s prior
     # meaning, not a replacement of it (design D13): a comparison decline
     # alone no longer reads as the fully terminal `declined` -- the acid
-    # test is asked next, and only once BOTH offers are answered does the
-    # ladder report `declined` again, this time naming both dates.
-    elif next_step == "benchmark" and resolved["status"] == "absent" and (
+    # test is asked next, and only once BOTH offers are answered (and
+    # neither was reopened with `decision: "yes"`) does the ladder report
+    # `declined` again, this time naming both dates.
+    #
+    # `build-first` is the fourth arm (D19-D21, Movement 6 Part A), added
+    # WITHIN this exact same last-among-the-overrides branch and guarded by
+    # the identical `resolved["status"] == "absent"` condition -- never a
+    # new position in the chain, which is the one thing this movement must
+    # not touch (Unit 3's own correction, above). Reading `decision: "yes"`
+    # reopens the corresponding offer BY THE ANSWER ALONE, immediately, with
+    # nothing yet built: no dedicated reopening branch is written beyond
+    # this read, the same "the reopening code is the absence of a branch"
+    # rule the paragraph above already states for the harness-materializing
+    # path. `build_first_arm` is threaded into `facts` below rather than
+    # recomputed at the publish site -- `_declare_first_publication`'s own
+    # precedent for a fact read once and reused, never a second read that
+    # could disagree with the branch that published it.
+    build_first_arm = None
+    if next_step == "benchmark" and resolved["status"] == "absent" and (
             comparison_question in answered):
-        if validation_question in answered:
-            next_step = "declined"
-        else:
+        comparison_decision = _decision_token_from_event(
+            _answered_event_from(buckets, comparison_question))
+        if comparison_decision == "yes":
+            next_step = "build-first"
+            build_first_arm = "comparison"
+        elif validation_question not in answered:
             next_step = "validate"
+        else:
+            validation_decision = _decision_token_from_event(
+                _answered_event_from(buckets, validation_question))
+            if validation_decision == "yes":
+                next_step = "build-first"
+                build_first_arm = "validation"
+            else:
+                next_step = "declined"
 
     # The harness's name is read from the target's own declaration
     # (`resolve_harness_status`), never assumed from a filename: a fixed
@@ -4062,6 +4089,14 @@ def cmd_probe(args) -> dict:
             "revision") or "",
         "premises": (implementation_declared["contract"] or {}).get(
             "premises") or {},
+        # D21: which of the two standing decisions was answered `"yes"` when
+        # `next_step == "build-first"`, `None` otherwise -- read once at the
+        # branch above and threaded through here for the identical reason
+        # every other fact in this dict is: `_build_first_publication` reads
+        # it to write the right half of its branching sentence, and a second
+        # read there could disagree with the branch that actually routed
+        # here.
+        "buildFirstArm": build_first_arm,
     }
     # The roster decides, never a literal (design D12, replacing the single
     # `wiring: bool` flag this used to be). `wiring_proposal` had exactly one
@@ -4073,8 +4108,28 @@ def cmd_probe(args) -> dict:
     # `wiring-first` gains it, because the state it describes IS the thing
     # blocking; `validate` gains the analogous `validation` draft the
     # identical way.
+    #
+    # `build-first` cannot be a static roster entry here (D21): the SAME
+    # `next_step` value needs `wiring_proposal` when the comparison was
+    # accepted and `validation_proposal` when the acid test was, and every
+    # entry in `PROBE_NEXT_STEPS` is required to carry a plain `tuple`
+    # (`NextStepPublicationRosterTests.test_every_entry_names_a_drafts_tuple_of_known_builders`)
+    # -- never a value computed from `facts`, unlike `publish`, which
+    # already takes `facts` as an argument and is exactly where every other
+    # branch-dependent choice in this roster lives. Rather than loosen that
+    # shape lock for one entry, `build-first`'s own roster tuple stays empty
+    # (`declare-first`'s own precedent: a repair whose published TEXT
+    # already varies by branch-threaded fact while its roster `drafts`
+    # stays `()`), and the one draft it does need is resolved here, from the
+    # identical `build_first_arm` fact `_build_first_publication` reads --
+    # never both proposals at once, which would publish guidance for the
+    # arm that was NOT accepted alongside the one that was.
+    draft_names = PROBE_NEXT_STEPS[next_step]["drafts"]
+    if next_step == "build-first":
+        draft_names = (("wiring",) if build_first_arm == "comparison"
+                       else ("validation",))
     drafts = {draft: PROBE_DRAFTS[draft](target, name, facts)
-             for draft in PROBE_NEXT_STEPS[next_step]["drafts"]}
+             for draft in draft_names}
     publication = next_step_publication(target, name, next_step, facts)
     # `toDiscuss` carries the question-shaped publications only -- a command
     # this flow can name completely is not a question anybody answers, and
@@ -12636,6 +12691,40 @@ def _validate_publication(target: Path, name: str, facts: dict) -> dict:
             facts.get("premises") or {}))
 
 
+def _build_first_publication(target: Path, name: str, facts: dict) -> dict:
+    """`build-first` (D21) -- reached once a standing decision has been
+    reopened (or freshly answered) `"yes"` and nothing has been built for
+    it yet. A repair, not an experiment: the decision is already made, and
+    what is owed is the wiring, the same reading that already makes
+    `wiring-first` a repair rather than an offer.
+
+    **One rung, publishing a branching sentence -- `_declare_first_
+    publication`'s own precedent** (one rung assigned from two different
+    conditions, the fact that decided which one threaded through `facts`
+    rather than recomputed here, where a second read could disagree with
+    the branch that actually routed to this rung). The comparison's own
+    acceptance act (`materialize --stage harness`) and the acid test's
+    (declaring a `__steps__` entry -- D15a forbids routing it through the
+    harness stage) differ, so the sentence names which was accepted rather
+    than describing an act generic enough to cover both falsely.
+
+    `buildFirstArm` is `"comparison"` or `"validation"`, threaded from the
+    branch in `cmd_probe`. The matching draft (`wiring` or `validation`) is
+    threaded the same way, through `cmd_probe`'s own `drafts` dict -- see
+    its comment there for why the roster's static `drafts` tuple could not
+    express this instead.
+    """
+    if facts.get("buildFirstArm") == "comparison":
+        state = ("accepted the offer to compare against its declared "
+                 "baselines, and nothing has been wired or run yet")
+    else:
+        state = ("accepted the offer to run its acid test, and nothing "
+                 "has been wired or run yet")
+    return _next_step_question_entry(
+        target, name, f"{name} (target {target}) {state}; "
+        + NEXT_STEP_REPAIR_CHOICE)
+
+
 def _search_first_publication(target: Path, name: str, facts: dict) -> dict:
     """`search-first` -- the defect that named this lock. A search is an
     experiment, declared as one, and launching it is exactly the point the
@@ -12923,14 +13012,18 @@ PROBE_NEXT_STEPS: dict[str, dict] = {
                            "publish": None},
     "already-benchmarked": {"kind": NEXT_STEP_TERMINAL, "drafts": (),
                             "publish": None},
-    # A declined comparison AND a declined acid test, settled and stable
-    # (D5, D13). Terminal for the same reason as the two above -- it names
-    # no work -- and joins `NextStepSectionCoverageTests.NO_SECTION`
-    # beside them: it is this flow's own answer to "the person said no,
-    # twice", and a section prescribing steps would invent the work both
-    # declines refused. `state` is never read here or anywhere else: the
-    # engine records that each offer was answered and never what the
-    # answer said (D5b/D5d/D15b).
+    # Both standing decisions settled and neither reopened, settled and
+    # stable (D5, D13, D19-D21). Terminal for the same reason as the two
+    # above -- it names no work -- and joins
+    # `NextStepSectionCoverageTests.NO_SECTION` beside them: it is this
+    # flow's own answer to "the person said no, twice", and a section
+    # prescribing steps would invent the work both declines refused.
+    # `state` alone (D5b/D5d/D15b's original "never what the answer said"
+    # rule) is no longer the whole story once a bucket carries a `decision`
+    # token: D19 supersedes D5b for exactly that closed token -- `decision`
+    # IS read now, by `cmd_probe`'s own branch above, and `"yes"` on either
+    # bucket routes to `build-first` instead of ever reaching this entry.
+    # The engine still parses no free text, here or anywhere else.
     "declined": {"kind": NEXT_STEP_TERMINAL, "drafts": (),
                 "publish": None},
 
@@ -12949,6 +13042,19 @@ PROBE_NEXT_STEPS: dict[str, dict] = {
                    "publish": _poll_first_publication},
     "report-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                      "publish": _report_first_publication},
+    # `build-first` (D21): a standing decision was reopened -- or freshly
+    # answered -- `"yes"`, and nothing has been wired or run yet. The
+    # decision is already made; what's owed is the wiring, the same reading
+    # that makes `wiring-first` a repair rather than an offer. `drafts`
+    # stays empty here on purpose: the one draft this rung needs (`wiring`
+    # or `validation`, by which decision was accepted) cannot be a fixed
+    # roster tuple the way every other entry's can, because the SAME
+    # `next_step` value needs either one depending on `facts["buildFirstArm"]`
+    # -- see `cmd_probe`'s own comment beside its `draft_names` resolution
+    # for why that one rung is resolved there instead of through this
+    # roster's static shape.
+    "build-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
+                    "publish": _build_first_publication},
     # The declared flow, before and after it has finished at pilot. Repairs
     # rather than experiments, and the distinction is not "does a machine
     # run": running the remaining steps of an already-agreed flow, and
@@ -13076,24 +13182,61 @@ def _answered_event_from(buckets: dict[str, dict],
     return event
 
 
-def _decision_from_event(event: dict | None) -> dict:
-    """One member of `probe`'s `decisions` payload key (D16 -- replaces D6's
-    withdrawn `comparisonDecision`). Shape is fixed on every call: `state` is
-    `"answered"` when `event` is present, `None` when the question was never
-    asked or its last event is unanswered (mirroring `_answered_event_from`'s
-    own `None` cases). `at` and `asked` are read verbatim off that event and
-    are DISPLAY ONLY, in both members -- never compared, never sorted, never
-    used to pick a winner; ledger append order already decided that inside
-    `_discussion_buckets`.
+def _decision_token_from_event(event: dict | None) -> str:
+    """The closed reopening token (D19) an answered `discuss` event carries,
+    read the same "engine reads the token, never the prose" way `cmd_offer`'s
+    own `--answer` is read -- `"yes"` only when the event's own `decision`
+    field says so exactly, `"no"` in every other case.
 
-    The engine records that the question was answered, and when -- never
-    what the answer said (D5b, D5d, D15b): `state` can only ever be
-    `"answered"` or `None`.
+    **The absent-token migration rule (D20).** An answered event with no
+    `decision` field at all -- every decline recorded before this capability
+    existed, and every ordinary free-text answer recorded after it that never
+    passed `--decision` -- reads as `"no"`. Not a convenience default: today
+    the only reachable meaning of an answered comparison/acid-test bucket is
+    "declined" (Units 4/4b shipped and tested exactly that), so reading a
+    legacy event this way preserves exactly what the flow already reported
+    for it and re-fires nothing on the first pass after this capability
+    lands. The token ADDS the ability to say `"yes"`; it reinterprets no
+    event already on the ledger (P4 still holds).
+
+    `event is None` (the question was never asked, or its last event is
+    unanswered) also reads as `"no"` here -- callers of this function only
+    ever reach it once `_answered_event_from` has already confirmed the
+    bucket is answered, so this is a defensive default, never a state this
+    function is asked to discriminate for its own sake. `_decision_from_event`
+    below is the sibling reader that keeps the three-state `None` open for a
+    caller that does need to tell "never asked" apart from "answered no".
     """
     if event is None:
-        return {"state": None, "at": None, "asked": None}
+        return "no"
+    return "yes" if event.get("decision") == "yes" else "no"
+
+
+def _decision_from_event(event: dict | None) -> dict:
+    """One member of `probe`'s `decisions` payload key (D16 -- replaces D6's
+    withdrawn `comparisonDecision`; D19 grows it with the `decision` member).
+    Shape is fixed on every call: `state` is `"answered"` when `event` is
+    present, `None` when the question was never asked or its last event is
+    unanswered (mirroring `_answered_event_from`'s own `None` cases). `at`
+    and `asked` are read verbatim off that event and are DISPLAY ONLY, in
+    both members -- never compared, never sorted, never used to pick a
+    winner; ledger append order already decided that inside
+    `_discussion_buckets`.
+
+    **`decision` (D19) is the one member that is no longer silent about what
+    the answer said** -- superseding D5b/D5d/D15b's original "never what the
+    answer said" rule for exactly the closed token this capability reads,
+    never for free text (the engine still parses no prose, on this key or
+    any other). `"yes"`/`"no"` once the question is answered, read through
+    `_decision_token_from_event`'s own migration rule (D20: an answered
+    event with no token reads as `"no"`); `None` only when the question was
+    never asked or stands unanswered, mirroring `state`.
+    """
+    if event is None:
+        return {"state": None, "at": None, "asked": None, "decision": None}
     return {"state": "answered", "at": event.get("at"),
-            "asked": event.get("asked")}
+            "asked": event.get("asked"),
+            "decision": _decision_token_from_event(event)}
 
 
 def _open_discussions(target: Path, name: str) -> list[dict]:
@@ -13145,6 +13288,23 @@ def cmd_discuss(args: argparse.Namespace) -> dict:
     `--question -` and `--answer -` both read stdin the same way
     `cmd_compose`'s `--entry-text` already does; giving both `-` at once is
     refused rather than silently reading one and leaving the other blank.
+
+    **`--decision` (D19) is a closed `yes`/`no` token, checked the identical
+    "refusing costs nothing" way `cmd_offer`'s own `--answer` is** --
+    `OFFER_ANSWER_NOT_A_TOKEN`'s exact refusal shape, reimplemented here
+    under its own code (`DISCUSS_DECISION_NOT_A_TOKEN`) rather than by
+    reusing `cmd_offer`: `offer` is bound to a different question, carries
+    no question-text field to discriminate a second one by, and its
+    own docstring states its appended event is write-only history that no
+    later decision ever reads back -- reading one back to decide a
+    reopening would break that stated invariant. This is a pure-argv
+    check, run before any I/O the same way `cmd_offer`'s own token check
+    runs before `resolve_target`/`revision_source`. `--decision` is
+    optional and independent of `--answer`: omitting it records a bare
+    discuss event exactly as every call before this capability existed
+    did, and it is never inferred from `--answer`'s free text -- the
+    engine parses no free text, on this call or any other (D19's own
+    standing rule).
     """
     target = resolve_target(args.target)
     name = validate_name(args.name)
@@ -13155,6 +13315,11 @@ def cmd_discuss(args: argparse.Namespace) -> dict:
             "DISCUSS_STDIN_CONFLICT",
             "--question and --answer cannot both read stdin in one call; "
             "pass at most one of them as -.")
+    if args.decision is not None and args.decision not in {"yes", "no"}:
+        raise Refused(
+            "DISCUSS_DECISION_NOT_A_TOKEN",
+            f"--decision {args.decision!r} is not one of the two closed "
+            "tokens yes/no; a reopening decision is never free text.")
 
     evidence = _position_write_evidence(target, name)
     position = position_state(target, name, evidence, None, None,
@@ -13193,13 +13358,14 @@ def cmd_discuss(args: argparse.Namespace) -> dict:
     impl_position.append_event(
         target / name / ".implementation" / "position.jsonl",
         {"kind": "discuss", "about": about, "asked": question,
-         "answered": answer, "status": status, "at": recorded_at})
+         "answered": answer, "status": status, "at": recorded_at,
+         "decision": args.decision})
 
     return {
         "command": "discuss", "target": str(target), "name": name,
         "status": status, "about": about, "measured": measured,
         "collides": collides, "collisionSearch": collision_search,
-        "asked": question, "answered": answer,
+        "asked": question, "answered": answer, "decision": args.decision,
         "recordedAt": recorded_at,
     }
 
@@ -18978,6 +19144,20 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--answer", default=None,
                            help="the answer text, or - to read stdin; omit "
                                 "to leave the discussion open")
+            p.add_argument("--decision", default=None,
+                           help="yes or no, reopening or reaffirming a "
+                                "declined comparison or acid-test decision "
+                                "(D19); checked as a coded refusal, never "
+                                "argparse choices, the same discipline "
+                                "`offer`'s own --answer keeps -- so a bad "
+                                "token prints the identical JSON refusal "
+                                "shape every other refusal here prints, not "
+                                "argparse's own usage text. Optional: omit "
+                                "to record a bare discuss event with no "
+                                "decision token, exactly as every call "
+                                "before this capability existed did. Never "
+                                "read back from a prior event to satisfy an "
+                                "omitted --decision on this one")
         if name == "propose":
             p.add_argument("--job", dest="jobs", action="append", required=True,
                            help="repeatable, at least one: a job this "

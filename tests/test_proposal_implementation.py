@@ -5589,12 +5589,13 @@ class DeclinedComparisonTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return json.loads(proc.stdout or "{}")
 
-    def discuss(self, box, question, answer):
-        proc = subprocess.run(
-            [sys.executable, str(CLI), "discuss", "--target", str(box),
-             "--name", "Method", "--about", "record",
-             "--question", question, "--answer", answer],
-            capture_output=True, text=True, cwd=FORGE)
+    def discuss(self, box, question, answer, decision=None):
+        args = [sys.executable, str(CLI), "discuss", "--target", str(box),
+               "--name", "Method", "--about", "record",
+               "--question", question, "--answer", answer]
+        if decision is not None:
+            args += ["--decision", decision]
+        proc = subprocess.run(args, capture_output=True, text=True, cwd=FORGE)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         return json.loads(proc.stdout or "{}")
 
@@ -5604,8 +5605,28 @@ class DeclinedComparisonTests(unittest.TestCase):
         return impl._benchmark_offer_question(box, "Method", baselines)
 
     def decline(self, box, baselines=None, answer="not now"):
+        """Deliberately passes no `--decision` at all -- every fixture that
+        calls this (the whole class, unchanged since Units 4/4b) is also,
+        by construction, a proof of D20's absent-token migration rule: an
+        answered bucket with no token still reads `"no"`."""
         question = self.offer_question(box, baselines)
         self.discuss(box, question, answer)
+        return question
+
+    def accept(self, box, baselines=None, answer="yes, let's compare"):
+        """The mirror of `decline` above, D19's own reopening token: accepts
+        the comparison offer with the closed `decision: "yes"` token, never
+        building anything itself -- `materialize --stage harness`'s own
+        machinery is out of this unit's scope, the same restraint the D5b
+        fixture already keeps."""
+        question = self.offer_question(box, baselines)
+        self.discuss(box, question, answer, decision="yes")
+        return question
+
+    def accept_validation(self, box, answer="yes, run it"):
+        """`accept`'s sibling for the acid-test bucket."""
+        question = self.validation_question(box)
+        self.discuss(box, question, answer, decision="yes")
         return question
 
     def validation_question(self, box):
@@ -5646,7 +5667,8 @@ class DeclinedComparisonTests(unittest.TestCase):
         probe = self.probe(box)
         self.assertEqual(probe["nextStep"], "benchmark")
         self.assertEqual(probe["decisions"]["comparison"],
-                         {"state": None, "at": None, "asked": None})
+                         {"state": None, "at": None, "asked": None,
+                          "decision": None})
 
     # --- spec "A Declined Comparison Is Persisted As A Bare Discuss Event" ---
 
@@ -5690,13 +5712,117 @@ class DeclinedComparisonTests(unittest.TestCase):
         self.assertEqual(probe["decisions"]["comparison"]["state"], "answered")
         self.assertEqual(probe["decisions"]["validation"]["state"], "answered")
 
+    # --- D19-D21: `decision: "yes"` reopens immediately, into `build-first` ---
+
+    def test_accepting_the_comparison_reopens_it_before_anything_is_built(self):
+        """spec 'A Declined Decision Reopens On Its Own Answer Alone...',
+        scenarios 'Accepting reopens the decision before anything is
+        built' and 'An accepted-but-unbuilt decision is never reported as
+        declined'."""
+        box = self.box("accept-comparison")
+        self.decline(box)
+        self.accept(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "build-first")
+        self.assertNotEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["decisions"]["comparison"]["decision"], "yes")
+        self.assertIsNotNone(probe["resolve"])
+        self.assertEqual(probe["resolve"]["kind"], "question")
+        self.assertIsNotNone(probe["wiring"])
+        self.assertIsNone(probe["validation"])
+
+    def test_accepting_the_comparison_from_scratch_reopens_it_too(self):
+        """The un-declined pole: D19's token reopens the offer whether or
+        not it was ever declined first -- a fresh `decision: "yes"` on an
+        unanswered bucket routes to `build-first` exactly the same way."""
+        box = self.box("accept-fresh")
+        self.accept(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "build-first")
+        self.assertEqual(probe["decisions"]["comparison"]["decision"], "yes")
+
+    def test_accepting_the_acid_test_reopens_it_before_anything_is_built(self):
+        box = self.box("accept-validation")
+        self.decline(box)
+        self.decline_validation(box)
+        self.accept_validation(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "build-first")
+        self.assertNotEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["decisions"]["validation"]["decision"], "yes")
+        self.assertIsNotNone(probe["validation"])
+        self.assertIsNone(probe["wiring"])
+
+    def test_declining_again_after_a_prior_yes_leaves_it_declined(self):
+        """spec scenario 'Declining again leaves it declined'."""
+        box = self.box("yes-then-no")
+        self.decline(box)
+        self.accept(box)
+        self.assertEqual(self.probe(box)["nextStep"], "build-first")
+        self.decline(box)
+        self.decline_validation(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["decisions"]["comparison"]["decision"], "no")
+
+    def test_reopening_appends_never_rewrites_the_original_decline_event(self):
+        """spec 'A Declined Decision Reopens On Its Own Answer Alone...' —
+        design's own P4 ("no existing ledger event is reinterpreted"): the
+        original decline's own event bytes are byte-identical after the
+        reopening answer is appended -- the reopening is a NEW event, never
+        an edit of the one already on disk."""
+        box = self.box("p4-append-only")
+        self.decline(box)
+        ledger = box / "Method" / ".implementation" / "position.jsonl"
+        original_lines = ledger.read_bytes().splitlines()
+        self.assertEqual(len(original_lines), 1)
+        self.accept(box)
+        after_lines = ledger.read_bytes().splitlines()
+        self.assertEqual(len(after_lines), 2)
+        self.assertEqual(after_lines[0], original_lines[0],
+                         "the original decline's own event bytes must be "
+                         "unchanged -- reopening appends, it never rewrites")
+        first_event = json.loads(after_lines[0])
+        second_event = json.loads(after_lines[1])
+        self.assertIsNone(first_event["decision"])
+        self.assertEqual(second_event["decision"], "yes")
+
+    def test_build_first_never_publishes_both_drafts_at_once(self):
+        """D21: exactly one of `wiring`/`validation` is non-`null` at
+        `build-first`, by which decision was accepted -- never both."""
+        comparison_box = self.box("build-first-wiring-only")
+        self.accept(comparison_box)
+        comparison_probe = self.probe(comparison_box)
+        self.assertIsNotNone(comparison_probe["wiring"])
+        self.assertIsNone(comparison_probe["validation"])
+
+        validation_box = self.box("build-first-validation-only")
+        self.decline(validation_box)
+        self.accept_validation(validation_box)
+        validation_probe = self.probe(validation_box)
+        self.assertIsNone(validation_probe["wiring"])
+        self.assertIsNotNone(validation_probe["validation"])
+
+    def test_a_legacy_declined_bucket_with_no_token_stays_declined(self):
+        """D20's migration rule, end to end: a decline recorded with no
+        `--decision` at all (every fixture `decline`/`decline_both` build,
+        unchanged since Units 4/4b) is read as `"no"`, not as undecided --
+        no re-fire from the migration itself."""
+        box = self.box("legacy-no-token")
+        self.decline_both(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["decisions"]["comparison"]["decision"], "no")
+        self.assertEqual(probe["decisions"]["validation"]["decision"], "no")
+
     # --- D6/D16/task 4.9: the `decisions.comparison` payload member ---
 
     def test_decisions_comparison_is_unanswered_before_any_decline(self):
         box = self.box("unanswered")
         probe = self.probe(box)
         self.assertEqual(probe["decisions"]["comparison"],
-                         {"state": None, "at": None, "asked": None})
+                         {"state": None, "at": None, "asked": None,
+                          "decision": None})
 
     def test_decisions_comparison_names_the_date_read_from_the_ledger_event(self):
         box = self.box("dated")
@@ -6358,6 +6484,17 @@ class AcidTestShadowEnumerationTests(unittest.TestCase):
              "--question", vq, "--answer", "not now"],
             check=True, capture_output=True, cwd=FORGE)
 
+    def accept_comparison(self, box):
+        """D19/D21: the fourth arm's own fixture -- `decision: "yes"` on the
+        comparison bucket, reaching `build-first` rather than `declined`."""
+        baselines = impl.previous_implementations(box, "Method")
+        cq = impl._benchmark_offer_question(box, "Method", baselines)
+        subprocess.run(
+            [sys.executable, str(CLI), "discuss", "--target", str(box),
+             "--name", "Method", "--about", "record", "--question", cq,
+             "--answer", "yes, let's compare", "--decision", "yes"],
+            check=True, capture_output=True, cwd=FORGE)
+
     @contextlib.contextmanager
     def _forced_guards(self, *, unfaithful=False, report_drift=False,
                        report_live_undeclared=False, remote_pending=False,
@@ -6424,6 +6561,24 @@ class AcidTestShadowEnumerationTests(unittest.TestCase):
                 search_absent=True, pilot_incomplete=True):
             probe = self.probe_in_process(box)
         self.assertNotEqual(probe["nextStep"], "declined")
+        self.assertIn(probe["nextStep"],
+                     {"wiring-first", "env-first", "poll-first",
+                      "search-first", "report-first", "pilot-first",
+                      "pilot-decisions"})
+
+    def test_every_repair_override_still_outranks_an_accepted_but_unbuilt_decision(self):
+        """Task 6a.10: no reordering occurred. `build-first` is the fourth
+        arm of the exact same last-among-the-overrides branch, guarded by
+        the identical `resolved.status == "absent"` condition -- a
+        genuinely owed repair must outrank it exactly as it outranks
+        `declined` and `validate`."""
+        box = self.box("build-first-mutation")
+        self.accept_comparison(box)
+        with self._forced_guards(
+                unfaithful=True, report_drift=True, remote_pending=True,
+                search_absent=True, pilot_incomplete=True):
+            probe = self.probe_in_process(box)
+        self.assertNotEqual(probe["nextStep"], "build-first")
         self.assertIn(probe["nextStep"],
                      {"wiring-first", "env-first", "poll-first",
                       "search-first", "report-first", "pilot-first",
@@ -7668,7 +7823,7 @@ class NextStepSectionCoverageTests(unittest.TestCase):
             {"nothing-to-compare", "convert", "piloted", "already-benchmarked",
              "declined", "validate", "benchmark", "declare-first", "env-first",
              "wiring-first", "poll-first", "pilot-first", "pilot-decisions",
-             "search-first", "report-first"})
+             "search-first", "report-first", "build-first"})
 
     def test_every_prescriptive_next_step_has_its_own_section(self):
         prescriptive = self.all_next_steps() - self.NO_SECTION
@@ -21885,6 +22040,95 @@ class DiscussCommandTests(unittest.TestCase):
         self.assertEqual(len(result["collides"]), 1)
         self.assertEqual(result["collisionSearch"], "performed")
 
+    # --- D19: `--decision`, the closed reopening token ---
+
+    def test_discuss_decision_yes_is_accepted_and_recorded_on_the_event(self):
+        box = self._box()
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", "Compare?",
+                            "--answer", "yes, let's compare", "--decision", "yes")
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["decision"], "yes")
+        ledger = box / "Method" / ".implementation" / "position.jsonl"
+        events = [json.loads(line)
+                 for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(events[-1]["decision"], "yes")
+
+    def test_discuss_decision_no_is_accepted_and_recorded_on_the_event(self):
+        box = self._box()
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", "Compare?",
+                            "--answer", "not now", "--decision", "no")
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertEqual(result["decision"], "no")
+        ledger = box / "Method" / ".implementation" / "position.jsonl"
+        events = [json.loads(line)
+                 for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(events[-1]["decision"], "no")
+
+    def test_discuss_without_decision_records_no_token_at_all(self):
+        """The bare, pre-capability shape: omitting `--decision` records a
+        `discuss` event exactly as every call before this capability
+        existed did -- `decision: null`, never a guessed value."""
+        box = self._box()
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", "Compare?",
+                            "--answer", "not now")
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        result = json.loads(proc.stdout)
+        self.assertIsNone(result["decision"])
+        ledger = box / "Method" / ".implementation" / "position.jsonl"
+        events = [json.loads(line)
+                 for line in ledger.read_text(encoding="utf-8").splitlines()]
+        self.assertIsNone(events[-1]["decision"])
+
+    def test_discuss_decision_outside_the_closed_domain_is_refused(self):
+        """spec 'A Declined Decision Reopens On Its Own Answer Alone...',
+        scenario 'An answer outside the closed domain is refused, never
+        interpreted' -- `cmd_offer`'s exact refusal shape, reimplemented on
+        `discuss` (D19) under its own code."""
+        box = self._box()
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", "Compare?",
+                            "--answer", "sure", "--decision", "maybe")
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["code"],
+                         "DISCUSS_DECISION_NOT_A_TOKEN")
+
+    def test_discuss_decision_refusal_reaches_nothing_on_disk(self):
+        """The refusal is pure-argv (checked before any I/O, mirroring
+        `cmd_offer`'s own token check): nothing is appended to the ledger."""
+        box = self._box()
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", "Compare?",
+                            "--decision", "maybe")
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        ledger = box / "Method" / ".implementation" / "position.jsonl"
+        self.assertFalse(ledger.exists())
+
+    def test_cmd_offer_is_untouched_by_the_discuss_decision_capability(self):
+        """D19: `cmd_offer` must not be reused to implement `--decision` --
+        its own docstring states the appended `offer` event is write-only
+        history that no later decision ever reads back, and reusing it
+        would break that stated invariant. Confirmed two ways: `cmd_discuss`'s
+        own source never calls `cmd_offer` or reuses its refusal code, and
+        `cmd_offer`'s own docstring still states the invariant this design
+        note relies on."""
+        discuss_source = inspect.getsource(impl.cmd_discuss)
+        self.assertNotIn("cmd_offer(", discuss_source,
+                         "cmd_discuss must never CALL cmd_offer; the "
+                         "docstring may still name it in prose")
+        self.assertNotIn('"OFFER_ANSWER_NOT_A_TOKEN"', discuss_source,
+                         "the closed-token refusal is raised under its own "
+                         "code, DISCUSS_DECISION_NOT_A_TOKEN, never offer's")
+        offer_source = " ".join(inspect.getsource(impl.cmd_offer).split())
+        self.assertIn(
+            "no code path under `.claude/skills/**/*.py` ever reads a "
+            "`kind: \"offer\"` event's fields back into a later decision",
+            offer_source)
+
 
 class SettleCommandTests(unittest.TestCase):
     """`settle` -- the placer (design "the placer", spec domain
@@ -32862,13 +33106,46 @@ class DiscussionBucketFoldTests(unittest.TestCase):
 
     def test_decision_from_event_reports_no_state_for_a_never_asked_question(self):
         self.assertEqual(impl._decision_from_event(None),
-                         {"state": None, "at": None, "asked": None})
+                         {"state": None, "at": None, "asked": None,
+                          "decision": None})
 
     def test_decision_from_event_reports_answered_with_the_events_own_fields(self):
+        """D19/D20: an answered event carrying no `decision` field at all
+        (every pre-capability event, and every ordinary free-text answer
+        that never passed `--decision`) reads `decision: "no"` -- the
+        absent-token migration rule, not a third state."""
         event = {"asked": "q", "answered": "not now", "at": "2024-06-01T12:00:00Z"}
         self.assertEqual(
             impl._decision_from_event(event),
-            {"state": "answered", "at": "2024-06-01T12:00:00Z", "asked": "q"})
+            {"state": "answered", "at": "2024-06-01T12:00:00Z", "asked": "q",
+             "decision": "no"})
+
+    def test_decision_from_event_reads_the_closed_yes_token(self):
+        event = {"asked": "q", "answered": "yes, wire it",
+                 "at": "2024-06-01T12:00:00Z", "decision": "yes"}
+        self.assertEqual(impl._decision_from_event(event)["decision"], "yes")
+
+    def test_decision_from_event_reads_an_explicit_no_token(self):
+        event = {"asked": "q", "answered": "not now",
+                 "at": "2024-06-01T12:00:00Z", "decision": "no"}
+        self.assertEqual(impl._decision_from_event(event)["decision"], "no")
+
+    def test_decision_token_from_event_reads_no_for_a_never_answered_bucket(self):
+        """`_decision_token_from_event` is a defensive two-state reader:
+        `None` (never asked, or last event unanswered) reads `"no"`, the
+        same as an answered event carrying no token -- its caller
+        (`cmd_probe`'s four-way branch) only ever reaches it once the
+        bucket is already confirmed answered, but the reader itself never
+        invents a third state."""
+        self.assertEqual(impl._decision_token_from_event(None), "no")
+
+    def test_decision_token_from_event_ignores_a_non_token_decision_value(self):
+        """Defence in depth: `cmd_discuss` already refuses anything outside
+        `{"yes", "no"}` before it reaches the ledger, so a malformed value
+        here can only be a hand-edited or pre-capability record -- read as
+        `"no"`, the identical migration rule, never raised on."""
+        event = {"asked": "q", "answered": "sure", "decision": "maybe"}
+        self.assertEqual(impl._decision_token_from_event(event), "no")
 
 
 class PilotGatesTheDeclaredScaleTests(unittest.TestCase):
