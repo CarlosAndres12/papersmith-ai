@@ -56,9 +56,41 @@ def command(register):
     return register
 
 
+def parse_argv(parser: argparse.ArgumentParser, argv: list[str] | None):
+    """Parse ``argv`` letting the chosen subcommand interleave its positionals
+    with its optionals (``papersmith run smoke --dry-run <dir>``).
+
+    Native argparse only mixes the two freely from 3.13 on; on 3.11/3.12 a
+    trailing positional after the optionals is rejected as unrecognized, which
+    the CI matrix caught. ``parse_intermixed_args`` is the documented API for
+    this order and is applied to the chosen subcommand only -- the top parser
+    carries subparsers, which ``parse_intermixed_args`` refuses.
+    """
+    actual = sys.argv[1:] if argv is None else list(argv)
+    subparsers = next(
+        (action for action in parser._actions
+         if isinstance(action, argparse._SubParsersAction)),
+        None,
+    )
+    if subparsers is not None and actual and actual[0] in subparsers.choices:
+        name = actual[0]
+        chosen = subparsers.choices[name]
+        try:
+            namespace = chosen.parse_intermixed_args(actual[1:])
+        except TypeError:
+            # `parse_intermixed_args` refuses parsers that carry their own
+            # subparsers (`target set <name> <dir>`) or a REMAINDER. Those
+            # commands never needed the interleave fix; their plain parse is
+            # the parser's own contract.
+            namespace = chosen.parse_args(actual[1:])
+        setattr(namespace, subparsers.dest, name)
+        return namespace
+    return parser.parse_args(argv)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parse_argv(parser, argv)
     handler = getattr(args, "handler", None)
     if handler is None:
         parser.print_help()

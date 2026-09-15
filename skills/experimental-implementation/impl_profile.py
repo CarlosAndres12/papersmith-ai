@@ -70,8 +70,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# The canonical tree is `skills/<skill>/impl_profile.py`, one level
+# shallower than upstream's `.claude/skills/<skill>/` anchor, so the repo
+# root is `parents[1]`, not `parents[2]`.
 _SKILL = Path(__file__).resolve().parent
-_FORGE_ROOT = _SKILL.parents[2]
+_FORGE_ROOT = _SKILL.parents[1]
 
 #: WHY THIS SKILL WAS INVOKED, AND WHERE IT HAS TO ARRIVE.
 #:

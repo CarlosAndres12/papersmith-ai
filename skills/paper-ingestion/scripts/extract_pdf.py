@@ -56,7 +56,6 @@ from pathlib import Path
 # do not yet implement on the Metal backend.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-import yaml
 
 # skills/paper-ingestion/scripts/extract_pdf.py -> repo root is parents[3]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -96,6 +95,13 @@ def load_config(path: Path | None = None) -> dict:
     of the wrong shape is reported instead of being silently treated as "no
     papers to ingest", which is indistinguishable from a healthy no-op.
     """
+    # Imported here, not at module scope: the CLI's own refusal surface
+    # (usage, argparse errors) must be reachable on an interpreter without
+    # the conversion stack -- the skill-audit probe drives exactly that
+    # path, and a top-level import turned its `exit 2` into a traceback's
+    # `exit 1` on any machine without PyYAML.
+    import yaml
+
     path = CONFIG_PATH if path is None else path
     if not path.exists():
         raise ConfigError(f"{path} not found")
