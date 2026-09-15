@@ -3,9 +3,9 @@
 > **Size note.** The `sdd-tasks` skill sets a 530-word default budget. The owner's
 > binding directives for this change — full coverage with nothing pending, explicit
 > no-regression verification rather than a note pointing at existing tests, and
-> chained units rather than reduced coverage against a 3150-line forecast on a
-> 1400-line budget — cannot be satisfied inside it. The same explicit-contract
-> override the proposal and design took applies here.
+> chained units rather than reduced coverage against a ~3220-line forecast (design
+> revision 4) on a 1400-line budget — cannot be satisfied inside it. The same
+> explicit-contract override the proposal and design took applies here.
 
 **Ordering.** Units are numbered as the design names them (`1`, `2`, `4`, `4b`, `3`)
 so every cross-reference to the design and specs stays stable. They are **presented
@@ -19,7 +19,7 @@ boundary is introduced or widened. No threat-matrix RED tasks apply.
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | ~3150 (design §10; per-unit sum below ~3160, within rounding) |
+| Estimated changed lines | ~3220 (design §10 revision 4; 400 + 750 + 560 + 720 + 800) |
 | 400-line budget risk | High |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1 (Unit 1) → PR 2 (Unit 2) → PR 3 (Unit 4) → PR 4 (Unit 4b) → PR 5 (Unit 3) |
@@ -40,7 +40,7 @@ Chain strategy: pending
 | 1 | Unit 1 — seal leaves the benchmark package | Relocate `report_digest.py`; rewrite `materialize.py` as one loop (D9); triage `test_remote_execution.py` | ~400 | `pytest tests/test_proposal_implementation.py -k "report_digest or scaffold_destinations or materialize"` | Scaffold a fresh target, run `verification.ipynb`, confirm the stamp | Revert restores the old path; idempotent scaffold rerun recovers; seal is kit-sourced, no data loss |
 | 2 | Unit 2 — declaration leaves the benchmark package | `__implementation__`, `__levels__/__steps__/__records__` relocation (D1/D2); `cmd_verify`'s two revision readers (D3); migration path | ~750 | `pytest tests/test_proposal_implementation.py -k "declaration or verify or migration"` | `cmd_verify` against a migration-shaped fixture carrying an unread literal | Revert restores bench-package read; gate refuses loudly (`OBJECT_MAP_NOT_APPROVED`), never a silent pass |
 | 3 | Unit 4 — a declined comparison is remembered | Question-text constructor (D5a), `declined` terminal, `_Benchmark` exclusion, `decisions.comparison` | ~560 | `pytest tests/test_proposal_implementation.py -k "discuss or declined or previous_implementations"` | `cmd_probe` twice: decline, then re-probe; assert settled-declined | Purely additive; revert loses only the bucket read, ledger event persists |
-| 4 | Unit 4b — the acid test | `validation_proposal` (D11), `validate` rung (D12), canonical `premises` key (D14/D14a), D15 invariant | ~650 | `pytest tests/test_proposal_implementation.py -k "validat or PROBE_DRAFTS or NextStep"` | `cmd_probe` → accept acid test → `cmd_step` wiring + running it | Purely additive; D15a+D15b guarantee no on-disk residue — revert unwinds a rung, never a directory |
+| 4 | Unit 4b — the acid test | `validation_proposal` (D11) with its `placement` section (D11a–d), `validate` rung (D12), canonical `premises` key (D14/D14a), D15 invariant proved local **and** remote | ~720 | `pytest tests/test_proposal_implementation.py -k "validat or PROBE_DRAFTS or NextStep or placement"` | `cmd_probe` → accept acid test → `cmd_step` wiring + running it, once local, once remote (job-folder generation via `remote_cli generate-job`) | Purely additive; D15a+D15b guarantee no on-disk residue under either placement — revert unwinds a rung, never a directory |
 | 5 | Unit 3 — first flow stops creating the benchmark package | Scaffold/harness list flip; `declare-first` narrows (D4); derived-count sweep (D8); doc sweep close-out | ~800 | `pytest tests/test_proposal_implementation.py` (full) + both seal suites | Full Flow A on a fresh target, E2E | Only unit changing Flow A's on-disk output; revert restores the scaffold list; Units 1/2/4/4b stay correct without it |
 
 ---
@@ -53,7 +53,7 @@ Chain strategy: pending
 - [x] 1.3 Relocate the `report_digest.py` entry in `scaffold_destinations()` and `scaffold_kit_source()` from `src/<P>_Benchmark/` to `src/<P>/`; confirm `KIT_SEAL` (the kit **source**) is unaffected — only the destination mapping moves.
 - [x] 1.4 Update `assets/kit/nb/verification.ipynb` and `assets/kit/nb/probe.ipynb`'s import line to `from {{PKG}} import report_digest`; leave `probe.ipynb`'s `HARNESS` path untouched.
 - [x] 1.5 Rewrite `scripts/materialize.py`: replace its three imperative sites with one loop over `scaffold_destinations(name)` + `scaffold_kit_source(...)` + `authored_package_init(name)` (D9). Preserve the `writable_at_scaffold_time` filter on `tests/*.py`; resolve kit sources under the caller-supplied `KIT` argument, never `SKILL_ROOT` — `experimental-implementation` ships no kit and must not gain the forge's own fixture content.
-  - *Note: D9's rewrite may overlap the in-flight change `the-skill-materializes-not-the-agent` (tasks 4.4/4.5), which proposes deleting `materialize.py` instead. This task encodes D9's rewrite; the owner has not yet ruled on deletion vs. rewrite. Do not block on it.*
+  - *Note: the owner has ruled — `materialize.py` is rewritten (D9's loop), not deleted. Unit 1 shipped this (commit `b493151`). The in-flight change `the-skill-materializes-not-the-agent`'s tasks 4.4/4.5 proposed deletion instead; that proposal did not prevail here and needs no further tracking in this file.*
 - [x] 1.6 Test: `materialize.py` writes exactly `scaffold_destinations(name)` — agreement holds when both sites update together, fails and names the divergent list when only one does (spec "Both Scaffold Mappings Agree").
 - [x] 1.7 Test: `verification.ipynb` executes and stamps at the new path; stamped content for identical proof inputs is unchanged before/after relocation (spec "First Flow's Verification Notebook Stamps Unaffected").
   - *Satisfied by the existing `NotebookSealAgreementTests` class (already runs the notebook's own cells and compares the stamp to `impl.source_digest`), corrected at its one hardcoded import-module assertion; no new test needed once that assertion named the relocated package.*
@@ -157,7 +157,30 @@ Chain strategy: pending
 - [ ] 4b.25 Update `NextStepPublicationRosterTests`: experiment-steps assertion grows to four (`validate` joins), docstring updated; terminal-steps assertion grows to three, renamed; roster-shape assertions confirm `drafts` totality on every entry.
 - [ ] 4b.26 Update `references/usage.md`'s "Three answers reach that point" and the `wiring` → `drafts`/`validation` payload description.
 - [ ] 4b.27 Regenerate both sealed corpora for the roster's `drafts` migration and `decisions.validation` (P6, second half). Read the diff, account for every moved case.
-- [ ] 4b.28 Run both suites green before closing the unit.
+- [ ] 4b.28 Checkpoint: run both suites green for the draft/roster/ladder work above (4b.1–4b.27) before continuing into the remote-capability tasks below — **the unit's actual closing task is 4b.43, not this one.**
+
+### Unit 4b, continued — the remote capability (design revision 4, D11a–D11d)
+
+> Owner instruction: *"Al igual que en el de benchmark, se debe habilitar las
+> opciones de remote, eso es importante."* Fully designed and specified already
+> (design §D11a–D11d; spec sixth revision) — implemented per those documents,
+> not re-derived here.
+
+- [ ] 4b.29 Extend `validation_proposal`'s draft with its own `placement` section (D11a) — never folded into `scale`, never buried in `needs`. Names `local` and `remote` with each's consequence and decides neither.
+- [ ] 4b.30 Test: the draft's placement section names both `local` and `remote`, each with its own consequence, and selects neither (spec "The Acid-Test Draft Names Placement As Its Own Section, Deciding Neither Option", scenario 1).
+- [ ] 4b.31 Test: an accepted and wired acid-test step's `placement` entry carries exactly what the person chose; a test that would go red on a silently-introduced default (spec, scenario 2).
+- [ ] 4b.32 Test: a target whose own declared rung ladder names a rung `"remote"` (matches the live target's `__levels__`) — the draft's placement section and scale section stay distinct; the rung name is read only as a scale point, never as a placement decision (spec, scenario 3; D11a's reason 2).
+- [ ] 4b.33 Within the placement section, propose a `job` name mechanically derived from the step's own name (D11a) — costs the person nothing to accept. Never propose or guess `service`; ask the person. Name any accelerator/environment/budget knob `generate-job` accepts as available, answered by the person, never pre-selected.
+- [ ] 4b.34 Test: the placement section already proposes a job name derived from the step's own name; no service name is proposed or invented — the person is asked; remote knobs are listed as available with none pre-selected (spec "The Acid-Test Draft Proposes The Job Name And Asks For The Service, Never Guessing Either", all three scenarios).
+- [ ] 4b.35 State cost's shape, never its magnitude, in the published acid-test question (D11c): real run/machine time; local's machine occupancy; remote's metered quota on a service account; that the offered scale is the small one and a larger run is a separate decision; that declining later costs nothing to unwind (D15a — no comparison-named structure was created). Carry the proposed scale's axes, derived from the declaration. State no duration, no quota figure, no service name — this repository already lived through one forge-invented quota figure that lived in a comment nothing read and did not match reality; do not repeat it.
+- [ ] 4b.36 Test: the offer states each placement's cost (machine-time spending, local occupancy, remote metered quota); distinguishes the small offered scale from a larger campaign as a separate decision; contains no invented duration, quota figure, or service name — only the proposed scale's own declared axes (spec "The Acid-Test Offer States Cost's Shape, Never Its Magnitude", all three scenarios).
+- [ ] 4b.37 Test (D11d): with `__levels__` empty, a step declaring `placement: "remote"` still routes identically through `flow_acts`; only the walk's grading falls back from by-rung to walked/not-walked. The draft's placement section does not read, or let a reader infer, that an empty ladder rules out a worker (spec "An Empty Declared Rung Ladder Does Not Constrain Placement", both scenarios).
+- [ ] 4b.38 Integration test (D11b — measured, not assumed, so the "no new machinery" claim is held by a test rather than left as prose): an acid-test `__steps__` entry with `placement: "remote"` walks `ACT_GENERATE_JOB` → `ACT_REHEARSE` → `ACT_LAUNCH` through the unmodified, generic `flow_acts`; `generate_job` accepts it with one arm's clone paths; assert against `remote-execution` **unchanged** — no acid-test-specific branch anywhere in that path (spec "A Remote Acid-Test Step Reaches A Worker Through The Existing, Unmodified Remote-Execution Path", scenario 1).
+- [ ] 4b.39 Test: `resolve_clone_paths()` validates the acid test's smaller single-arm import surface using the identical check every other step uses, with no single-arm branch written (spec, scenario 2).
+- [ ] 4b.40 Test: a remote acid-test job folder carries the notebook already chosen for the run via `--run-notebook`, never a second remote-only implementation of it (spec, scenario 3).
+- [ ] 4b.41 Confirm and test that `jobfolder.generate_job` writes `tools/<service>/<job-name>/` (`TOOLS_DIRNAME`) — `remote-execution`'s own output root, outside all three `materialize` stage lists — so generating a job folder for an acid test cannot touch `harness_destinations()` even in principle. This extends D15a's positive domain.
+- [ ] 4b.42 Extend the D15a no-benchmark-structure invariant test (task 4b.17) to run **once with `placement: "local"` and once with `placement: "remote"`**: after accepting, wiring, and running the acid test under each placement — no path under `src/<Package>_Benchmark/` exists, `harness_gaps()` is unchanged, no receipt entry carries `stage: "harness"`, and no written destination — including the generated job folder's own contents — appears in `harness_destinations(name)` (spec "An Accepted Acid Test Writes Only Into The Method's Own Surfaces...", all local/remote scenario pairs — proves the job-folder path is not a back door).
+- [ ] 4b.43 Document the `## Boundary` note in `SKILL.md`'s new `### nextStep: "validate"` section (task 4b.23): the live target's unread `__environment__` literal is almost certainly meant to feed the remote path's environment-provisioning input, but wiring it through is explicitly out of scope for this change — named so the next person finds it, never wired here. Then run both suites (`npm test` and the Python unittest suites) green — **this closes Unit 4b.**
 
 ## Unit 3 — The first flow stops creating the benchmark package
 
@@ -187,5 +210,12 @@ Chain strategy: pending
 ## Notes carried forward, not tasks
 
 - The `AGREED.md`/`AGREEMENTS.md` naming drift is out of scope; fixed as a one-line edit inside 2.16, the commit that already touches that paragraph.
-- D9's `materialize.py` rewrite (1.5) may be superseded by a future owner ruling favoring deletion (`the-skill-materializes-not-the-agent`, tasks 4.4/4.5). Encoded as rewrite here; not blocked on that ruling.
+- D9's `materialize.py` rewrite is settled: the owner ruled rewrite over deletion, and Unit 1 (`b493151`) already shipped it. `the-skill-materializes-not-the-agent`'s deletion proposal (tasks 4.4/4.5) did not prevail here; no open decision remains to track.
 - Design's open questions on D5b, D14a and `__implementation__`'s name were resolved in favor of the design by revision 3 of the spec reconciliation; no divergence remains for `sdd-apply` to arbitrate.
+- **Revision 4 (this pass): Unit 4b gains the remote capability.** The owner asked for parity with the comparison's own remote support — *"Al igual que en el de benchmark, se debe habilitar las opciones de remote, eso es importante."* Design revision 4 (D11a–D11d) and the spec's sixth revision (5 new requirements, one extended with local/remote scenario pairs, plus a `## Boundary` section) cover it in full; tasks 4b.29–4b.43 below implement it. No new machinery is required (D11b, evidence-backed) — the remote path is documentation plus one draft section, held to that claim by an integration test (4b.38) rather than left as prose. Unit 4b's forecast moves from ~650 to ~720; the change's total moves from ~3150 to ~3220.
+
+### What Unit 1 and Unit 2 reported, recorded here so it is not lost
+
+- **Unit 1** (`b493151`) and **Unit 2** (`432da9f`) are committed; their task items are marked done.
+- **Unit 2 found and fixed four production bugs beyond the design's own scope**, discovered by test triage rather than design review: `undeclared_ladder_state`, `undeclared_records_state`, `undeclared_produces_state`, and `undeclared_step_notebooks_state` all still hardcoded the old benchmark root for their "where would this be written" path. Fixed alongside the D2 relocation.
+- **One spec/design discrepancy surfaced and was resolved in the spec's favour**, per this file's own contract ("where design and spec disagree, the spec's requirement wins"): task 2.19(b)'s migration refusal. Design §7 called for no new code — an enriched detail folded into the existing `OBJECT_MAP_NOT_APPROVED` refusal. The spec required a **distinct named code**. Unit 2 implemented the spec's requirement: a new refusal code, `OBJECT_MAP_AT_OLD_HOME`, naming both the old and new locations. Recorded here so the design/spec divergence is visible at verify time, not only in commit history.
