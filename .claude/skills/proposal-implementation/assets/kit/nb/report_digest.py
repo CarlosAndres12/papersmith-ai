@@ -7,9 +7,11 @@ and the old one keeps being believed while the code moves out from under it.
 This module stamps it. The notebook prints it at the end, verification
 recomputes it, and if the two disagree the report is a relic.
 
-It lives in the benchmark package because it belongs to producing the report,
-not to the formulation: it implements no equation and so declares no
-`__provenance__`.
+It lives beside the method's own package because Flow A must be able to
+stamp before any comparison has ever been offered: it produces no proof of
+its own and so declares no `__provenance__`, but every notebook that proves
+something needs to import it, and Flow A's notebook runs before a benchmark
+package exists at all.
 
 **The two halves have to produce the same number.** The destination writes this
 one and verification recomputes the other, so testing each against a fixture of
@@ -74,11 +76,13 @@ def _here() -> tuple[Path, str]:
     notebook that departed from the mould, which is the one that most needs
     watching.
 
-    This file lives in `<repo>/src/<Package>_Benchmark/`, so both facts are in
-    its own path and no notebook has to know them.
+    This file lives in `<repo>/src/<Package>/`, so both facts are in its own
+    path and no notebook has to know them: `parents[1]` of its own directory
+    is the repository root, and its own directory's name is the package,
+    verbatim, with no suffix to strip.
     """
     package_dir = Path(__file__).resolve().parent
-    return package_dir.parents[1], package_dir.name.removesuffix("_Benchmark")
+    return package_dir.parents[1], package_dir.name
 
 
 def stamp(repository: Path | None = None, package: str | None = None) -> str:

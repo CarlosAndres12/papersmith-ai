@@ -1053,18 +1053,26 @@ igual.
 ```
 implementations/<repo>/           git propio, .venv propio, ignorado por la forja
 ├── <Name>/                       Notebooks/  Data/  Results/  Models/
-├── src/<Package>/                una implementación por objeto matemático, cada una con su procedencia
-├── src/<Package>_Benchmark/      el arnés: declara qué ejercita, nunca declara procedencia
+├── src/<Package>/                una implementación por objeto matemático, cada una con su procedencia,
+│                                 más __implementation__ (revisión/premisas) y las declaraciones propias
+│                                 del flujo (__levels__/__steps__/__records__)
+├── src/<Package>_Benchmark/      el arnés de la comparación — sólo existe una vez aceptada
 ├── tests/                        la escalera de cinco niveles
 ├── tools/                        sólo si hace falta: opera corridas, no implementa ecuaciones
 └── pyproject.toml
 ```
 
-El paquete de benchmark declara contra qué revisión se construyó y qué secciones y
-ecuaciones ejercita cada brazo. **No declara procedencia a propósito**: no implementa
-ninguna ecuación, y estamparle una falsificaría justamente el chequeo que ata código a
-matemática. Lo escribe el agente al cablear; lo leen `verify` y `probe`, siempre de
-forma estática.
+`src/<Package>_Benchmark/` **no** es un destino del andamiaje inicial (`materialize --stage
+scaffold`): un destino recién andamiado no tiene ese directorio. Lo escribe únicamente
+`materialize --stage harness`, y sólo después de que se acepta una comparación —nunca
+si se la rechaza, y nunca por correr el ensayo de validación de un solo brazo en su
+lugar—. Declara qué secciones y ecuaciones ejercita cada brazo. **No declara
+procedencia a propósito**: no implementa ninguna ecuación, y estamparle una
+falsificaría justamente el chequeo que ata código a matemática. Lo escribe el agente
+al cablear; lo leen `verify` y `probe`, siempre de forma estática. Contra qué revisión
+se construyó el método, y bajo qué premisas, vive aparte, en `__implementation__`
+dentro de `src/<Package>/__init__.py` —son hechos sobre el MÉTODO, no sobre la
+comparación.
 
 **Los seguros.**
 

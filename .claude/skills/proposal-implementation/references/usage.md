@@ -146,8 +146,7 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py pla
   "scaffoldFiles": [".gitignore (.venv/, __pycache__/, .ipynb_checkpoints/, .implementation/)",
                     "pyproject.toml [tool.pytest.ini_options] pythonpath",
                     "src/Example_Method/__init__.py",
-                    "src/Example_Method_Benchmark/__init__.py",
-                    "src/Example_Method_Benchmark/report_digest.py",
+                    "src/Example_Method/report_digest.py",
                     "tests/test_smoke.py", "tests/findings.py",
                     "tests/conftest.py", "tests/sweep.py",
                     "tests/admissibility.py",
@@ -263,13 +262,16 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
 ```
 
 This is the command that fills every scaffold gap — never the agent copying
-files by hand. It writes every one of `scaffoldFiles`' eleven file
-destinations from `assets/kit/` — `kit/src_benchmark/`, `kit/tests/` and
-`kit/nb/`, with `src/<Package>/__init__.py` authored directly — merges the
-two anchors (`.gitignore`, `pyproject.toml [tool.pytest.ini_options]`) into
-whatever the target already has, and records every write in
+files by hand. It writes every one of `scaffoldFiles`' file destinations
+(`scaffold_destinations(name)`, the one list this call and `plan`/`verify`'s
+gap report both read) from `assets/kit/` — `kit/tests/` and `kit/nb/`, with
+`src/<Package>/__init__.py` authored directly — merges the two anchors
+(`.gitignore`, `pyproject.toml [tool.pytest.ini_options]`) into whatever the
+target already has, and records every write in
 `<Name>/.implementation/materialization.json`, git-ignored, written last and
-atomically after every file has landed.
+atomically after every file has landed. `src/<Package>_Benchmark/__init__.py`
+is **not** among these destinations — it is a harness destination, written
+only once a comparison is accepted (see "Materialize the harness" below).
 
 The plan gate is the same one `apply` uses: `PLAN_MISMATCH` for a plan
 produced elsewhere, `PLAN_STALE` if the repository's structure moved since
@@ -291,8 +293,11 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
 The three destinations SKILL.md step 9 names: `src/<Package>/module.py`,
 `tests/test_invariants.py`, `tests/test_synthetic.py`. Same plan/clean-worktree
 preflight as `--stage scaffold`, plus one more: it refuses
-`OBJECT_MAP_NOT_APPROVED` until `src/<Package>_Benchmark/__init__.py` carries
-step 8's `revision`/`premises`. Unlike scaffold, this write is **not** gated on
+`OBJECT_MAP_NOT_APPROVED` until `src/<Package>/__init__.py`'s `__implementation__`
+carries step 8's `revision`/`premises` — or, on a target scaffolded before this
+literal existed and whose old `src/<Package>_Benchmark/__init__.py` still binds
+them, `OBJECT_MAP_AT_OLD_HOME`, naming both locations (SKILL.md step 8's
+migration procedure). Unlike scaffold, this write is **not** gated on
 the result parsing — `writable_at_scaffold_time`'s `ast.parse` check is scoped
 to the scaffold stage on purpose. All three templates carry tokens
 (`{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`, `{{EXPECTATION}}`, ...) sitting
@@ -310,13 +315,17 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
   --stage harness --plan /tmp/plan.json
 ```
 
-The three destinations the harness-wiring section names: `benchmark.py`,
-`verdict.py`, `probe.ipynb`. No `--seed`: none of the three carries a
-`{{SEED}}` token (`probe.ipynb` carries `{{SEEDS}}` instead, answered later, at
-probe time, not by this command). No object-map precondition either —
-`benchmark.py`/`verdict.py` carry no token at all and parse the moment they
-land. `wiring.py` stays out of this stage entirely: SKILL.md states it is
-bespoke-authored, never a kit destination.
+The destinations the harness-wiring section names: `src/<Package>_Benchmark/__init__.py`
+(the benchmark declaration itself — copied verbatim from `assets/kit/src_benchmark/`
+and never populated by this command), `benchmark.py`, `verdict.py`, `probe.ipynb`.
+No `--seed`: none of the four carries a `{{SEED}}` token (`probe.ipynb` carries
+`{{SEEDS}}` instead, answered later, at probe time, not by this command). No
+object-map precondition either — `__init__.py`/`benchmark.py`/`verdict.py` carry
+no unresolved token at all and parse the moment they land. `wiring.py` stays out
+of this stage entirely: SKILL.md states it is bespoke-authored, never a kit
+destination. This is the only stage that ever writes `src/<Package>_Benchmark/`
+into a target — the scaffold stage does not, and never runs it merely because a
+comparison was declined or an acid test was run instead.
 
 ### Declaring authorship, and adopting what was never recorded
 
@@ -1521,17 +1530,25 @@ discovered. Everything else is required.
 `probe` runs nothing and changes nothing — `kind` says so in the output itself,
 and the exit status is `0` whatever it finds. `nextStep` is the answer and there
 is exactly one of them: the ladder is ordered, so the first thing standing in
-the way is the only thing reported. Eleven values are possible. Eight prescribe
-work and each has its own section in `SKILL.md` — `convert`, `declare-first`,
-`env-first`, `wiring-first`, `poll-first`, `search-first`, `report-first` and
-`benchmark`. The other three have no section: `nothing-to-compare` and
-`already-benchmarked` prescribe no work at all, and `piloted`'s own rule keeps
-its question open rather than handing over a list of steps.
+the way is the only thing reported. The full set of values `probe` can return,
+and which of them have their own `SKILL.md` section, is derived rather than
+transcribed here — see
+`NextStepSectionCoverageTests.test_every_value_the_cli_can_return_is_accounted_for`,
+which scrapes both directly from the source rather than carrying a count that
+can drift out of sync with it. Most values prescribe work and each has its own
+section in `SKILL.md` — `convert`, `declare-first`, `env-first`, `wiring-first`,
+`poll-first`, `pilot-first`, `pilot-decisions`, `search-first`, `report-first`,
+`benchmark`, `validate` and `build-first`. A few have no section:
+`nothing-to-compare` and `already-benchmarked` prescribe no work at all,
+`piloted`'s own rule keeps its question open rather than handing over a list
+of steps, and `declined` is this flow's own answer to "the person said no" —
+twice.
 
-**Prescribing no section is not the same as publishing nothing.** Nine of the
-eleven publish `resolve` (below); only the two that name no work at all —
-`nothing-to-compare` and `already-benchmarked` — publish `null`, and they say so
-in `PROBE_NEXT_STEPS` rather than by omission.
+**Prescribing no section is not the same as publishing nothing.** Most values
+publish a `resolve` question or draft (below); only the terminal states that
+name no work at all — `nothing-to-compare`, `already-benchmarked` and
+`declined` — publish `null`, and they say so in `PROBE_NEXT_STEPS` rather than
+by omission.
 
 Never read past the answer for a reason to skip it. A rung fires because
 everything above it is already settled, so the next one down says nothing about
@@ -1710,16 +1727,34 @@ whoever reads the output:
   `implementation_cli.py env --target <t>`; run it unedited). `{kind:
   "question", question, command}` where the next act is a decision, in which
   case `command` is the runnable `discuss` invocation that opens it. `null`
-  only at `nothing-to-compare` and `already-benchmarked`, the two answers
-  `PROBE_NEXT_STEPS` declares terminal.
+  only at `nothing-to-compare`, `already-benchmarked` and `declined`, the
+  three answers `PROBE_NEXT_STEPS` declares terminal. `declined` is a
+  comparison the person said no to; the offer stays remembered and does not
+  re-fire unless the situation it was declined against genuinely changes.
 
   **Wherever the flow reaches the point of running experiments, the question
   is the same one**: continue the flow toward the declared scale, or complement
-  the experiments first. Three answers reach that point — `benchmark` (the
-  offer to run), `piloted` (a run already made below the scale it declared)
-  and `search-first` (a declared search that has chosen nothing yet, and a
-  search is an experiment with a scale of its own). `search-first` used to
-  publish nothing at all.
+  the experiments first. Four answers reach that point — `benchmark` (the
+  offer to run), `validate` **reached from an absent benchmark package** (the
+  acid test: the method alone, against its own declared prediction, once the
+  comparison has been declined), `piloted` (a run already made below the
+  scale it declared) and `search-first` (a declared search that has chosen
+  nothing yet, and a search is an experiment with a scale of its own).
+  `search-first` used to publish nothing at all.
+
+  **`validate` reached from `already-benchmarked` (Unit 6b, design D23a-c) is
+  the one exception**: a REPORTING state, not an offer to run, so it asks the
+  repair choice instead — do the transition now, or record why it is
+  deliberately deferred — never the experiment choice above. A comparison
+  that has already completed already measures the method alone on the same
+  data an acid test would use, so accepting never spends machine time; it
+  hand-edits the benchmark declaration's own `arms` block to undeclare the
+  rival, re-sealed with `materialize --authored`, and touches nothing else —
+  not `Results/…`, not an executed notebook or its stamp, not a ledger event.
+  See `SKILL.md`'s own `### nextStep: "validate"` section, "Two transitions,
+  and they are not symmetric", for the full account of both directions
+  (test → comparison reuses `build-first`'s own token with no new machinery
+  at all; comparison → test is the one described here).
 
 - **`toDiscuss`** — the question-shaped half of `resolve`, as a list, so a
   reader can treat every open question the same way whichever command reported
@@ -1730,12 +1765,27 @@ whoever reads the output:
   Run it verbatim, or run `discuss` by hand. It **never gates** — the same
   non-goal as `verify`'s own `toDiscuss` above.
 
-`wiring` is reported at two answers, not one: `benchmark`, where the draft is
-the raw material the run offer is built from, and `wiring-first`, where an arm
-declares mathematics it never calls and the draft is the very thing that state
-is missing. It was guarded on `benchmark` alone, and because the `wiring-first`
-override runs before that guard, the one answer naming missing wiring came back
-with `wiring: null`.
+`wiring` and `validation` are the two draft payloads `PROBE_DRAFTS` can
+publish (design D12, replacing a single `wiring: bool` flag). `wiring` is
+reported at three answers: `benchmark`, where the draft is the raw material
+the run offer is built from; `wiring-first`, where an arm declares
+mathematics it never calls and the draft is the very thing that state is
+missing; and `build-first` (design D21), when it is the comparison's own
+decision that was reopened or freshly accepted. It was guarded on
+`benchmark` alone, and because the `wiring-first` override runs before that
+guard, the one answer naming missing wiring came back with `wiring: null`.
+`validation` is reported at two answers: `validate` **reached from an absent
+benchmark package** — the acid test's own draft: the method's modules with
+no rival, the target's own `__levels__`, a `placement` section naming
+`local`/`remote` and deciding neither, and a proposed record entry — and
+`build-first`, when it is the acid test's own decision that was reopened or
+freshly accepted. `build-first` never publishes both at once: exactly one of
+`wiring`/`validation` is non-`null` there, by which decision routed to it
+(`decisions.comparison.decision` or `decisions.validation.decision`), the
+same discipline every other rung's `null`-elsewhere shape already keeps.
+`validate` **reached from `already-benchmarked`** (Unit 6b, D23b) reports
+`validation: null` — a REPORTING state never proposes a run, so no draft of
+how to wire and run one rides beside it.
 
 - **`walk`** — where this repository stands in its own declared flow. Read it
   when you are opening a clean repository to run the flow from the top: it
@@ -2250,10 +2300,11 @@ state, alongside the scenarios — not verified by hand once.
 | `PLAN_REQUIRED` | `materialize --stage` needs `--plan <approved plan JSON>`. |
 | `SEED_REQUIRED` | `materialize --stage scaffold` needs `--seed`, substituted into `{{SEED}}`. |
 | `STAGE_CANNOT_ANSWER` | A scaffold-stage `.py` destination still fails `ast.parse` after `{{PKG}}`/`{{SEED}}` substitution — its remaining token answers a later step. Names the file. Never raised by `objects`/`harness`: their three destinations are either written with tokens deliberately left standing (`objects`) or already parse cleanly (`harness`'s two `.py` files). |
-| `OBJECT_MAP_NOT_APPROVED` | `materialize --stage objects` ran before step 8's `revision`/`premises` were recorded in `src/<Package>_Benchmark/__init__.py`. The detail names whichever of the two is still blank, so a half-written map does not send you back to re-read the half that is already right. Get that declaration approved and written first. |
+| `OBJECT_MAP_NOT_APPROVED` | `materialize --stage objects` ran before step 8's `revision`/`premises` were recorded in `src/<Package>/__init__.py`'s `__implementation__`. The detail names whichever of the two is still blank, so a half-written map does not send you back to re-read the half that is already right. Get that declaration approved and written first. |
+| `OBJECT_MAP_AT_OLD_HOME` | `materialize --stage objects` ran on a target scaffolded before this change: `src/<Package>_Benchmark/__init__.py` still binds `revision`/`premises` there, and `src/<Package>/__init__.py`'s `__implementation__` is blank. Distinct from `OBJECT_MAP_NOT_APPROVED` — this target once declared, at the old home — and names both locations. Follow SKILL.md step 8's migration procedure: scaffold, hand-move the literals (including any this skill has no reader for), `materialize --authored`, delete the orphaned seal copy, re-execute notebooks. |
 | `SCAFFOLD_DRIFT` | (`verify`, reported in `structure.scaffoldDrift`, never raised) A receipt-recorded scaffold destination's on-disk bytes no longer match its `writtenSha256`. Release the seal with `materialize --authored <path>` after declaring the edit. `objects`/`harness` destinations get the identical check under `structure.objectDrift`/`structure.harnessDrift`. |
 | `UNRECORDED_SCAFFOLD` | (`verify`, reported in `structure.unrecordedScaffold`, never raised) A scaffold destination exists on disk with no receipt entry — most often because the target was scaffolded before this command existed. Remedy: `materialize --adopt <path>`, one path at a time, deliberately. **This degrades the guarantee**: adoption records who is responsible for the bytes, never that they came from the kit — the record names who wrote them, not that the engine owns them. `objects`/`harness` destinations get the identical check under `structure.unrecordedObjects`/`structure.unrecordedHarness`. |
-| `NOT_A_KIT_DESTINATION` | `materialize --authored`/`--adopt` named a path outside the seventeen kit destinations (eleven scaffold, three objects, three harness). The receipt is not a general-purpose ledger. |
+| `NOT_A_KIT_DESTINATION` | `materialize --authored`/`--adopt` named a path outside `all_kit_destinations` — the scaffold, objects and harness destination lists, concatenated. The receipt is not a general-purpose ledger. |
 | `MATERIALIZE_PATH_ABSENT` | `materialize --authored`/`--adopt` named a path with no bytes on disk. |
 | `NO_RECEIPT_ENTRY` | `materialize --authored <path>` named a path the engine never wrote. There is no seal to release; use `--adopt`. |
 | `ALREADY_RECORDED` | `materialize --adopt <path>` named a path the receipt already carries. Adoption is not a re-seal; use `--authored`. |
@@ -2280,7 +2331,7 @@ the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-eight codes, including
+carries a `resolve` key saying what. Sixty-nine codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

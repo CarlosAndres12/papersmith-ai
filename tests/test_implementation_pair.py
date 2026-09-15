@@ -1000,7 +1000,13 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
 
         (box / "src" / self.PACKAGE).mkdir(parents=True)
         (box / "src" / self.PACKAGE / "__init__.py").write_text(
-            "__all__ = []\n", encoding="utf-8")
+            "__all__ = []\n"
+            "__implementation__ = {\n"
+            f"    'revision': {self.REVISION!r}, 'premises': {{}},\n"
+            "}\n"
+            "__steps__ = {'measure': {'module': 'Method_Benchmark.steps', "
+            "'function': 'run'}}\n",
+            encoding="utf-8")
         (box / "src" / self.PACKAGE / "kernels.py").write_text(
             "__provenance__ = {\n"
             f"    'revision': {self.REVISION!r}, 'sections': ['1'],\n"
@@ -1009,13 +1015,10 @@ class TwoDocumentLifecycleTests(unittest.TestCase):
         (box / "src" / f"{self.PACKAGE}_Benchmark").mkdir(parents=True)
         (box / "src" / f"{self.PACKAGE}_Benchmark" / "__init__.py").write_text(
             "__benchmark__ = {\n"
-            f"    'revision': {self.REVISION!r}, 'premises': {{}},\n"
             "    'arms': {'floor': {'sections': ['1']}}, 'search': {},\n"
             "    'report': {}, 'distribution': {},\n"
             "    'entry': {'module': 'Method_Benchmark.steps', 'function': 'run'},\n"
-            "}\n"
-            "__steps__ = {'measure': {'module': 'Method_Benchmark.steps', "
-            "'function': 'run'}}\n",
+            "}\n",
             encoding="utf-8")
         (box / "src" / f"{self.PACKAGE}_Benchmark" / "steps.py").write_text(
             "def run(*a, **k):\n    return {}\n", encoding="utf-8")

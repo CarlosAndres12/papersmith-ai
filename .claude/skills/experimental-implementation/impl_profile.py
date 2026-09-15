@@ -94,8 +94,10 @@ OBJECTIVE_FLOW = {
          "establishes": "a repository set up the way this skill expects, "
                         "with an interpreter of its own and the protocol's "
                         "declared steps laid out as runnable commands",
-         "behindWhen": "`structure` reports no scaffold gaps and the "
-                       "protocol the run answers to is named and readable"},
+         "behindWhen": "`structure` reports no scaffold gaps and "
+                       "`__implementation__` carries the revision and "
+                       "premises the protocol answers to -- which is what "
+                       "`materialize --stage objects` refuses without"},
         {"stage": "binding",
          "establishes": "the code that runs says what the bound "
                         "experiments revision says, every declared step "
