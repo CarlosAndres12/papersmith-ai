@@ -44,18 +44,24 @@ it stores credentials and consumes the inbox — and deciding what happens to an
 account that stopped working.
 
 
-## What this skill has not written down
+## Accepted operations
 
-**Its own operations are not documented as a closed set.** The CLI accepts five
-and refuses everything else by naming them, so the running code holds a roster;
-this document does not. An audit of that surface returns `no-closed-roster` over
-all 286 lines.
+The closed set this CLI accepts. Derived from `accounts_cli.py`'s own argparse
+roster on 2026-09-14 by running it, never transcribed from memory: anything not
+in this table is refused, and the refusal names these five.
 
-The remedy is a plainly-named heading carrying a markdown table a probe can
-derive from. Two further things are true and worth knowing before someone tries:
-the instrument that produced this finding **cannot be declared** in the auditor's
-own doctrine, for a reason recorded there; and this skill holds live credentials,
-so any audit of it stays read-only.
+| Operation | What it does |
+|---|---|
+| `list` | show stored accounts, never their keys |
+| `discover` | find `kaggle.json` files to offer as choices |
+| `validate` | re-check every stored account and take in whatever is in the inbox |
+| `remove` | delete stored accounts by username |
+| `materialize` | write one worker's credential to a config directory, non-interactively |
+
+Two things stay true about auditing this surface: the instrument that first
+found the roster missing **cannot be declared** in the auditor's own doctrine,
+for a reason recorded there; and this skill holds live credentials, so any audit
+of it stays **read-only**.
 
 ## Activation Contract
 

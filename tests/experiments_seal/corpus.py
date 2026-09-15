@@ -245,13 +245,21 @@ _MODULE_SOURCE = (
 
 _BENCHMARK_INIT_SOURCE = (
     "__benchmark__ = {\n"
-    "    'revision': 'trial-1.md',\n"
-    "    'premises': {},\n"
     "    'arms': {'floor': {'sections': ['1']}, 'full': {'sections': ['1', '2', '3']}},\n"
     "    'search': {},\n"
     "    'report': {},\n"
     "    'distribution': {},\n"
     "    'entry': {'module': 'Trial_Benchmark.steps', 'function': 'run'},\n"
+    "}\n"
+)
+
+#: `src/Trial/__init__.py`'s content: `__all__` beside `__implementation__`
+#: and `__steps__` (design D1/D2, moved off `__benchmark__`).
+_IMPLEMENTATION_INIT_SOURCE = (
+    "__all__ = []\n"
+    "__implementation__ = {\n"
+    "    'revision': 'trial-1.md',\n"
+    "    'premises': {},\n"
     "}\n"
     "__steps__ = {\n"
     "    'measure': {'module': 'Trial_Benchmark.steps', 'function': 'run'},\n"
@@ -324,7 +332,8 @@ def _write_common_package(target: Path, *, with_data: bool,
     if with_data:
         (target / "Trial" / "Data").mkdir(parents=True)
 
-    (target / "src" / "Trial" / "__init__.py").write_text("__all__ = []\n", encoding="utf-8")
+    (target / "src" / "Trial" / "__init__.py").write_text(
+        _IMPLEMENTATION_INIT_SOURCE, encoding="utf-8")
     (target / "src" / "Trial" / "kernels.py").write_text(_MODULE_SOURCE, encoding="utf-8")
     (target / "src" / "Trial_Benchmark" / "__init__.py").write_text(
         _BENCHMARK_INIT_SOURCE, encoding="utf-8")

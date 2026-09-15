@@ -153,17 +153,25 @@ MEASURED_MOVERS: dict[str, tuple[str, ...]] = {
     # excluded as non-deterministic moves.
     "findings.citation_pattern": (
         "admit-e0", "admit-e1", "adopt-same-target", "apply", "close-e0",
-        "close-e1", "compose", "defect", "discuss", "gate-e0", "gate-e1",
-        "handoff-e0", "handoff-e1", "materialize", "name", "offer-e0",
-        "offer-e1", "plan-a", "plan-b", "position-e0", "position-e1",
-        "probe", "settle", "step", "verify-a", "verify-b", "verify-t",
-        "walk"),
-    "vocabulary.subject_singular": ("compose",),
-    "vocabulary.subject_plural": (),  # ZERO-MOVER
+        "close-e1", "compose",
+        "defect", "discuss", "gate-e0", "gate-e1", "handoff-e0", "handoff-e1",
+        "materialize", "name", "offer-e0", "offer-e1", "plan-a", "plan-b",
+        "position-e0", "position-e1", "probe", "settle", "step", "verify-a",
+        "verify-b", "verify-t", "walk"),
+    # Re-measured 2026-09-14, M2 closed: `handoff` stopped composing a sentence
+    # of its own in one fixed human tongue and now hands the domain's six nouns
+    # over as data, so an agent can put them into whichever tongue it was
+    # addressed in. Every one of the six therefore reaches sealed output, where
+    # three of them previously reached none at all: `subject_plural`,
+    # `subject_collective` and `subject_collective_es` were ZERO-MOVERS purely
+    # because no sentence happened to use them. Taken from the run, never
+    # assumed -- the failure named each new set.
+    "vocabulary.subject_singular": ("compose", "handoff-e1"),
+    "vocabulary.subject_plural": ("handoff-e1",),
     "vocabulary.subject_singular_es": ("handoff-e1",),
     "vocabulary.subject_plural_es": ("handoff-e1",),
-    "vocabulary.subject_collective": (),  # ZERO-MOVER
-    "vocabulary.subject_collective_es": (),  # ZERO-MOVER
+    "vocabulary.subject_collective": ("handoff-e1",),
+    "vocabulary.subject_collective_es": ("handoff-e1",),
     "vocabulary.artifact_noun": (),  # ZERO-MOVER
     "documents.label": (),  # ZERO-MOVER
     "documents.directory": ("admit-e0", "close-e0", "gate-e0", "offer-e0", "position-e0"),

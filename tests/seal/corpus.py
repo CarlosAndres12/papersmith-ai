@@ -168,18 +168,28 @@ _MODULE_SOURCE = (
 )
 
 #: `src/Seal_Benchmark/__init__.py`'s content for `fixture_a`/`fixture_b`:
-#: `__benchmark__` (populated `arms`, declared family `seal-1.md`) beside
-#: `__steps__` — both top-level literals live in the same file, per
-#: `BENCHMARK_DECLARATION`/`STEPS_DECLARATION` (design.md's own citations).
+#: `__benchmark__`'s five remaining blocks (populated `arms`) — `revision`/
+#: `premises`/`__steps__` moved to `_IMPLEMENTATION_INIT_SOURCE` below
+#: (design D1/D2: facts about the method, not the comparison).
 _BENCHMARK_INIT_SOURCE = (
     "__benchmark__ = {\n"
-    "    'revision': 'seal-1.md',\n"
-    "    'premises': {},\n"
     "    'arms': {'floor': {'sections': ['1']}, 'full': {'sections': ['1', '2', '3']}},\n"
     "    'search': {},\n"
     "    'report': {},\n"
     "    'distribution': {},\n"
     "    'entry': {'module': 'Seal_Benchmark.steps', 'function': 'run'},\n"
+    "}\n"
+)
+
+#: `src/Seal/__init__.py`'s content for `fixture_a`/`fixture_b`: `__all__`
+#: beside `__implementation__` (declared family `seal-1.md`) and `__steps__`
+#: — both top-level literals live in the same file, per
+#: `IMPLEMENTATION_DECLARATION`/`STEPS_DECLARATION` (design D1/D2).
+_IMPLEMENTATION_INIT_SOURCE = (
+    "__all__ = []\n"
+    "__implementation__ = {\n"
+    "    'revision': 'seal-1.md',\n"
+    "    'premises': {},\n"
     "}\n"
     "__steps__ = {\n"
     "    'measure': {'module': 'Seal_Benchmark.steps', 'function': 'run'},\n"
@@ -250,7 +260,8 @@ def _write_common_package(target: Path, *, module_source: str,
     if with_data:
         (target / "Seal" / "Data").mkdir(parents=True)
 
-    (target / "src" / "Seal" / "__init__.py").write_text("__all__ = []\n", encoding="utf-8")
+    (target / "src" / "Seal" / "__init__.py").write_text(
+        _IMPLEMENTATION_INIT_SOURCE, encoding="utf-8")
     (target / "src" / "Seal" / "kernels.py").write_text(module_source, encoding="utf-8")
     (target / "src" / "Seal_Benchmark" / "__init__.py").write_text(
         benchmark_init_source, encoding="utf-8")
