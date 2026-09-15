@@ -1720,11 +1720,12 @@ whoever reads the output:
 
   **Wherever the flow reaches the point of running experiments, the question
   is the same one**: continue the flow toward the declared scale, or complement
-  the experiments first. Three answers reach that point — `benchmark` (the
-  offer to run), `piloted` (a run already made below the scale it declared)
-  and `search-first` (a declared search that has chosen nothing yet, and a
-  search is an experiment with a scale of its own). `search-first` used to
-  publish nothing at all.
+  the experiments first. Four answers reach that point — `benchmark` (the
+  offer to run), `validate` (the acid test: the method alone, against its own
+  declared prediction, once the comparison has been declined), `piloted` (a
+  run already made below the scale it declared) and `search-first` (a
+  declared search that has chosen nothing yet, and a search is an experiment
+  with a scale of its own). `search-first` used to publish nothing at all.
 
 - **`toDiscuss`** — the question-shaped half of `resolve`, as a list, so a
   reader can treat every open question the same way whichever command reported
@@ -1735,12 +1736,18 @@ whoever reads the output:
   Run it verbatim, or run `discuss` by hand. It **never gates** — the same
   non-goal as `verify`'s own `toDiscuss` above.
 
-`wiring` is reported at two answers, not one: `benchmark`, where the draft is
-the raw material the run offer is built from, and `wiring-first`, where an arm
-declares mathematics it never calls and the draft is the very thing that state
-is missing. It was guarded on `benchmark` alone, and because the `wiring-first`
-override runs before that guard, the one answer naming missing wiring came back
-with `wiring: null`.
+`wiring` and `validation` are the two draft payloads `PROBE_DRAFTS` can
+publish (design D12, replacing a single `wiring: bool` flag). `wiring` is
+reported at two answers: `benchmark`, where the draft is the raw material the
+run offer is built from, and `wiring-first`, where an arm declares mathematics
+it never calls and the draft is the very thing that state is missing. It was
+guarded on `benchmark` alone, and because the `wiring-first` override runs
+before that guard, the one answer naming missing wiring came back with
+`wiring: null`. `validation` is reported at exactly one answer, `validate` —
+the acid test's own draft: the method's modules with no rival, the target's
+own `__levels__`, a `placement` section naming `local`/`remote` and deciding
+neither, and a proposed record entry. `null` at every other answer, the
+identical shape `wiring` keeps.
 
 - **`walk`** — where this repository stands in its own declared flow. Read it
   when you are opening a clean repository to run the flow from the top: it

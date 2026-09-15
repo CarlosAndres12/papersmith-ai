@@ -3436,7 +3436,7 @@ def baseline_environment(target: Path, baselines: list[str], name_of_ours: str =
     }
 
 
-def wiring_proposal(target: Path, name: str, baselines: list[str]) -> dict:
+def wiring_proposal(target: Path, name: str, facts: dict) -> dict:
     """A draft of how each implementation would become a trainable model.
 
     This is a proposal, never a decision. The harness knows how to train and measure;
@@ -3447,7 +3447,14 @@ def wiring_proposal(target: Path, name: str, baselines: list[str]) -> dict:
     Every module already declares what it implements in `__provenance__`, so the draft
     is assembled from the repository rather than guessed, and nothing here needs to
     know what the method is about.
+
+    Takes `facts` rather than a bare `baselines` list (design D12): both
+    `PROBE_DRAFTS` builders share the identical `(target, name, facts)`
+    signature, so there is one shape to learn and `cmd_probe` calls each the
+    same way. `baselines` is read out of it (`facts["baselines"]`, already
+    threaded through since D5a) rather than recomputed.
     """
+    baselines = facts.get("baselines") or []
     package = target / "src" / package_name(name)
     modules = []
     for file in sorted(package.glob("*.py")) if package.is_dir() else []:
@@ -3499,6 +3506,125 @@ def wiring_proposal(target: Path, name: str, baselines: list[str]) -> dict:
                     "cannot know which models or datasets are reasonable for a field "
                     "it has not read, and suggesting from a list would be guessing.",
         },
+    }
+
+
+def _validation_job_name(name: str) -> str:
+    """The job folder name the acid-test draft's `placement` section
+    proposes, derived mechanically from the step's own name (D11a) — costs
+    the person nothing to accept, since `flow_acts` blocks a remote step
+    whose `job` names nothing. Never a service name: that is asked of the
+    person, never guessed (the forge may read a service name to walk a
+    directory and reduce it to a count, and cannot discover one either —
+    adapters register lazily)."""
+    return f"{package_name(name).lower()}-validate"
+
+
+def validation_proposal(target: Path, name: str, facts: dict) -> dict:
+    """The acid test's own draft (design D11): `wiring_proposal`'s own `new`
+    half — the method's modules, with no rival — plus the yardstick already
+    declared in `__implementation__`, a scale drawn from the target's own
+    `__levels__`, a `placement` section that decides nothing (D11a), and a
+    proposed `evidence` entry. Every input is a function this engine already
+    has; nothing here is guessed.
+
+    Shares the `(target, name, facts)` signature `PROBE_DRAFTS` both
+    builders take (design D12) — `facts` is the identical dict `cmd_probe`
+    hands `wiring_proposal`, so `baselines`, `revision` and `premises` are
+    all read off it rather than recomputed.
+
+    `baselines` is non-empty by construction at this rung: `validate` is
+    only reachable once the comparison was declined, which is only
+    reachable once `previous_implementations` returned something — a target
+    with nothing to compare against answers `nothing-to-compare` far above
+    and never reaches here. `data` therefore always has material to read,
+    never an empty section apologising for itself.
+
+    **Record path never borrows the comparison's name** (D15a's second
+    naming-leak site): `evidence.path` lives under the product folder and
+    names no `_Benchmark`-suffixed anything.
+    """
+    baselines = facts.get("baselines") or []
+    revision = facts.get("revision") or ""
+    premises = facts.get("premises") or {}
+    wiring = wiring_proposal(target, name, facts)
+    levels = resolve_levels_declaration(target, name)
+    # "The lowest rung above the floor" (D11): `levels[0]` is the floor
+    # itself -- no run at all -- so the small scale offered is the first
+    # rung above it. With fewer than two rungs declared there is no rung
+    # above the floor to read, and the scale is asked exactly as it is
+    # when `__levels__` is empty outright.
+    if len(levels) >= 2:
+        scale_rung = levels[1]
+        scale_needs: list[str] = []
+    else:
+        scale_rung = None
+        scale_needs = ["which rung this run targets — `__levels__` names "
+                       "no rung above the floor"]
+    job_name = _validation_job_name(name)
+    return {
+        "status": "draft",
+        "instruction": "Complete `placement` and `evidence`, then this "
+                       "step runs the method alone against its own "
+                       "declared prediction. Nothing runs until you do: a "
+                       "builder left empty is reported as not applicable, "
+                       "never as a result.",
+        "claim": {
+            "revision": revision,
+            "premises": premises,
+            "note": "the yardstick's form, carried through verbatim from "
+                    "`__implementation__` — never validated or "
+                    "interpreted here (D14b); the yardstick's "
+                    "calibration, the reference figure, is not written "
+                    "and is asked below, in `needs`",
+        },
+        "arm": {
+            "package": wiring["new"]["package"],
+            "modules": wiring["new"]["modules"],
+            "needs": wiring["new"]["needs"],
+        },
+        "data": {
+            "fromBaseline": baseline_environment(target, baselines, name),
+            "note": "where a real setting already exists on disk — the one "
+                    "that already has meaning is the baseline's, and this "
+                    "run is what is there today without the rival arm",
+        },
+        "scale": {
+            "rung": scale_rung,
+            "levels": levels,
+            "needs": scale_needs,
+        },
+        "placement": {
+            # Names both, decides neither (D11a) — a step with no
+            # `placement` blocks the walk (`PLACEMENT_UNDECLARED_CONSEQUENCE`),
+            # so the absence is a question and not a nicety, but choosing
+            # for the person would be the same defect one layer up.
+            "options": {
+                "local": "occupies this machine for the run's duration",
+                "remote": "spends metered quota on a service account",
+            },
+            "job": job_name,
+            "service": None,
+            "needs": ["placement — local or remote, decided by the "
+                      "person and never defaulted",
+                      "service — the account the job folder lives under, "
+                      "asked and never guessed",
+                      "any accelerator, environment, or budget knob "
+                      "`generate-job` accepts (accelerator_kind, "
+                      "accelerator_architectures, "
+                      "environment_requirements, environment_index_url, "
+                      "local_budget_seconds), named as available and "
+                      "answered by the person, never pre-selected"],
+        },
+        "evidence": {
+            "name": "validation",
+            "path": "Results/validation.json",
+            "requiredScale": {"rung": scale_rung} if scale_rung else {},
+        },
+        "needs": ["the reference figure premises names no threshold for, "
+                  f"read from revision {revision!r} — never parsed by "
+                  "this engine out of any document's prose",
+                  "what a failure would look like"] + scale_needs,
     }
 
 
@@ -3606,6 +3732,12 @@ def cmd_probe(args) -> dict:
     # costs a sentence rather than the campaign, but still must not be printed with
     # the authority of thirty repetitions behind it.
     resolved = resolve_benchmark_declaration(target, name)
+    # The acid test's own yardstick (design D14): `revision` and `premises`,
+    # read once here and threaded through `facts` below rather than
+    # recomputed at the ladder branch and again at the `decisions.validation`
+    # payload member -- the identical "computed once and reused" discipline
+    # `resolved` and `buckets` already keep in this function.
+    implementation_declared = resolve_implementation_declaration(target, name)
     unfaithful = benchmark_unfaithfulness(target, name)
     remote = remote_execution_state(target, name, package_name(name))
     report = report_state(target, name, package_name(name))
@@ -3708,20 +3840,38 @@ def cmd_probe(args) -> dict:
     # computed once and reused both for the override below and for the
     # `decisions.comparison` payload member (D16/D9).
     comparison_question = _benchmark_offer_question(target, name, baselines)
-    # A declined comparison, checked BEFORE every override that follows,
-    # including the `declare-first` narrowing immediately below (D5b): a
-    # declined comparison must never be told to fix a declaration for a
-    # harness that does not exist. `status == "absent"` is "nothing was
+    # The one construction site for the acid-test offer's own text (D14),
+    # computed the identical "once, reused" way -- both for the three-way
+    # branch immediately below and for the `decisions.validation` payload
+    # member.
+    validation_question = _validation_offer_question(
+        target, name,
+        (implementation_declared["contract"] or {}).get("revision") or "",
+        (implementation_declared["contract"] or {}).get("premises") or {})
+    # The comparison and the acid test, checked BEFORE every override that
+    # follows, including the `declare-first` narrowing immediately below
+    # (D5b, extended by D13 into a three-way branch): neither a declined
+    # comparison nor an open acid test may be told to fix a declaration for
+    # a harness that does not exist. `status == "absent"` is "nothing was
     # built" -- no `src/<Package>_Benchmark/` directory at all -- so once the
     # harness stage actually materializes it (the existing acceptance act,
-    # unchanged by this decline capability), this guard stops matching by
+    # unchanged by either decline capability), this guard stops matching by
     # itself and the ladder falls through exactly as it would for a target
     # that was never declined. That is the "no code path specific to
-    # reopening" the offer's own persistence relies on: the reopening code
+    # reopening" each offer's own persistence relies on: the reopening code
     # is the absence of a branch.
+    #
+    # `validate`'s own guard is additive on top of `declined`'s prior
+    # meaning, not a replacement of it (design D13): a comparison decline
+    # alone no longer reads as the fully terminal `declined` -- the acid
+    # test is asked next, and only once BOTH offers are answered does the
+    # ladder report `declined` again, this time naming both dates.
     if next_step == "benchmark" and resolved["status"] == "absent" and (
             comparison_question in answered):
-        next_step = "declined"
+        if validation_question in answered:
+            next_step = "declined"
+        else:
+            next_step = "validate"
     elif next_step in ("benchmark", "piloted") and resolved["status"] in (
             "absent", "undeclared"):
         next_step = "declare-first"
@@ -3796,16 +3946,6 @@ def cmd_probe(args) -> dict:
     elif next_step in ("benchmark", "piloted") and report["status"] != "ok":
         next_step = "report-first"
 
-    # The roster decides, never a literal. This line read `if next_step ==
-    # "benchmark"`, and `wiring-first` is assigned by an override twenty lines
-    # above it -- so at the one answer that names an arm declaring content
-    # it never calls, the draft of how each module becomes trainable came back
-    # `None` and whoever was driving the CLI composed the wiring plan in prose.
-    # `benchmark` keeps it (it is the raw material the run offer is built from,
-    # and nothing is unreached there); `wiring-first` gains it, because the
-    # state it describes IS the thing blocking.
-    proposal = (wiring_proposal(target, name, baselines)
-                if PROBE_NEXT_STEPS[next_step]["wiring"] else None)
     # The harness's name is read from the target's own declaration
     # (`resolve_harness_status`), never assumed from a filename: a fixed
     # convention here reported `harness: null` on a target that had followed
@@ -3837,47 +3977,73 @@ def cmd_probe(args) -> dict:
     # the decision has not changed, and embedding it would open a new,
     # never-to-be-revisited `discuss` bucket on every call (the stability rule
     # `_piloted_discuss_entry` already documents).
-    publication = next_step_publication(
-        target, name, next_step,
-        {"declared": (state.get("belowTargetScale") or {})
-         if next_step == "piloted"
-         else (declared_required_scale(search) or {}),
-         # The two facts `declare-first` is assigned from, threaded through
-         # rather than recomputed: its published sentence names the state that
-         # actually routed there, and a second read here could disagree with
-         # the branch above that published it.
-         "declarationStatus": resolved["status"],
-         "live": report.get("live"),
-         # The two facts the flow rungs publish, threaded through rather than
-         # recomputed: a second read here could disagree with the branch that
-         # published it, the same discipline `declarationStatus` states.
-         "incomplete": pilot["incomplete"],
-         # Flattened in the rows' own order, de-duplicated without sorting:
-         # two steps may render into one root, and naming an output twice in
-         # the published sentence reads as two artefacts. A step owes a LIST
-         # now (`_pilot_notebooks` unions its declared `produces` roots with
-         # its sequence item's witness), and reading only the first would put
-         # this consumer back one indirection behind the widened answer.
-         "notebooks": list(dict.fromkeys(
-             notebook for row in pilot["steps"]
-             for notebook in row["notebooks"])),
-         # What those notebooks carry, and whether any step is still
-         # undecided -- threaded through for the reason every other fact
-         # here is: a second read could disagree with the branch that
-         # published it.
-         "reportFindings": report_findings,
-         # Which of those steps the pilot never opened a notebook for --
-         # `pilotCompleteness`' own list, threaded through for the reason
-         # every other fact here is. Without it the decision pass names the
-         # notebooks that exist and says nothing about the steps that
-         # rendered none, which is exactly how four steps of ten fell out of
-         # a pilot with nobody told.
-         "withoutNotebook": pilot["withoutNotebook"],
-         "undecided": pilot_undecided,
-         # `_benchmark_publication`'s own operand (D5a): read once at the top
-         # of this function and threaded through here rather than recomputed,
-         # the same discipline every other fact in this dict keeps.
-         "baselines": baselines})
+    #
+    # Hoisted into a named variable rather than an inline literal (design
+    # D12): `PROBE_DRAFTS`' own builders take this identical dict, and
+    # `cmd_probe` builds `{d: PROBE_DRAFTS[d](target, name, facts) for d in
+    # entry["drafts"]}` from it below -- one dict serving both the
+    # publication and the drafts, never two reads that could disagree.
+    facts = {
+        "declared": (state.get("belowTargetScale") or {})
+                    if next_step == "piloted"
+                    else (declared_required_scale(search) or {}),
+        # The two facts `declare-first` is assigned from, threaded through
+        # rather than recomputed: its published sentence names the state that
+        # actually routed there, and a second read here could disagree with
+        # the branch above that published it.
+        "declarationStatus": resolved["status"],
+        "live": report.get("live"),
+        # The two facts the flow rungs publish, threaded through rather than
+        # recomputed: a second read here could disagree with the branch that
+        # published it, the same discipline `declarationStatus` states.
+        "incomplete": pilot["incomplete"],
+        # Flattened in the rows' own order, de-duplicated without sorting:
+        # two steps may render into one root, and naming an output twice in
+        # the published sentence reads as two artefacts. A step owes a LIST
+        # now (`_pilot_notebooks` unions its declared `produces` roots with
+        # its sequence item's witness), and reading only the first would put
+        # this consumer back one indirection behind the widened answer.
+        "notebooks": list(dict.fromkeys(
+            notebook for row in pilot["steps"]
+            for notebook in row["notebooks"])),
+        # What those notebooks carry, and whether any step is still
+        # undecided -- threaded through for the reason every other fact
+        # here is: a second read could disagree with the branch that
+        # published it.
+        "reportFindings": report_findings,
+        # Which of those steps the pilot never opened a notebook for --
+        # `pilotCompleteness`' own list, threaded through for the reason
+        # every other fact here is. Without it the decision pass names the
+        # notebooks that exist and says nothing about the steps that
+        # rendered none, which is exactly how four steps of ten fell out of
+        # a pilot with nobody told.
+        "withoutNotebook": pilot["withoutNotebook"],
+        "undecided": pilot_undecided,
+        # `_benchmark_publication`'s own operand (D5a): read once at the top
+        # of this function and threaded through here rather than recomputed,
+        # the same discipline every other fact in this dict keeps.
+        "baselines": baselines,
+        # `validation_proposal`'s and `_validate_publication`'s own operands
+        # (D11/D14): read once, above, from `implementation_declared` and
+        # threaded through here rather than recomputed.
+        "revision": (implementation_declared["contract"] or {}).get(
+            "revision") or "",
+        "premises": (implementation_declared["contract"] or {}).get(
+            "premises") or {},
+    }
+    # The roster decides, never a literal (design D12, replacing the single
+    # `wiring: bool` flag this used to be). `wiring_proposal` had exactly one
+    # call site, guarded on `next_step == "benchmark"`, and `wiring-first` is
+    # assigned by an override many lines above it -- so at the one answer
+    # that names an arm declaring content it never calls, the draft of how
+    # each module becomes trainable came back `None` and whoever was driving
+    # the CLI composed the wiring plan in prose. `benchmark` keeps it, and
+    # `wiring-first` gains it, because the state it describes IS the thing
+    # blocking; `validate` gains the analogous `validation` draft the
+    # identical way.
+    drafts = {draft: PROBE_DRAFTS[draft](target, name, facts)
+             for draft in PROBE_NEXT_STEPS[next_step]["drafts"]}
+    publication = next_step_publication(target, name, next_step, facts)
     # `toDiscuss` carries the question-shaped publications only -- a command
     # this flow can name completely is not a question anybody answers, and
     # putting one in a discussion list would open a bucket nothing retires.
@@ -4005,17 +4171,27 @@ def cmd_probe(args) -> dict:
                      if key in ("kind", "question", "command")}
                     if publication else None),
         "toDiscuss": to_discuss,
-        "wiring": proposal,
+        # Public key unchanged for every pre-existing rung (design D12): a
+        # `wiring_proposal` draft rides here exactly where it always did.
+        # `drafts` never carried the key at all for a rung that does not name
+        # it, so `.get` and a bare literal `None` agree in every such case.
+        "wiring": drafts.get("wiring"),
+        # The acid test's own draft (design D11/D12): always present, `None`
+        # when `validate` is not this answer's `nextStep`, the identical
+        # shape `wiring` keeps.
+        "validation": drafts.get("validation"),
         # One reported, never-gating key, fixed shape on every call (D16,
-        # replacing the withdrawn D6 `comparisonDecision`). `comparison` is
-        # this unit's own member; a sibling `validation` member joins it once
-        # the acid test lands, unchanged in shape. Read from `buckets`
-        # directly (`_answered_event_from`) rather than from `answered`,
-        # which only ever answers a membership question and cannot carry a
-        # date or the exact text that was answered.
+        # replacing the withdrawn D6 `comparisonDecision`). `comparison` and
+        # `validation` are both always present; `validation` completes what
+        # Unit 4 (D6/D16 partial) shipped only `comparison` for. Read from
+        # `buckets` directly (`_answered_event_from`) rather than from
+        # `answered`, which only ever answers a membership question and
+        # cannot carry a date or the exact text that was answered.
         "decisions": {
             "comparison": _decision_from_event(
                 _answered_event_from(buckets, comparison_question)),
+            "validation": _decision_from_event(
+                _answered_event_from(buckets, validation_question)),
         },
         # `probe` looks and reports; it never runs anything itself.
         "kind": "read-only",
@@ -4649,7 +4825,7 @@ _DEFAULT_PACKAGE_DECLARATIONS = (
     "# where it runs:\n"
     "#     __steps__ = {\n"
     '#         "computation": {\n'
-    '#             "module": "Example_Method_Benchmark.steps",\n'
+    '#             "module": "Example_Method.steps",\n'
     '#             "function": "run_computation",\n'
     "#             # Where this step sits in the order, and what it\n"
     "#             # consumes from the steps above it. `advances` is the\n"
@@ -4673,7 +4849,7 @@ _DEFAULT_PACKAGE_DECLARATIONS = (
     '#             "service": "the-service-you-send-to",\n'
     "#         },\n"
     '#         "rendering": {\n'
-    '#             "module": "Example_Method_Benchmark.steps",\n'
+    '#             "module": "Example_Method.steps",\n'
     '#             "function": "run_rendering",\n'
     '#             "advances": 2,\n'
     "#             # What it consumes, named: this is the link a remote\n"
@@ -12332,6 +12508,91 @@ def _benchmark_publication(target: Path, name: str, facts: dict) -> dict:
         _benchmark_offer_question(target, name, facts.get("baselines") or []))
 
 
+def _canonical_premises(premises: object) -> str:
+    """The one canonical rendering of a declared `premises` value (design
+    D14a) — a TOTAL projection, never a validator. A mapping renders every
+    key it currently carries, sorted, naming none, requiring none,
+    dropping none: an unexpected key, a `premises` missing one of the
+    kit's own suggested four, or a `premises` bound to a value that is not
+    a mapping at all are all rendered here, none refused, none treated as
+    more or less valid than the others (spec "The canonical rendering
+    names no key and refuses nothing").
+
+    Only the PARSED, SORTED value is embedded — never the source bytes.
+    Re-indenting, a quote-style change, a reflowed line, or a trailing
+    comma all move the source bytes while this rendering stays identical,
+    because the parse already discarded all four before this function ever
+    sees the value (D14a's stability argument).
+
+    Rendered inline and readable, never digested: the result is question
+    text a human reads and answers, and the family's own precedent is that
+    the question NAMES the thing — `_search_first_publication`'s axes with
+    their values, `_piloted_discuss_entry`'s declared scale. Sixty-four hex
+    characters in the middle of a sentence is not a question anybody
+    answers.
+    """
+    if not isinstance(premises, dict):
+        return repr(premises)
+    return ", ".join(f"{key}={premises[key]!r}" for key in sorted(premises))
+
+
+def _validation_offer_question(target: Path, name: str, revision: str,
+                               premises: object) -> str:
+    """The exact text of the acid-test offer, and the only construction of
+    it — `_benchmark_offer_question`'s own rule, for the same reason: this
+    string IS the bucket key (`_discussion_buckets` buckets by exact
+    trimmed text), so a second spelling anywhere would open a second,
+    never-retiring bucket for a decision somebody already made.
+
+    Derived from the target, the name, the declared `revision`, and a
+    CANONICAL RENDERING of `premises` alone (design D14: "Key = target +
+    name + revision + premises") — never the comparison's own baseline
+    set (independent decisions, D14a), never a scale or a count of
+    anything (the family's standing rule), and never the raw source bytes
+    (D14a). A changed `revision` or a changed `premises` content is what
+    makes a previously-declined acid test genuinely a different one;
+    nothing else moves this text.
+
+    The published question also states cost's shape, never its magnitude
+    (design D11c): that it is a real run on real data and spends machine
+    time, what each placement costs, that the offered scale is the small
+    one and a larger campaign is a separate decision, and that declining
+    later costs nothing to unwind. Stated as fixed prose rather than a
+    number derived from the declared scale, because embedding a
+    declaration this constructor does not take as a parameter would widen
+    its key beyond the four inputs above — no duration, no quota figure,
+    and no service name are ever named here, matching the rule this
+    repository already learned from a forge-invented weekly-quota figure
+    that lived in a comment nothing read and did not match reality.
+    """
+    rendered = _canonical_premises(premises)
+    return (
+        f"{name} (target {target}) is ready to run its acid test — the "
+        f"method alone, on real data, at small scale, with no rival arm, "
+        f"judged against revision {revision!r}'s declared prediction "
+        f"({rendered}); a real run spends machine time, a local run "
+        f"occupies this machine for its duration, a remote run spends "
+        f"metered quota on a service account, the scale on offer is the "
+        f"small one and a larger campaign is a separate decision, and "
+        f"declining later costs nothing to unwind; " + NEXT_STEP_EXPERIMENT_CHOICE)
+
+
+def _validate_publication(target: Path, name: str, facts: dict) -> dict:
+    """`validate` — the offer to run the acid test. The validation draft
+    rides in `validation` (the roster says so); this is the question that
+    must be open beside it.
+
+    `revision`/`premises` are threaded through `facts` rather than
+    recomputed — `cmd_probe` already reads `resolve_implementation_declaration`
+    once at the top of the function, and a second read here could disagree
+    with the branch that published it."""
+    return _next_step_question_entry(
+        target, name,
+        _validation_offer_question(
+            target, name, facts.get("revision") or "",
+            facts.get("premises") or {}))
+
+
 def _search_first_publication(target: Path, name: str, facts: dict) -> dict:
     """`search-first` -- the defect that named this lock. A search is an
     experiment, declared as one, and launching it is exactly the point the
@@ -12581,52 +12842,69 @@ def _pilot_decisions_publication(target: Path, name: str, facts: dict) -> dict:
         + NEXT_STEP_REPAIR_CHOICE)
 
 
+#: The two draft builders `PROBE_NEXT_STEPS`' own `drafts` key can name
+#: (design D12), replacing the single `wiring_proposal` call site's own
+#: `wiring: bool` flag. A third draft would have needed a second flag
+#: beside `wiring` under the old shape -- exactly the defect this roster
+#: itself exists to close one level up (`STRUCTURE_GAP_STAGES` states the
+#: identical rule for stages) -- so a rung's drafts are a REGISTRY lookup,
+#: not a growing set of booleans. Both builders share the identical
+#: `(target, name, facts)` signature, so there is one shape to learn.
+PROBE_DRAFTS: dict[str, object] = {
+    "wiring": wiring_proposal,
+    "validation": validation_proposal,
+}
+
 #: Every value `cmd_probe`'s ladder can assign to `next_step`, and what each
 #: one publishes. The roster exists because the condition it replaces was one
 #: literal -- `next_step == "piloted"` -- so `search-first`, which launches a
 #: search, reported a word and published nothing; adding a second literal
 #: beside the first would have reproduced that defect one value later.
 #:
-#: `kind` is read for what the question asks. `wiring` is read for whether the
-#: `wiring_proposal` draft belongs in the payload: it had exactly one call site,
-#: guarded on `benchmark`, and `wiring-first` is set by an override that runs
-#: BEFORE that guard -- so the one answer naming missing wiring withheld the
-#: draft of how to wire it. `publish` is `None` only where `kind` is terminal,
-#: and `NextStepPublicationRosterTests` holds that join.
+#: `kind` is read for what the question asks. `drafts` names which of
+#: `PROBE_DRAFTS`' own builders belong in the payload (design D12,
+#: replacing the single-flag `wiring: bool` this key used to be): the
+#: `wiring_proposal` draft had exactly one call site, guarded on
+#: `benchmark`, and `wiring-first` is set by an override that runs BEFORE
+#: that guard -- so the one answer naming missing wiring withheld the
+#: draft of how to wire it. `validate` gains the identical treatment for
+#: `validation_proposal`. `publish` is `None` only where `kind` is
+#: terminal, and `NextStepPublicationRosterTests` holds that join.
 PROBE_NEXT_STEPS: dict[str, dict] = {
     # Terminal. Flow B says to ask the user and invent no work for either, so
     # a publication here would be inventing exactly the work Flow B refuses --
     # the same reason `NextStepSectionCoverageTests` withholds their SKILL.md
     # sections. `piloted` is deliberately NOT among them: its own rule keeps a
     # question open, and an open question is work.
-    "nothing-to-compare": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+    "nothing-to-compare": {"kind": NEXT_STEP_TERMINAL, "drafts": (),
                            "publish": None},
-    "already-benchmarked": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+    "already-benchmarked": {"kind": NEXT_STEP_TERMINAL, "drafts": (),
                             "publish": None},
-    # A declined comparison, settled and stable (D5). Terminal for the same
-    # reason as the two above -- it names no work -- and joins
-    # `NextStepSectionCoverageTests.NO_SECTION` beside them: it is this
-    # flow's own answer to "the person said no", and a section prescribing
-    # steps would invent the work the decline refused. `state` is never
-    # read here or anywhere else: the engine records that the offer was
-    # answered and never what the answer said (D5b/D5d).
-    "declined": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+    # A declined comparison AND a declined acid test, settled and stable
+    # (D5, D13). Terminal for the same reason as the two above -- it names
+    # no work -- and joins `NextStepSectionCoverageTests.NO_SECTION`
+    # beside them: it is this flow's own answer to "the person said no,
+    # twice", and a section prescribing steps would invent the work both
+    # declines refused. `state` is never read here or anywhere else: the
+    # engine records that each offer was answered and never what the
+    # answer said (D5b/D5d/D15b).
+    "declined": {"kind": NEXT_STEP_TERMINAL, "drafts": (),
                 "publish": None},
 
     # Repairs: work whose cost is already settled -- a person's attention, or
     # a run the flow already agreed to. Never an offer of the declared scale,
     # which is what separates this kind from `experiment` below.
-    "convert": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "convert": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                 "publish": _convert_publication},
-    "declare-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "declare-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                       "publish": _declare_first_publication},
-    "env-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "env-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                   "publish": _env_first_publication},
-    "wiring-first": {"kind": NEXT_STEP_REPAIR, "wiring": True,
+    "wiring-first": {"kind": NEXT_STEP_REPAIR, "drafts": ("wiring",),
                      "publish": _wiring_first_publication},
-    "poll-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "poll-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                    "publish": _poll_first_publication},
-    "report-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "report-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                      "publish": _report_first_publication},
     # The declared flow, before and after it has finished at pilot. Repairs
     # rather than experiments, and the distinction is not "does a machine
@@ -12637,21 +12915,31 @@ PROBE_NEXT_STEPS: dict[str, dict] = {
     # ask the standing rule's flow question -- and these two exist precisely
     # to withhold that offer until the pilot has run and every step has been
     # decided.
-    "pilot-first": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "pilot-first": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                     "publish": _pilot_first_publication},
-    "pilot-decisions": {"kind": NEXT_STEP_REPAIR, "wiring": False,
+    "pilot-decisions": {"kind": NEXT_STEP_REPAIR, "drafts": (),
                         "publish": _pilot_decisions_publication},
 
-    # Experiments: the three answers that spend machine time, and therefore the
-    # three the standing rule's flow question belongs at. `search-first`
+    # Experiments: the four answers that spend machine time, and therefore the
+    # four the standing rule's flow question belongs at. `search-first`
     # launches a search, which declares a scale of its own and is an experiment
-    # by this skill's own hard rule; `benchmark` is the offer to run; `piloted`
-    # is a run already made below the scale it declared.
-    "search-first": {"kind": NEXT_STEP_EXPERIMENT, "wiring": False,
+    # by this skill's own hard rule; `benchmark` is the offer to run;
+    # `validate` is the acid test -- the same apparatus with a single arm,
+    # which declares a scale of its own exactly as `benchmark` does (design
+    # D12); `piloted` is a run already made below the scale it declared.
+    "search-first": {"kind": NEXT_STEP_EXPERIMENT, "drafts": (),
                      "publish": _search_first_publication},
-    "benchmark": {"kind": NEXT_STEP_EXPERIMENT, "wiring": True,
+    "benchmark": {"kind": NEXT_STEP_EXPERIMENT, "drafts": ("wiring",),
                   "publish": _benchmark_publication},
-    "piloted": {"kind": NEXT_STEP_EXPERIMENT, "wiring": False,
+    # The acid test (design D10b-D17): reached once the comparison is
+    # declined and this question itself remains unanswered (D13's
+    # three-way branch, in `cmd_probe`). `validate-first` was rejected as
+    # a name -- the `*-first` suffix is the REPAIR family's own convention,
+    # and this is a peer offer beside `benchmark`, named for what it
+    # offers rather than what it repairs (design D12).
+    "validate": {"kind": NEXT_STEP_EXPERIMENT, "drafts": ("validation",),
+                "publish": _validate_publication},
+    "piloted": {"kind": NEXT_STEP_EXPERIMENT, "drafts": (),
                 "publish": _piloted_publication},
 }
 

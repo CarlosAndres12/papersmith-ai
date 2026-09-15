@@ -482,22 +482,35 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: three-way ladder comment above the new `declined` override each read
 #: differently from what they replaced. `benchmark` 98->97, `place`
 #: 54->53.
+#: `the-comparison-nobody-asked-for` (Unit 4b, design.md D11/D12/D13/D14):
+#: the acid test's own draft (`validation_proposal`), its offer
+#: constructor (`_validation_offer_question`/`_canonical_premises`), the
+#: `PROBE_DRAFTS` registry replacing the `wiring: bool` flag, and the
+#: three-way `benchmark`/`validate`/`declined` ladder branch are all new
+#: engine prose, not a domain word: twenty-one words already exempted
+#: here read naturally inside it and grew. `against` 185->188, `answered`
+#: 82->85, `answers` 101->104, `before` 238->239, `benchmark` 97->99,
+#: `beside` 95->98, `claim` 35->36, `declaration` 204->205, `empty`
+#: 123->127, `local` 34->37, `longer` 48->49, `makes` 43->44, `object`
+#: 30->33, `rather` 349->358, `remote` 61->65, `reported` 144->145,
+#: `small` 4->8, `something` 70->71, `validated` 7->8, `value` 235->239,
+#: `whose` 151->152. None shrank and none left the denylist.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 78, "admissible": 3, "after": 85, "against": 185,
-    "agreed": 26, "answered": 82, "answers": 101, "approved": 28,
-    "audit": 15, "before": 238, "benchmark": 97, "beside": 95,
-    "check": 151, "checkable": 3, "claim": 35, "command": 268,
-    "commands": 18, "compares": 24, "declaration": 204,
-    "destinations": 37, "empty": 123, "established": 4, "experiment": 24,
+    "actually": 78, "admissible": 3, "after": 85, "against": 188,
+    "agreed": 26, "answered": 85, "answers": 104, "approved": 28,
+    "audit": 15, "before": 239, "benchmark": 99, "beside": 98,
+    "check": 151, "checkable": 3, "claim": 36, "command": 268,
+    "commands": 18, "compares": 24, "declaration": 205,
+    "destinations": 37, "empty": 127, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 21, "isolated": 5, "leave": 11, "leaves": 36,
-    "local": 34, "longer": 48, "makes": 43, "materialized": 11,
+    "local": 37, "longer": 49, "makes": 44, "materialized": 11,
     "measured": 141, "measurement": 42, "module": 194, "notebooks": 110,
-    "object": 30, "pilot": 123, "place": 53, "produces": 51,
-    "rather": 349, "recorded": 76, "remedy": 54, "remote": 61,
-    "reported": 144, "resolves": 31, "ruled": 9, "runnable": 15,
-    "scaffolded": 10, "sitting": 9, "small": 4, "something": 70,
-    "steps": 139, "sweep": 7, "validated": 7, "value": 235, "whose": 151,
+    "object": 33, "pilot": 123, "place": 53, "produces": 51,
+    "rather": 358, "recorded": 76, "remedy": 54, "remote": 65,
+    "reported": 145, "resolves": 31, "ruled": 9, "runnable": 15,
+    "scaffolded": 10, "sitting": 9, "small": 8, "something": 71,
+    "steps": 139, "sweep": 7, "validated": 8, "value": 239, "whose": 152,
     "write": 107, "wrong": 51,
 }
 
@@ -711,9 +724,16 @@ class KitAgreementLockTests(unittest.TestCase):
 # after landing every S3-S13 field: still 96, still 1 file. Any OTHER
 # movement -- a rename campaign, an accidental sweep -- is refused here.
 L1_BASELINE_AT_S0 = 97
-L1_DELIBERATE_SHRINK = 2  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion;
+L1_DELIBERATE_SHRINK = 4  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion;
 #: and `fix/skills-critical-review`, where compressing the four per-document
-#: consumers' own comments dropped one prose mention of the first host by name.
+#: consumers' own comments dropped one prose mention of the first host by name
+#: (2 total). `the-comparison-nobody-asked-for` (Unit 4b, design D12) removed
+#: the bare local variable `proposal` -- `cmd_probe`'s own `wiring_proposal`
+#: call site and its `"wiring": proposal,` return-dict line -- in favour of
+#: the `PROBE_DRAFTS` dict comprehension's `drafts` variable, dropping 2 more
+#: standalone occurrences of the word (`\bproposal\b` never matches inside
+#: the identifier `wiring_proposal`, since there is no word boundary before
+#: it -- only the bare variable name itself ever counted here).
 #: A shrink in this count is the direction this pin wants -- it is recorded
 #: rather than absorbed because an unexplained MOVE is the defect, in either
 #: direction: a rename campaign looks exactly like this from outside.

@@ -1080,14 +1080,14 @@ class WiringProposalTests(unittest.TestCase):
     def test_the_draft_is_assembled_from_provenance_not_guessed(self):
         box = self.repo(modules=[("global_term.py", self.MODULE)],
                         baseline_files=["src/TOLLA/models.py"])
-        draft = impl.wiring_proposal(box, "Tolla", ["TOLLA"])
+        draft = impl.wiring_proposal(box, "Tolla", {"baselines": ["TOLLA"]})
         module = draft["new"]["modules"][0]
         self.assertEqual(module["sections"], ["5"])
         self.assertEqual(module["equations"], ["32", "33"])
         self.assertEqual(module["invariants"], ["bounded"])
 
     def test_it_says_what_it_needs_from_the_user_rather_than_deciding(self):
-        draft = impl.wiring_proposal(self.repo(), "Tolla", [])
+        draft = impl.wiring_proposal(self.repo(), "Tolla", {})
         self.assertEqual(draft["status"], "draft")
         needs = " ".join(draft["new"]["needs"] + draft["baseline"]["needs"]).lower()
         for asked in ("trainable terms", "backbone", "head", "entry point"):
@@ -1100,7 +1100,7 @@ class WiringProposalTests(unittest.TestCase):
             "from torchvision import models\n"
             "def build():\n"
             "    return models.resnet50(weights=None)\n")
-        draft = impl.wiring_proposal(box, "Tolla", ["TOLLA"])
+        draft = impl.wiring_proposal(box, "Tolla", {"baselines": ["TOLLA"]})
         found = [b["name"] for b in draft["offer"]["fromBaseline"]["backbones"]]
         self.assertEqual(found, ["resnet50"])
         # Nothing is suggested from a list: a forge for papers cannot know which
@@ -1109,7 +1109,7 @@ class WiringProposalTests(unittest.TestCase):
 
     def test_the_baseline_is_offered_as_a_candidate_never_as_editable(self):
         box = self.repo(baseline_files=["src/TOLLA/models.py", "src/TOLLA/train.py"])
-        draft = impl.wiring_proposal(box, "Tolla", ["TOLLA"])
+        draft = impl.wiring_proposal(box, "Tolla", {"baselines": ["TOLLA"]})
         candidate = draft["baseline"]["candidates"][0]
         self.assertEqual(candidate["package"], "TOLLA")
         self.assertEqual(len(candidate["files"]), 2)
@@ -5594,6 +5594,35 @@ class DeclinedComparisonTests(unittest.TestCase):
         self.discuss(box, question, answer)
         return question
 
+    def validation_question(self, box):
+        """D14's own construction site, mirroring `offer_question` above.
+        Reads the declaration exactly as `cmd_probe` does -- `revision`
+        defaults to `""` and `premises` to `{}` on a target that has not
+        declared `__implementation__` at all, matching every fixture this
+        class builds."""
+        declared = impl.resolve_implementation_declaration(box, "Method")
+        contract = declared["contract"] or {}
+        return impl._validation_offer_question(
+            box, "Method", contract.get("revision") or "",
+            contract.get("premises") or {})
+
+    def decline_validation(self, box, answer="not now"):
+        """Declines the acid test the identical way `decline` declines the
+        comparison -- D13's second question, reached only once the first is
+        already answered."""
+        question = self.validation_question(box)
+        self.discuss(box, question, answer)
+        return question
+
+    def decline_both(self, box, baselines=None, answer="not now"):
+        """The fully terminal `declined` state (D13): both the comparison
+        and the acid test answered. Most of this class's fixtures predate
+        the acid-test follow-up and reach `declined` through the comparison
+        alone; this is the helper for the ones whose intent is the fully
+        settled, twice-declined state."""
+        self.decline(box, baselines=baselines, answer=answer)
+        self.decline_validation(box, answer=answer)
+
     # --- the pole: without a decline this exact fixture is
     # `DeclareFirstBeforeTheRunTests`'s own `declare-first` (D5b's guard is
     # additive, not a replacement of the existing "absent" override) ---
@@ -5617,16 +5646,35 @@ class DeclinedComparisonTests(unittest.TestCase):
             list((box / "Method").glob("Results/*")), [],
             "a decline must create no Results artefact")
 
-    # --- D5b/D5d: the ladder branch itself ---
+    # --- D5b/D5d, extended by D13: the ladder branch itself ---
 
-    def test_declining_turns_the_offer_into_the_terminal_declined_answer(self):
-        box = self.box("terminal")
+    def test_declining_only_the_comparison_reaches_validate_not_declined(self):
+        """D13's own correction to D5b's original, single-question reading:
+        a declined comparison alone no longer reads as fully terminal -- the
+        acid test is asked next, and `validate` (not `declined`) is the
+        honest answer while it stands open."""
+        box = self.box("half-declined")
         self.decline(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "validate")
+        self.assertIsNotNone(probe["resolve"])
+        self.assertEqual(probe["resolve"]["kind"], "question")
+        self.assertIsNotNone(probe["validation"])
+        self.assertIsNone(probe["wiring"])
+        self.assertEqual(probe["decisions"]["comparison"]["state"], "answered")
+        self.assertIsNone(probe["decisions"]["validation"]["state"])
+
+    def test_declining_both_turns_the_offer_into_the_terminal_declined_answer(self):
+        box = self.box("terminal")
+        self.decline_both(box)
         probe = self.probe(box)
         self.assertEqual(probe["nextStep"], "declined")
         self.assertIsNone(probe["resolve"])
         self.assertEqual(probe["toDiscuss"], [])
         self.assertIsNone(probe["wiring"])
+        self.assertIsNone(probe["validation"])
+        self.assertEqual(probe["decisions"]["comparison"]["state"], "answered")
+        self.assertEqual(probe["decisions"]["validation"]["state"], "answered")
 
     # --- D6/D16/task 4.9: the `decisions.comparison` payload member ---
 
@@ -5660,13 +5708,13 @@ class DeclinedComparisonTests(unittest.TestCase):
 
     def test_re_running_probe_with_nothing_changed_stays_settled_declined(self):
         box = self.box("stable")
-        self.decline(box)
+        self.decline_both(box)
         self.assertEqual(self.probe(box)["nextStep"], "declined")
         self.assertEqual(self.probe(box)["nextStep"], "declined")
 
     def test_editing_a_method_module_leaves_the_decision_settled(self):
         box = self.box("edit")
-        self.decline(box)
+        self.decline_both(box)
         (box / "src/Method/called.py").write_text(
             _module("r01.md", ["3"], ["11", "12"], imports="import torch\n"),
             encoding="utf-8")
@@ -5737,6 +5785,7 @@ class DeclinedComparisonTests(unittest.TestCase):
         disk) is reproduced directly."""
         box = self.box("reopen")
         question = self.decline(box)
+        self.decline_validation(box)
         self.assertEqual(self.probe(box)["nextStep"], "declined")
         self.discuss(box, question, "yes, wire it")
         (box / "src" / "Method_Benchmark").mkdir(parents=True)
@@ -5774,11 +5823,907 @@ class DeclinedComparisonTests(unittest.TestCase):
         pre_fix_baselines = sorted(["Method_Benchmark", "Prior"])
         self.decline(box, baselines=pre_fix_baselines)
         self.assertEqual(self.probe(box)["nextStep"], "declare-first")
-        self.decline(box)  # today's corrected question text
+        self.decline_both(box)  # today's corrected question text, both offers
         first = self.probe(box)
         second = self.probe(box)
         self.assertEqual(first["nextStep"], "declined")
         self.assertEqual(second["nextStep"], "declined")
+
+class ValidationOfferQuestionConstructorTests(unittest.TestCase):
+    """D14/D14a: one constructor, one spelling, for the acid-test offer's
+    own question text -- the bucket key `_discussion_buckets` folds by, so
+    a second spelling anywhere would open a second, never-retiring bucket
+    for a decision somebody already made. The same discipline
+    `_benchmark_offer_question` documents for its own bucket key (D5a).
+    """
+
+    TARGET = Path("implementations/box")
+    NAME = "Method"
+
+    def test_the_publication_is_byte_identical_to_the_constructor(self):
+        revision, premises = "r01.md", {"metric": "acc"}
+        published = impl._validate_publication(
+            self.TARGET, self.NAME,
+            {"revision": revision, "premises": premises})
+        self.assertEqual(
+            published["question"],
+            impl._validation_offer_question(
+                self.TARGET, self.NAME, revision, premises))
+
+    def test_a_different_revision_produces_different_text(self):
+        first = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "acc"})
+        second = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r02.md", {"metric": "acc"})
+        self.assertNotEqual(first, second)
+
+    def test_different_premises_content_produces_different_text(self):
+        first = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "acc"})
+        second = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "f1"})
+        self.assertNotEqual(first, second)
+
+    def test_cosmetic_key_reordering_does_not_move_the_text(self):
+        # Python-level key order never reaches the canonical rendering --
+        # sorted(keys) is applied regardless of insertion order, the
+        # runtime analogue of re-indenting/reflowing the declaration's own
+        # source.
+        first = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md",
+            {"metric": "acc", "direction": "higher"})
+        second = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md",
+            {"direction": "higher", "metric": "acc"})
+        self.assertEqual(first, second)
+
+    def test_the_comparisons_own_baseline_set_never_moves_this_key(self):
+        """D14a's 'Independence of the two decisions': the acid-test key
+        never reads `baselines` at all -- it is not even a parameter."""
+        source = inspect.getsource(impl._validation_offer_question)
+        self.assertNotIn("baselines", source)
+
+    def test_a_fifth_key_added_to_premises_moves_the_key(self):
+        """The under-fire guard (task 4b.7): field-name-aware
+        canonicalization would UNDER-fire on exactly this case -- a fifth
+        key the kit's own comment never suggested changes the declared
+        criterion and MUST move the key, or a genuine change would report
+        as the settled decline, which is the worse failure (D14a)."""
+        four = {"prediction": "a class label", "statisticalUnit": "subject",
+                "metric": "balancedAccuracy", "direction": "higher"}
+        five = {**four, "extra": "a fifth key nobody suggested"}
+        first = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", four)
+        second = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", five)
+        self.assertNotEqual(first, second)
+
+    def test_the_canonical_rendering_refuses_nothing(self):
+        """Spec 'The canonical rendering names no key and refuses
+        nothing': unexpected keys, missing all four suggested keys, and a
+        `premises` bound to a non-mapping value are all rendered, none
+        raises."""
+        for premises in (
+            {"unexpectedKey": "x"},
+            {},
+            "not a mapping at all",
+            ["also", "not", "a", "mapping"],
+            None,
+        ):
+            with self.subTest(premises=premises):
+                text = impl._validation_offer_question(
+                    self.TARGET, self.NAME, "r01.md", premises)
+                self.assertIsInstance(text, str)
+
+    def test_only_one_place_in_the_engine_builds_this_sentence(self):
+        source = ENGINE.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count("is ready to run its acid test"), 1,
+            "the acid-test offer's own sentence must be built in exactly "
+            "one place: `_validation_offer_question`")
+
+    def test_the_ladder_calls_the_constructor_rather_than_a_literal(self):
+        source = inspect.getsource(impl.cmd_probe)
+        self.assertIn("_validation_offer_question(", source)
+
+    def test_the_offer_never_embeds_raw_source_bytes(self):
+        """D14a: only the PARSED, sorted value is embedded. Re-declaring an
+        identical mapping with different Python-level formatting (the
+        runtime analogue of a re-indent/requote/reflow/trailing comma at
+        the source level) produces identical text, because the parse
+        already discarded all four before this function ever sees the
+        value."""
+        first = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md",
+            {"metric": "acc", "direction": "higher",})
+        second = impl._validation_offer_question(
+            self.TARGET,
+            self.NAME,
+            "r01.md",
+            {
+                "direction": "higher",
+                "metric": "acc",
+            },
+        )
+        self.assertEqual(first, second)
+
+    def test_the_offer_names_a_single_arm_with_no_rival_and_no_menu(self):
+        text = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "acc"})
+        self.assertIn("no rival arm", text)
+        self.assertIn("real data", text)
+        self.assertIn("small scale", text)
+        self.assertNotIn("already proved", text)
+
+    def test_the_offer_closes_with_the_standing_experiment_choice(self):
+        text = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "acc"})
+        self.assertTrue(text.endswith(impl.NEXT_STEP_EXPERIMENT_CHOICE))
+
+    def test_the_offer_states_costs_shape_never_its_magnitude(self):
+        text = impl._validation_offer_question(
+            self.TARGET, self.NAME, "r01.md", {"metric": "acc"})
+        self.assertIn("machine time", text)
+        self.assertIn("occupies this machine", text)
+        self.assertIn("metered quota", text)
+        self.assertIn("service account", text)
+        self.assertIn("separate decision", text)
+        self.assertIn("costs nothing to unwind", text)
+        # No invented magnitude: no digit anywhere in the fixed cost-shape
+        # tail. Scoped past the target/revision text, which may
+        # legitimately carry its own digits (a revision filename).
+        tail = text.split("a real run spends machine time", 1)[1]
+        self.assertNotRegex(tail, r"\d")
+
+
+class CanonicalPremisesRenderingTests(unittest.TestCase):
+    """D14a/D14b: `_canonical_premises` is a TOTAL projection, never a
+    validator -- "a function that can say no has become a schema."""
+
+    def test_keys_are_sorted_regardless_of_declaration_order(self):
+        a = impl._canonical_premises({"metric": "acc", "direction": "higher"})
+        b = impl._canonical_premises({"direction": "higher", "metric": "acc"})
+        self.assertEqual(a, b)
+
+    def test_every_present_key_is_named(self):
+        rendered = impl._canonical_premises(
+            {"prediction": "p", "statisticalUnit": "u",
+             "metric": "m", "direction": "d"})
+        for key in ("prediction", "statisticalUnit", "metric", "direction"):
+            self.assertIn(key, rendered)
+
+    def test_an_unexpected_key_is_rendered_not_refused(self):
+        rendered = impl._canonical_premises({"somethingNobodySuggested": 1})
+        self.assertIn("somethingNobodySuggested", rendered)
+
+    def test_missing_all_four_suggested_keys_is_rendered_not_refused(self):
+        self.assertEqual(impl._canonical_premises({}), "")
+
+    def test_a_non_mapping_value_is_rendered_not_refused(self):
+        for value in ("prose instead of a mapping", ["a", "list"], None, 42):
+            with self.subTest(value=value):
+                rendered = impl._canonical_premises(value)
+                self.assertIsInstance(rendered, str)
+
+    def test_no_suggested_field_name_is_hardcoded_as_required(self):
+        """The three-reasons rejection of field-name-aware canonicalization
+        (D14a): the function's own body names none of the kit's suggested
+        four fields -- it is a total projection over whatever keys are
+        present, never a schema that knows which ones matter."""
+        source = inspect.getsource(impl._canonical_premises)
+        body = source.split('"""', 2)[-1]
+        for field in ("prediction", "statisticalUnit", "metric", "direction"):
+            self.assertNotIn(f'"{field}"', body)
+            self.assertNotIn(f"'{field}'", body)
+
+
+class ValidationProposalTests(unittest.TestCase):
+    """D11: the acid test's own draft -- `wiring_proposal`'s `new` half,
+    with no rival, plus the yardstick and a scale."""
+
+    MODULE = ('__provenance__ = {"revision": "r16.md", "sections": ["5"],\n'
+              '                  "equations": ["32", "33"], "invariants": ["bounded"]}\n')
+
+    def repo(self, modules=(), baseline_files=(), levels=None, name="Tolla"):
+        box = Path(tempfile.mkdtemp(prefix="pp-validate-"))
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        pkg = box / "src" / impl.package_name(name)
+        pkg.mkdir(parents=True)
+        for filename, source in modules:
+            (pkg / filename).write_text(source)
+        for path in baseline_files:
+            full = box / path
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text("x = 1\n")
+        if levels is not None:
+            (pkg / "__init__.py").write_text(
+                f"__levels__ = {levels!r}\n", encoding="utf-8")
+        return box
+
+    def facts(self, baselines=(), revision="r01.md", premises=None):
+        return {"baselines": list(baselines), "revision": revision,
+                "premises": premises if premises is not None else {}}
+
+    def test_the_draft_names_the_methods_own_modules_as_the_single_arm(self):
+        box = self.repo(modules=[("global_term.py", self.MODULE)],
+                        baseline_files=["src/TOLLA/models.py"])
+        draft = impl.validation_proposal(
+            box, "Tolla", self.facts(baselines=["TOLLA"]))
+        module = draft["arm"]["modules"][0]
+        self.assertEqual(module["sections"], ["5"])
+        self.assertEqual(module["equations"], ["32", "33"])
+
+    def test_the_rival_half_is_absent_even_when_baselines_exist_on_disk(self):
+        box = self.repo(baseline_files=["src/TOLLA/models.py"])
+        draft = impl.validation_proposal(
+            box, "Tolla", self.facts(baselines=["TOLLA"]))
+        self.assertNotIn("baseline", draft)
+
+    def test_data_reads_from_the_baseline_environment_on_disk(self):
+        box = self.repo(baseline_files=["src/TOLLA/models.py"])
+        (box / "src/TOLLA/models.py").write_text(
+            "from torchvision import models\n"
+            "def build():\n"
+            "    return models.resnet50(weights=None)\n")
+        draft = impl.validation_proposal(
+            box, "Tolla", self.facts(baselines=["TOLLA"]))
+        found = [b["name"] for b in draft["data"]["fromBaseline"]["backbones"]]
+        self.assertEqual(found, ["resnet50"])
+
+    def test_the_scale_reads_the_rung_above_the_floor(self):
+        box = self.repo(levels=["none", "pilot", "remote"])
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertEqual(draft["scale"]["rung"], "pilot")
+
+    def test_scale_is_asked_when_levels_is_empty(self):
+        box = self.repo(levels=[])
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertIsNone(draft["scale"]["rung"])
+        self.assertTrue(draft["scale"]["needs"])
+
+    def test_scale_is_asked_when_no_levels_are_declared_at_all(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertIsNone(draft["scale"]["rung"])
+        self.assertTrue(draft["scale"]["needs"])
+
+    def test_the_claim_quotes_premises_and_revision_verbatim(self):
+        box = self.repo()
+        premises = {"metric": "acc", "direction": "higher"}
+        draft = impl.validation_proposal(
+            box, "Tolla", self.facts(revision="r03.md", premises=premises))
+        self.assertEqual(draft["claim"]["revision"], "r03.md")
+        self.assertEqual(draft["claim"]["premises"], premises)
+
+    def test_placement_names_both_options_and_decides_neither(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertEqual(set(draft["placement"]["options"]), {"local", "remote"})
+        self.assertNotIn("placement", draft["placement"])
+
+    def test_a_job_name_is_already_proposed(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertEqual(draft["placement"]["job"],
+                         impl._validation_job_name("Tolla"))
+
+    def test_the_service_is_never_proposed(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertIsNone(draft["placement"]["service"])
+        needs = " ".join(draft["placement"]["needs"]).lower()
+        self.assertIn("service", needs)
+        self.assertIn("asked", needs)
+
+    def test_remote_knobs_are_named_as_available_none_preselected(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        needs = " ".join(draft["placement"]["needs"])
+        for knob in ("accelerator_kind", "accelerator_architectures",
+                    "environment_requirements", "environment_index_url",
+                    "local_budget_seconds"):
+            self.assertIn(knob, needs)
+
+    def test_the_evidence_path_does_not_borrow_the_comparisons_name(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertNotIn("Benchmark", draft["evidence"]["path"])
+        self.assertNotIn("benchmark", draft["evidence"]["path"].lower())
+
+    def test_needs_asks_for_the_reference_figure_and_names_the_revision(self):
+        box = self.repo()
+        draft = impl.validation_proposal(
+            box, "Tolla", self.facts(revision="r07.md"))
+        needs = " ".join(draft["needs"])
+        self.assertIn("reference figure", needs)
+        self.assertIn("r07.md", needs)
+
+    def test_the_engine_never_extracts_a_number_from_any_document(self):
+        """spec 'The engine never extracts a number from prose': the whole
+        draft-building function reads no document text at all -- it reads
+        the parsed declaration and the repository's own code, never a
+        `.md` file's prose."""
+        source = inspect.getsource(impl.validation_proposal)
+        self.assertNotIn(".read_text", source)
+        self.assertNotIn("prose_of", source)
+
+    def test_the_draft_shape_mirrors_wiring_proposals_own_envelope(self):
+        box = self.repo()
+        draft = impl.validation_proposal(box, "Tolla", self.facts())
+        self.assertEqual(draft["status"], "draft")
+        self.assertIn("instruction", draft)
+        self.assertIn("needs", draft)
+
+
+class AcidTestKitGuidanceTests(unittest.TestCase):
+    """D15a's first naming-leak site (task 4b.18): the kit's own `__steps__`
+    example, shown to every person wiring ANY step -- including an acid
+    test -- must name the method's own package, never a `_Benchmark`-
+    suffixed one, which would teach exactly the habit the structural
+    prohibition forbids."""
+
+    def test_the_steps_example_names_the_methods_own_package(self):
+        example = impl.authored_package_init("Method")
+        self.assertIn('"module": "Example_Method.steps"', example)
+        self.assertNotIn("Example_Method_Benchmark", example)
+
+
+class AcidTestNoCrossSkillReachTests(unittest.TestCase):
+    """spec 'An Accepted Acid Test Is Discussed Entirely Within This Skill
+    And Session' (task 4b.20): the validation path imports, reads and
+    invokes nothing outside this skill and the shared engine."""
+
+    FORBIDDEN = ("experimental-deliberation", "proposal-deliberation",
+                "deliberation_engine")
+
+    def test_the_draft_and_offer_functions_reach_no_other_skill(self):
+        source = "".join(inspect.getsource(fn) for fn in (
+            impl.validation_proposal, impl._validation_offer_question,
+            impl._validate_publication, impl._canonical_premises,
+            impl._validation_job_name))
+        for forbidden in self.FORBIDDEN:
+            self.assertNotIn(forbidden, source)
+
+
+class AcidTestLadderThreeWayTests(unittest.TestCase):
+    """D13's three-way branch, end to end (task 4b.15): unanswered ->
+    `benchmark`; comparison answered -> `validate` with a draft; both
+    answered -> `declined` with both dates."""
+
+    def box(self, suffix):
+        box = FORGE / "implementations" / f"_e2e_threeway_{suffix}_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src/Method").mkdir(parents=True)
+        (box / "src/Prior").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/called.py").write_text(
+            _module("r01.md", ["3"], ["11"], imports="import torch\n"),
+            encoding="utf-8")
+        (box / "src/Prior/model.py").write_text("import torch\n", encoding="utf-8")
+        return box
+
+    def probe(self, box):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "probe", "--target", str(box),
+             "--name", "Method", "--revision", "r01.md"],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout or "{}")
+
+    def discuss(self, box, question, answer):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "discuss", "--target", str(box),
+             "--name", "Method", "--about", "record",
+             "--question", question, "--answer", answer],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+    def test_the_three_way_branch_end_to_end(self):
+        box = self.box("e2e")
+        baselines = impl.previous_implementations(box, "Method")
+        comparison_question = impl._benchmark_offer_question(
+            box, "Method", baselines)
+
+        # Comparison declined; the acid test's own question opens.
+        self.discuss(box, comparison_question, "not now")
+        second = self.probe(box)
+        self.assertEqual(second["nextStep"], "validate")
+        self.assertIsNotNone(second["validation"])
+        self.assertEqual(second["validation"]["status"], "draft")
+        self.assertEqual(second["decisions"]["comparison"]["state"], "answered")
+        self.assertIsNone(second["decisions"]["validation"]["state"])
+
+        # Both declined; fully terminal, both dates recorded.
+        declared = impl.resolve_implementation_declaration(box, "Method")
+        contract = declared["contract"] or {}
+        validation_question = impl._validation_offer_question(
+            box, "Method", contract.get("revision") or "",
+            contract.get("premises") or {})
+        self.discuss(box, validation_question, "not now")
+        third = self.probe(box)
+        self.assertEqual(third["nextStep"], "declined")
+        self.assertIsNone(third["resolve"])
+        self.assertIsNone(third["wiring"])
+        self.assertIsNone(third["validation"])
+        self.assertEqual(third["decisions"]["comparison"]["state"], "answered")
+        self.assertEqual(third["decisions"]["validation"]["state"], "answered")
+        self.assertIsNotNone(third["decisions"]["comparison"]["at"])
+        self.assertIsNotNone(third["decisions"]["validation"]["at"])
+        self.assertNotEqual(third["decisions"]["comparison"]["asked"],
+                            third["decisions"]["validation"]["asked"])
+
+
+class AcidTestShadowEnumerationTests(unittest.TestCase):
+    """D13's proof obligation (task 4b.12), and its own admitted open
+    question (task 4b.13) -- measured, not assumed. Each of the six
+    named repair overrides' own precondition is forced true by mutating
+    the REAL reader's output (never a hand-built stub, which risks
+    omitting a key some other part of `cmd_probe` also reads off the same
+    dict), and `declined` is confirmed to still win -- proving none of them
+    shadows the three-way branch, which sits ahead of all six in the same
+    `if`/`elif` chain.
+    """
+
+    def box(self, suffix):
+        box = FORGE / "implementations" / f"_e2e_shadow_{suffix}_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src/Method").mkdir(parents=True)
+        (box / "src/Prior").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/called.py").write_text(
+            _module("r01.md", ["3"], ["11"], imports="import torch\n"),
+            encoding="utf-8")
+        (box / "src/Prior/model.py").write_text("import torch\n", encoding="utf-8")
+        return box
+
+    def decline_both(self, box):
+        baselines = impl.previous_implementations(box, "Method")
+        cq = impl._benchmark_offer_question(box, "Method", baselines)
+        subprocess.run(
+            [sys.executable, str(CLI), "discuss", "--target", str(box),
+             "--name", "Method", "--about", "record",
+             "--question", cq, "--answer", "not now"],
+            check=True, capture_output=True, cwd=FORGE)
+        vq = impl._validation_offer_question(box, "Method", "", {})
+        subprocess.run(
+            [sys.executable, str(CLI), "discuss", "--target", str(box),
+             "--name", "Method", "--about", "record",
+             "--question", vq, "--answer", "not now"],
+            check=True, capture_output=True, cwd=FORGE)
+
+    @contextlib.contextmanager
+    def _forced_guards(self, *, unfaithful=False, report_drift=False,
+                       report_live_undeclared=False, remote_pending=False,
+                       search_absent=False, pilot_incomplete=False):
+        """Each named guard, forced true by mutating the REAL reader's
+        return value in place -- see the class docstring for why."""
+        stack = contextlib.ExitStack()
+        if unfaithful:
+            stack.enter_context(unittest.mock.patch.object(
+                impl, "benchmark_unfaithfulness",
+                return_value=[{"module": "forced", "equations": ["1"]}]))
+        if report_drift or report_live_undeclared:
+            real = impl.report_state
+            def fake_report(target, name, package, _real=real):
+                result = _real(target, name, package)
+                if report_drift:
+                    result["status"] = "drift"
+                if report_live_undeclared:
+                    result["live"] = "undeclared"
+                return result
+            stack.enter_context(unittest.mock.patch.object(
+                impl, "report_state", fake_report))
+        if remote_pending:
+            real = impl.remote_execution_state
+            def fake_remote(target, name, package, _real=real):
+                result = _real(target, name, package)
+                result["status"] = "pending"
+                return result
+            stack.enter_context(unittest.mock.patch.object(
+                impl, "remote_execution_state", fake_remote))
+        if search_absent:
+            real = impl.search_state
+            def fake_search(*a, _real=real, **kw):
+                result = _real(*a, **kw)
+                result["recordFound"] = False
+                return result
+            stack.enter_context(unittest.mock.patch.object(
+                impl, "search_state", fake_search))
+        if pilot_incomplete:
+            real = impl.pilot_completeness_state
+            def fake_pilot(*a, _real=real, **kw):
+                result = _real(*a, **kw)
+                result["status"] = "incomplete"
+                return result
+            stack.enter_context(unittest.mock.patch.object(
+                impl, "pilot_completeness_state", fake_pilot))
+        with stack:
+            yield
+
+    def probe_in_process(self, box):
+        args = argparse.Namespace(target=str(box), name="Method",
+                                  revision="r01.md")
+        return impl.cmd_probe(args)
+
+    def test_declined_outranks_every_repair_override_even_when_all_are_forced(self):
+        box = self.box("mutation")
+        self.decline_both(box)
+        with self._forced_guards(
+                unfaithful=True, report_drift=True, remote_pending=True,
+                search_absent=True, pilot_incomplete=True):
+            probe = self.probe_in_process(box)
+        self.assertEqual(probe["nextStep"], "declined")
+
+    def test_the_forced_state_is_real_a_negative_control(self):
+        """Without the declines, the identical forced state reaches one of
+        the repair overrides -- proving the forcing above genuinely moves
+        the ladder rather than being inert."""
+        box = self.box("control")
+        with self._forced_guards(
+                unfaithful=True, report_drift=True, remote_pending=True,
+                search_absent=True, pilot_incomplete=True):
+            probe = self.probe_in_process(box)
+        self.assertIn(probe["nextStep"],
+                     {"wiring-first", "env-first", "poll-first",
+                      "search-first", "report-first", "pilot-first",
+                      "pilot-decisions", "declare-first"})
+        self.assertNotEqual(probe["nextStep"], "declined")
+
+    def test_declare_firsts_second_branch_is_unreachable_once_declined(self):
+        """Task 4b.13's own measurement: `declare-first`'s second branch
+        (`report.get('live') == 'undeclared'`, unconditioned on declaration
+        status) sits in an `elif` several clauses after the three-way
+        branch's own `if` -- so once `declined` matches, that branch is
+        structurally unreachable in the same evaluation, exactly as the
+        other five overrides are. Not reachable; no escalation needed."""
+        box = self.box("declare-first-second")
+        self.decline_both(box)
+        with self._forced_guards(report_live_undeclared=True):
+            probe = self.probe_in_process(box)
+        self.assertEqual(probe["nextStep"], "declined")
+
+    def test_declare_firsts_second_branch_is_real_a_negative_control(self):
+        box = self.box("declare-first-second-control")
+        with self._forced_guards(report_live_undeclared=True):
+            probe = self.probe_in_process(box)
+        self.assertEqual(probe["nextStep"], "declare-first")
+
+
+class AcidTestInvariantTests(unittest.TestCase):
+    """D15a/D15b: an accepted acid test writes only into the method's own
+    surfaces, and creates no benchmark-named structure (tasks 4b.16,
+    4b.17, extended to remote placement by 4b.42)."""
+
+    def _box(self, suffix):
+        box = FORGE / "implementations" / f"_e2e_acidtest_{suffix}_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True, exist_ok=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        write_fixture_interpreter(
+            box / ".venv" / ("Scripts" if os.name == "nt" else "bin"))
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        return box
+
+    def _commit(self, box):
+        git = ["git", "-c", "user.email=forge@example.invalid",
+               "-c", "user.name=forge", "-C", str(box)]
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        subprocess.run(git + ["add", "-A"], check=True, capture_output=True)
+        subprocess.run(git + ["commit", "-qm", "toy"], check=True,
+                       capture_output=True)
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE)
+
+    def test_answering_the_question_alone_creates_nothing(self):
+        """spec 'The Acid Test Materializes Nothing Up Front', scenarios
+        1/2: asking, and answering with acceptance, creates no file beyond
+        the ledger the answer itself is recorded in."""
+        box = self._box("ask")
+        before = {p.relative_to(box) for p in box.rglob("*") if p.is_file()}
+        question = impl._validation_offer_question(box, "Method", "", {})
+        proc = self.run_cli("discuss", "--target", str(box), "--name", "Method",
+                            "--about", "record", "--question", question,
+                            "--answer", "yes, run it")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        after = {p.relative_to(box) for p in box.rglob("*") if p.is_file()}
+        self.assertEqual(after - before,
+                         {Path("Method/.implementation/position.jsonl")})
+
+    def test_a_wired_and_run_local_acid_test_creates_no_benchmark_package(self):
+        """D15a's stronger invariant (task 4b.17), placement local: after
+        wiring and RUNNING the acid test -- not merely answering the
+        question -- no `src/Method_Benchmark/` path exists, `harness_gaps`
+        is unchanged, no receipt entry carries `stage: "harness"`, and no
+        member of `harness_destinations()` was written."""
+        box = self._box("run-local")
+        (box / "src" / "Method" / "validation.py").write_text(
+            "def run_validation():\n    return None\n", encoding="utf-8")
+        (box / "src" / "Method" / "__init__.py").write_text(
+            "__steps__ = {'validation': {'module': 'Method.validation',\n"
+            "                            'function': 'run_validation',\n"
+            "                            'placement': 'local'}}\n",
+            encoding="utf-8")
+        self._commit(box)
+
+        before_gaps = impl.harness_gaps(box, "Method")
+        proc = self.run_cli("step", "--target", str(box), "--name", "Method",
+                            "--session", "s1", "--step", "validation")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["outcome"], "returned")
+
+        self.assertFalse((box / "src" / "Method_Benchmark").exists())
+        self.assertEqual(impl.harness_gaps(box, "Method"), before_gaps)
+        receipt = impl.read_materialization_receipt(box)
+        stages = {entry.get("stage") for entry in receipt.get("entries", [])}
+        self.assertNotIn("harness", stages)
+        for destination in impl.harness_destinations("Method"):
+            self.assertFalse((box / destination).exists())
+
+    def test_a_wired_and_run_remote_acid_test_creates_no_benchmark_package(self):
+        """The identical invariant, placement remote (task 4b.42) -- the
+        job-folder path is not a back door: `jobfolder.generate_job`
+        writes under `tools/`, outside every `materialize` stage list, so
+        `harness_gaps`/`harness_destinations` are unaffected even by the
+        generated job folder's own contents."""
+        rcli = impl._load_remote_execution_cli()
+        rcli.ADAPTER.register_metadata(
+            "acid-test-fake-service",
+            lambda run_config: ("fake-metadata.json",
+                                json.dumps({"ok": True})))
+        box = self._box("run-remote")
+        (box / "src" / "Method" / "validation.py").write_text(
+            "def run_validation():\n    return None\n", encoding="utf-8")
+        self._commit(box)
+
+        before_gaps = impl.harness_gaps(box, "Method")
+        with unittest.mock.patch.object(
+                rcli.JOBFOLDER, "verify_pin_preconditions", return_value=None):
+            job_dir = rcli.JOBFOLDER.generate_job(
+                target=box, service="acid-test-fake-service",
+                job_name=impl._validation_job_name("Method"),
+                product="Method", commit="a" * 40,
+                repo_url="https://example.invalid/r.git", repo_ref="main",
+                clone_paths=["src/Method"],
+                run_module="Method.validation", run_function="run_validation")
+
+        self.assertFalse((box / "src" / "Method_Benchmark").exists())
+        self.assertEqual(impl.harness_gaps(box, "Method"), before_gaps)
+        self.assertTrue(job_dir.is_relative_to(box / "tools"))
+        written = {str(p.relative_to(box)) for p in job_dir.rglob("*")
+                  if p.is_file()}
+        for destination in impl.harness_destinations("Method"):
+            self.assertNotIn(destination, written)
+
+
+class AcidTestRemotePlacementTests(unittest.TestCase):
+    """D11a/D11d, spec sixth revision: the acid-test draft's own
+    `placement` section (tasks 4b.30, 4b.32, 4b.37)."""
+
+    def repo(self, levels=None, name="Method"):
+        box = Path(tempfile.mkdtemp(prefix="pp-validate-remote-"))
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        pkg = box / "src" / impl.package_name(name)
+        pkg.mkdir(parents=True)
+        if levels is not None:
+            (pkg / "__init__.py").write_text(
+                f"__levels__ = {levels!r}\n", encoding="utf-8")
+        return box
+
+    def facts(self, **overrides):
+        base = {"baselines": [], "revision": "r01.md", "premises": {}}
+        base.update(overrides)
+        return base
+
+    def test_an_undeclared_placement_entry_is_never_defaulted(self):
+        """spec scenario 2: a wired step's own `placement` entry carries
+        exactly what the person chose -- `flow_acts` blocks rather than
+        defaulting when it is absent, and this test would go red on a
+        silently-introduced default."""
+        rows = [{"step": "validation", "walk": "notWalked", "rung": None,
+                "advances": 1, "notebooks": []}]
+        steps = {"validation": {"module": "Method.validation",
+                                "function": "run_validation",
+                                "advances": 1}}  # no `placement` key at all
+        acts = impl.flow_acts(rows, steps, jobs=[])
+        self.assertEqual(acts[0]["act"], impl.ACT_BLOCKED)
+        self.assertIsNone(acts[0]["placement"])
+
+    def test_a_targets_own_remote_rung_name_is_read_only_as_scale(self):
+        """spec scenario 3: a target whose own `__levels__` names a rung
+        `remote` (matches the live target). The draft's placement and
+        scale sections stay distinct."""
+        box = self.repo(levels=["none", "remote"])
+        draft = impl.validation_proposal(box, "Method", self.facts())
+        self.assertEqual(draft["scale"]["rung"], "remote")
+        self.assertNotIn("placement", draft["placement"])
+        self.assertEqual(set(draft["placement"]["options"]), {"local", "remote"})
+
+    def test_empty_levels_does_not_rule_out_remote_placement(self):
+        """spec 'An Empty Declared Rung Ladder Does Not Constrain
+        Placement': with `__levels__` empty, the placement section still
+        names both options -- it never reads or implies that an empty
+        ladder rules out a worker."""
+        box = self.repo(levels=[])
+        draft = impl.validation_proposal(box, "Method", self.facts())
+        self.assertEqual(set(draft["placement"]["options"]), {"local", "remote"})
+        placement_text = " ".join(
+            str(v) for v in draft["placement"].values()).lower()
+        self.assertNotIn("cannot", placement_text)
+        self.assertNotIn("rules out", placement_text)
+
+    def test_an_empty_ladder_routes_a_remote_step_identically_grading_by_walk(self):
+        """spec scenario 1: with `__levels__` empty, a step declaring
+        `placement: "remote"` still routes through `flow_acts` -- only the
+        grading falls back from by-rung to walked/not-walked (D11d)."""
+        rows = [{"step": "validation", "walk": "notWalked", "rung": None,
+                "advances": 1, "notebooks": []}]
+        steps = {"validation": {"module": "Method.validation",
+                                "function": "run_validation", "advances": 1,
+                                "placement": "remote", "job": "j",
+                                "service": "svc"}}
+        acts = impl.flow_acts(rows, steps, jobs=[], level=None, levels=[])
+        self.assertEqual(acts[0]["act"], impl.ACT_GENERATE_JOB)
+
+
+class AcidTestRemoteExecutionIntegrationTests(unittest.TestCase):
+    """D11b (task 4b.38, integration -- measured, not left as prose): a
+    remote acid-test step reaches a worker through the EXISTING, unmodified
+    remote-execution path. No acid-test-specific branch exists anywhere in
+    it -- proved by walking the identical, already-generic machinery every
+    comparison step already walks."""
+
+    def test_flow_acts_routes_a_remote_acid_test_step_generically(self):
+        """`flow_acts` is generic over any declared step's `placement`/
+        `job`/`service` (design D11b) -- no code in it distinguishes an
+        acid-test step from a comparison step. Proved directly: a single
+        declared step named 'validation', placement remote, with no job
+        folder on disk yet, routes to `ACT_GENERATE_JOB` exactly as a
+        comparison step would."""
+        rows = [{"step": "validation", "walk": "notWalked", "rung": None,
+                "advances": 1, "notebooks": []}]
+        steps = {"validation": {"module": "Method.validation",
+                                "function": "run_validation",
+                                "advances": 1, "placement": "remote",
+                                "job": "method-validate", "service": "svc"}}
+        acts = impl.flow_acts(rows, steps, jobs=[])
+        self.assertEqual(len(acts), 1)
+        self.assertEqual(acts[0]["act"], impl.ACT_GENERATE_JOB)
+        self.assertEqual(acts[0]["job"], "method-validate")
+
+    def test_a_remote_acid_test_step_generates_a_job_folder_identically(self):
+        """Scenario 1: the generate/rehearse/launch progression is reached
+        through machinery this change leaves unmodified -- proved by
+        actually generating a job folder for a single-arm acid-test step
+        through `jobfolder.generate_job`, unedited."""
+        rcli = impl._load_remote_execution_cli()
+        rcli.ADAPTER.register_metadata(
+            "acid-test-fake-service",
+            lambda run_config: ("fake-metadata.json",
+                                json.dumps({"ok": True})))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            pkg = target / "src" / "Method"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "validation.py").write_text(
+                "def run_validation():\n    return None\n", encoding="utf-8")
+            with unittest.mock.patch.object(
+                    rcli.JOBFOLDER, "verify_pin_preconditions",
+                    return_value=None):
+                job_dir = rcli.JOBFOLDER.generate_job(
+                    target=target, service="acid-test-fake-service",
+                    job_name=impl._validation_job_name("Method"),
+                    product="Method", commit="a" * 40,
+                    repo_url="https://example.invalid/r.git", repo_ref="main",
+                    clone_paths=["src/Method"],
+                    run_module="Method.validation",
+                    run_function="run_validation")
+            self.assertTrue(
+                job_dir.is_relative_to(target.resolve() / "tools"))
+            run_config = json.loads(
+                (job_dir / "run-config.json").read_text(encoding="utf-8"))
+            self.assertEqual(run_config["run"]["module"], "Method.validation")
+            self.assertEqual(run_config["run"]["function"], "run_validation")
+
+    def test_the_clone_path_check_needs_no_single_arm_branch(self):
+        """Scenario 2: `resolve_clone_paths()` validates the acid test's
+        smaller single-arm import surface using the identical check every
+        other step uses -- this change adds no code to `jobfolder.py` at
+        all, so there is no single-arm-specific branch for it to have."""
+        rcli = impl._load_remote_execution_cli()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            pkg = target / "src" / "Method"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "validation.py").write_text(
+                "def run_validation():\n    return None\n", encoding="utf-8")
+            result = rcli.JOBFOLDER.resolve_clone_paths(
+                target, ["Method.validation"], ["src/Method"])
+        self.assertEqual(result["computedNotDeclared"], [])
+        self.assertEqual(result["unresolved"], [])
+
+    def test_the_remote_run_carries_the_notebook_already_chosen(self):
+        """Scenario 3: `--run-notebook` carries the notebook already
+        chosen for the run, never a second implementation of it."""
+        rcli = impl._load_remote_execution_cli()
+        rcli.ADAPTER.register_metadata(
+            "acid-test-fake-service",
+            lambda run_config: ("fake-metadata.json",
+                                json.dumps({"ok": True})))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            pkg = target / "src" / "Method"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            notebooks = target / "Method" / "Notebooks"
+            notebooks.mkdir(parents=True)
+            (notebooks / "validation.ipynb").write_text(json.dumps({
+                "cells": [{"cell_type": "code", "source": ["import Method\n"]}],
+                "metadata": {}, "nbformat": 4, "nbformat_minor": 5}),
+                encoding="utf-8")
+            with unittest.mock.patch.object(
+                    rcli.JOBFOLDER, "verify_pin_preconditions",
+                    return_value=None):
+                job_dir = rcli.JOBFOLDER.generate_job(
+                    target=target, service="acid-test-fake-service",
+                    job_name=impl._validation_job_name("Method"),
+                    product="Method", commit="a" * 40,
+                    repo_url="https://example.invalid/r.git", repo_ref="main",
+                    clone_paths=["src/Method", "Method/Notebooks"],
+                    run_notebook="Method/Notebooks/validation.ipynb")
+            run_config = json.loads(
+                (job_dir / "run-config.json").read_text(encoding="utf-8"))
+        self.assertEqual(run_config["run"],
+                         {"notebook": "Method/Notebooks/validation.ipynb"})
+
+    def test_the_job_folder_lands_under_tools_outside_every_materialize_stage_list(self):
+        """Task 4b.41: `jobfolder.generate_job` writes under
+        `tools/<service>/<job-name>/`, outside `scaffold_destinations`,
+        `object_destinations` and `harness_destinations` even in
+        principle."""
+        rcli = impl._load_remote_execution_cli()
+        rcli.ADAPTER.register_metadata(
+            "acid-test-fake-service",
+            lambda run_config: ("fake-metadata.json",
+                                json.dumps({"ok": True})))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            pkg = target / "src" / "Method"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            (pkg / "validation.py").write_text(
+                "def run_validation():\n    return None\n", encoding="utf-8")
+            with unittest.mock.patch.object(
+                    rcli.JOBFOLDER, "verify_pin_preconditions",
+                    return_value=None):
+                job_dir = rcli.JOBFOLDER.generate_job(
+                    target=target, service="acid-test-fake-service",
+                    job_name=impl._validation_job_name("Method"),
+                    product="Method", commit="a" * 40,
+                    repo_url="https://example.invalid/r.git", repo_ref="main",
+                    clone_paths=["src/Method"],
+                    run_module="Method.validation",
+                    run_function="run_validation")
+            rel = str(job_dir.relative_to(target.resolve()))
+            for destination in (impl.scaffold_destinations("Method")
+                                + impl.object_destinations("Method")
+                                + impl.harness_destinations("Method")):
+                self.assertFalse(
+                    rel == destination or rel.startswith(destination + "/"),
+                    f"{rel!r} collides with stage destination {destination!r}")
+
 
 class SearchDeclaredBeforeTheRunTests(unittest.TestCase):
     """A run whose governing scalar has not yet been chosen has no
@@ -6644,7 +7589,7 @@ class NextStepSectionCoverageTests(unittest.TestCase):
         self.assertEqual(
             self.all_next_steps(),
             {"nothing-to-compare", "convert", "piloted", "already-benchmarked",
-             "declined", "benchmark", "declare-first", "env-first",
+             "declined", "validate", "benchmark", "declare-first", "env-first",
              "wiring-first", "poll-first", "pilot-first", "pilot-decisions",
              "search-first", "report-first"})
 
@@ -30399,13 +31344,16 @@ class NextStepPublicationRosterTests(unittest.TestCase):
     def test_the_experiment_steps_are_the_ones_that_spend_machine_time(self):
         """The predicate the standing rule needs: whenever the flow reaches the
         point of running experiments it must ask whether to continue the flow
-        or complement them. Three answers reach that point -- the offer to run
-        (`benchmark`), the pilot already run below its declared scale
-        (`piloted`), and the declared search that has chosen nothing yet
-        (`search-first`), which launches a run of its own."""
+        or complement them. Four answers reach that point -- the offer to run
+        (`benchmark`), the acid test (`validate`, design D12: a single-arm
+        run declares a scale of its own exactly as a comparison does), the
+        pilot already run below its declared scale (`piloted`), and the
+        declared search that has chosen nothing yet (`search-first`), which
+        launches a run of its own."""
         experiments = sorted(step for step, entry in impl.PROBE_NEXT_STEPS.items()
                              if entry["kind"] == impl.NEXT_STEP_EXPERIMENT)
-        self.assertEqual(experiments, ["benchmark", "piloted", "search-first"])
+        self.assertEqual(experiments,
+                         ["benchmark", "piloted", "search-first", "validate"])
 
     def test_every_non_terminal_step_publishes_something(self):
         for step, entry in sorted(impl.PROBE_NEXT_STEPS.items()):
@@ -30415,6 +31363,21 @@ class NextStepPublicationRosterTests(unittest.TestCase):
                     continue
                 self.assertIsNotNone(entry["publish"])
 
+    def test_every_entry_names_a_drafts_tuple_of_known_builders(self):
+        """Roster-shape assertion (design D12, task 4b.25): every entry
+        carries a `drafts` tuple, never the withdrawn `wiring: bool` flag,
+        and every name in it is a real `PROBE_DRAFTS` key -- so a typo'd
+        draft name fails here rather than silently publishing `None` forever
+        at the one rung that named it."""
+        for step, entry in sorted(impl.PROBE_NEXT_STEPS.items()):
+            with self.subTest(step=step):
+                self.assertNotIn("wiring", entry,
+                                 "the roster no longer carries a bare "
+                                 "'wiring' boolean key")
+                self.assertIsInstance(entry["drafts"], tuple)
+                for draft in entry["drafts"]:
+                    self.assertIn(draft, impl.PROBE_DRAFTS)
+
     def test_the_wiring_draft_belongs_to_the_two_steps_the_wiring_blocks(self):
         """The withheld payload. `wiring_proposal` had one call site, guarded
         by `next_step == "benchmark"`, and `wiring-first` is set by an override
@@ -30422,8 +31385,16 @@ class NextStepPublicationRosterTests(unittest.TestCase):
         the draft of how to wire it came back `None` and the agent composed the
         plan in prose. Both steps get it, and the roster is what says so."""
         carrying = sorted(step for step, entry in impl.PROBE_NEXT_STEPS.items()
-                          if entry["wiring"])
+                          if "wiring" in entry["drafts"])
         self.assertEqual(carrying, ["benchmark", "wiring-first"])
+
+    def test_the_validation_draft_belongs_to_validate_alone(self):
+        """The analogous withheld payload for the acid test (design D12):
+        `validation_proposal` has exactly one call site, `validate`, and no
+        other rung's `drafts` names it."""
+        carrying = sorted(step for step, entry in impl.PROBE_NEXT_STEPS.items()
+                          if "validation" in entry["drafts"])
+        self.assertEqual(carrying, ["validate"])
 
     def test_the_experiment_question_names_the_open_choice(self):
         for step, entry in sorted(impl.PROBE_NEXT_STEPS.items()):

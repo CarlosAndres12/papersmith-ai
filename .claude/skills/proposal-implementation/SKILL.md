@@ -1914,6 +1914,104 @@ virtualenv in the checkout — it stamps interpreter, platform and device into t
 summary instead of refusing, so a table produced elsewhere is labelled as produced
 elsewhere rather than attributed to this machine.
 
+### `nextStep: "validate"` — run the acid test: the method alone, against its own claim
+
+Reached once the comparison has been declined and this second question is still
+open (`probe`'s three-way branch: unanswered comparison → `benchmark`; comparison
+answered, acid test unanswered → `validate`; both answered → `declined`, naming
+both dates).
+
+**What it is, and what it is not.** The target's own apparatus, the same one
+`benchmark` above uses, with a single arm: the method alone, on real data, at
+small scale — no rival, no winner. The question is not "which wins" but "does
+the method do what the proposal said it would do". It is **not more
+verification** — the invariant tests already prove the formulas in the
+abstract, with no data — and it is **not a comparison** — there is no rival
+arm and nothing here decides a winner.
+
+**The yardstick's form is already written; its calibration is asked.**
+`__implementation__["premises"]` states the prediction, the statistical unit,
+the metric and the direction — the shape of a single-arm pass/fail criterion.
+It does not state a threshold, and with one arm there is nothing to be better
+than. The draft's `needs` asks the person for the reference figure the
+declared `revision` reports, and names that revision — the engine never
+parses a number out of prose (`report_state`'s own `proseNumbers` finding
+treats exactly that as a defect).
+
+**`placement` is its own section in the draft, and it decides nothing.** A
+`__steps__` entry with no `placement` blocks the walk
+(`PLACEMENT_UNDECLARED_CONSEQUENCE`), so the draft names `local` and `remote`
+with each one's own consequence and picks neither. Within that section a
+`job` folder name is already proposed, derived mechanically from the step's
+own name — costing the person nothing to accept — but `service` is asked,
+never guessed: this skill may read a service name to walk a directory and
+must reduce it to a count before returning anything, and it cannot discover
+one either, since adapters register lazily. Any accelerator, environment, or
+budget knob the remote path accepts is named as available and answered by
+the person, never pre-selected. An empty `__levels__` does not rule out a
+remote placement — the two are independent declarations; an empty ladder
+only changes the walk's grading from by-rung to walked/not-walked.
+
+**The published question states cost's shape, never its magnitude.** It says
+that this is a real run that spends machine time, that a local run occupies
+this machine for its duration, that a remote run spends metered quota on a
+service account, that the scale on offer is the small one and a larger
+campaign is a separate decision, and that declining later costs nothing to
+unwind. It states no duration, no quota figure and no service name — the
+forge cannot know any of those, and this repository already lived through a
+forge-invented weekly-quota figure that sat in a comment nothing read and did
+not match reality.
+
+**A remote acid-test step reaches a worker through the unmodified
+`remote-execution` path.** Nothing here is new machinery: `flow_acts` is
+already generic over any declared step's `placement`/`job`/`service`, and
+`resolve_clone_paths()` already cross-checks declared clone paths against
+what the declared entry modules actually import — a single arm simply needs
+fewer of them, through the identical check every other step uses. The job
+folder lands at `tools/<service>/<job-name>/` — `remote-execution`'s own
+output root, outside all three `materialize` stage lists — and carries the
+notebook already chosen for the run via `--run-notebook`, never a second
+implementation of it.
+
+**What it may write to, and the one thing it may never create.** Accepting
+the acid test **must never create `src/<Package>_Benchmark/`** and must
+never write any harness-stage destination — not the benchmark declaration,
+not its entry module, not its verdict module, not its harness notebook. A
+single-arm run of the method against its own declared prediction is not a
+benchmark, and naming it one would reintroduce this skill's own defect
+wearing the opposite mask. This holds identically whether placement is local
+or remote: a generated job folder is not a back door around it, because
+`tools/` sits outside every `materialize` stage list even in principle. What
+it MAY write to: the method's own package declaration (a `__steps__`,
+`__records__` and/or `__levels__` entry, re-sealed with `materialize
+--authored`), the method's own modules and tests, `<Name>/Notebooks/`, a
+record under the product folder at a path that does not borrow the
+comparison's name (never `.../Results/Benchmark/...`), and — when placement
+is remote — its own job folder under `tools/`. Every other package under
+`src/` stays read-only to it.
+
+**Nothing materializes up front.** Asking the question creates nothing;
+answering it and opening a discussion creates nothing; only agreeing a
+specific run materializes what that run needs — the identical discipline
+`benchmark` above and D15b state for the comparison offer.
+
+**Answering is entirely inside this skill and this session.** Nothing here
+hands off to another skill: acceptance is discussed with the same
+discuss/agreement machinery this skill already uses for its other offers.
+
+**Boundary, named rather than built.** `generate_job` accepts
+environment-provisioning input (`environment_requirements`,
+`environment_index_url`), and at least one already-scaffolded target
+carries its own top-level `__environment__` literal of exactly that shape,
+unread by anything in this skill (see
+`implementation-comparison-deferral`'s migration requirement, which
+carries it forward rather than dropping it). Wiring that literal through
+as the remote acid test's environment input is almost certainly what it
+was meant for, and this is where that wiring would eventually live. **It
+is not built here** — that is a reader for a literal this change
+deliberately leaves without one, named so the next person finds it rather
+than rediscovers it.
+
 ### The report contract, and why `verify` reads the document too
 
 Every other check in this skill asks whether the run was sound. None of them asks
@@ -2605,7 +2703,7 @@ is a fact nobody reads:
 | `baselines` | The prior implementations there are to compare against | Yes — nothing to compare against outranks everything else on the ladder |
 | `comparable` | Whether that list is non-empty, stated once so nobody re-derives it | Reported whatever it says |
 | `coupling` | Which notebook cells reach into the target's internals instead of its declared surface | **Never** — a static fact, reported so somebody can decide about it |
-| `decisions` | The comparison's own standing decision: `comparison.state` is `"answered"` once the offer's own question has been answered, `null` while it stands open; `at` and `asked` are read verbatim off that ledger event and are display-only, never a tiebreak. The engine records that the question was answered and when — never what the answer said | **Never** — read to publish `declined` (below), never gating on its own; the ladder's own guard is the offer's exact question text, not this key |
+| `decisions` | Two standing decisions, always both present: `comparison` (the offer to compare) and `validation` (the acid-test offer to run one arm), each `{state, at, asked}` — `state` is `"answered"` once that offer's own question has been answered, `null` while it stands open; `at` and `asked` are read verbatim off that ledger event and are display-only, never a tiebreak. The engine records that a question was answered and when — never what the answer said | **Never** — read to publish `validate` and `declined` (below), never gating on its own; the ladder's own guard is each offer's exact question text, not this key |
 | `harnessStatus` | Where the target's own declaration says its harness module is: `undeclared`, present at `path`, or `declaredMissing` naming `declaredModule` and `searchedPath`. `declaredFunction` echoes `entry.function` beside it, and `note` names what a blank one costs: nothing in this skill reads that field, but a job generated in the callable shape needs `generate-job --run-function`, and this declaration is where its value comes from | Reported whatever it says |
 | `nextStep` | The one thing to do next | This is the answer, not a fact feeding it |
 | `notebook` | Where the pilot notebook is, or `null` | Reported whatever it says |
@@ -2621,6 +2719,7 @@ is a fact nobody reads:
 | `search` | Whether a declared search chose anything, and what a full run would cost | Yes — a record absent from disk, or its `scaleSatisfied` short of `true`, is `search-first` |
 | `toDiscuss` | The question-shaped half of `resolve`, as a list: one directly runnable, `shlex.quote`-escaped `discuss` command for every `nextStep` whose next act is a decision, naming the target/name pair and — for `piloted` and `search-first` — the DECLARED (never the achieved) scale. Empty for the two terminal steps and for `env-first`, whose exit is a command nobody has to decide about | **Never** — a published action naming an already-computed undecided thing, not a verdict (see "Neither half proves who answered," above) |
 | `unreachedModules` | Arms declaring mathematics they never call | Yes — that is `wiring-first` |
+| `validation` | The acid-test draft, present at the one answer `PROBE_NEXT_STEPS` marks as carrying it: `validate`, the offer to run the method alone against its own declared prediction. `null` at every other answer, the identical shape `wiring` keeps. See [`nextStep: "validate"`](#nextstep-validate) | Reported whatever it says |
 | `wiring` | The proposed wiring, present at the two answers `PROBE_NEXT_STEPS` marks as carrying it: `benchmark`, the offer to run, and `wiring-first`, where an arm declares mathematics it never calls. It used to be guarded on `benchmark` alone, so the one answer that named missing wiring withheld the draft of how to wire it | Reported whatever it says |
 
 Column one is read by the suite against `probe`'s own return, exactly as the
