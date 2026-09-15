@@ -14317,7 +14317,7 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
     target's own capitalisation is not structurally different from one that
     matches the lexicon's lowercased spelling. And rule B's own scan, which
     used to stop at
-    `.claude/skills/`, now reaches every OTHER test module's own commentary —
+    `skills/`, now reaches every OTHER test module's own commentary —
     comments and docstrings, never an ordinary string literal — because a
     name that leaks into a fixture's own prose is exactly the shape the one
     measured instance took.
@@ -14328,7 +14328,7 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
 
     # One definition of the guarded surface, borrowed rather than restated: a
     # second spelling of "what the forge ships" is how the two go out of step.
-    # Shared with rule A and rule C, both scoped to `.claude/skills/` alone --
+    # Shared with rule A and rule C, both scoped to `skills/` alone --
     # `rule_b_documents`, below, widens ON TOP of this for rule B specifically,
     # rather than widening what A and C see too.
     guarded_documents = ReportFirstSectionProseTests.guarded_documents
@@ -14487,7 +14487,7 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         exists to catch unreachable by it.
 
         The two roots are independent on purpose. Production widens both
-        from the real forge (`root=None` reads `.claude/skills/`,
+        from the real forge (`root=None` reads `skills/`,
         `tests_root=None` reads this file's own directory) with nothing
         further to pass. A scratch-root test that only overrides `root`
         (the shape every rule A/B test already had) stays exactly as scoped
