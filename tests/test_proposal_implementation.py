@@ -23,6 +23,7 @@ import sys
 import tempfile
 import textwrap
 import time
+import tokenize
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -13800,6 +13801,22 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
 
     `FORGE_VOCABULARY_FLOOR` is rule C and lives on the class next door, which
     already scans it over the same surface.
+
+    **Three measured gaps, closed here (design.md D24).** `derived_denylist`
+    already saw a target's own directory name — but only decomposed, so a
+    name built from two otherwise-ordinary words came apart into parts each
+    individually admitted to `FORGE_LEXICON`, and the composition that
+    actually identified the target was the one thing subtraction destroyed.
+    `target_words` now adds the undivided compound too, so a target named
+    from ordinary words is no longer invisible for being spelled out of
+    them. `leaks` now compares case-insensitively, so a mention wearing the
+    target's own capitalisation is not structurally different from one that
+    matches the lexicon's lowercased spelling. And rule B's own scan, which
+    used to stop at
+    `.claude/skills/`, now reaches every OTHER test module's own commentary —
+    comments and docstrings, never an ordinary string literal — because a
+    name that leaks into a fixture's own prose is exactly the shape the one
+    measured instance took.
     """
 
     SKILL_ROOT = ReportFirstSectionProseTests.SKILL_ROOT
@@ -13807,11 +13824,15 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
 
     # One definition of the guarded surface, borrowed rather than restated: a
     # second spelling of "what the forge ships" is how the two go out of step.
+    # Shared with rule A and rule C, both scoped to `.claude/skills/` alone --
+    # `rule_b_documents`, below, widens ON TOP of this for rule B specifically,
+    # rather than widening what A and C see too.
     guarded_documents = ReportFirstSectionProseTests.guarded_documents
     scannable_text = ReportFirstSectionProseTests.scannable_text
     scan_root = ReportFirstSectionProseTests.scan_root
 
     TARGETS = FORGE / "implementations"
+    TESTS_ROOT = Path(__file__).resolve().parent
 
     #: Split on punctuation and on camel-case boundaries, so `FEM_TOLLA_Benchmark`
     #: and `reportDigest` both come apart into the words a reader would say.
@@ -13886,6 +13907,18 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         Directories beginning with `_` are skipped because that is where this
         suite builds its own throwaway targets; deriving the denylist from them
         would make the guard depend on which tests happened to run first.
+
+        **The compound survives its own parts (design.md D24, layer 1).**
+        `self.split(target.name)` alone is not enough: a name built from two
+        ordinary, individually-legitimate words comes apart into parts each
+        admissible to `FORGE_LEXICON` on its own merits, and
+        `derived_denylist` subtracting the lexicon then subtracts the whole
+        name along with them. Each part's admission was argued for that
+        part; none of those arguments extend to the composition, which is
+        the one thing that actually names the target. So the undivided name
+        is added as its own candidate word too, normalized the same way
+        `split`'s own parts are — lowercased, nothing else — never inferred
+        from its parts surviving individually.
         """
         base = self.TARGETS if root is None else Path(root)
         words: set[str] = set()
@@ -13897,6 +13930,7 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
                 continue
             targets.append(target.name)
             words.update(self.split(target.name))
+            words.add(target.name.lower())
             for package in sorted((target / "src").iterdir()
                                   if (target / "src").is_dir() else []):
                 if not package.is_dir() or package.name.startswith("."):
@@ -13939,14 +13973,91 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         # it.
         return sorted(words - set(FORGE_LEXICON) - set(FORGE_VOCABULARY_FLOOR))
 
-    def leaks(self, denylist, root=None):
+    def rule_b_documents(self, root=None, tests_root=None):
+        """Rule B's own surface: every shipped skill file under `root`
+        (`guarded_documents`, shared with rules A and C, unchanged), plus
+        every `*.py` module directly under `tests_root` (task 6c.7, design.md
+        D24 layer 3) — THIS FILE included: the one measured leak (task 6c.10)
+        sat in this module's own fixture commentary, so excluding it from the
+        scan it is written into would leave the one instance the widening
+        exists to catch unreachable by it.
+
+        The two roots are independent on purpose. Production widens both
+        from the real forge (`root=None` reads `.claude/skills/`,
+        `tests_root=None` reads this file's own directory) with nothing
+        further to pass. A scratch-root test that only overrides `root`
+        (the shape every rule A/B test already had) stays exactly as scoped
+        as `guarded_documents` always was — `tests_root` widens only when a
+        caller asks for it explicitly, which is what lets 6c.8/6c.9 prove
+        the widening reachable without reading the real `tests/` directory.
+        """
+        documents = list(self.guarded_documents(root))
+        if tests_root is not None or root is None:
+            scan_tests = self.TESTS_ROOT if tests_root is None else Path(tests_root)
+            if scan_tests.is_dir():
+                documents.extend(sorted(scan_tests.glob("*.py")))
+        return documents
+
+    def commentary_text(self, document: Path) -> str:
+        """`document`'s own comments and docstrings, and nothing else.
+
+        Not every string literal — an ordinary fixture string (a planted
+        leak's expected text, an invented target name) is DATA a test
+        deliberately carries, not the forge speaking, and scanning it would
+        object to the very fixtures these suites plant on purpose to prove a
+        leak is caught (task 6c.7's own scoping instruction). Comments come
+        from `tokenize`, the only stage that still sees them; docstrings come
+        from `ast.get_docstring` on the module, every class and every
+        function. Case is preserved here, never lowered — the mention this
+        exists to catch wears the target's own capitalisation, and `leaks`'
+        own case-insensitive match is what has to survive it, not a lowering
+        this function performs on its behalf.
+        """
+        source = document.read_text(encoding="utf-8", errors="replace")
+        parts = []
+        try:
+            for token in tokenize.generate_tokens(io.StringIO(source).readline):
+                if token.type == tokenize.COMMENT:
+                    parts.append(token.string.lstrip("#"))
+        except (tokenize.TokenError, IndentationError, SyntaxError):
+            pass
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return "\n".join(parts)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                                 ast.AsyncFunctionDef)):
+                doc = ast.get_docstring(node, clean=False)
+                if doc:
+                    parts.append(doc)
+        return "\n".join(parts)
+
+    def word_appears(self, word: str, text: str) -> bool:
+        """Whether `word` appears in `text` at a word boundary, regardless of
+        how the two are cased relative to each other (design.md D24; spec
+        "The Anti-Leak Guard's Word Comparison Does Not Depend On Matching
+        Case"). The comparison carries its own case-insensitivity rather than
+        trusting every caller to have lowered `text` first — `commentary_text`
+        deliberately does not, and a future surface that also does not must
+        not silently reopen the gap this closes.
+        """
+        return re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE) is not None
+
+    def leaks(self, denylist, root=None, tests_root=None):
         found = {}
-        for document in self.guarded_documents(root):
-            text = self.scannable_text(document)
-            hits = [word for word in denylist
-                    if re.search(rf"\b{re.escape(word)}\b", text)]
+        skills_base = self.scan_root(root)
+        tests_base = (self.TESTS_ROOT if tests_root is None
+                     else Path(tests_root)).resolve()
+        for document in self.rule_b_documents(root, tests_root):
+            resolved = document.resolve()
+            under_tests = tests_base in resolved.parents
+            text = (self.commentary_text(document) if under_tests
+                    else self.scannable_text(document))
+            hits = [word for word in denylist if self.word_appears(word, text)]
             if hits:
-                found[str(document.relative_to(self.scan_root(root)))] = hits
+                base = tests_base if under_tests else skills_base.resolve()
+                found[str(resolved.relative_to(base))] = hits
         return found
 
     def test_rule_b_finds_no_target_vocabulary_in_the_forge(self):
@@ -14073,9 +14184,11 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
 
         denylist = self.derived_denylist(self.scratch_targets())
         self.assertEqual(
-            denylist, ["nimbus", "paddock", "stirrup"],
+            denylist, ["nimbus", "nimbus_benchmark", "paddock", "stirrup"],
             "the denylist is every word the target owns minus the lexicon, so "
-            "`benchmark`, `config` and `init` are subtracted and these are left")
+            "`benchmark`, `config` and `init` are subtracted and these are "
+            "left, plus the undivided directory name itself "
+            "(`nimbus_benchmark`, design.md D24 layer 1)")
 
         forge = self.scratch_forge()
         (forge / "scripts" / "leaky.py").write_text(
@@ -14087,6 +14200,100 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
             self.leaks(denylist, forge), {"scripts/leaky.py": ["paddock"]},
             "rule B has to name the file and the word, because a guard that "
             "reports only that something is wrong repairs nothing")
+
+    def scratch_compound_target(self, *names):
+        """A target root whose directories are named from words already
+        admitted to `FORGE_LEXICON`, shaped after the real target's own
+        two-word compound — never the real target's own name (design.md
+        D24; the one measured instance is task 6c.10's to remove, not this
+        suite's to add a second copy of).
+        """
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for name in names:
+            (root / name).mkdir()
+        return root
+
+    def test_the_compound_survives_even_though_both_parts_are_admitted(self):
+        """Task 6c.2: a target named from two ordinary, individually-admitted
+        words (shaped after the live target's own two-word compound) survives
+        into `derived_denylist()`'s output as its own compound word, even
+        though both of its parts are individually subtracted by
+        `FORGE_LEXICON` (design.md D24, layer 1).
+        """
+        self.assertIn("domain", FORGE_LEXICON)
+        self.assertIn("objective", FORGE_LEXICON)
+
+        root = self.scratch_compound_target("Domain_Objective")
+        words, targets = self.target_words(root)
+        self.assertEqual(targets, ["Domain_Objective"])
+        self.assertIn("domain", words)
+        self.assertIn("objective", words)
+        self.assertIn("domain_objective", words)
+
+        denylist = self.derived_denylist(root)
+        self.assertNotIn(
+            "domain", denylist,
+            "domain is FORGE_LEXICON's own on its own merits and must be "
+            "subtracted")
+        self.assertNotIn(
+            "objective", denylist,
+            "objective is FORGE_LEXICON's own on its own merits and must be "
+            "subtracted")
+        self.assertIn(
+            "domain_objective", denylist,
+            "the compound is nobody's lexicon entry on its own and must "
+            "survive the subtraction that removes its two parts")
+
+    def test_the_word_boundary_actually_matches_a_real_compound_mention(self):
+        """Task 6c.4, the owner's own instruction: `\\b` treats `_` as a word
+        character, so this is proven directly against a real compound-shaped
+        mention, never inferred from the parts' own boundary behavior.
+        """
+        self.assertTrue(
+            self.word_appears(
+                "domain_objective",
+                "found under Domain_Objective's own src/ tree"))
+        self.assertFalse(
+            self.word_appears("domain_objective", "Domain_Objective_Extra"),
+            "`_` is a word character, so the boundary must not fire inside "
+            "a longer compound that merely starts the same way")
+
+    def test_a_differently_cased_mention_is_caught_regardless_of_the_denylists_own_case(self):
+        """Task 6c.5 (spec "The Anti-Leak Guard's Word Comparison Does Not
+        Depend On Matching Case", scenario 1) — proven directly against the
+        matcher, which must not depend on an upstream lowering discipline it
+        does not itself enforce.
+        """
+        self.assertTrue(self.word_appears("paddock", "Staged in the Paddock."))
+        self.assertTrue(self.word_appears("paddock", "STAGED IN THE PADDOCK."))
+        self.assertFalse(self.word_appears("paddock", "nothing to see here"))
+
+    def test_a_second_targets_compound_needs_no_exemption_list(self):
+        """Task 6c.6 (spec scenario 2 — "the fix closes the class, not the
+        one instance"). A SECOND, previously-unseen compound is derived and
+        caught by the exact same mechanism that caught the first, wearing a
+        casing that matches neither the directory's own nor the denylist's
+        own lowercased entry, with no per-target list anywhere in the guard.
+        """
+        root = self.scratch_compound_target("Domain_Objective", "Local_Pipeline")
+        denylist = self.derived_denylist(root)
+        self.assertIn("domain_objective", denylist)
+        self.assertIn("local_pipeline", denylist)
+
+        forge = self.scratch_forge()
+        (forge / "scripts" / "leaky.py").write_text(
+            "# copied straight out of LOCAL_PIPELINE's own tree\nVALUE = 1\n",
+            encoding="utf-8")
+        (forge / "scripts" / "clean.py").write_text(
+            "VALUE = 2\n", encoding="utf-8")
+        self.assertEqual(
+            self.leaks(denylist, forge),
+            {"scripts/leaky.py": ["local_pipeline"]},
+            "the second target's compound is caught by the same derivation "
+            "that caught the first — no exemption list named it, and the "
+            "first target's own compound (domain_objective) is not a false "
+            "positive here")
 
     def test_a_notebook_name_is_vocabulary_the_way_a_module_name_is(self):
         """The hole this walk was widened to close, owned at both ends.
@@ -14274,6 +14481,65 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
             sorted(set(FORGE_LEXICON) & set(FORGE_VOCABULARY_FLOOR)), [],
             "a word on the floor is a leak somebody already found, so it can "
             "never also be vocabulary the forge owns")
+
+    def scratch_commentary_module(self, source, name="fixture_module.py"):
+        """A scratch `tests/`-shaped root holding one module carrying
+        `source`, for proving the widened scan (task 6c.7) reachable without
+        reading the real `tests/` directory — `rule_b_documents`' own
+        `tests_root` override exists for exactly this.
+        """
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / name).write_text(source, encoding="utf-8")
+        return root
+
+    def test_a_live_targets_name_in_a_test_comment_is_caught_by_the_widened_scan(self):
+        """Task 6c.8 (spec "No Live Target's Own Name Appears Anywhere In
+        This Forge, In Any Casing", scenario 1). A compound target name
+        sitting in a test module's own DOCSTRING, wearing a casing that
+        matches neither the directory nor the denylist's own lowercased
+        entry, is caught by the widened scan, naming the file and the word —
+        the exact shape the one measured instance (task 6c.10) took. A
+        synthetic compound proves the mechanism; the fix for the real
+        instance is 6c.10's own edit, not a second copy of it planted here.
+        """
+        root = self.scratch_compound_target("Domain_Objective")
+        denylist = self.derived_denylist(root)
+        self.assertIn("domain_objective", denylist)
+
+        tests_root = self.scratch_commentary_module(
+            '"""A fixture shaped after Domain_Objective\'s own '
+            'declaration."""\nVALUE = 1\n')
+
+        forge = self.scratch_forge()
+        self.assertEqual(
+            self.leaks(denylist, forge, tests_root=tests_root),
+            {"fixture_module.py": ["domain_objective"]},
+            "the widened scan has to name the file and the word, the same "
+            "obligation the shipped-file half already carries")
+
+    def test_a_neutral_fixture_name_is_not_mistaken_for_a_leak_by_the_widened_scan(self):
+        """Task 6c.9 (spec scenario 2). A generic, invented fixture name —
+        `Nimbus_Benchmark`, this suite's own standing convention for a name
+        no real target owns — is not mistaken for a leak by the widened
+        scan. Proven beside the case task 6c.7 exists to scope for: an
+        ordinary STRING LITERAL carrying the real denylist word is exempt
+        too, because the widened scan reaches commentary, never every
+        string literal a test plants on purpose as data.
+        """
+        root = self.scratch_compound_target("Domain_Objective")
+        denylist = self.derived_denylist(root)
+
+        tests_root = self.scratch_commentary_module(
+            '"""Builds a scratch Nimbus_Benchmark target and asserts its '
+            'own report renders."""\n'
+            'FIXTURE_NAME = "Domain_Objective"  # planted as data, not prose\n')
+        forge = self.scratch_forge()
+        self.assertEqual(
+            self.leaks(denylist, forge, tests_root=tests_root), {},
+            "an invented name is not any real target's own word, and a "
+            "string literal is a test's own fixture DATA rather than the "
+            "forge speaking -- neither is a leak")
 
 
 class UndeclaredRecordEndToEndTests(unittest.TestCase):
@@ -17635,10 +17901,12 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
 
 
 class LiveTargetMigrationFixtureTests(unittest.TestCase):
-    """Task 2.19's concrete fixture: shaped after
-    `implementations/Domain_Adaptation`'s old-home declaration, per owner
-    instruction, never the live target itself (that repository is separate
-    and this change's commit does not touch it -- design §7's boundary).
+    """Task 2.19's concrete fixture: shaped after a live target's own
+    old-home declaration, per owner instruction, never naming which one and
+    never the live target itself (that repository is separate and this
+    change's commit does not touch it -- design §7's boundary; task 6c.10
+    removed the one instance that named it, the fixture comment Unit 2 had
+    added here).
 
     Non-blank `revision`/`premises`, non-empty `__levels__`/`__steps__`/
     `__records__`, plus one extra top-level literal (`__environment__`,

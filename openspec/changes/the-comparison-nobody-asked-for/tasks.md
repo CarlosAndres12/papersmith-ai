@@ -327,47 +327,96 @@ Chain strategy: pending
 > Touches no engine code, no ladder, no corpus. Closes a measured leak that is
 > open right now. No reason to hold it behind the two larger units.
 
-- [ ] 6c.1 Fix the compound-word gap (D24, layer 1): wherever `target_words` calls
+- [x] 6c.1 Fix the compound-word gap (D24, layer 1): wherever `target_words` calls
       `words.update(self.split(target.name))`, also add the **undivided compound**
       `target.name` itself (normalized) as its own candidate word — each split
       part's lexicon admission was argued on its own merits, and those arguments
       do not extend to the whole.
-- [ ] 6c.2 Test: a target named from two ordinary, individually-admitted words
+      - *`words.add(target.name.lower())`, right beside the existing split call.*
+- [x] 6c.2 Test: a target named from two ordinary, individually-admitted words
       (shaped after `Domain_Adaptation`) survives into `derived_denylist()`'s
       output as its own compound word, even though both of its parts are
       individually subtracted by `FORGE_LEXICON`.
-- [ ] 6c.3 Fix the case gap (D24, layer 2): add `re.IGNORECASE` to `leaks()`'s
+      - *`test_the_compound_survives_even_though_both_parts_are_admitted`, plus
+        the pre-existing `test_rule_b_names_the_file_and_the_word_a_planted_leak_is_in`
+        now asserting `nimbus_benchmark` too — shaped after `Domain_Objective`
+        (two real `FORGE_LEXICON` words), never the live target's own name.*
+- [x] 6c.3 Fix the case gap (D24, layer 2): add `re.IGNORECASE` to `leaks()`'s
       `re.search(rf"\b{re.escape(word)}\b", text)` so a title-cased or
       differently-cased mention still matches the lowercased denylist entry.
-- [ ] 6c.4 Explicit test, not an assumption (owner's own instruction — `\b` treats
+      - *Extracted into `word_appears(word, text)`, carrying `re.IGNORECASE`
+        itself rather than trusting every caller to pre-lower `text` — load-bearing
+        once 6c.7's widened surface stopped lowering test-file commentary.*
+- [x] 6c.4 Explicit test, not an assumption (owner's own instruction — `\b` treats
       `_` as a word character): once the compound is in the denylist, `leaks()`'s
       `\b...\b` boundary actually matches a real `Domain_Adaptation`-shaped
       mention. Do not infer this from the parts' own boundary behavior.
-- [ ] 6c.5 Test: a mention cased differently from the denylist's own lowercased
+      - *`test_the_word_boundary_actually_matches_a_real_compound_mention`
+        (positive: matches inside a real sentence; negative: does not fire
+        inside a longer compound merely sharing a prefix).*
+- [x] 6c.5 Test: a mention cased differently from the denylist's own lowercased
       entry is still caught (spec "The Anti-Leak Guard's Word Comparison Does Not
       Depend On Matching Case", scenario 1).
-- [ ] 6c.6 Test: a hypothetical second live target's compound name, planted in any
+      - *`test_a_differently_cased_mention_is_caught_regardless_of_the_denylists_own_case`,
+        proven directly against `word_appears` rather than through
+        `scannable_text`'s own incidental lowering.*
+- [x] 6c.6 Test: a hypothetical second live target's compound name, planted in any
       casing into a forge file as a test, is caught with no per-target exemption
       list required (spec, scenario 2 — "the fix closes the class, not the one
       instance").
-- [ ] 6c.7 Fix the scan-surface gap (D24, layer 3): widen the guard's scan (today
+      - *`test_a_second_targets_compound_needs_no_exemption_list` — two scratch
+        targets, second one's compound (`LOCAL_PIPELINE`, uppercase) caught by
+        the identical derivation, no list anywhere names it.*
+- [x] 6c.7 Fix the scan-surface gap (D24, layer 3): widen the guard's scan (today
       `SCAN_ROOT = SKILLS_ROOT`, `.claude/skills/` only) so test-file commentary —
       fixture descriptions, comments, string content not meant as a neutral
       placeholder — is included. Scope narrowly to commentary/fixture-description
       content, not every string literal in every test, to avoid a false-positive
       machine.
-- [ ] 6c.8 Test: a live target's repository directory name in a test file's own
+      - *New `rule_b_documents(root, tests_root)` (kept apart from the shared
+        `guarded_documents`, so rules A/C stay unwidened) adds every `*.py` under
+        `tests/`, THIS file included — the measured leak sat in its own fixture
+        commentary. New `commentary_text()` extracts only `tokenize` COMMENT
+        tokens and `ast.get_docstring` text, never an ordinary string literal —
+        `test_a_neutral_fixture_name_is_not_mistaken_for_a_leak_by_the_widened_scan`
+        pins the exemption directly, planting the real denylist word as a bare
+        string-literal fixture value beside a comment saying so, and confirms it
+        is not flagged.*
+- [x] 6c.8 Test: a live target's repository directory name in a test file's own
       comment is caught by the widened guard, naming the file and the word (spec
       "No Live Target's Own Name Appears Anywhere In This Forge, In Any Casing",
       scenario 1).
-- [ ] 6c.9 Test: a neutral, invented fixture name is not mistaken for a leak by the
+      - *`test_a_live_targets_name_in_a_test_comment_is_caught_by_the_widened_scan`
+        — a synthetic compound (`Domain_Objective`) in a scratch module's own
+        docstring, never the real target's name planted a second time.*
+- [x] 6c.9 Test: a neutral, invented fixture name is not mistaken for a leak by the
       widened scan (spec, scenario 2).
-- [ ] 6c.10 Remove and reword the one measured instance: the fixture comment Unit 2
+      - *`test_a_neutral_fixture_name_is_not_mistaken_for_a_leak_by_the_widened_scan`
+        (see 6c.7's own note — same test covers both).*
+- [x] 6c.10 Remove and reword the one measured instance: the fixture comment Unit 2
       added in `tests/test_proposal_implementation.py`, naming `Domain_Adaptation`
       — reword to say "a live target", never which. Zero occurrences under
       `.claude/` already; this is the test-surface instance, not a doctrine leak.
-- [ ] 6c.11 Run both suites (`npm test` and the Python unittest suites) green,
+      - *`LiveTargetMigrationFixtureTests`'s own class docstring reworded.
+        Measured, not assumed: mutation-tested by temporarily restoring the old
+        wording in a throwaway copy of the file and confirming the widened scan
+        (task 6c.7) genuinely catches it before the reword, and confirming
+        `test_rule_b_finds_no_target_vocabulary_in_the_forge` is green against
+        the real repository only after it.*
+- [x] 6c.11 Run both suites (`npm test` and the Python unittest suites) green,
       confirming the corrected guard passes on the repository as it now stands.
+      - *`npm test`: 640/640 (JS untouched). `tests.test_proposal_implementation`:
+        1619 tests, 32 pre-existing/environmental failures (25 failures + 7
+        errors) — identical set reproduced on pristine HEAD via `git stash` A/B
+        (same class every prior unit documented: missing `torch`/`numpy`/`pytest`
+        under the required `python3.12` interpreter), 0 new. Zero new
+        `FORGE_LEXICON` admissions were needed — measured before writing any
+        test: the widened scan's only real hit anywhere in the whole forge was
+        the one instance this unit's own task 6c.10 reworded.
+        `tests.test_implementation_domain_lock`: 28/28 (unaffected — a
+        different lock, `M5_PINNED_RESIDUE`, over the engine directory, not
+        this test-suite-internal guard). `ForgeVocabularyDerivedGuardTests`
+        itself: 18/18.*
 
 ### Unit 6a — a decision can be reopened (Part A, ~1000 floor)
 
