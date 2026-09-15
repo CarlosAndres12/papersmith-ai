@@ -3837,43 +3837,27 @@ def cmd_probe(args) -> dict:
         _report_findings_question(target, name, report_findings)
         not in answered)
     # The one construction site for the comparison offer's own text (D5a),
-    # computed once and reused both for the override below and for the
-    # `decisions.comparison` payload member (D16/D9).
+    # computed once and reused both for the override near the bottom and for
+    # the `decisions.comparison` payload member (D16/D9).
     comparison_question = _benchmark_offer_question(target, name, baselines)
     # The one construction site for the acid-test offer's own text (D14),
     # computed the identical "once, reused" way -- both for the three-way
-    # branch immediately below and for the `decisions.validation` payload
+    # branch near the bottom and for the `decisions.validation` payload
     # member.
     validation_question = _validation_offer_question(
         target, name,
         (implementation_declared["contract"] or {}).get("revision") or "",
         (implementation_declared["contract"] or {}).get("premises") or {})
-    # The comparison and the acid test, checked BEFORE every override that
-    # follows, including the `declare-first` narrowing immediately below
-    # (D5b, extended by D13 into a three-way branch): neither a declined
-    # comparison nor an open acid test may be told to fix a declaration for
-    # a harness that does not exist. `status == "absent"` is "nothing was
-    # built" -- no `src/<Package>_Benchmark/` directory at all -- so once the
-    # harness stage actually materializes it (the existing acceptance act,
-    # unchanged by either decline capability), this guard stops matching by
-    # itself and the ladder falls through exactly as it would for a target
-    # that was never declined. That is the "no code path specific to
-    # reopening" each offer's own persistence relies on: the reopening code
-    # is the absence of a branch.
-    #
-    # `validate`'s own guard is additive on top of `declined`'s prior
-    # meaning, not a replacement of it (design D13): a comparison decline
-    # alone no longer reads as the fully terminal `declined` -- the acid
-    # test is asked next, and only once BOTH offers are answered does the
-    # ladder report `declined` again, this time naming both dates.
-    if next_step == "benchmark" and resolved["status"] == "absent" and (
-            comparison_question in answered):
-        if validation_question in answered:
-            next_step = "declined"
-        else:
-            next_step = "validate"
-    elif next_step in ("benchmark", "piloted") and resolved["status"] in (
-            "absent", "undeclared"):
+    # Narrowed to `"undeclared"` only (design D4, Movement 3): `"absent"` is
+    # the ordinary pre-acceptance state of every first-flow target now that
+    # the benchmark package is no longer scaffolded, so it must fall through
+    # past every repair below to the three-way branch at the bottom of this
+    # chain, never be told to "declare" a file that deliberately does not
+    # exist yet. `"undeclared"` still means the package exists and is blank
+    # -- after this change that can only follow an accepted comparison,
+    # which is exactly what `declare-first` has always meant.
+    if next_step in ("benchmark", "piloted") and resolved["status"] == (
+            "undeclared"):
         next_step = "declare-first"
     # Immediately after `declare-first` (Decision 12): introspection is
     # meaningless before something is declared, so declaration keeps the top
@@ -3943,8 +3927,53 @@ def cmd_probe(args) -> dict:
             or (declared_required_scale(search)
                 and search["scaleSatisfied"] is not True)):
         next_step = "search-first"
-    elif next_step in ("benchmark", "piloted") and report["status"] != "ok":
+    # `resolved["status"] != "absent"` (design D4/D13, Unit 3 correction):
+    # `report["status"]` reads `"absent"` -- not `"ok"` -- for a target with
+    # no benchmark package at all, which is the ordinary pre-acceptance
+    # state now (Movement 3) and not a report in drift. Without this guard
+    # every first-flow target that has never even been offered a comparison
+    # would report `report-first` -- exactly the "a rung whose whole premise
+    # is a document disagreeing with a run, when no report exists yet to
+    # disagree with" accident `declare-first` exists to prevent, now
+    # reachable one state later because `"absent"` no longer routes there.
+    # `env-first`/`wiring-first`/`search-first` need no matching guard:
+    # `report.get("live")` is `None` and `unfaithful`/`search["recordFound"]`
+    # are already falsy when `resolved["status"] == "absent"`, measured
+    # directly rather than assumed symmetric with this one.
+    elif next_step in ("benchmark", "piloted") and (
+            resolved["status"] != "absent" and report["status"] != "ok"):
         next_step = "report-first"
+    # The comparison and the acid test, checked LAST among the overrides
+    # (design D13's own stated placement -- "last among the overrides, after
+    # `report-first`"): neither a declined comparison nor an open acid test
+    # may be told to fix a declaration for a harness that does not exist,
+    # but a genuinely owed repair above -- one the target's own declared
+    # flow already agreed to, or a submission already out, or a benchmark
+    # declaration that has started and disagrees with the run -- must
+    # continue to outrank it (spec "Introducing The Acid-Test Follow-Up Does
+    # Not Reorder Or Shadow Any Other Ladder State", scenario "A genuinely
+    # owed repair still outranks the acid-test offer"; Unit 3 correction of
+    # Unit 4b's shipped placement -- see this unit's own report for why).
+    # `status == "absent"` is "nothing was built" -- no
+    # `src/<Package>_Benchmark/` directory at all -- so once the harness
+    # stage actually materializes it (the existing acceptance act, unchanged
+    # by either decline capability), this guard stops matching by itself and
+    # the ladder falls through exactly as it would for a target that was
+    # never declined. That is the "no code path specific to reopening" each
+    # offer's own persistence relies on: the reopening code is the absence
+    # of a branch.
+    #
+    # `validate`'s own guard is additive on top of `declined`'s prior
+    # meaning, not a replacement of it (design D13): a comparison decline
+    # alone no longer reads as the fully terminal `declined` -- the acid
+    # test is asked next, and only once BOTH offers are answered does the
+    # ladder report `declined` again, this time naming both dates.
+    elif next_step == "benchmark" and resolved["status"] == "absent" and (
+            comparison_question in answered):
+        if validation_question in answered:
+            next_step = "declined"
+        else:
+            next_step = "validate"
 
     # The harness's name is read from the target's own declaration
     # (`resolve_harness_status`), never assumed from a filename: a fixed
@@ -3969,8 +3998,11 @@ def cmd_probe(args) -> dict:
     # a literal. The line this replaces fired on `next_step == "piloted"` and
     # on nothing else, so every other answer -- `search-first` above all, which
     # launches a search -- named a step and published no way to take it, and
-    # whoever was driving the CLI composed the question in prose. Two of the
-    # eleven answers publish nothing, and the roster is where they say so.
+    # whoever was driving the CLI composed the question in prose. Some of the
+    # ladder's answers publish nothing (the terminal states, `NO_SECTION`),
+    # and the roster is where they say so —
+    # `NextStepSectionCoverageTests.test_every_value_the_cli_can_return_is_accounted_for`
+    # derives the full set, never a hand-written count.
     #
     # The declared scale is the only fact either experiment question reads, and
     # only ever the DECLARED one: the achieved count climbs on every poll while
@@ -4474,16 +4506,21 @@ def ignore_gaps(target: Path) -> list[str]:
 
 
 def scaffold_destinations(name: str) -> list[str]:
-    """The eleven file paths a `materialize --stage scaffold` writes.
+    """The file paths a `materialize --stage scaffold` writes.
 
     Pulled out of `scaffold_gaps` so the writer and the gap-reporter read one
     list rather than two: `scaffold_gaps` reports which of these are missing
     (plus the two merge anchors, which are not paths in this sense at all —
     see `scaffold_gaps`'s own docstring-equivalent comment below), and
     `materialize --stage scaffold` copies exactly these into a target.
+
+    `src/<Package>_Benchmark/__init__.py` is deliberately absent from this
+    list (design Movement 3 / D4): the benchmark package is the harness
+    stage's own destination now (`harness_destinations`), written only once a
+    comparison is accepted, never by the scaffold stage every first-flow
+    target passes through regardless of whether a comparison is ever offered.
     """
     return [f"src/{package_name(name)}/__init__.py",
-            f"src/{package_name(name)}_Benchmark/__init__.py",
             # The seal every notebook stamps by importing, rather than by
             # hashing a tree of its own. It sits beside the method's own
             # `__init__.py` because `_here()` reads the repository off its
@@ -4618,13 +4655,20 @@ def object_kit_source(destination: str, name: str) -> Path | None:
 
 
 def harness_destinations(name: str) -> list[str]:
-    """The three file paths a `materialize --stage harness` writes: SKILL.md's
+    """The file paths a `materialize --stage harness` writes: SKILL.md's
     harness-wiring table, made concrete. `wiring.py` is deliberately absent —
     SKILL.md states it is bespoke-authored, never kit-sourced, and stays out
     of every stage.
+
+    `src/<Package>_Benchmark/__init__.py` is the benchmark declaration itself
+    (design Movement 3 / D4): it moved here from `scaffold_destinations`
+    because it is materialized only once a comparison has been accepted, via
+    this stage's own wiring-first rung — never by the scaffold stage every
+    first-flow target passes through.
     """
     package = package_name(name)
-    return [f"src/{package}_Benchmark/benchmark.py",
+    return [f"src/{package}_Benchmark/__init__.py",
+            f"src/{package}_Benchmark/benchmark.py",
             f"src/{package}_Benchmark/verdict.py",
             f"{name}/Notebooks/probe.ipynb"]
 
@@ -4636,6 +4680,8 @@ def harness_gaps(target: Path, name: str) -> list[str]:
 def harness_kit_source(destination: str, name: str) -> Path | None:
     package = package_name(name)
     mapping = {
+        f"src/{package}_Benchmark/__init__.py":
+            SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py",
         f"src/{package}_Benchmark/benchmark.py":
             SKILL_ROOT / "assets" / "kit" / "nb" / "benchmark.py",
         f"src/{package}_Benchmark/verdict.py":
@@ -4648,9 +4694,8 @@ def harness_kit_source(destination: str, name: str) -> Path | None:
 
 def all_kit_destinations(name: str) -> list[str]:
     """Every kit destination across all three stages — the domain
-    `--authored`/`--adopt` are scoped to (`NOT_A_KIT_DESTINATION`). Eleven
-    scaffold + three objects + three harness = seventeen, matching the
-    design's own count.
+    `--authored`/`--adopt` are scoped to (`NOT_A_KIT_DESTINATION`): the
+    scaffold, objects and harness destination lists, concatenated.
     """
     return [*scaffold_destinations(name), *object_destinations(name),
             *harness_destinations(name)]
@@ -4675,8 +4720,6 @@ MATERIALIZATION_RECEIPT = Path(".implementation") / "materialization.json"
 def scaffold_kit_source(destination: str, name: str) -> Path | None:
     package = package_name(name)
     mapping = {
-        f"src/{package}_Benchmark/__init__.py":
-            SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py",
         f"src/{package}/{KIT_SEAL.name}": KIT_SEAL,
         "tests/test_smoke.py": SKILL_ROOT / "assets" / "kit" / "tests" / "test_smoke.py",
         "tests/findings.py": SKILL_ROOT / "assets" / "kit" / "tests" / "findings.py",
@@ -5006,7 +5049,7 @@ def _kit_structure_gaps(target: Path, destinations: list[str]) -> dict:
 
 
 def scaffold_structure_gaps(target: Path, name: str) -> dict:
-    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the eleven scaffold
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the scaffold
     destinations only — never the two merge anchors, whose correctness is
     re-derived presence (`ignore_gaps`/`pytest_anchor_missing`), not a hash,
     and never a destination absent from disk, which is a gap `scaffold_gaps`
@@ -5016,19 +5059,19 @@ def scaffold_structure_gaps(target: Path, name: str) -> dict:
 
 
 def object_structure_gaps(target: Path, name: str) -> dict:
-    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the three `objects`
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the `objects`
     destinations only. Named `object_structure_gaps`, not folded into
     `scaffold_structure_gaps`, because the two stages' destinations are
     different files reported under different `structure` keys
     (`objectDrift`/`unrecordedObjects` vs `scaffoldDrift`/`unrecordedScaffold`)
-    — `scaffold_gaps`/`scaffold_structure_gaps` stay scoped to the eleven, as
-    every existing caller and test already assumes.
+    — `scaffold_gaps`/`scaffold_structure_gaps` stay scoped to the scaffold
+    destinations, as every existing caller and test already assumes.
     """
     return _kit_structure_gaps(target, object_destinations(name))
 
 
 def harness_structure_gaps(target: Path, name: str) -> dict:
-    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the three `harness`
+    """`SCAFFOLD_DRIFT` / `UNRECORDED_SCAFFOLD` over the `harness`
     destinations only — see `object_structure_gaps` for why this is a
     sibling function rather than a widening of the scaffold one."""
     return _kit_structure_gaps(target, harness_destinations(name))
@@ -16193,11 +16236,11 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # The receipt-backed half: whether the destinations `materialize` writes
     # still match what it wrote (SCAFFOLD_DRIFT), and whether one of them
     # exists with no receipt entry explaining it (UNRECORDED_SCAFFOLD). Scoped
-    # to the eleven scaffold destinations only — the anchors' correctness is
+    # to the scaffold destinations only — the anchors' correctness is
     # re-derived presence, already covered by `scaffold_gaps` above. The
-    # `objects` and `harness` stages get their own sibling checks, over their
-    # own three destinations each, so all seventeen kit destinations are
-    # accounted for — never only the eleven scaffold ones.
+    # `objects` and `harness` stages get their own sibling checks, over
+    # their own destinations, so every kit destination is accounted for —
+    # never only the scaffold ones.
     scaffold_recorded = scaffold_structure_gaps(target, name)
     object_recorded = object_structure_gaps(target, name)
     harness_recorded = harness_structure_gaps(target, name)
@@ -16555,8 +16598,9 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         # nested block already uses, so the two cannot be read as different facts.
         #
         # `absent` is deliberately not folded in: a target with no Benchmark
-        # package has nothing to be unfaithful to, and `structure.scaffoldGaps`
-        # already names the file it is missing.
+        # package has nothing to be unfaithful to, and `structure.harnessGaps`
+        # already names the file it is missing (design D4/Movement 3: the
+        # benchmark package is a harness destination now, not a scaffold one).
         fidelity_status = "undeclared"
     else:
         fidelity_status = "ok"
@@ -17242,7 +17286,7 @@ def _stage_objects(target: Path, name: str, seed: str) -> dict:
     substituted templates — deliberately NOT gated by
     `writable_at_scaffold_time`.
 
-    Unlike scaffold's eleven, all three of these templates carry tokens
+    Unlike the scaffold destinations, all three of these templates carry tokens
     (`{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`, `{{EXPECTATION}}`, ...) sitting
     inside Python identifiers that only step 9's own authoring can answer —
     no CLI flag supplies them, and none should, since answering them IS the

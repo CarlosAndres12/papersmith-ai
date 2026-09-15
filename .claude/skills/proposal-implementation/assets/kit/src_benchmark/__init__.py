@@ -1,8 +1,9 @@
 """Declares the experiment this benchmark package runs.
 
-The scaffold step copies this file in once, verbatim, and substitutes nothing
-into it — every value below is prefilled empty, and stays that way until a
-person fills it in as the work happens.
+The harness stage copies this file in once, verbatim, only after a
+comparison has been accepted, and substitutes nothing into it — every value
+below is prefilled empty, and stays that way until a person fills it in as
+the work happens.
 
 Each of the five blocks is prefilled empty on purpose, and only at this level.
 Emptiness at the block level is unambiguous: no repository ever means "I

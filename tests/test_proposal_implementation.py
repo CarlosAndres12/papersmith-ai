@@ -5453,12 +5453,19 @@ class UnreachedMathematicsEndToEndTests(unittest.TestCase):
 
 
 class DeclareFirstBeforeTheRunTests(unittest.TestCase):
-    """A benchmark declaration that has said nothing yet blocks the run ahead
-    of every other rung the ladder can reach, because each of them reads that
-    same declaration and finds nothing wrong with a target that has not
-    started declaring — `wiring-first` reads `arms`, `search-first` reads
-    `search`, `report-first` reads `report`, and all three are empty in
-    exactly the same way a real defect in one of them would not be.
+    """A benchmark declaration that EXISTS and has said nothing yet
+    (`undeclared`) blocks the run ahead of every other rung the ladder can
+    reach, because each of them reads that same declaration and finds
+    nothing wrong with a target that has not started declaring —
+    `wiring-first` reads `arms`, `search-first` reads `search`,
+    `report-first` reads `report`, and all three are empty in exactly the
+    same way a real defect in one of them would not be.
+
+    A target with no benchmark package at all (`absent`) is a different
+    state (design D4/Movement 3): it is the ordinary pre-acceptance state of
+    every first-flow target now that the benchmark package is no longer
+    scaffolded, so it falls through to the comparison offer instead — see
+    `test_no_benchmark_package_at_all_yields_the_comparison_offer` below.
 
     Fixtures reuse the toy shape `UnreachedMathematicsEndToEndTests`
     established: a module reached through an import, and a `Prior` package to
@@ -5496,9 +5503,13 @@ class DeclareFirstBeforeTheRunTests(unittest.TestCase):
     BLANK = ("__benchmark__ = {'revision': '', 'premises': {}, 'arms': {}, "
              "'search': {}, 'report': {}, 'distribution': {}}\n")
 
-    def test_no_benchmark_package_at_all_yields_declare_first(self):
+    def test_no_benchmark_package_at_all_yields_the_comparison_offer(self):
+        """Design D4/Movement 3: `absent` is the ordinary pre-acceptance
+        state of every first-flow target now that the benchmark package is
+        no longer scaffolded, so it falls through to the offer rather than
+        being told to "declare" a file that deliberately does not exist."""
         probe = self.probe_with(benchmark_dir=False, suffix="absent")
-        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["nextStep"], "benchmark")
 
     def test_a_scaffold_with_every_block_blank_yields_declare_first(self):
         """The companion decision, proved end to end: the exact template
@@ -5531,7 +5542,7 @@ class DeclareFirstBeforeTheRunTests(unittest.TestCase):
             shutil.rmtree(box, ignore_errors=True)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         result = json.loads(proc.stdout or "{}")
-        self.assertEqual(result["nextStep"], "declare-first")
+        self.assertEqual(result["nextStep"], "benchmark")
         self.assertEqual(result["kind"], "read-only")
 
     def test_the_toy_targets_left_nothing_behind(self):
@@ -5545,11 +5556,13 @@ class DeclinedComparisonTests(unittest.TestCase):
 
     Reuses `DeclareFirstBeforeTheRunTests`'s own fixture shape -- a trainable
     target with one genuine baseline and no `Method_Benchmark` package on
-    disk at all, which that class already proves lands on `declare-first`.
-    `declined`'s own guard (D5b) must be checked BEFORE that override, not
-    instead of it: every fixture here is that exact starting point, so a
-    test that never calls `discuss` at all is the pole proving the override
-    is additive.
+    disk at all, which that class already proves lands on `benchmark` (the
+    comparison offer -- design D4/Movement 3: `absent` is the ordinary
+    pre-acceptance state, never "declare a file that does not exist").
+    `declined`'s own guard (D13) is the LAST override in the chain, not the
+    first: every fixture here is that exact starting point, so a test that
+    never calls `discuss` at all is the pole proving the offer stands until
+    something actually answers it.
     """
 
     def box(self, suffix):
@@ -5627,10 +5640,10 @@ class DeclinedComparisonTests(unittest.TestCase):
     # `DeclareFirstBeforeTheRunTests`'s own `declare-first` (D5b's guard is
     # additive, not a replacement of the existing "absent" override) ---
 
-    def test_without_a_decline_the_fixture_is_declare_first_unaffected(self):
+    def test_without_a_decline_the_fixture_is_the_comparison_offer_unaffected(self):
         box = self.box("pole")
         probe = self.probe(box)
-        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["nextStep"], "benchmark")
         self.assertEqual(probe["decisions"]["comparison"],
                          {"state": None, "at": None, "asked": None})
 
@@ -5731,9 +5744,9 @@ class DeclinedComparisonTests(unittest.TestCase):
         # longer answers it -- the `declined` override stops matching and
         # the ladder falls through to whatever it would say for an
         # undeclined target with this benchmark package still absent
-        # (`DeclareFirstBeforeTheRunTests`'s own `declare-first`), never the
-        # stale settled decline.
-        self.assertEqual(probe["nextStep"], "declare-first")
+        # (`DeclareFirstBeforeTheRunTests`'s own `benchmark`, design
+        # D4/Movement 3), never the stale settled decline.
+        self.assertEqual(probe["nextStep"], "benchmark")
         self.assertEqual(probe["decisions"]["comparison"]["state"], None)
 
     def test_a_removed_baseline_re_fires_the_offer(self):
@@ -5744,7 +5757,7 @@ class DeclinedComparisonTests(unittest.TestCase):
         self.decline(box)
         shutil.rmtree(box / "src" / "Second")
         probe = self.probe(box)
-        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["nextStep"], "benchmark")
         self.assertEqual(probe["decisions"]["comparison"]["state"], None)
 
     # --- spec "Every Pre-Existing Probe Rung Fires Under Its Exact Prior
@@ -5768,6 +5781,42 @@ class DeclinedComparisonTests(unittest.TestCase):
             {"revision": "r01.md", "reduction": {}, "comparison": []}),
             encoding="utf-8")
         self.assertEqual(self.probe(box)["nextStep"], "already-benchmarked")
+
+    # --- Unit 3 (task 3.13), spec "Introducing The Acid-Test Follow-Up
+    # Does Not Reorder Or Shadow Any Other Ladder State" ---
+
+    def test_all_five_named_states_fire_under_their_own_precondition_alone(self):
+        """`nothing-to-compare`, `already-benchmarked`, `benchmark`,
+        `validate` and `declined` -- exercised in isolation, each under
+        exactly the precondition that names it, confirming the scaffold/
+        harness list flip (D4) reorders and shadows none of them."""
+        ntc = FORGE / "implementations" / f"_e2e_five_ntc_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, ntc, ignore_errors=True)
+        (ntc / "src/Method").mkdir(parents=True)
+        (ntc / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(ntc)], check=True,
+                       capture_output=True)
+        (ntc / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.probe(ntc)["nextStep"], "nothing-to-compare")
+
+        already = self.box("five-already")
+        results = already / "Method" / "Results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / impl.PROBE_RESULTS).write_text(json.dumps(
+            {"revision": "r01.md", "reduction": {}, "comparison": []}),
+            encoding="utf-8")
+        self.assertEqual(self.probe(already)["nextStep"], "already-benchmarked")
+
+        offered = self.box("five-offered")
+        self.assertEqual(self.probe(offered)["nextStep"], "benchmark")
+
+        validating = self.box("five-validating")
+        self.decline(validating)
+        self.assertEqual(self.probe(validating)["nextStep"], "validate")
+
+        declined = self.box("five-declined")
+        self.decline_both(declined)
+        self.assertEqual(self.probe(declined)["nextStep"], "declined")
 
     # --- spec "Answering The Same Question Again Reopens The Comparison
     # With No Separate Reopening Step" ---
@@ -5812,7 +5861,7 @@ class DeclinedComparisonTests(unittest.TestCase):
         self.decline(box, baselines=pre_fix_baselines)
         probe = self.probe(box)
         self.assertEqual(
-            probe["nextStep"], "declare-first",
+            probe["nextStep"], "benchmark",
             "the corrected sorted name set produces a different question "
             "text, so the offer must report as unanswered rather than as "
             "the settled decline")
@@ -5822,7 +5871,7 @@ class DeclinedComparisonTests(unittest.TestCase):
         box = self.box("migration-restabilize")
         pre_fix_baselines = sorted(["Method_Benchmark", "Prior"])
         self.decline(box, baselines=pre_fix_baselines)
-        self.assertEqual(self.probe(box)["nextStep"], "declare-first")
+        self.assertEqual(self.probe(box)["nextStep"], "benchmark")
         self.decline_both(box)  # today's corrected question text, both offers
         first = self.probe(box)
         second = self.probe(box)
@@ -6257,14 +6306,25 @@ class AcidTestLadderThreeWayTests(unittest.TestCase):
 
 
 class AcidTestShadowEnumerationTests(unittest.TestCase):
-    """D13's proof obligation (task 4b.12), and its own admitted open
-    question (task 4b.13) -- measured, not assumed. Each of the six
-    named repair overrides' own precondition is forced true by mutating
-    the REAL reader's output (never a hand-built stub, which risks
-    omitting a key some other part of `cmd_probe` also reads off the same
-    dict), and `declined` is confirmed to still win -- proving none of them
-    shadows the three-way branch, which sits ahead of all six in the same
-    `if`/`elif` chain.
+    """D13's proof obligation (task 4b.12), corrected in Unit 3 (task 3.14 /
+    spec "Introducing The Acid-Test Follow-Up Does Not Reorder Or Shadow Any
+    Other Ladder State", scenario "A genuinely owed repair still outranks
+    the acid-test offer").
+
+    Unit 4b shipped the three-way branch FIRST in `cmd_probe`'s `if`/`elif`
+    chain, which made `declined` win over every repair unconditionally --
+    the opposite of the spec's own requirement, and of design D13's own
+    literal text ("last among the overrides, after `report-first`"). Unit 3
+    moves the three-way branch back to LAST (report-first also gained an
+    explicit `resolved.status != "absent"` guard, the one override that
+    read the benchmark declaration without already being naturally shielded
+    when absent -- see `implementation_engine.py`'s own comment beside it).
+    Each of the six named repair overrides' own precondition is forced true
+    by mutating the REAL reader's output (never a hand-built stub, which
+    risks omitting a key some other part of `cmd_probe` also reads off the
+    same dict), and a repair is confirmed to win over `declined` -- proving
+    the three-way branch now shadows nothing, exactly as D13 always
+    intended.
     """
 
     def box(self, suffix):
@@ -6351,14 +6411,22 @@ class AcidTestShadowEnumerationTests(unittest.TestCase):
                                   revision="r01.md")
         return impl.cmd_probe(args)
 
-    def test_declined_outranks_every_repair_override_even_when_all_are_forced(self):
+    def test_every_repair_override_still_outranks_a_declined_comparison(self):
+        """Unit 3's correction: with every repair precondition forced true
+        simultaneously on an already-twice-declined target, the ladder must
+        still report the owed repair, never `declined` -- the opposite of
+        what Unit 4b's own (now-superseded) placement proved."""
         box = self.box("mutation")
         self.decline_both(box)
         with self._forced_guards(
                 unfaithful=True, report_drift=True, remote_pending=True,
                 search_absent=True, pilot_incomplete=True):
             probe = self.probe_in_process(box)
-        self.assertEqual(probe["nextStep"], "declined")
+        self.assertNotEqual(probe["nextStep"], "declined")
+        self.assertIn(probe["nextStep"],
+                     {"wiring-first", "env-first", "poll-first",
+                      "search-first", "report-first", "pilot-first",
+                      "pilot-decisions"})
 
     def test_the_forced_state_is_real_a_negative_control(self):
         """Without the declines, the identical forced state reaches one of
@@ -6375,20 +6443,28 @@ class AcidTestShadowEnumerationTests(unittest.TestCase):
                       "pilot-decisions", "declare-first"})
         self.assertNotEqual(probe["nextStep"], "declined")
 
-    def test_declare_firsts_second_branch_is_unreachable_once_declined(self):
-        """Task 4b.13's own measurement: `declare-first`'s second branch
+    def test_declare_firsts_second_branch_now_outranks_declined_too(self):
+        """Unit 3's correction of task 4b.13's own measurement: with the
+        three-way branch moved to last, `declare-first`'s second branch
         (`report.get('live') == 'undeclared'`, unconditioned on declaration
-        status) sits in an `elif` several clauses after the three-way
-        branch's own `if` -- so once `declined` matches, that branch is
-        structurally unreachable in the same evaluation, exactly as the
-        other five overrides are. Not reachable; no escalation needed."""
+        status) now sits BEFORE it in the `if`/`elif` chain, exactly like
+        every other repair -- so it outranks `declined` too, the same
+        correction this class's other tests prove for the six named
+        repairs. The forced combination itself remains unrealistic (a real
+        `resolved.status == "absent"` target never has `report.live ==
+        "undeclared"` -- `report_state`'s own early-return path never sets
+        `live` at all), but the structural conclusion still holds and is
+        worth pinning."""
         box = self.box("declare-first-second")
         self.decline_both(box)
         with self._forced_guards(report_live_undeclared=True):
             probe = self.probe_in_process(box)
-        self.assertEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["nextStep"], "declare-first")
 
     def test_declare_firsts_second_branch_is_real_a_negative_control(self):
+        """Without the declines, the identical forcing still reaches
+        `declare-first` -- proving the mock genuinely moves the ladder
+        rather than the prior test passing for an unrelated reason."""
         box = self.box("declare-first-second-control")
         with self._forced_guards(report_live_undeclared=True):
             probe = self.probe_in_process(box)
@@ -8308,12 +8384,15 @@ class ReportFirstSectionProseTests(unittest.TestCase):
 
 
 class MaterializeBenchmarkDeclarationTests(unittest.TestCase):
-    """Before this, `materialize.py` never created `src/<Package>_Benchmark/`
-    at all, so `scaffold_gaps` — the one check whose job is reporting what a
-    scaffold left out — checked five paths and none of them was the
-    declaration. These pin the fix: a fresh scaffold writes the declaration,
-    it parses empty, and `scaffold_gaps` can both see it present and see it
-    missing.
+    """Design D4/Movement 3 moved the benchmark declaration off the scaffold
+    stage entirely: `materialize.py` (the scaffold script, D9's loop over
+    `scaffold_destinations`) never writes `src/<Package>_Benchmark/` at all
+    any more, and `scaffold_gaps` correctly never names it. It is a HARNESS
+    destination now, written only by `materialize --stage harness`, only
+    once a comparison is accepted. These pin that: a fresh scaffold leaves
+    it absent, the kit source it would eventually be copied from parses
+    empty with the right shape, and `harness_gaps` — not `scaffold_gaps` —
+    is what reports it missing.
     """
 
     KIT = FORGE / ".claude/skills/proposal-implementation/assets/kit"
@@ -8330,16 +8409,24 @@ class MaterializeBenchmarkDeclarationTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         return box
 
-    def _declared(self, box):
+    def _scaffolded(self, box):
         self.materialize.main(str(box), "Method", "1", str(self.KIT))
         return box / "src" / "Method_Benchmark" / "__init__.py"
 
-    def test_a_fresh_scaffold_writes_a_declaration_that_parses_empty(self):
+    def test_a_fresh_scaffold_does_not_write_the_benchmark_declaration(self):
         box = self._box()
-        declared = self._declared(box)
-        self.assertTrue(declared.exists())
+        declared = self._scaffolded(box)
+        self.assertFalse(declared.exists(),
+                         "the scaffold stage must not create "
+                         "src/<Package>_Benchmark/ at all (design D4)")
 
-        tree = ast.parse(declared.read_text(encoding="utf-8"))
+    def test_the_kit_source_declaration_parses_empty_with_the_right_shape(self):
+        """The content the harness stage would eventually copy in verbatim
+        (`harness_kit_source`, no substitution needed inside `__benchmark__`)
+        — read directly, since `materialize.py` (the scaffold-only script)
+        has no harness-stage mode of its own to exercise this through."""
+        source = self.KIT / "src_benchmark" / "__init__.py"
+        tree = ast.parse(source.read_text(encoding="utf-8"))
         value = None
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(
@@ -8360,15 +8447,14 @@ class MaterializeBenchmarkDeclarationTests(unittest.TestCase):
                 continue
             self.assertIn(field, ("", {}, []), f"{key!r} is not empty: {field!r}")
 
-    def test_scaffold_gaps_no_longer_reports_it_missing_once_written(self):
-        box = self._box()
-        self._declared(box)
-        gaps = impl.scaffold_gaps(box, "Method")
-        self.assertNotIn("src/Method_Benchmark/__init__.py", gaps)
-
-    def test_scaffold_gaps_reports_it_missing_when_absent(self):
+    def test_scaffold_gaps_never_names_the_benchmark_declaration(self):
         with tempfile.TemporaryDirectory() as raw:
             gaps = impl.scaffold_gaps(Path(raw), "Method")
+        self.assertNotIn("src/Method_Benchmark/__init__.py", gaps)
+
+    def test_harness_gaps_reports_it_missing_when_absent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            gaps = impl.harness_gaps(Path(raw), "Method")
         self.assertIn("src/Method_Benchmark/__init__.py", gaps)
 
 
@@ -9518,6 +9604,139 @@ class MaterializeScaffoldAgreementTests(unittest.TestCase):
         self.assertIn(missing, str(caught.exception))
 
 
+class DerivedScaffoldCountSweepTests(unittest.TestCase):
+    """Unit 3, tasks 3.6/3.7/3.8, design D8: a count that describes a list
+    (the scaffold destinations, the harness destinations, the kit
+    destinations, the `nextStep` ladder) is computed from that list at read
+    time; a count in prose is deleted, not updated. Design §1.3 named the
+    exact stale sites this sweep closes -- `references/usage.md`'s "Eleven
+    values are possible", `cmd_probe`'s own "Two of the eleven answers"
+    comment, and the engine docstrings' "eleven"/"seventeen"/"seven blocks"
+    -- plus the two counts that were already wrong before this change
+    (`usage.md`'s ladder sentences, `all_kit_destinations`'s deleted
+    arithmetic-identity assertion). This is the grep-style check that no
+    hand-written numeral replaced them.
+    """
+
+    DOCTRINE_FILES = (SKILL_MD, USAGE_MD, FORGE / "README.md", ENGINE)
+
+    #: The exact number-words design §1.3 measured as stale scaffold/gap/
+    #: kit-destination/ladder counts. Not every numeral in these files --
+    #: version numbers, dates, and unrelated prose numerals are legitimate
+    #: and out of this sweep's scope -- only the specific words the design
+    #: named as having described one of these lists.
+    STALE_COUNT_WORDS = ("eleven", "seventeen", "thirteen")
+
+    #: The word must share a LINE with one of these to count as a scaffold/
+    #: kit-destination count claim -- not every "eleven"/"seventeen" in
+    #: these files is one: `SKILL.md` also counts CLI subcommands
+    #: ("twenty subcommands... the eleven above") and the engine also
+    #: counts physical files once observed on disk under `implementations/`
+    #: ("seventeen frozen inside shard clones"), neither a list this
+    #: change's own destinations functions compute. Scoping by co-occurring
+    #: keyword, not a blanket ban on the word anywhere in the file, is what
+    #: keeps this a real check rather than a false-positive generator.
+    CONTEXT_WORDS = ("scaffold", "destination", "kit")
+
+    def test_no_doctrine_file_states_the_old_scaffold_or_kit_destination_counts(self):
+        offenders = []
+        for path in self.DOCTRINE_FILES:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                lowered = line.lower()
+                if not any(re.search(rf"\b{context}", lowered)
+                          for context in self.CONTEXT_WORDS):
+                    continue
+                for word in self.STALE_COUNT_WORDS:
+                    if re.search(rf"\b{word}\b", lowered):
+                        offenders.append(
+                            f"{path.name} still spells {word!r} beside a "
+                            f"scaffold/kit-destination mention: {line.strip()!r}")
+        self.assertEqual(
+            offenders, [],
+            "a doctrine file states a scaffold/kit-destination count as a "
+            "hand-written numeral (design D8 requires the noun instead): "
+            + "; ".join(offenders))
+
+    def test_scaffold_gaps_maximum_is_derived_not_transcribed(self):
+        """Ten unconditional entries (spec "The Scaffold Stage Does Not
+        Create A Benchmark Package") plus up to two conditional merge
+        anchors -- computed here from the same functions doctrine points
+        readers at, never a literal this test carries independently."""
+        self.assertEqual(len(impl.scaffold_destinations("Method")), 10)
+        with tempfile.TemporaryDirectory() as raw:
+            gaps = impl.scaffold_gaps(Path(raw), "Method")
+        self.assertLessEqual(len(gaps), 12)
+
+    def test_all_kit_destinations_docstring_carries_no_arithmetic_identity(self):
+        """The `all_kit_destinations` docstring used to assert "Eleven +
+        three + three = seventeen" in prose -- an identity no test held and
+        that this change falsifies twice over (ten scaffold, four harness).
+        Deleted, not updated."""
+        doc = ast.get_docstring(next(
+            node for node in ast.parse(
+                ENGINE.read_text(encoding="utf-8")).body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "all_kit_destinations"))
+        self.assertNotIn("=", doc)
+        for word in self.STALE_COUNT_WORDS:
+            self.assertNotIn(word, doc.lower())
+
+
+class FreshFlowATargetEndToEndTests(unittest.TestCase):
+    """Unit 3, task 3.18 -- E2E: a fresh Flow A target, after scaffolding
+    alone, through the whole first-flow story the scaffold/harness list
+    flip (design D4) exists to tell.
+    """
+
+    NAME = "Example-Method"
+    PACKAGE = "Example_Method"
+    SEED = "7"
+
+    def scaffolded(self):
+        box = FORGE / "implementations" / f"_e2e_flowa_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        box.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        subprocess.run(
+            [sys.executable, str(SKILL_ROOT / "scripts/materialize.py"),
+             str(box), self.NAME, self.SEED], check=True, capture_output=True)
+        return box
+
+    def test_no_benchmark_directory_exists_anywhere_under_src(self):
+        box = self.scaffolded()
+        benchmark_dirs = [path for path in (box / "src").rglob("*")
+                          if path.is_dir() and path.name.endswith("_Benchmark")]
+        self.assertEqual(benchmark_dirs, [],
+                         "a fresh scaffold must create no `_Benchmark` "
+                         "directory anywhere under src/ (design D4)")
+
+    def test_previous_implementations_is_empty(self):
+        box = self.scaffolded()
+        self.assertEqual(impl.previous_implementations(box, self.NAME), [])
+
+    def test_the_flow_reports_nothing_to_compare(self):
+        box = self.scaffolded()
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "probe", "--target", str(box),
+             "--name", self.NAME],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["nextStep"],
+                         "nothing-to-compare")
+
+    def test_verification_notebook_executes_and_stamps(self):
+        """The identical `NotebookSealAgreementTests` machinery, run once
+        more over a target scaffolded with today's list (no benchmark
+        package on disk at all) rather than a hand-materialized one."""
+        box = self.scaffolded()
+        notebook = box / self.NAME / "Notebooks" / "verification.ipynb"
+        helper = NotebookSealAgreementTests()
+        index, _, _ = helper.stamping_cell("verification.ipynb")
+        seal = helper.executed_seal(notebook, index)
+        self.assertTrue(seal.startswith(impl.DIGEST_MARKER))
+
+
 class NotebookSealAgreementTests(unittest.TestCase):
     """The kit notebook stamped a digest over a tree the verifier never reads.
 
@@ -10310,6 +10529,7 @@ class StageTwoInstructionsTests(unittest.TestCase):
         "tests/test_synthetic.py": "assets/kit/tests/test_synthetic.py",
     }
     COPY_STEP = {
+        "src/<Package>_Benchmark/__init__.py": "assets/kit/src_benchmark/__init__.py",
         "src/<Package>_Benchmark/benchmark.py": "assets/kit/nb/benchmark.py",
         "src/<Package>_Benchmark/verdict.py": "assets/kit/nb/verdict.py",
         "<Name>/Notebooks/probe.ipynb": "assets/kit/nb/probe.ipynb",
@@ -10891,22 +11111,27 @@ class HarnessPlacementTests(unittest.TestCase):
 
         Two tables state stage 2. Step 9's writes a module per object from
         `assets/kit/src/` and `assets/kit/tests/`, and no fixture can perform it
-        — the object map it answers does not exist. The copy step's is the other
-        one, and every asset it names is staged under `assets/kit/nb/`, which is
-        the property this reads it by. A third table, or a copy step that
-        started staging from somewhere else, turns this red rather than silently
-        placing the wrong three files.
+        — the object map it answers does not exist. The copy step's is the
+        other one, and every asset it names is staged under `assets/kit/nb/`
+        or `assets/kit/src_benchmark/` (the benchmark declaration itself,
+        design D4/Movement 3 — materialized by this same harness stage, only
+        once a comparison is accepted), never under `assets/kit/src/` or
+        `assets/kit/tests/`, which is the property this reads it by. A third
+        table, or a copy step that started staging from somewhere else, turns
+        this red rather than silently placing the wrong files.
         """
+        COPY_STEP_ROOTS = ("assets/kit/nb/", "assets/kit/src_benchmark/")
         staged = []
         for table in markdown_table_rows(SKILL_MD.read_text(encoding="utf-8"),
                                          STAGE_TWO_HEADER):
             assets = [declared_assets(row[1]) for row in table]
-            if assets and all(len(a) == 1 and a[0].startswith("assets/kit/nb/")
+            if assets and all(len(a) == 1 and a[0].startswith(COPY_STEP_ROOTS)
                               for a in assets):
                 staged.append({row[0].strip("`"): declared_assets(row[1])[0]
                                for row in table})
         self.assertEqual(len(staged), 1,
-                         "%d stage-2 tables stage out of `assets/kit/nb/`" % len(staged))
+                         "%d stage-2 tables stage out of `assets/kit/nb/` or "
+                         "`assets/kit/src_benchmark/`" % len(staged))
         return staged[0]
 
     def expected_files(self):
@@ -11283,16 +11508,18 @@ class FidelityUndeclaredTests(unittest.TestCase):
 
     def test_an_absent_benchmark_package_is_deliberately_not_folded_in(self):
         """A target with no Benchmark package has nothing to be unfaithful to,
-        and `structure.scaffoldGaps` already names the file it is missing.
-        Reporting it twice, in a field about fidelity, would teach the reader
-        that `undeclared` means two different things."""
+        and `structure.harnessGaps` already names the file it is missing
+        (design D4/Movement 3: the benchmark package is a harness
+        destination now, not a scaffold one). Reporting it twice, in a
+        field about fidelity, would teach the reader that `undeclared`
+        means two different things."""
         proc = self.verify(suffix="absent", declaration="", bench_package=False)
         result = json.loads(proc.stdout or "{}")
 
         self.assertEqual(result["fidelity"]["benchmark"]["status"], "absent")
         self.assertEqual(result["fidelity"]["status"], "ok")
         self.assertIn("src/Method_Benchmark/__init__.py",
-                      result["structure"]["scaffoldGaps"])
+                      result["structure"]["harnessGaps"])
 
     def test_a_declared_benchmark_still_reports_ok(self):
         """The control pole. Without it a ladder that always answered
@@ -12069,44 +12296,28 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
             "on purpose, remove this test with it rather than leaving it green")
         return step[index:].split("\n\n")[0]
 
-    def test_the_count_step_five_attributes_to_the_harness_is_one_its_table_yields(self):
-        """Reachable red, and the exact claim that was false: "performs this
-        exact mapping for eight of the nine" was wrong in both halves — the
-        harness covers all of them, and there are thirteen, not nine.
-
-        The clause is required to state a count. A prose rewrite that drops the
-        number states nothing false, but it also leaves the coverage claim held
-        by nobody, which is the condition this whole change exists to end. That
-        the harness's tree really is the stage-1 register is a separate and
-        behavioural matter, and `MaterializeWritesStageOneTests` owns it; what is
-        held here is only that the number doctrine prints agrees with the table
-        doctrine prints it beside.
+    def test_step_five_states_no_hand_written_count_for_the_harness(self):
+        """Superseded by design D8 (Unit 3, `the-comparison-nobody-asked-for`):
+        this class's own original test required the clause to state a count
+        matching the table, so that a stale numeral could be caught by
+        comparison. D8's rule is stronger and supersedes it — a count that
+        describes a list is never transcribed as prose at all, derived at
+        read time instead, so there is no numeral left to go stale in the
+        first place. The clause about `scripts/materialize.py`'s coverage
+        must name the identical list (`scaffold_destinations`) rather than a
+        count of it; `MaterializeWritesStageOneTests` owns the behavioural
+        claim that the mapping really is complete.
         """
         harness = self.harness()
         step = self.step_five()
-
-        tables = markdown_table_rows(
-            SKILL_MD.read_text(encoding="utf-8"), STAGE_ONE_HEADER)
-        self.assertEqual(len(tables), 1)
-        rows = tables[0]
-        total = len(rows)
-        authored = sum(1 for row in rows if row[1].startswith("authored:"))
-
         clause = self.harness_clause(step)
 
         counts = self.counts_in(clause)
-        self.assertTrue(
-            counts,
-            f"step 5 attributes no count at all to {harness.name}; the coverage "
-            "claim it makes is what this test holds, so it has to make one")
         self.assertEqual(
-            counts[0], total,
-            f"step 5 says {harness.name} covers {counts[0]} of the gaps and its "
-            f"own table has {total} rows")
-        self.assertEqual(
-            sorted(set(counts) - {total, authored}), [],
-            f"step 5's clause about {harness.name} states a count its table "
-            f"does not yield; the table has {total} rows, {authored} authored")
+            counts, [],
+            f"step 5's clause about {harness.name} states a hand-written "
+            f"count ({counts}); design D8 requires the noun (the destination "
+            "list) rather than a numeral that can drift out of sync with it")
 
     def test_step_five_carries_the_standing_the_harness_claims_for_itself(self):
         """Reachable red, and red when it was written: step 5 named the harness
@@ -13158,10 +13369,12 @@ class MaterializeStageObjectsWriterTests(MaterializeCommandFixture, unittest.Tes
 
 
 class MaterializeStageHarnessWriterTests(MaterializeCommandFixture, unittest.TestCase):
-    """`--stage harness`: the harness-wiring table's three destinations
-    (`benchmark.py`, `verdict.py`, `probe.ipynb`), gated only on the same
-    plan/clean-worktree preflight `scaffold` uses -- no object-map
-    precondition, and no `--seed`."""
+    """`--stage harness`: the harness-wiring table's destinations
+    (`__init__.py`, `benchmark.py`, `verdict.py`, `probe.ipynb`), gated only
+    on the same plan/clean-worktree preflight `scaffold` uses -- no
+    object-map precondition, and no `--seed`. `__init__.py` (design D4/
+    Movement 3) is the benchmark declaration itself, materialized only here,
+    never at scaffold time."""
 
     def _staged_scaffold(self, tag):
         box = self._fully_materialized(tag)
@@ -13195,6 +13408,7 @@ class MaterializeStageHarnessWriterTests(MaterializeCommandFixture, unittest.Tes
         shared helper instead."""
         box = self._staged_scaffold("_harness_conflict")
         raced = f"src/{self.PACKAGE}_Benchmark/benchmark.py"
+        (box / raced).parent.mkdir(parents=True, exist_ok=True)
         (box / raced).write_text("already here\n", encoding="utf-8")
         self._git(box, "add", "-A")
         self._git(box, "commit", "-q", "-m", "the file the race lands on")
@@ -16759,13 +16973,17 @@ class KitBuiltTargetIntrospectionTests(MaterializeCommandFixture, unittest.TestC
             assert "import torch" in stub
         return stub
 
-    def _declare_object_map(self, box, name=None):
-        """Step 8's declaration, answered the way SKILL.md's worked example
-        answers it: the base fixture's `revision`/`premises`, plus `entry` — the
-        block this class exists for — and `report`, without which `report_state`
-        never reaches `introspect` at all.
+    def _declare_benchmark_entry_and_report(self, box, name=None):
+        """`__benchmark__`'s own `entry` — the block this class exists for —
+        and `report`, without which `report_state` never reaches
+        `introspect` at all.
+
+        Design D4/Movement 3: `src/<Package>_Benchmark/__init__.py` is a
+        HARNESS destination now, materialized only at the end of
+        `_fully_materialized_all_stages` — so this can only run after that
+        call returns, unlike step 8's declaration (`_declare_object_map`,
+        untouched, still lands on the method's own package pre-harness).
         """
-        super()._declare_object_map(box, name)
         name = name or self.NAME
         package = impl.package_name(name)
         path = box / "src" / f"{package}_Benchmark" / "__init__.py"
@@ -16786,11 +17004,8 @@ class KitBuiltTargetIntrospectionTests(MaterializeCommandFixture, unittest.TestC
         assert text != before and f'{package}_Benchmark.benchmark' in text
         assert '"renderers"' in text
         path.write_text(text, encoding="utf-8")
-        # `super()._declare_object_map` re-seals `src/<Package>/__init__.py`
-        # (where it wrote `revision`/`premises`) back in
-        # `_fully_materialized_all_stages` -- this edit lands on the
-        # SIBLING file, `__benchmark__`'s own `entry`/`report` blocks, and
-        # needs its own re-seal or it reads as `SCAFFOLD_DRIFT` forever.
+        # The harness stage's own fresh receipt entry for this file needs its
+        # own re-seal or it reads as `SCAFFOLD_DRIFT` forever.
         payload, code, proc = self._run_cli(
             "materialize", "--target", str(box), "--name", name,
             "--authored", f"src/{package}_Benchmark/__init__.py")
@@ -16800,6 +17015,7 @@ class KitBuiltTargetIntrospectionTests(MaterializeCommandFixture, unittest.TestC
         """All three stages, a baseline to compare against, a tensor backend,
         and an interpreter equivalent to this one."""
         box = self._fully_materialized_all_stages(tag)
+        self._declare_benchmark_entry_and_report(box)
         # `cmd_probe` answers `nothing-to-compare` with no prior work under
         # `src/` and never reaches the ladder at all.
         prior = box / "src" / "Prior"

@@ -576,7 +576,7 @@ exactly what stops a launcher from being able to claim it implements anything.
 | `verify` reports `unreachedModules` | An arm declares mathematics it never calls: report before any run |
 | `verify` reports a non-empty `structure.scaffoldGaps`/`objectGaps`/`harnessGaps` | Kit destinations this skill ships are absent from the repository. `structure.resolve` publishes one entry per gap key that names anything, each naming the exact `materialize --stage` that writes them and the exact files it would write, with a `discuss` command that runs unedited. It is a question and not the command on purpose: `--plan` is an approval a human gives, and a published command that generated its own approval would answer the gate instead of passing it; `--seed` is the number the scaffolded experiment draws from, which no skill may choose for a repository |
 | `verify` reports `fidelity: "undeclared"` | The Benchmark package exists and every block of `__benchmark__` is still at its scaffolded empty value: fill the declaration before quoting any fidelity result, because nothing measured against it has been checked yet |
-| `probe` reports `nextStep: "declare-first"` | The benchmark has no `src/<Package>_Benchmark/` at all, or has one whose every block is still at its scaffolded empty value: report before offering a run built on a declaration that has not happened |
+| `probe` reports `nextStep: "declare-first"` | The benchmark package exists (a comparison was already accepted) but every block of `__benchmark__` is still at its scaffolded empty value: report before offering a run built on a declaration that has not happened. A target with no benchmark package at all does not reach this row — see `nextStep: "benchmark"`/`"validate"`/`"declined"` below |
 | `probe` reports `nextStep: "poll-first"` | A submission is already out to a remote worker with no result back yet: report before offering another run |
 | `probe` reports `nextStep: "search-first"` | A declared search's record is absent from disk: the run has no chosen configuration yet, report before offering it |
 | `probe` reports `nextStep: "pilot-first"` | The flow the target declared has steps that have not finished at pilot — `pilotCompleteness.incomplete` names them, ordinal-carrying and ordinal-less alike: report those, and never the declared scale, because nothing has been produced yet for anybody to read |
@@ -651,7 +651,9 @@ date. Drift is Flow B's fourth step, not a reason to start over.
 5. **Fill every scaffold gap.** Run `materialize --stage scaffold --plan <path
    to the approved plan> --seed <the suite's fixed seed>`. `plan`'s
    `scaffoldFiles` and `verify`'s `structure.scaffoldGaps` report the same
-   thirteen, and the command writes every one of them from the kit at
+   destinations — the table below, plus the two merge anchors
+   (`.gitignore`, `pyproject.toml [tool.pytest.ini_options]`) when either is
+   missing — and the command writes every one of them from the kit at
    `assets/kit/`, then records what it wrote in `<Name>/.implementation/
    materialization.json` — the receipt a later hand-edit is checked against
    (`SCAFFOLD_DRIFT`), and the reason a target scaffolded before this command
@@ -659,19 +661,20 @@ date. Drift is Flow B's fourth step, not a reason to start over.
    --adopt <path>` on each of its scaffold destinations, deliberately, one at
    a time. The agent never copies these files by hand: a target `verify`
    reports incomplete after this command runs means the command refused, not
-   that four rows were skipped. `scripts/materialize.py` — the forge's own
-   harness, never a step of Flow A — performs this exact mapping for all
-   thirteen, so the test suite can examine a freshly scaffolded target the
-   identical way: the two rows marked `authored:` are written rather than
-   copied, and the `.gitignore` is merged into whatever the repository
-   already has instead of written over it.
+   that a row was skipped. `scripts/materialize.py` — the forge's own
+   harness, never a step of Flow A — performs this exact mapping over the
+   identical list (`scaffold_destinations`), so the test suite can examine a
+   freshly scaffolded target the identical way: the rows marked `authored:`
+   are written rather than copied, and the `.gitignore` is merged into
+   whatever the repository already has instead of written over it.
+   `src/<Package>_Benchmark/__init__.py` is **not** among these destinations —
+   see [`nextStep: "declare-first"`](#nextstep-declare-first--the-benchmark-package-exists-and-says-nothing-yet).
 
    | Gap `plan` and `verify` report | Written from |
    | --- | --- |
    | `.gitignore (.venv/, __pycache__/, .ipynb_checkpoints/)` | authored: the entries a virtualenv inside the target needs kept out of the index |
    | `pyproject.toml [tool.pytest.ini_options] pythonpath` | `assets/pyproject.template.toml`, or the anchor appended to the existing file |
    | `src/<Package>/__init__.py` | authored: exports the target's own modules (none yet), plus `__implementation__`/`__levels__`/`__steps__`/`__records__` prefilled empty, with guidance comments, awaiting step 8/9 |
-   | `src/<Package>_Benchmark/__init__.py` | `assets/kit/src_benchmark/__init__.py`, copied verbatim and never populated |
    | `src/<Package>/report_digest.py` | `assets/kit/nb/report_digest.py` |
    | `tests/test_smoke.py` | `assets/kit/tests/test_smoke.py` |
    | `tests/findings.py` | `assets/kit/tests/findings.py` |
@@ -1253,9 +1256,14 @@ prefills all four empty, with guidance comments, the moment
 `src/<Package>_Benchmark/__init__.py` carries one literal, `__benchmark__`, and
 every check downstream of it — `search`, `distribution`, `report`, the wiring
 crossing behind `wiring-first`, `probe`'s whole ladder — reads that one dict
-and nothing else. The kit scaffolds it with all five top-level blocks present
-and empty (`assets/kit/src_benchmark/__init__.py`), so a freshly materialized
-target already has the file; what it does not yet have is anything written
+and nothing else. It is a **harness** destination, not a scaffold one: the
+kit ships it with all five top-level blocks present and empty
+(`assets/kit/src_benchmark/__init__.py`), but `materialize --stage harness`
+writes it only once a comparison has been accepted (see
+[`nextStep: "benchmark"`](#nextstep-benchmark--propose-the-wiring-then-train-both-and-measure)) —
+never at scaffold time, and never for a target whose comparison was declined
+or whose acid test was run instead. Before acceptance there is no file at
+all; once it is materialized, what it does not yet have is anything written
 into it:
 
     __benchmark__ = {
@@ -1320,11 +1328,15 @@ run. `declare-first`, below, is what tells the two apart.
 **`undeclared` covers a blank declaration, not only a missing one.** Both a
 target with no `src/<Package>_Benchmark/` directory at all (`absent`) and one
 whose `__init__.py` parses but leaves every block at its scaffolded, empty
-value (`undeclared`) are read the same way by `search`, `distribution`,
-`report` and `probe`'s `declare-first` — as nothing yet said, not as a
-finished declaration that happens to say little. Once any one block is
-answered, the declaration is `declared`, and each block reports its own state
-independently from there.
+value (`undeclared`) are read the same way by `search`, `distribution` and
+`report` — as nothing yet said, not as a finished declaration that happens to
+say little. `probe`'s `declare-first` is narrower than that (D4): it fires
+only on `undeclared`, never on `absent` — a target with no benchmark package
+at all is the ordinary pre-acceptance state and falls through to the
+comparison offer or the decline pair instead, never to "declare" a file that
+deliberately does not exist yet. Once any one block is answered, the
+declaration is `declared`, and each block reports its own state independently
+from there.
 
 ### `nextStep: "convert"` — port the implementation to PyTorch
 
@@ -1338,36 +1350,46 @@ The mathematics does not change — this is a change of backend, not of method �
 invariant test must still hold. Re-run the audit: a remedy established over the numpy
 sweep has not been established over the converted one.
 
-### `nextStep: "declare-first"` — the benchmark has not been declared yet
+### `nextStep: "declare-first"` — the benchmark package exists and says nothing yet
 
-`resolve_benchmark_declaration`'s own three-way read is what this rung acts
-on: `absent` (no `src/<Package>_Benchmark/` directory at all — nothing could
-have declared anything yet) and `undeclared` (the directory exists, but
-either nothing parses as `__benchmark__`, or one does and every block in it is
-still at its scaffolded empty value — see
-[The benchmark declaration, and its five blocks](#the-benchmark-declaration-and-its-five-blocks))
-both block the run. `declared` — at least one block answered — does not, and
-lets the ladder continue to the checks below that read what was answered.
+`resolve_benchmark_declaration`'s `undeclared` state is what this rung acts
+on: `src/<Package>_Benchmark/__init__.py` exists — the harness stage has
+already written it, which only happens once a comparison has been accepted
+(see [`nextStep: "benchmark"`](#nextstep-benchmark--propose-the-wiring-then-train-both-and-measure)) —
+but either nothing parses as `__benchmark__`, or one does and every block in
+it is still at its scaffolded empty value (see
+[The benchmark declaration, and its five blocks](#the-benchmark-declaration-and-its-five-blocks)).
+`declared` — at least one block answered — does not block the run, and lets
+the ladder continue to the checks below that read what was answered.
+
+**`resolved["status"] == "absent"` — no benchmark package at all — does
+*not* route here.** That is the ordinary, pre-acceptance state of every
+first-flow target now that the benchmark package is no longer scaffolded: it
+falls through to the comparison offer (`benchmark`) or, once that offer is
+answered, to `validate`/`declined` instead — see
+[`nextStep: "benchmark"`](#nextstep-benchmark--propose-the-wiring-then-train-both-and-measure).
+Routing an absent package here would tell every such target to go and fill a
+file that deliberately does not exist yet.
 
 **Why it sits first, ahead of every other rung here, and why that is not a
 preference.** `unreachedModules` — what `wiring-first` reads — is computed
 from this same declaration's `arms` block, and with nothing declared that
 block is always empty: `wiring-first` can never fire on its own while the
 declaration itself has said nothing, so placing this rung ahead of it costs
-nothing that rung would otherwise have caught. Left unguarded, a target that
-has declared nothing instead reaches `report-first` by accident: `report`
-already reports its own `"undeclared"` the moment its block has nothing in
-it, and that alone used to carry the run offer straight past a target that
-had not started declaring anything, into a rung whose whole premise is a
-document disagreeing with a run — when no report exists yet to disagree with.
-`declare-first` is the honest rung for that state, and it stands ahead of
-every check that is built on top of a declaration which has not happened.
+nothing that rung would otherwise have caught. Left unguarded, a target whose
+benchmark package exists and has declared nothing instead reaches
+`report-first` by accident: `report` already reports its own `"undeclared"`
+the moment its block has nothing in it, and that alone used to carry the run
+offer straight past a target that had not started declaring anything, into a
+rung whose whole premise is a document disagreeing with a run — when no
+report exists yet to disagree with. `declare-first` is the honest rung for
+that state, and it stands ahead of every check that is built on top of a
+declaration which has not happened.
 
 **Report it, and stop there.** Unlike `wiring-first`, this names nothing to
 correct: there is no fork to point at, only empty blocks and a person who has
 not yet filled `arms`, `search`, `report` and `distribution` in as the work
-happens. Say which of the two states applies — `absent` or `undeclared` — and, for
-`undeclared`, what the resolver's own `detail` names: no readable literal at
+happens. Say what the resolver's own `detail` names: no readable literal at
 all, or one that parses with nothing in it answered.
 
 ### `nextStep: "env-first"` — the declared entry module cannot be imported
@@ -1873,21 +1895,25 @@ the reported common environment would be an intersection with that list rather t
 the environment the prior results came from. `build_data` belongs to the wiring for
 the same reason the builders do.
 
-Materialize these three, fill in the reduction, and execute the notebook. Run
+Materialize these four, fill in the reduction, and execute the notebook. Run
 `materialize --stage harness --plan <path to the approved plan>` — no `--seed`: none
-of the three carries a `{{SEED}}` token (`probe.ipynb` carries `{{SEEDS}}` instead,
+of the four carries a `{{SEED}}` token (`probe.ipynb` carries `{{SEEDS}}` instead,
 answered later, at probe time). Unlike `objects`, this stage needs no step-8
-precondition and its two `.py` destinations parse cleanly the moment they land:
+precondition and its three `.py` destinations parse cleanly the moment they land:
 
 | Written into | Written from |
 | --- | --- |
+| `src/<Package>_Benchmark/__init__.py` | `assets/kit/src_benchmark/__init__.py`, copied verbatim and never populated — see [The benchmark declaration, and its five blocks](#the-benchmark-declaration-and-its-five-blocks) |
 | `src/<Package>_Benchmark/benchmark.py` | `assets/kit/nb/benchmark.py` |
 | `src/<Package>_Benchmark/verdict.py` | `assets/kit/nb/verdict.py` |
 | `<Name>/Notebooks/probe.ipynb` | `assets/kit/nb/probe.ipynb` |
 
-The agent never copies these three by hand — the same `materialize` discipline step 5
+The agent never copies these four by hand — the same `materialize` discipline step 5
 and step 9 use, and `wiring.py` above stays the one bespoke-authored exception: it is
-never a kit destination and this command never touches it.
+never a kit destination and this command never touches it. This is also the one and
+only stage that ever writes `src/<Package>_Benchmark/` into a target at all — see
+[`nextStep: "declare-first"`](#nextstep-declare-first--the-benchmark-package-exists-and-says-nothing-yet)
+for why the scaffold stage no longer does.
 
 `assets/kit/nb/` stages what the notebooks need; it does not mirror where any of it
 ends up. Python that lives beside a notebook is a
@@ -2881,7 +2907,7 @@ else in this file writes into `AGREED.md`'s checklist body.
 | `settle` | Places exactly one caller-authored `- [ ] <text>` line, verbatim, under a caller-named `--under <heading>` (exact match, hash marks included) in whichever holder file `agreements_state` already knows carries checklist items — the mark written is always `[ ]`, never `[x]`. `--about` is resolved the identical way `discuss`'s own `--about` is, then matched against the ledger by witness identity `(kind, operand)`; ANY answered `discuss` event satisfies this, never newest-wins, so a later open clarifying question never erases an earlier answer. On a collision (the same `_agreement_collides` search `discuss` reports), `--supersedes <text>` must exact-match one of the computed colliding items; recorded in the one `settle` ledger event only — the document itself still needs a human-written `Reversed` paragraph to show the supersession actually happened, which this command deliberately cannot author. Optional `--witness test_<id>` — a separate identity from `--about` — is persisted verbatim as a trailing `` `test_<id>` `` token; omitted, the written line is byte-identical to the pre-witness grammar. `settle` is the ONLY command that ever writes this token: there is no `patch`/`edit` subcommand, and hand-typing one into the file is unsupported doctrine, not a technical prevention — the parser cannot and does not distinguish a skill-written token from a hand-typed one, and `verify`/`close` evaluate either exactly the same way. No `--revision`: a placement binds to no revision. **`--attach`** (design "attach, not place") switches this same command into a second mode: bind `--witness` (required in this mode) onto a line ALREADY settled, matched by its exact `--text` — the mark is never touched, a ticked item stays ticked and an open one stays open, and everything else in the holder file is byte-identical afterward. `--under`/`--about`/`--supersedes` do not apply with `--attach` and are refused if given; the discussion precondition (`SETTLE_NOT_DISCUSSED`/`SETTLE_DISCUSSION_UNANSWERED`) is skipped entirely, because a line `--attach` matches was already discussed and placed by a prior `settle` call — attaching a witness to it is not placing a new agreement (see `cmd_settle`'s own docstring for the full reasoning). This is the retrofit mechanism, not the retrofit itself: running it over every already-settled line in a target is a separate, bounded, operator-directed pass. **`--remove`** (design "the eraser") switches this same command into a third mode: delete an already-settled line's own bytes outright, matched by its exact `--text`, touching no other byte in the document. Refused `SETTLE_NOT_REVERSED` unless the exact text is already quoted, bold, under a `## Reversed` heading somewhere in the same holder — deletion is refused until the document itself already explains why, and `--remove` deliberately cannot author that explanation. `--under`/`--supersedes`/`--witness` do not apply and are refused if given. **`--reverse`** (design "a reversal is one write") switches this same command into a fourth mode: write a NEW `## Reversed` entry (from `--paragraph`, required — `SETTLE_PARAGRAPH_REQUIRED` if blank or omitted, since the engine never authors the reasoning) and delete that same located line, both folded into ONE spliced write — either both land or the compare-and-swap itself refuses and neither does. Refused `SETTLE_ALREADY_REVERSED` if the text is already quoted under `## Reversed` (plain `--remove` is the reachable command for that state) and `SETTLE_HEADING_ABSENT`/`SETTLE_HEADING_AMBIGUOUS` if the holder carries no `## Reversed` heading, or more than one. `--under`/`--supersedes`/`--witness` do not apply and are refused if given. **`--done`** (design "the tick this class closes") switches this same command into a fifth mode: flip an already-settled line's own mark from `[ ]` to `[x]`, matched by its exact `--text` — the text, any witness token it already carries, and every other byte in the holder file are unchanged. Refused `SETTLE_NOT_WITNESSED` unless the located line already carries a `` `test_<id>` `` token: a tick asserts the work is done, and this command refuses to author that assertion for a line nobody can point a test at — bind one first with `--attach`. Refused `SETTLE_ALREADY_DONE` if the located mark is already `x`/`X`. `--under`/`--supersedes`/`--witness`/`--paragraph` do not apply with `--done` and are refused if given; the discussion precondition is skipped for the identical reason `--attach` skips it (see `cmd_settle`'s own docstring for the full guard argument, including why an escape hatch for witness-less irreducible arguments was deliberately not added, and why un-ticking is deliberately left out of this change) | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code below), `SETTLE_STDIN_CONFLICT` (`--text -` and `--supersedes -` together), `SETTLE_EMPTY_TEXT`, `SETTLE_ATTACH_CONFLICT` (`--attach` combined with `--under` or `--supersedes`), `SETTLE_REMOVE_CONFLICT` (`--remove` combined with `--attach`/`--under`/`--supersedes`/`--witness`), `SETTLE_REVERSE_CONFLICT` (`--reverse` combined with `--attach`/`--remove`/`--under`/`--supersedes`/`--witness`, or `--paragraph` given without `--reverse`), `SETTLE_DONE_CONFLICT` (`--done` combined with `--attach`/`--remove`/`--reverse`/`--under`/`--supersedes`/`--witness`/`--paragraph`), `SETTLE_WITNESS_REQUIRED` (`--attach` without `--witness`), `SETTLE_PARAGRAPH_REQUIRED` (`--reverse` without a non-blank `--paragraph`), `SETTLE_UNDER_REQUIRED` / `SETTLE_ABOUT_REQUIRED` (create path only, omitted without `--attach`/`--remove`/`--reverse`/`--done`), `SETTLE_NOT_DISCUSSED` (no `discuss` event names this witness identity at all — create path only), `SETTLE_DISCUSSION_UNANSWERED` (events exist, none `answered` — create path only), `SETTLE_HOLDER_ABSENT` (no markdown file under the product folder holds checklist items), `SETTLE_HEADING_ABSENT` / `SETTLE_HEADING_AMBIGUOUS` (create path: the named heading occurs zero, or more than one, times across every holder — a fenced code block's own heading-shaped line never counts as an occurrence), `SETTLE_TEXT_ABSENT` / `SETTLE_TEXT_AMBIGUOUS` (`--attach`/`--remove`/`--reverse`/`--done` paths: `--text` matches zero, or more than one, existing checklist line across every holder), `SETTLE_ALREADY_WITNESSED` (`--attach` path: the one located line already carries a witness token; `--attach` never replaces one), `SETTLE_NOT_REVERSED` (`--remove` path: the exact text is not already quoted, bold, under a `## Reversed` heading in the same holder), `SETTLE_ALREADY_REVERSED` (`--reverse` path: the exact text is already quoted under `## Reversed`; plain `--remove` is the reachable command for that state), `SETTLE_ALREADY_DONE` (`--done` path: the located line's own mark is already `x`/`X`), `SETTLE_NOT_WITNESSED` (`--done` path: the located line carries no witness token), `SETTLE_COLLIDES_UNNAMED` (create path: a collision exists and `--supersedes` was not given; names every colliding text verbatim, never a count, and prints one runnable `discuss` command asking which one, if any, this placement supersedes), `SETTLE_SUPERSEDES_UNKNOWN` (create path: `--supersedes` names text absent from the computed collision list), `SETTLE_WITNESS_MALFORMED` (`--witness` given and not `test_[A-Za-z0-9_]+`, either path), `POSITION_HOLDER_MOVED` (reused unchanged from `position`/`close` — the holder's bytes changed between the read that located the line and the write), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
 | `defect` | One `defect` event to `.implementation/position.jsonl`: the forge-relative `--file` path, its live `fileSha256` digest, `session`, `at` and, when given, `detail` (omitted entirely, never written as `null`, when not given). Declares that some file this forge itself ships is currently broken. While this stays open (see `open_defects`), `step`, `gate`, `offer`, `close`, `settle`, `apply` and `admit` all refuse `FORGE_DEFECT_OPEN` for this exact `<target>/<name>` — see their own rows below, and `apply`/`admit` in [The rest of the surface](#the-rest-of-the-surface-and-the-roster-closed-at-nineteen). `probe`, `verify`, `position`, `plan`, `compose`, `handoff` and `discuss` stay reachable throughout; `handoff` additionally surfaces every open defect (file, session, detail) in its report. Never gated on an already-open defect and calls no worktree guard itself: a second declaration while one is open must stay possible, and the worktree is likely dirty precisely when something is broken. Repeatable — a call over an unchanged digest appends a fresh event rather than editing or refusing. Clearing happens the moment the named file's bytes change; asserting a fix in a fresh `--detail` on unchanged bytes does not clear it. **Deleting the file after a defect was declared against it is itself a clear**, decided rather than an oversight: the recorded digest can never again match an absent file, so absence is the strongest possible digest change (`ABSENT_FILE_DIGEST`, see `impl_position.current_file_digest`) — not a hole to close. This blocks mid-flow forge repair once detected; it does not prevent the edit itself — no hook or deny rule is added. Scope is per `<target>/<name>`, never a switch that blocks every target at once: a parallel session on a different target running the identical broken code must rediscover it | `DEFECT_FILE_NOT_FORGE_OWNED` (`--file` resolves outside `FORGE_ROOT/.claude/skills` — checked before existence, so this command never reports on the existence of anything outside that tree), `DEFECT_FILE_ABSENT` (`--file` is not a regular file; a path that never existed is refused rather than recorded, since the sentinel it would otherwise carry could never clear on its own), `PRODUCT_DIR_MISNAMED` (this call's `<name>/` holds none of the product categories while exactly one differently-named folder holds them, so the ledger would open a second product tree nothing else reads — refused before the first append, publishing the `plan` that names the folder) |
 | `walk` | Walks the declared flow toward the rung the position header aims at, act by act, in `advances` order. It executes the **published subcommands as subprocesses** rather than calling their functions, so every guard those carry applies exactly as it does to a person running them — nothing re-implemented, nothing bypassed; a walker that reached inside would be a second path to the same acts, and the second path is always the one missing a check. It performs `run-local` and `generate-job` and STOPS at a `rehearse` — no act here performs a rehearsal, and the doctrine below leaves it to a person — refreshes the position after each local step, and records that step's product with a **mechanical** message naming the step and nothing else — `step` refuses on a dirty tree and every step dirties it, so a walk that stopped to ask for a message would not be a walk; what the work MEANS stays the operator's and none of it is pushed. It appends to no ledger itself: every write goes through `step` or `position`. **It stops at a launch and has no path to `submit` at all** | Refuses `FORGE_DEFECT_OPEN`; otherwise it does not refuse, it STOPS — at the first act it will not take (`launch`, `blocked`, or an unclassified act) or the first that refused, returning `performed` and `stoppedAt`. Stops rather than filtering and continuing, because the flow is ordered: a step that cannot run is one whose output every later step reads |
-| `materialize` | Exactly one of three mutually exclusive modes. `--stage <scaffold\|objects\|harness> --plan <path> [--seed <n>]`: plan-gated (the `PLAN_MISMATCH`/`PLAN_STALE` pattern `apply` uses) and clean-worktree-required; writes the chosen stage's file destinations from the kit — eleven for `scaffold` (plus its two merge anchors, `.gitignore`/`pyproject.toml`), three for `objects` (gated on step 8's declaration; `--seed` required), three for `harness` (no `--seed` needed) — and records every write in `<Name>/.implementation/materialization.json` (git-ignored), written last, atomically, after every file has landed. `--authored <path>`: releases the drift seal on one receipt-recorded destination, any of the seventeen, after the agent has authored over it — no file write, no plan gate, a dirty tree is fine (precedent: `_is_own_bookkeeping`). `--adopt <path>`: records an unrecorded destination's current bytes into the receipt as `kind: "adopted"` — the degraded guarantee, spelled out in `references/usage.md`: the record names who is responsible for the bytes, never that they came from the kit | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code below: `materialize --stage` writes kit destinations over the target, so it spends exactly as `apply` does), `MATERIALIZE_MODE_REQUIRED`, `MATERIALIZE_MODE_CONFLICT` (two or more of `--stage`/`--authored`/`--adopt` given together), `OUTSIDE_WORKSPACE`, `NOT_A_GIT_REPO`, `DIRTY_WORKTREE` (`--stage` only), `PLAN_REQUIRED`, `PLAN_MISMATCH`, `PLAN_STALE`, `SEED_REQUIRED` (`scaffold`/`objects` only), `OBJECT_MAP_NOT_APPROVED` (`--stage objects` before step 8's `revision`/`premises` are recorded), `OBJECT_MAP_AT_OLD_HOME` (`--stage objects` on a target scaffolded before `__implementation__` existed, whose `revision`/`premises` still sit at the pre-relocation home — see the migration procedure at step 8), `STAGE_CANNOT_ANSWER` (a scaffold-stage template still carries an unresolved `{{TOKEN}}` after substitution), `DESTINATION_CONFLICT` (a destination appeared between the set computation and the write, the whole stage refused before any byte lands), `APPLY_ABORTED` (mid-write failure; tree reset and cleaned, no receipt entry), `NOT_A_KIT_DESTINATION` (`--authored`/`--adopt` naming a path outside the seventeen), `MATERIALIZE_PATH_ABSENT` (naming a path with no bytes on disk), `NO_RECEIPT_ENTRY` (`--authored` on a path the engine never wrote — use `--adopt`), `ALREADY_RECORDED` (`--adopt` on a path the receipt already carries — use `--authored`) |
+| `materialize` | Exactly one of three mutually exclusive modes. `--stage <scaffold\|objects\|harness> --plan <path> [--seed <n>]`: plan-gated (the `PLAN_MISMATCH`/`PLAN_STALE` pattern `apply` uses) and clean-worktree-required; writes the chosen stage's file destinations from the kit — `scaffold_destinations` for `scaffold` (plus its two merge anchors, `.gitignore`/`pyproject.toml`), `object_destinations` for `objects` (gated on step 8's declaration; `--seed` required), `harness_destinations` for `harness` (no `--seed` needed, gains `src/<Package>_Benchmark/__init__.py`) — and records every write in `<Name>/.implementation/materialization.json` (git-ignored), written last, atomically, after every file has landed. `--authored <path>`: releases the drift seal on one receipt-recorded destination, any of `all_kit_destinations`, after the agent has authored over it — no file write, no plan gate, a dirty tree is fine (precedent: `_is_own_bookkeeping`). `--adopt <path>`: records an unrecorded destination's current bytes into the receipt as `kind: "adopted"` — the degraded guarantee, spelled out in `references/usage.md`: the record names who is responsible for the bytes, never that they came from the kit | `FORGE_DEFECT_OPEN` (an open forge defect for this target/name — checked first, before every code below: `materialize --stage` writes kit destinations over the target, so it spends exactly as `apply` does), `MATERIALIZE_MODE_REQUIRED`, `MATERIALIZE_MODE_CONFLICT` (two or more of `--stage`/`--authored`/`--adopt` given together), `OUTSIDE_WORKSPACE`, `NOT_A_GIT_REPO`, `DIRTY_WORKTREE` (`--stage` only), `PLAN_REQUIRED`, `PLAN_MISMATCH`, `PLAN_STALE`, `SEED_REQUIRED` (`scaffold`/`objects` only), `OBJECT_MAP_NOT_APPROVED` (`--stage objects` before step 8's `revision`/`premises` are recorded), `OBJECT_MAP_AT_OLD_HOME` (`--stage objects` on a target scaffolded before `__implementation__` existed, whose `revision`/`premises` still sit at the pre-relocation home — see the migration procedure at step 8), `STAGE_CANNOT_ANSWER` (a scaffold-stage template still carries an unresolved `{{TOKEN}}` after substitution), `DESTINATION_CONFLICT` (a destination appeared between the set computation and the write, the whole stage refused before any byte lands), `APPLY_ABORTED` (mid-write failure; tree reset and cleaned, no receipt entry), `NOT_A_KIT_DESTINATION` (`--authored`/`--adopt` naming a path outside `all_kit_destinations`), `MATERIALIZE_PATH_ABSENT` (naming a path with no bytes on disk), `NO_RECEIPT_ENTRY` (`--authored` on a path the engine never wrote — use `--adopt`), `ALREADY_RECORDED` (`--adopt` on a path the receipt already carries — use `--authored`) |
 
 ### The rest of the surface, and the roster closed at nineteen
 

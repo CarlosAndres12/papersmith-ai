@@ -146,7 +146,6 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py pla
   "scaffoldFiles": [".gitignore (.venv/, __pycache__/, .ipynb_checkpoints/, .implementation/)",
                     "pyproject.toml [tool.pytest.ini_options] pythonpath",
                     "src/Example_Method/__init__.py",
-                    "src/Example_Method_Benchmark/__init__.py",
                     "src/Example_Method/report_digest.py",
                     "tests/test_smoke.py", "tests/findings.py",
                     "tests/conftest.py", "tests/sweep.py",
@@ -263,13 +262,16 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
 ```
 
 This is the command that fills every scaffold gap — never the agent copying
-files by hand. It writes every one of `scaffoldFiles`' eleven file
-destinations from `assets/kit/` — `kit/src_benchmark/`, `kit/tests/` and
-`kit/nb/`, with `src/<Package>/__init__.py` authored directly — merges the
-two anchors (`.gitignore`, `pyproject.toml [tool.pytest.ini_options]`) into
-whatever the target already has, and records every write in
+files by hand. It writes every one of `scaffoldFiles`' file destinations
+(`scaffold_destinations(name)`, the one list this call and `plan`/`verify`'s
+gap report both read) from `assets/kit/` — `kit/tests/` and `kit/nb/`, with
+`src/<Package>/__init__.py` authored directly — merges the two anchors
+(`.gitignore`, `pyproject.toml [tool.pytest.ini_options]`) into whatever the
+target already has, and records every write in
 `<Name>/.implementation/materialization.json`, git-ignored, written last and
-atomically after every file has landed.
+atomically after every file has landed. `src/<Package>_Benchmark/__init__.py`
+is **not** among these destinations — it is a harness destination, written
+only once a comparison is accepted (see "Materialize the harness" below).
 
 The plan gate is the same one `apply` uses: `PLAN_MISMATCH` for a plan
 produced elsewhere, `PLAN_STALE` if the repository's structure moved since
@@ -313,13 +315,17 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
   --stage harness --plan /tmp/plan.json
 ```
 
-The three destinations the harness-wiring section names: `benchmark.py`,
-`verdict.py`, `probe.ipynb`. No `--seed`: none of the three carries a
-`{{SEED}}` token (`probe.ipynb` carries `{{SEEDS}}` instead, answered later, at
-probe time, not by this command). No object-map precondition either —
-`benchmark.py`/`verdict.py` carry no token at all and parse the moment they
-land. `wiring.py` stays out of this stage entirely: SKILL.md states it is
-bespoke-authored, never a kit destination.
+The destinations the harness-wiring section names: `src/<Package>_Benchmark/__init__.py`
+(the benchmark declaration itself — copied verbatim from `assets/kit/src_benchmark/`
+and never populated by this command), `benchmark.py`, `verdict.py`, `probe.ipynb`.
+No `--seed`: none of the four carries a `{{SEED}}` token (`probe.ipynb` carries
+`{{SEEDS}}` instead, answered later, at probe time, not by this command). No
+object-map precondition either — `__init__.py`/`benchmark.py`/`verdict.py` carry
+no unresolved token at all and parse the moment they land. `wiring.py` stays out
+of this stage entirely: SKILL.md states it is bespoke-authored, never a kit
+destination. This is the only stage that ever writes `src/<Package>_Benchmark/`
+into a target — the scaffold stage does not, and never runs it merely because a
+comparison was declined or an acid test was run instead.
 
 ### Declaring authorship, and adopting what was never recorded
 
@@ -1524,17 +1530,24 @@ discovered. Everything else is required.
 `probe` runs nothing and changes nothing — `kind` says so in the output itself,
 and the exit status is `0` whatever it finds. `nextStep` is the answer and there
 is exactly one of them: the ladder is ordered, so the first thing standing in
-the way is the only thing reported. Eleven values are possible. Eight prescribe
-work and each has its own section in `SKILL.md` — `convert`, `declare-first`,
-`env-first`, `wiring-first`, `poll-first`, `search-first`, `report-first` and
-`benchmark`. The other three have no section: `nothing-to-compare` and
-`already-benchmarked` prescribe no work at all, and `piloted`'s own rule keeps
-its question open rather than handing over a list of steps.
+the way is the only thing reported. The full set of values `probe` can return,
+and which of them have their own `SKILL.md` section, is derived rather than
+transcribed here — see
+`NextStepSectionCoverageTests.test_every_value_the_cli_can_return_is_accounted_for`,
+which scrapes both directly from the source rather than carrying a count that
+can drift out of sync with it. Most values prescribe work and each has its own
+section in `SKILL.md` — `convert`, `declare-first`, `env-first`, `wiring-first`,
+`poll-first`, `pilot-first`, `pilot-decisions`, `search-first`, `report-first`,
+`benchmark` and `validate`. A few have no section: `nothing-to-compare` and
+`already-benchmarked` prescribe no work at all, `piloted`'s own rule keeps its
+question open rather than handing over a list of steps, and `declined` is this
+flow's own answer to "the person said no" — twice.
 
-**Prescribing no section is not the same as publishing nothing.** Nine of the
-eleven publish `resolve` (below); only the two that name no work at all —
-`nothing-to-compare` and `already-benchmarked` — publish `null`, and they say so
-in `PROBE_NEXT_STEPS` rather than by omission.
+**Prescribing no section is not the same as publishing nothing.** Most values
+publish a `resolve` question or draft (below); only the terminal states that
+name no work at all — `nothing-to-compare`, `already-benchmarked` and
+`declined` — publish `null`, and they say so in `PROBE_NEXT_STEPS` rather than
+by omission.
 
 Never read past the answer for a reason to skip it. A rung fires because
 everything above it is already settled, so the next one down says nothing about
@@ -2266,7 +2279,7 @@ state, alongside the scenarios — not verified by hand once.
 | `OBJECT_MAP_AT_OLD_HOME` | `materialize --stage objects` ran on a target scaffolded before this change: `src/<Package>_Benchmark/__init__.py` still binds `revision`/`premises` there, and `src/<Package>/__init__.py`'s `__implementation__` is blank. Distinct from `OBJECT_MAP_NOT_APPROVED` — this target once declared, at the old home — and names both locations. Follow SKILL.md step 8's migration procedure: scaffold, hand-move the literals (including any this skill has no reader for), `materialize --authored`, delete the orphaned seal copy, re-execute notebooks. |
 | `SCAFFOLD_DRIFT` | (`verify`, reported in `structure.scaffoldDrift`, never raised) A receipt-recorded scaffold destination's on-disk bytes no longer match its `writtenSha256`. Release the seal with `materialize --authored <path>` after declaring the edit. `objects`/`harness` destinations get the identical check under `structure.objectDrift`/`structure.harnessDrift`. |
 | `UNRECORDED_SCAFFOLD` | (`verify`, reported in `structure.unrecordedScaffold`, never raised) A scaffold destination exists on disk with no receipt entry — most often because the target was scaffolded before this command existed. Remedy: `materialize --adopt <path>`, one path at a time, deliberately. **This degrades the guarantee**: adoption records who is responsible for the bytes, never that they came from the kit — the record names who wrote them, not that the engine owns them. `objects`/`harness` destinations get the identical check under `structure.unrecordedObjects`/`structure.unrecordedHarness`. |
-| `NOT_A_KIT_DESTINATION` | `materialize --authored`/`--adopt` named a path outside the seventeen kit destinations (eleven scaffold, three objects, three harness). The receipt is not a general-purpose ledger. |
+| `NOT_A_KIT_DESTINATION` | `materialize --authored`/`--adopt` named a path outside `all_kit_destinations` — the scaffold, objects and harness destination lists, concatenated. The receipt is not a general-purpose ledger. |
 | `MATERIALIZE_PATH_ABSENT` | `materialize --authored`/`--adopt` named a path with no bytes on disk. |
 | `NO_RECEIPT_ENTRY` | `materialize --authored <path>` named a path the engine never wrote. There is no seal to release; use `--adopt`. |
 | `ALREADY_RECORDED` | `materialize --adopt <path>` named a path the receipt already carries. Adoption is not a re-seal; use `--authored`. |

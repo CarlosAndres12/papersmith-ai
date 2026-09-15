@@ -495,22 +495,37 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: 30->33, `rather` 349->358, `remote` 61->65, `reported` 144->145,
 #: `small` 4->8, `something` 70->71, `validated` 7->8, `value` 235->239,
 #: `whose` 151->152. None shrank and none left the denylist.
+#: `the-comparison-nobody-asked-for` (Unit 3, design.md D4/D8/D13): the
+#: scaffold/harness list flip, the `declare-first` narrowing to
+#: `"undeclared"` only, the derived-count sweep (D8) removing every
+#: hand-written gap/ladder numeral from engine docstrings, and the Unit 3
+#: correction moving the three-way `benchmark`/`validate`/`declined`
+#: branch to last among `cmd_probe`'s overrides (so a genuinely owed
+#: repair outranks a declined comparison, per the fifth spec revision) are
+#: all new/rewritten engine prose, not a domain word: eleven words already
+#: exempted here read naturally inside it and grew. `after` 85->87,
+#: `agreed` 26->27, `benchmark` 99->105, `declaration` 205->207,
+#: `destinations` 37->38, `longer` 49->51, `materialized` 11->12,
+#: `measured` 141->142, `rather` 358->359, `scaffolded` 10->11, `whose`
+#: 152->153. One SHRANK: the three-way branch's own comment, rewritten for
+#: its new last-in-chain position, reads differently from what it
+#: replaced. `before` 239->238. None left the denylist; no new leak.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 78, "admissible": 3, "after": 85, "against": 188,
-    "agreed": 26, "answered": 85, "answers": 104, "approved": 28,
-    "audit": 15, "before": 239, "benchmark": 99, "beside": 98,
+    "actually": 78, "admissible": 3, "after": 87, "against": 188,
+    "agreed": 27, "answered": 85, "answers": 104, "approved": 28,
+    "audit": 15, "before": 238, "benchmark": 105, "beside": 98,
     "check": 151, "checkable": 3, "claim": 36, "command": 268,
-    "commands": 18, "compares": 24, "declaration": 205,
-    "destinations": 37, "empty": 127, "established": 4, "experiment": 24,
+    "commands": 18, "compares": 24, "declaration": 207,
+    "destinations": 38, "empty": 127, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 21, "isolated": 5, "leave": 11, "leaves": 36,
-    "local": 37, "longer": 49, "makes": 44, "materialized": 11,
-    "measured": 141, "measurement": 42, "module": 194, "notebooks": 110,
+    "local": 37, "longer": 51, "makes": 44, "materialized": 12,
+    "measured": 142, "measurement": 42, "module": 194, "notebooks": 110,
     "object": 33, "pilot": 123, "place": 53, "produces": 51,
-    "rather": 358, "recorded": 76, "remedy": 54, "remote": 65,
+    "rather": 359, "recorded": 76, "remedy": 54, "remote": 65,
     "reported": 145, "resolves": 31, "ruled": 9, "runnable": 15,
-    "scaffolded": 10, "sitting": 9, "small": 8, "something": 71,
-    "steps": 139, "sweep": 7, "validated": 8, "value": 239, "whose": 152,
+    "scaffolded": 11, "sitting": 9, "small": 8, "something": 71,
+    "steps": 139, "sweep": 7, "validated": 8, "value": 239, "whose": 153,
     "write": 107, "wrong": 51,
 }
 
