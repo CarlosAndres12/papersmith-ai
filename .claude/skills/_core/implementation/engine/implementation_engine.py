@@ -3113,6 +3113,12 @@ def previous_implementations(target: Path, name: str) -> list[str]:
     into `src/<Package>/`, precisely so the work that was already here survives the
     reorganization intact. Whatever is left over is the baseline a probe compares
     against — it is found by reading the tree, not by remembering that it was there.
+
+    A `_Benchmark`-suffixed directory is excluded regardless of whose it is: it is
+    this skill's own comparison package, never somebody else's prior work, and
+    counting it as a baseline is exactly what made `nothing-to-compare`
+    unreachable for a freshly scaffolded target — there was always at least one
+    "baseline" on disk, the skill's own.
     """
     # Case-folded: on a case-insensitive filesystem `src/Method` and `src/METHOD` are one
     # directory, so an exact comparison would hand our own package back as somebody
@@ -3126,6 +3132,7 @@ def previous_implementations(target: Path, name: str) -> list[str]:
         entry.name for entry in src.iterdir()
         if entry.is_dir() and entry.name.casefold() != ours
         and entry.name not in IGNORED_DIRS
+        and not entry.name.endswith("_Benchmark")
         # Any source at all: a baseline is somebody else's prior work and may be
         # notebooks, R or MATLAB. Requiring Python would make it invisible.
         and any(child.is_file() and child.suffix.lower() in BASELINE_SOURCE_EXT
@@ -3660,7 +3667,12 @@ def cmd_probe(args) -> dict:
     # carried out in the full run. Never "which are open": a step nobody has
     # asked about yet appears in no open bucket either, and reading that as
     # decided is silence taken for consent.
-    answered = _answered_discussions(target, name)
+    # Folded exactly once here and handed to both pure readers below
+    # (`_answered_from_buckets`, `_answered_event_from`), the "computed once
+    # and reused" rule `jobs`, `probe_digest`, `probe_evidence` and
+    # `probe_steps` already keep in this function (D6).
+    buckets = _discussion_buckets(target, name)
+    answered = _answered_from_buckets(buckets)
     pilot_undecided = [
         row["step"] for row in pilot["steps"]
         if _pilot_decision_question(target, name, row["step"]) not in answered]
@@ -3692,7 +3704,25 @@ def cmd_probe(args) -> dict:
     report_unacknowledged = bool(report_findings) and (
         _report_findings_question(target, name, report_findings)
         not in answered)
-    if next_step in ("benchmark", "piloted") and resolved["status"] in (
+    # The one construction site for the comparison offer's own text (D5a),
+    # computed once and reused both for the override below and for the
+    # `decisions.comparison` payload member (D16/D9).
+    comparison_question = _benchmark_offer_question(target, name, baselines)
+    # A declined comparison, checked BEFORE every override that follows,
+    # including the `declare-first` narrowing immediately below (D5b): a
+    # declined comparison must never be told to fix a declaration for a
+    # harness that does not exist. `status == "absent"` is "nothing was
+    # built" -- no `src/<Package>_Benchmark/` directory at all -- so once the
+    # harness stage actually materializes it (the existing acceptance act,
+    # unchanged by this decline capability), this guard stops matching by
+    # itself and the ladder falls through exactly as it would for a target
+    # that was never declined. That is the "no code path specific to
+    # reopening" the offer's own persistence relies on: the reopening code
+    # is the absence of a branch.
+    if next_step == "benchmark" and resolved["status"] == "absent" and (
+            comparison_question in answered):
+        next_step = "declined"
+    elif next_step in ("benchmark", "piloted") and resolved["status"] in (
             "absent", "undeclared"):
         next_step = "declare-first"
     # Immediately after `declare-first` (Decision 12): introspection is
@@ -3843,7 +3873,11 @@ def cmd_probe(args) -> dict:
          # rendered none, which is exactly how four steps of ten fell out of
          # a pilot with nobody told.
          "withoutNotebook": pilot["withoutNotebook"],
-         "undecided": pilot_undecided})
+         "undecided": pilot_undecided,
+         # `_benchmark_publication`'s own operand (D5a): read once at the top
+         # of this function and threaded through here rather than recomputed,
+         # the same discipline every other fact in this dict keeps.
+         "baselines": baselines})
     # `toDiscuss` carries the question-shaped publications only -- a command
     # this flow can name completely is not a question anybody answers, and
     # putting one in a discussion list would open a bucket nothing retires.
@@ -3972,6 +4006,17 @@ def cmd_probe(args) -> dict:
                     if publication else None),
         "toDiscuss": to_discuss,
         "wiring": proposal,
+        # One reported, never-gating key, fixed shape on every call (D16,
+        # replacing the withdrawn D6 `comparisonDecision`). `comparison` is
+        # this unit's own member; a sibling `validation` member joins it once
+        # the acid test lands, unchanged in shape. Read from `buckets`
+        # directly (`_answered_event_from`) rather than from `answered`,
+        # which only ever answers a membership question and cannot carry a
+        # date or the exact text that was answered.
+        "decisions": {
+            "comparison": _decision_from_event(
+                _answered_event_from(buckets, comparison_question)),
+        },
         # `probe` looks and reports; it never runs anything itself.
         "kind": "read-only",
     }
@@ -12255,14 +12300,36 @@ def _next_step_question_entry(target: Path, name: str, question: str) -> dict:
     }
 
 
+def _benchmark_offer_question(target: Path, name: str,
+                              baselines: list[str]) -> str:
+    """The exact text of the comparison offer, and the only construction of
+    it -- `_pilot_decision_question`'s own rule, for the same reason: this
+    string IS the bucket key (`_discussion_buckets` buckets by exact trimmed
+    text), so a second spelling anywhere would open a second, never-retiring
+    bucket for a decision somebody already made.
+
+    Derived from the target, the name and the SORTED baseline names alone --
+    never a count. A baseline appearing or disappearing changes what
+    comparison is actually on offer, which IS a change of state; how many
+    there are is not (`_report_findings_question`'s stated reason, verbatim).
+    """
+    named = ", ".join(sorted(baselines))
+    return (f"{name} (target {target}) is ready to be wired and run against "
+            f"{named}, and the wiring draft is published beside this "
+            "question; " + NEXT_STEP_EXPERIMENT_CHOICE)
+
+
 def _benchmark_publication(target: Path, name: str, facts: dict) -> dict:
     """`benchmark` -- the offer to run. The wiring draft rides in `wiring`
-    (the roster says so); this is the question that must be open beside it."""
+    (the roster says so); this is the question that must be open beside it.
+
+    `baselines` is threaded through `facts` rather than recomputed --
+    `cmd_probe` already read `previous_implementations()` once at the top of
+    the function, and a second read here could disagree with the branch that
+    published it."""
     return _next_step_question_entry(
         target, name,
-        f"{name} (target {target}) is ready to be wired and run, and the "
-        "wiring draft is published beside this question; "
-        + NEXT_STEP_EXPERIMENT_CHOICE)
+        _benchmark_offer_question(target, name, facts.get("baselines") or []))
 
 
 def _search_first_publication(target: Path, name: str, facts: dict) -> dict:
@@ -12536,6 +12603,15 @@ PROBE_NEXT_STEPS: dict[str, dict] = {
                            "publish": None},
     "already-benchmarked": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
                             "publish": None},
+    # A declined comparison, settled and stable (D5). Terminal for the same
+    # reason as the two above -- it names no work -- and joins
+    # `NextStepSectionCoverageTests.NO_SECTION` beside them: it is this
+    # flow's own answer to "the person said no", and a section prescribing
+    # steps would invent the work the decline refused. `state` is never
+    # read here or anywhere else: the engine records that the offer was
+    # answered and never what the answer said (D5b/D5d).
+    "declined": {"kind": NEXT_STEP_TERMINAL, "wiring": False,
+                "publish": None},
 
     # Repairs: work whose cost is already settled -- a person's attention, or
     # a run the flow already agreed to. Never an offer of the declared scale,
@@ -12623,6 +12699,18 @@ def _discussion_buckets(target: Path, name: str) -> dict[str, dict]:
     return buckets
 
 
+def _answered_from_buckets(buckets: dict[str, dict]) -> set[str]:
+    """The pure fold-reader (D6): every distinct question text whose bucket
+    (already resolved to its LAST event in ledger order by
+    `_discussion_buckets`) carries a non-blank answer.
+
+    Takes the fold rather than re-reading it, so a caller that has already
+    computed `buckets` once -- `cmd_probe` does, per D6's "computed once and
+    reused" rule -- never pays for a second read of the same ledger."""
+    return {text for text, event in buckets.items()
+            if (event.get("answered") or "").strip()}
+
+
 def _answered_discussions(target: Path, name: str) -> set[str]:
     """Every distinct `discuss` question text whose LAST occurrence in ledger
     order carries a non-blank answer -- `_open_discussions`'s exact
@@ -12633,9 +12721,48 @@ def _answered_discussions(target: Path, name: str) -> set[str]:
     list, so reading "not open" as "decided" would treat every item that was
     never asked about as already settled -- silence read as consent, which is
     the one reading this whole surface exists to refuse.
+
+    A thin wrapper over `_answered_from_buckets` (D6): this function keeps its
+    exact public signature for callers that have not been threaded a fold of
+    their own, and folds exactly once per call, same as before.
     """
-    return {text for text, event in _discussion_buckets(target, name).items()
-            if (event.get("answered") or "").strip()}
+    return _answered_from_buckets(_discussion_buckets(target, name))
+
+
+def _answered_event_from(buckets: dict[str, dict],
+                         question: str) -> dict | None:
+    """One bucket's own last event, when it carries a non-blank answer --
+    `None` both when `question` was never asked at all and when its last
+    event is unanswered (D6). Silence is never consent, the same rule
+    `_answered_discussions` already states; this is the sibling reader over
+    the identical fold that also hands back the event itself, for a caller
+    that needs the event's own `at`/`asked` rather than a bare membership
+    test.
+    """
+    event = buckets.get(question)
+    if event is None or not (event.get("answered") or "").strip():
+        return None
+    return event
+
+
+def _decision_from_event(event: dict | None) -> dict:
+    """One member of `probe`'s `decisions` payload key (D16 -- replaces D6's
+    withdrawn `comparisonDecision`). Shape is fixed on every call: `state` is
+    `"answered"` when `event` is present, `None` when the question was never
+    asked or its last event is unanswered (mirroring `_answered_event_from`'s
+    own `None` cases). `at` and `asked` are read verbatim off that event and
+    are DISPLAY ONLY, in both members -- never compared, never sorted, never
+    used to pick a winner; ledger append order already decided that inside
+    `_discussion_buckets`.
+
+    The engine records that the question was answered, and when -- never
+    what the answer said (D5b, D5d, D15b): `state` can only ever be
+    `"answered"` or `None`.
+    """
+    if event is None:
+        return {"state": None, "at": None, "asked": None}
+    return {"state": "answered", "at": event.get("at"),
+            "asked": event.get("asked")}
 
 
 def _open_discussions(target: Path, name: str) -> list[dict]:

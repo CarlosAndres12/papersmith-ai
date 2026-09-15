@@ -1713,8 +1713,10 @@ whoever reads the output:
   `implementation_cli.py env --target <t>`; run it unedited). `{kind:
   "question", question, command}` where the next act is a decision, in which
   case `command` is the runnable `discuss` invocation that opens it. `null`
-  only at `nothing-to-compare` and `already-benchmarked`, the two answers
-  `PROBE_NEXT_STEPS` declares terminal.
+  only at `nothing-to-compare`, `already-benchmarked` and `declined`, the
+  three answers `PROBE_NEXT_STEPS` declares terminal. `declined` is a
+  comparison the person said no to; the offer stays remembered and does not
+  re-fire unless the situation it was declined against genuinely changes.
 
   **Wherever the flow reaches the point of running experiments, the question
   is the same one**: continue the flow toward the declared scale, or complement

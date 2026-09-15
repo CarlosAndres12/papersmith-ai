@@ -773,6 +773,24 @@ class ProbeStateTests(unittest.TestCase):
         self.assertEqual(impl.previous_implementations(box, "Tolla"),
                          ["old_matlab", "old_notebooks"])
 
+    def test_the_skills_own_benchmark_package_is_never_a_baseline(self):
+        # Task 4.4/4.5 (spec "The Baseline Finder Excludes The Skill's Own
+        # Benchmark Package"): a `_Benchmark`-suffixed directory is this
+        # skill's own comparison package, never somebody else's prior work --
+        # excluded regardless of whose it is, not only ours by name.
+        box = Path(tempfile.mkdtemp(prefix="pp-probe-"))
+        for package in ("Tolla_Benchmark", "Other_Benchmark"):
+            (box / "src" / package).mkdir(parents=True)
+            (box / "src" / package / "m.py").write_text("x\n")
+        self.assertEqual(impl.previous_implementations(box, "Tolla"), [])
+
+    def test_a_genuine_baseline_is_found_beside_an_excluded_benchmark_package(self):
+        box = Path(tempfile.mkdtemp(prefix="pp-probe-"))
+        for package in ("Tolla_Benchmark", "legacy"):
+            (box / "src" / package).mkdir(parents=True)
+            (box / "src" / package / "m.py").write_text("x\n")
+        self.assertEqual(impl.previous_implementations(box, "Tolla"), ["legacy"])
+
     def test_no_summary_means_no_probe_has_run(self):
         box = self.repo(packages=["Tolla"])
         self.assertEqual(impl.probe_state(box, "Tolla", "r16.md")["status"], "absent")
@@ -831,6 +849,60 @@ class ProbeStateTests(unittest.TestCase):
                       "the output path must be anchored to the repository the "
                       "owned cell resolves, never a bare ../ that resolves "
                       "outside it and never a second answer of the notebook's own")
+
+
+class BenchmarkOfferQuestionConstructorTests(unittest.TestCase):
+    """D5a: one constructor, one spelling, for the comparison offer's own
+    question text -- the bucket key `_discussion_buckets` folds by, so a
+    second spelling anywhere would open a second, never-retiring bucket for
+    a decision somebody already made. The same discipline
+    `_pilot_decision_question` and `_report_findings_question` document for
+    their own bucket keys.
+    """
+
+    TARGET = Path("implementations/box")
+    NAME = "Method"
+
+    def test_the_publication_is_byte_identical_to_the_constructor(self):
+        baselines = ["Prior", "Zeta"]
+        published = impl._benchmark_publication(
+            self.TARGET, self.NAME, {"baselines": baselines})
+        self.assertEqual(
+            published["question"],
+            impl._benchmark_offer_question(self.TARGET, self.NAME, baselines))
+
+    def test_different_baseline_sets_produce_different_question_text(self):
+        first = impl._benchmark_offer_question(self.TARGET, self.NAME, ["Alpha"])
+        second = impl._benchmark_offer_question(self.TARGET, self.NAME, ["Beta"])
+        self.assertNotEqual(first, second)
+
+    def test_the_question_text_never_contains_a_bare_count(self):
+        for baselines in (["Alpha"], ["Alpha", "Beta"],
+                          ["Alpha", "Beta", "Gamma"]):
+            question = impl._benchmark_offer_question(
+                self.TARGET, self.NAME, baselines)
+            self.assertNotRegex(
+                question, r'\b' + str(len(baselines)) + r'\b',
+                "the question text must never embed a count of the "
+                "baselines, only their names")
+
+    def test_the_sorted_names_themselves_are_named(self):
+        question = impl._benchmark_offer_question(
+            self.TARGET, self.NAME, ["Zeta", "Alpha"])
+        self.assertIn("Alpha, Zeta", question,
+                      "baselines are embedded sorted, regardless of the "
+                      "order `previous_implementations` happened to hand in")
+
+    def test_only_one_place_in_the_engine_builds_this_sentence(self):
+        source = ENGINE.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count("is ready to be wired and run against"), 1,
+            "the comparison offer's own sentence must be built in exactly "
+            "one place: `_benchmark_offer_question`")
+
+    def test_the_ladder_calls_the_constructor_rather_than_a_literal(self):
+        source = inspect.getsource(impl.cmd_probe)
+        self.assertIn("_benchmark_offer_question(", source)
 
 
 class BackendStateTests(unittest.TestCase):
@@ -5468,6 +5540,246 @@ class DeclareFirstBeforeTheRunTests(unittest.TestCase):
         self.assertEqual(leftover, [], leftover)
 
 
+class DeclinedComparisonTests(unittest.TestCase):
+    """A declined comparison is remembered (Unit 4, D5).
+
+    Reuses `DeclareFirstBeforeTheRunTests`'s own fixture shape -- a trainable
+    target with one genuine baseline and no `Method_Benchmark` package on
+    disk at all, which that class already proves lands on `declare-first`.
+    `declined`'s own guard (D5b) must be checked BEFORE that override, not
+    instead of it: every fixture here is that exact starting point, so a
+    test that never calls `discuss` at all is the pole proving the override
+    is additive.
+    """
+
+    def box(self, suffix):
+        box = FORGE / "implementations" / f"_e2e_declined_{suffix}_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src/Method").mkdir(parents=True)
+        (box / "src/Prior").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/called.py").write_text(
+            _module("r01.md", ["3"], ["11"], imports="import torch\n"),
+            encoding="utf-8")
+        (box / "src/Prior/model.py").write_text("import torch\n", encoding="utf-8")
+        return box
+
+    def probe(self, box):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "probe", "--target", str(box),
+             "--name", "Method", "--revision", "r01.md"],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout or "{}")
+
+    def discuss(self, box, question, answer):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "discuss", "--target", str(box),
+             "--name", "Method", "--about", "record",
+             "--question", question, "--answer", answer],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout or "{}")
+
+    def offer_question(self, box, baselines=None):
+        if baselines is None:
+            baselines = impl.previous_implementations(box, "Method")
+        return impl._benchmark_offer_question(box, "Method", baselines)
+
+    def decline(self, box, baselines=None, answer="not now"):
+        question = self.offer_question(box, baselines)
+        self.discuss(box, question, answer)
+        return question
+
+    # --- the pole: without a decline this exact fixture is
+    # `DeclareFirstBeforeTheRunTests`'s own `declare-first` (D5b's guard is
+    # additive, not a replacement of the existing "absent" override) ---
+
+    def test_without_a_decline_the_fixture_is_declare_first_unaffected(self):
+        box = self.box("pole")
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["decisions"]["comparison"],
+                         {"state": None, "at": None, "asked": None})
+
+    # --- spec "A Declined Comparison Is Persisted As A Bare Discuss Event" ---
+
+    def test_declining_persists_a_bare_discuss_event_and_nothing_else(self):
+        box = self.box("bare")
+        self.decline(box)
+        self.assertFalse((box / "src" / "Method_Benchmark").exists(),
+                         "a decline must build no comparison machinery")
+        self.assertFalse((box / "Method" / "AGREED.md").exists())
+        self.assertEqual(
+            list((box / "Method").glob("Results/*")), [],
+            "a decline must create no Results artefact")
+
+    # --- D5b/D5d: the ladder branch itself ---
+
+    def test_declining_turns_the_offer_into_the_terminal_declined_answer(self):
+        box = self.box("terminal")
+        self.decline(box)
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "declined")
+        self.assertIsNone(probe["resolve"])
+        self.assertEqual(probe["toDiscuss"], [])
+        self.assertIsNone(probe["wiring"])
+
+    # --- D6/D16/task 4.9: the `decisions.comparison` payload member ---
+
+    def test_decisions_comparison_is_unanswered_before_any_decline(self):
+        box = self.box("unanswered")
+        probe = self.probe(box)
+        self.assertEqual(probe["decisions"]["comparison"],
+                         {"state": None, "at": None, "asked": None})
+
+    def test_decisions_comparison_names_the_date_read_from_the_ledger_event(self):
+        box = self.box("dated")
+        question = self.decline(box)
+        probe = self.probe(box)
+        comparison = probe["decisions"]["comparison"]
+        self.assertEqual(comparison["state"], "answered")
+        self.assertEqual(comparison["asked"], question)
+        self.assertIsNotNone(comparison["at"])
+
+    def test_a_stale_decline_still_names_its_own_original_date(self):
+        """spec 'A stale report is distinguishable from a fresh one': running
+        `probe` again days later must not overwrite the recorded date with
+        today's."""
+        box = self.box("stale")
+        self.decline(box)
+        first = self.probe(box)["decisions"]["comparison"]["at"]
+        second = self.probe(box)["decisions"]["comparison"]["at"]
+        self.assertEqual(first, second)
+
+    # --- spec "The Offer Re-Fires Exactly When The Baseline Name Set
+    # Materially Changes" ---
+
+    def test_re_running_probe_with_nothing_changed_stays_settled_declined(self):
+        box = self.box("stable")
+        self.decline(box)
+        self.assertEqual(self.probe(box)["nextStep"], "declined")
+        self.assertEqual(self.probe(box)["nextStep"], "declined")
+
+    def test_editing_a_method_module_leaves_the_decision_settled(self):
+        box = self.box("edit")
+        self.decline(box)
+        (box / "src/Method/called.py").write_text(
+            _module("r01.md", ["3"], ["11", "12"], imports="import torch\n"),
+            encoding="utf-8")
+        self.assertEqual(self.probe(box)["nextStep"], "declined")
+
+    def test_a_new_baseline_re_fires_the_offer(self):
+        box = self.box("new-baseline")
+        self.decline(box)
+        (box / "src" / "Second").mkdir(parents=True)
+        (box / "src" / "Second" / "m.py").write_text("import torch\n",
+                                                      encoding="utf-8")
+        probe = self.probe(box)
+        # A new baseline changes the question text, so the old decline no
+        # longer answers it -- the `declined` override stops matching and
+        # the ladder falls through to whatever it would say for an
+        # undeclined target with this benchmark package still absent
+        # (`DeclareFirstBeforeTheRunTests`'s own `declare-first`), never the
+        # stale settled decline.
+        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["decisions"]["comparison"]["state"], None)
+
+    def test_a_removed_baseline_re_fires_the_offer(self):
+        box = self.box("removed-baseline")
+        (box / "src" / "Second").mkdir(parents=True)
+        (box / "src" / "Second" / "m.py").write_text("import torch\n",
+                                                      encoding="utf-8")
+        self.decline(box)
+        shutil.rmtree(box / "src" / "Second")
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "declare-first")
+        self.assertEqual(probe["decisions"]["comparison"]["state"], None)
+
+    # --- spec "Every Pre-Existing Probe Rung Fires Under Its Exact Prior
+    # Condition" (task 4.13 regression) ---
+
+    def test_nothing_to_compare_still_fires_alone_with_no_baseline(self):
+        box = FORGE / "implementations" / f"_e2e_declined_ntc_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src/Method").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        self.assertEqual(self.probe(box)["nextStep"], "nothing-to-compare")
+
+    def test_already_benchmarked_still_fires_alone_with_a_current_result(self):
+        box = self.box("current")
+        results = box / "Method" / "Results"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / impl.PROBE_RESULTS).write_text(json.dumps(
+            {"revision": "r01.md", "reduction": {}, "comparison": []}),
+            encoding="utf-8")
+        self.assertEqual(self.probe(box)["nextStep"], "already-benchmarked")
+
+    # --- spec "Answering The Same Question Again Reopens The Comparison
+    # With No Separate Reopening Step" ---
+
+    def test_accepting_reopens_the_ladder_with_no_dedicated_reopening_branch(self):
+        """D5b: acceptance is expressed by the act it authorizes --
+        `materialize --stage harness`, after which `src/Method_Benchmark/`
+        exists and `resolved.status` is no longer `"absent"`. The guard
+        (`resolved.status == "absent"`) then simply stops matching by
+        itself, with no branch written for reopening -- so re-answering the
+        identical question text, plus the harness stage actually landing,
+        proceeds toward the comparison exactly as an undeclined target
+        does. `materialize --stage harness`'s own machinery is out of this
+        unit's scope; its one observable effect (the package existing on
+        disk) is reproduced directly."""
+        box = self.box("reopen")
+        question = self.decline(box)
+        self.assertEqual(self.probe(box)["nextStep"], "declined")
+        self.discuss(box, question, "yes, wire it")
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        probe = self.probe(box)
+        self.assertNotEqual(probe["nextStep"], "declined")
+        self.assertEqual(probe["nextStep"], "declare-first",
+                         "as though it had never been declined: the same "
+                         "answer an undeclined target with a bare, "
+                         "undeclared benchmark package gets")
+
+    # --- spec "The Baseline-Finder Fix Causes Exactly One Expected Re-Fire
+    # On Landing, Not A Defect" ---
+
+    def test_a_pre_fix_recorded_decline_re_fires_exactly_once_after_landing(self):
+        """A decline whose bucket key embeds the pre-fix baseline set --
+        including the target's own `_Benchmark`-suffixed package, counted as
+        a baseline before task 4.4's exclusion -- is a different question
+        from the one `_benchmark_offer_question` computes today. Simulated
+        directly: the fix and the constructor ship in the same commit, so
+        there is no earlier state of this codebase to reproduce a real
+        pre-fix ledger entry from."""
+        box = self.box("migration")
+        pre_fix_baselines = sorted(["Method_Benchmark", "Prior"])
+        self.decline(box, baselines=pre_fix_baselines)
+        probe = self.probe(box)
+        self.assertEqual(
+            probe["nextStep"], "declare-first",
+            "the corrected sorted name set produces a different question "
+            "text, so the offer must report as unanswered rather than as "
+            "the settled decline")
+        self.assertIsNone(probe["decisions"]["comparison"]["state"])
+
+    def test_answering_the_refired_offer_restores_stability_with_no_second_refire(self):
+        box = self.box("migration-restabilize")
+        pre_fix_baselines = sorted(["Method_Benchmark", "Prior"])
+        self.decline(box, baselines=pre_fix_baselines)
+        self.assertEqual(self.probe(box)["nextStep"], "declare-first")
+        self.decline(box)  # today's corrected question text
+        first = self.probe(box)
+        second = self.probe(box)
+        self.assertEqual(first["nextStep"], "declined")
+        self.assertEqual(second["nextStep"], "declined")
+
 class SearchDeclaredBeforeTheRunTests(unittest.TestCase):
     """A run whose governing scalar has not yet been chosen has no
     configuration at all — narrower than a wrong report and cheaper to catch
@@ -6263,7 +6575,7 @@ class RemoteExecutionJobsSectionTests(unittest.TestCase):
 
 
 class NextStepSectionCoverageTests(unittest.TestCase):
-    """`probe` returns thirteen `nextStep` values; SKILL.md must define a
+    """`probe` returns fourteen `nextStep` values; SKILL.md must define a
     `### nextStep: "..."` section for exactly the ones that prescribe work.
 
     The reachable red here is `test_no_next_step_is_named_without_a_definition`:
@@ -6275,7 +6587,7 @@ class NextStepSectionCoverageTests(unittest.TestCase):
 
     SKILL_MD = CLI.parent.parent / "SKILL.md"
 
-    # The three `nextStep` values that prescribe no work, and therefore must
+    # The four `nextStep` values that prescribe no work, and therefore must
     # never get a `### nextStep: "..."` section of their own. This split cannot
     # be read off the CLI source — the source only says which strings
     # `next_step` can hold, never which of them call for a procedure and which
@@ -6294,10 +6606,15 @@ class NextStepSectionCoverageTests(unittest.TestCase):
     # a gap; it would violate the rule the section would be explaining. This is
     # the assertion that stops a future contributor from "fixing the asymmetry"
     # by handing `piloted` the menu its own text forbids.
+    #
+    # `declined` (D5d): this flow's own answer to "the person said no". The
+    # decision was already made and recorded as a bare `discuss` event; a
+    # section here would invent the work the decline refused.
     NO_SECTION = frozenset({
         "nothing-to-compare",
         "already-benchmarked",
         "piloted",
+        "declined",
     })
 
     HEADING_RE = re.compile(r'^### `nextStep: "([a-z0-9-]+)"`', re.MULTILINE)
@@ -6327,24 +6644,24 @@ class NextStepSectionCoverageTests(unittest.TestCase):
         self.assertEqual(
             self.all_next_steps(),
             {"nothing-to-compare", "convert", "piloted", "already-benchmarked",
-             "benchmark", "declare-first", "env-first", "wiring-first",
-             "poll-first", "pilot-first", "pilot-decisions", "search-first",
-             "report-first"})
+             "declined", "benchmark", "declare-first", "env-first",
+             "wiring-first", "poll-first", "pilot-first", "pilot-decisions",
+             "search-first", "report-first"})
 
     def test_every_prescriptive_next_step_has_its_own_section(self):
         prescriptive = self.all_next_steps() - self.NO_SECTION
         missing = sorted(prescriptive - self.headings())
         self.assertEqual(missing, [], f"no `### nextStep` heading for: {missing}")
 
-    def test_the_three_that_prescribe_no_work_have_no_section(self):
-        """See `NO_SECTION` above for why these three are withheld on purpose
+    def test_the_four_that_prescribe_no_work_have_no_section(self):
+        """See `NO_SECTION` above for why these four are withheld on purpose
         rather than by oversight."""
         present = sorted(self.NO_SECTION & self.headings())
         self.assertEqual(present, [], f"unexpected `### nextStep` heading for: {present}")
 
     def test_no_next_step_is_named_without_a_definition(self):
         """A value mentioned in backticks anywhere in the document must either
-        have its own heading or be one of the three deliberately left unheaded
+        have its own heading or be one of the four deliberately left unheaded
         (`NO_SECTION`); anything else is a dangling reference — the exact shape
         of the defect this change fixes."""
         text = self.SKILL_MD.read_text(encoding="utf-8")
@@ -30069,13 +30386,15 @@ class NextStepPublicationRosterTests(unittest.TestCase):
             sorted({impl.NEXT_STEP_EXPERIMENT, impl.NEXT_STEP_REPAIR,
                     impl.NEXT_STEP_TERMINAL}))
 
-    def test_exactly_the_two_terminal_steps_are_declared_terminal(self):
+    def test_exactly_the_three_terminal_steps_are_declared_terminal(self):
         """Read rather than assumed: `piloted` looks terminal (a pilot ran) and
         is not -- its own rule keeps the question open, which is work. These
-        two are the only answers that prescribe none."""
+        three are the only answers that prescribe none: a decline, D5d's own
+        addition, joins the two that were always here."""
         terminal = sorted(step for step, entry in impl.PROBE_NEXT_STEPS.items()
                           if entry["kind"] == impl.NEXT_STEP_TERMINAL)
-        self.assertEqual(terminal, ["already-benchmarked", "nothing-to-compare"])
+        self.assertEqual(
+            terminal, ["already-benchmarked", "declined", "nothing-to-compare"])
 
     def test_the_experiment_steps_are_the_ones_that_spend_machine_time(self):
         """The predicate the standing rule needs: whenever the flow reaches the
@@ -30978,10 +31297,10 @@ class DiscussionBucketFoldTests(unittest.TestCase):
                 handle.write(json.dumps(event) + "\n")
         return root
 
-    def _event(self, asked, answered=None):
+    def _event(self, asked, answered=None, at=None):
         return {"kind": "discuss", "about": {"kind": "record", "operand": None},
                 "asked": asked, "answered": answered,
-                "status": "answered" if answered else "open"}
+                "status": "answered" if answered else "open", "at": at}
 
     def test_a_ledger_with_no_discussion_answers_nothing(self):
         root = self._target([])
@@ -31029,6 +31348,72 @@ class DiscussionBucketFoldTests(unittest.TestCase):
         self.assertEqual(opened, {"open?"})
         self.assertEqual(answered, {"closed?"})
         self.assertEqual(opened & answered, set())
+
+    # --- D6: the sibling readers over one fold, folded exactly once ---
+
+    def test_answered_from_buckets_is_a_pure_reader_over_a_given_fold(self):
+        """`_answered_discussions` becomes a thin wrapper over this pure
+        function (D6), which takes the fold rather than re-reading it -- the
+        shape `cmd_probe` needs to fold `_discussion_buckets` exactly once
+        and hand it to every reader."""
+        root = self._target([self._event("q", "yes")])
+        buckets = impl._discussion_buckets(root, "Method")
+        self.assertEqual(impl._answered_from_buckets(buckets), {"q"})
+
+    def test_answered_event_from_returns_none_for_a_question_never_asked(self):
+        root = self._target([])
+        buckets = impl._discussion_buckets(root, "Method")
+        self.assertIsNone(impl._answered_event_from(buckets, "q"))
+
+    def test_answered_event_from_returns_none_for_an_unanswered_question(self):
+        """Silence is never consent: an open question reports `None`, the
+        identical reading as one never asked at all."""
+        root = self._target([self._event("q")])
+        buckets = impl._discussion_buckets(root, "Method")
+        self.assertIsNone(impl._answered_event_from(buckets, "q"))
+
+    def test_answered_event_from_returns_the_last_answered_event(self):
+        root = self._target([self._event("q", "no", at="2024-01-01T00:00:00Z"),
+                             self._event("q", "yes", at="2024-01-02T00:00:00Z")])
+        buckets = impl._discussion_buckets(root, "Method")
+        event = impl._answered_event_from(buckets, "q")
+        self.assertEqual(event["answered"], "yes")
+        self.assertEqual(event["at"], "2024-01-02T00:00:00Z")
+
+    def test_ledger_append_order_decides_a_same_second_tie(self):
+        """spec 'Ledger Append Order Decides Ties; The Decline Date Is
+        Display-Only, Never An Ordering Key': two events on the identical
+        text, the identical `at`, opposing answers -- the event appended
+        LATER wins, never a comparison of `at`."""
+        tied = "2024-06-01T12:00:00Z"
+        root = self._target([self._event("q", "no", at=tied),
+                             self._event("q", "yes", at=tied)])
+        buckets = impl._discussion_buckets(root, "Method")
+        event = impl._answered_event_from(buckets, "q")
+        self.assertEqual(event["answered"], "yes",
+                         "the later-appended event must win even though "
+                         "both share the identical `at`")
+
+    def test_swapping_which_same_second_event_is_appended_last_swaps_the_winner(self):
+        """The `at` value alone must never decide it: reversing append order
+        with the identical timestamps reverses the winner too -- proving the
+        winner is read from position, not from the value of `at`."""
+        tied = "2024-06-01T12:00:00Z"
+        root = self._target([self._event("q", "yes", at=tied),
+                             self._event("q", "no", at=tied)])
+        buckets = impl._discussion_buckets(root, "Method")
+        event = impl._answered_event_from(buckets, "q")
+        self.assertEqual(event["answered"], "no")
+
+    def test_decision_from_event_reports_no_state_for_a_never_asked_question(self):
+        self.assertEqual(impl._decision_from_event(None),
+                         {"state": None, "at": None, "asked": None})
+
+    def test_decision_from_event_reports_answered_with_the_events_own_fields(self):
+        event = {"asked": "q", "answered": "not now", "at": "2024-06-01T12:00:00Z"}
+        self.assertEqual(
+            impl._decision_from_event(event),
+            {"state": "answered", "at": "2024-06-01T12:00:00Z", "asked": "q"})
 
 
 class PilotGatesTheDeclaredScaleTests(unittest.TestCase):

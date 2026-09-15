@@ -98,14 +98,14 @@
     "sha256": "eae0ea68991005cb29f80ec6db41dc74eba78cf7a0cac63512456e52fe868e63"
   },
   "probe": {
-    "bytes": 10125,
+    "bytes": 9013,
     "exit": 0,
-    "sha256": "30a50c7ff4f7cbc492f9b49c0ead3e1a7ec7f215482a576b6416b08520109175"
+    "sha256": "2b43c653cb45ac31587cc02d644a9b29ff9c73999dc5b8e736303c5e331ddfe7"
   },
   "propose": {
     "bytes": 405,
     "exit": 0,
-    "sha256": "77e0710e15e4d63c4a8cae7bafcda8f06d5527f53aa27db4f6c17846f4238478"
+    "sha256": "7e0411da0a451a79c9870deb78baa749e0ab0dad1169675e424d11c44013a373"
   },
   "settle": {
     "bytes": 2914,
