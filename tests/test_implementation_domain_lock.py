@@ -354,6 +354,13 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: either domain's `vocabulary.names` (which Lock B already holds to zero).
 #: Two profiles on disk today: `experimental-implementation` (this change)
 #: and `proposal-implementation`. Five denylist words measured genuinely
+#: 2026-09-14, M2 closed: `cmd_handoff` stopped composing a sentence of
+#: its own in one fixed human tongue, so the prose that carried `local`,
+#: `measurement`, `named`, `recorded` and `remedy` is gone and five pins
+#: SHRINK (40->30, 43->42, 178->177, 77->75, 55->54). A shrink is what
+#: this lock permits deliberately; it is recorded here so the next reader
+#: knows which change took them down and does not restore them by hand.
+#:
 #: ABSENT from the engine and need no pin at all: `formulation`,
 #: `mathematical`, `mathematics`, `statistical`, `traced` -- the first three
 #: are also members of `proposal-implementation`'s own `vocabulary.names`,
@@ -427,36 +434,130 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: Six SHRANK, and are recorded here for the same reason: the engine's
 #: module docstring stopped hand-listing four subcommands argparse already
 #: prints in full, and the compressed comments gave the rest back. `against` 184->183, `approved` 29->28, `commands` 19->18, `readable` 24->23, `resolves` 32->31, `whose` 145->144.
+#: `the-comparison-nobody-asked-for` (Unit 2, design.md D1/D2/D3/D10):
+#: `revision`/`premises` relocated off `__benchmark__` onto their own
+#: `__implementation__` literal (`resolve_implementation_declaration`,
+#: `declaration_root`, `_implementation_predates_relocation`), and the
+#: three sibling resolvers' docstrings were rewritten to point at the new
+#: root. `authored_package_init` grew a ~100-line prefilled-empty template
+#: (`_DEFAULT_PACKAGE_DECLARATIONS`) carrying the guidance comments moved
+#: out of the kit asset, and `cmd_verify`'s two revision readers were
+#: rewritten to source `__implementation__` unconditionally. All of that is
+#: new engine prose, not a domain word: twenty-seven words already exempted
+#: here read naturally inside it and grew. `after` 79->84, `against`
+#: 183->184, `agreed` 24->26, `answered` 71->73, `answers` 99->100,
+#: `before` 228->232, `benchmark` 91->98, `beside` 92->94, `check`
+#: 150->151, `compares` 23->24, `declaration` 191->202, `empty` 113->120,
+#: `isolated` 4->5, `leave` 9->11, `leaves` 34->35, `local` 30->34,
+#: `longer` 46->47, `materialized` 10->11, `module` 189->193, `object`
+#: 28->29, `place` 51->54, `produces` 44->46, `rather` 332->341, `remote`
+#: 55->58, `reported` 142->143, `ruled` 8->9, `scaffolded` 4->7,
+#: `something` 69->70, `steps` 133->135, `value` 233->235, `whose`
+#: 144->148.
+#: Two SHRANK: docstring compression elsewhere in the same edit gave two
+#: words back. `invariant` 22->21, `measured` 141->140.
+#: Eight LEFT THE DENYLIST ENTIRELY and their pins are removed, not
+#: shrunk to zero: `experimental-implementation/impl_profile.py`'s
+#: "standing" stage was rewritten in the same commit (design D3, task
+#: 2.15) to name the relocated gate the identical way
+#: `proposal-implementation`'s own profile does, so `carries`,
+#: `materialize`, `objects`, `premises`, `refuses` and `stage` are now
+#: BOTH profiles' own north vocabulary -- ordinary engine vocabulary,
+#: never single-owner again. `named` and `readable` left with them: they
+#: were the exact words the rewritten sentence replaced, and neither
+#: survives in the other profile's own north either. A word leaving the
+#: denylist needs no exemption at all, dead or otherwise.
+#: `the-comparison-nobody-asked-for` (Unit 4, design.md D5/D6/D16): a
+#: decline is now a bare `discuss` event, kept stable by
+#: `_benchmark_offer_question` and folded once per `cmd_probe` call
+#: through `_discussion_buckets`/`_answered_from_buckets`/
+#: `_answered_event_from`/`_decision_from_event`, and `previous_implementations`
+#: excludes any `_Benchmark`-suffixed directory. All new engine prose, not
+#: a domain word: twenty-six words already exempted here read naturally
+#: inside it and grew. `actually` 76->78, `after` 84->85, `against`
+#: 184->185, `answered` 73->82, `answers` 100->101, `before` 232->238,
+#: `beside` 94->95, `declaration` 202->204, `empty` 120->123, `leaves`
+#: 35->36, `longer` 47->48, `measured` 140->141, `module` 193->194,
+#: `notebooks` 107->110, `object` 29->30, `pilot` 119->123, `produces`
+#: 46->51, `rather` 341->349, `recorded` 75->76, `remote` 58->61,
+#: `reported` 143->144, `scaffolded` 7->10, `steps` 135->139, `whose`
+#: 148->151.
+#: Two SHRANK: the docstring rewrite of `previous_implementations` and the
+#: three-way ladder comment above the new `declined` override each read
+#: differently from what they replaced. `benchmark` 98->97, `place`
+#: 54->53.
+#: `the-comparison-nobody-asked-for` (Unit 4b, design.md D11/D12/D13/D14):
+#: the acid test's own draft (`validation_proposal`), its offer
+#: constructor (`_validation_offer_question`/`_canonical_premises`), the
+#: `PROBE_DRAFTS` registry replacing the `wiring: bool` flag, and the
+#: three-way `benchmark`/`validate`/`declined` ladder branch are all new
+#: engine prose, not a domain word: twenty-one words already exempted
+#: here read naturally inside it and grew. `against` 185->188, `answered`
+#: 82->85, `answers` 101->104, `before` 238->239, `benchmark` 97->99,
+#: `beside` 95->98, `claim` 35->36, `declaration` 204->205, `empty`
+#: 123->127, `local` 34->37, `longer` 48->49, `makes` 43->44, `object`
+#: 30->33, `rather` 349->358, `remote` 61->65, `reported` 144->145,
+#: `small` 4->8, `something` 70->71, `validated` 7->8, `value` 235->239,
+#: `whose` 151->152. None shrank and none left the denylist.
+#: `the-comparison-nobody-asked-for` (Unit 3, design.md D4/D8/D13): the
+#: scaffold/harness list flip, the `declare-first` narrowing to
+#: `"undeclared"` only, the derived-count sweep (D8) removing every
+#: hand-written gap/ladder numeral from engine docstrings, and the Unit 3
+#: correction moving the three-way `benchmark`/`validate`/`declined`
+#: branch to last among `cmd_probe`'s overrides (so a genuinely owed
+#: repair outranks a declined comparison, per the fifth spec revision) are
+#: all new/rewritten engine prose, not a domain word: eleven words already
+#: exempted here read naturally inside it and grew. `after` 85->87,
+#: `agreed` 26->27, `benchmark` 99->105, `declaration` 205->207,
+#: `destinations` 37->38, `longer` 49->51, `materialized` 11->12,
+#: `measured` 141->142, `rather` 358->359, `scaffolded` 10->11, `whose`
+#: 152->153. One SHRANK: the three-way branch's own comment, rewritten for
+#: its new last-in-chain position, reads differently from what it
+#: replaced. `before` 239->238. None left the denylist; no new leak.
+#: `the-comparison-nobody-asked-for` (Unit 6a, design.md D19-D21): the
+#: closed `discuss --decision yes|no` token, its `DISCUSS_DECISION_NOT_A_TOKEN`
+#: refusal, the absent-token migration rule (D20), the `decisions.*.decision`
+#: payload member, and the `build-first` rung (fourth arm of the same
+#: last-among-the-overrides branch Unit 3 placed) are all new engine prose,
+#: not a domain word: eighteen words already exempted here read naturally
+#: inside it and grew. `actually` 78->80, `after` 87->89, `against`
+#: 188->189, `answered` 85->92, `before` 238->243, `beside` 98->99, `check`
+#: 151->153, `empty` 127->129, `experiment` 24->25, `invariant` 21->22,
+#: `longer` 51->53, `makes` 44->46, `rather` 359->366, `recorded` 76->78,
+#: `reported` 145->146, `value` 239->242, `whose` 153->154, `write`
+#: 107->109. None shrank and none left the denylist; `test_2` confirms no
+#: new unpinned leak either.
+#: upstream-sync 2026-09-15: re-measured after merging upstream/main bf00e17
+#: (engine port + fork adopt deltas + both sides' prose). Every value below is
+#: taken from the merged tree, never assumed; pinned == every denylist word the
+#: engine actually spells, by construction.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    #: upstream-sync 2026-09-13, re-measured after the merge, recorded per
-    #: word so no move is silent: `against` 183->185, `answered` 71->72,
-    #: `approved` 28->47, `audit` 15->19, `before` 228->236, `beside`
-    #: 92->96, `carries` 178->180, `check` 150->154, `command` 268->272,
-    #: `compares` 23->24, `destinations` 37->38, `established` 4->5,
-    #: `implementations` 2->4, `leaves` 34->35, `longer` 46->47, `makes`
-    #: 43->44, `materialize` 31->32, `measured` 141->142, `place` 51->52,
-    #: `rather` 332->338, `readable` 23->24, `refuses` 93->98, `scaffolded`
-    #: 4->5, `something` 69->71, `stage` 82->88, `write` 107->108. Every
-    #: growth traces to one change: the adopt port (+567 engine lines) and
-    #: the upstream merge's roster/usage prose.
-    "actually": 76, "admissible": 3, "after": 80, "against": 185,
-    "agreed": 24, "answered": 72, "answers": 99, "approved": 47,
-    "audit": 19, "before": 236, "benchmark": 91, "beside": 96,
-    "carries": 180, "check": 154, "checkable": 3, "claim": 35,
-    "command": 272, "commands": 18, "compares": 24, "declaration": 191,
-    "destinations": 38, "empty": 113, "established": 5, "experiment": 24,
+    "actually": 82, "admissible": 3, "after": 90, "against": 191,
+    "agreed": 27, "answered": 95, "answers": 106, "approved": 47,
+    "audit": 19, "before": 252, "benchmark": 108, "beside": 104,
+    "check": 157, "checkable": 3, "claim": 36, "command": 272,
+    "commands": 18, "compares": 25, "declaration": 209,
+    "destinations": 39, "empty": 129, "established": 5, "experiment": 25,
     "experiments": 6, "implementations": 4, "incomplete": 28,
-    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 35, "local": 40,
-    "longer": 47, "makes": 44, "materialize": 32, "materialized": 10,
-    "measured": 142, "measurement": 43, "module": 189, "named": 178,
-    "notebooks": 107, "object": 28, "objects": 19, "pilot": 119,
-    "place": 52, "premises": 7, "produces": 44, "rather": 338,
-    "readable": 24, "recorded": 77, "refuses": 98, "remedy": 55,
-    "remote": 55, "reported": 142, "resolves": 31, "ruled": 8,
-    "runnable": 15, "scaffolded": 5, "sitting": 9, "small": 4,
-    "something": 71, "stage": 88, "steps": 133, "sweep": 7,
-    "validated": 7, "value": 233, "whose": 144, "write": 108, "wrong": 51,
+    "invariant": 22, "isolated": 5, "leave": 11, "leaves": 37,
+    "local": 37, "longer": 54, "makes": 47, "materialized": 12,
+    "measured": 144, "measurement": 43, "module": 194, "notebooks": 110,
+    "object": 33, "pilot": 123, "place": 55, "produces": 51,
+    "rather": 376, "recorded": 78, "remedy": 54, "remote": 65,
+    "reported": 146, "resolves": 31, "ruled": 9, "runnable": 15,
+    "scaffolded": 12, "sitting": 9, "small": 8, "something": 74,
+    "steps": 139, "sweep": 7, "validated": 8, "value": 243, "whose": 154,
+    "write": 110, "wrong": 51
 }
+#: Unit 6b (Part B, the transitions): thirteen pins grew from the new
+#: engine prose alone (`_comparison_reuses_acid_test_question`,
+#: `_validate_publication`'s own branch, `cmd_probe`'s new reachability
+#: branch and fact threading) -- `actually`, `answered`, `answers`,
+#: `before`, `benchmark`, `beside`, `declaration`, `measured`,
+#: `measurement`, `place`, `rather`, `something`, `value`. Zero admissions,
+#: zero removals; `SKILL.md`/`references/usage.md` are outside
+#: `_engine_files()`'s own scan, the identical restraint every prior
+#: unit's changelog block already states.
 
 
 class DerivedDenylistTests(unittest.TestCase):
@@ -668,12 +769,20 @@ class KitAgreementLockTests(unittest.TestCase):
 # after landing every S3-S13 field: still 96, still 1 file. Any OTHER
 # movement -- a rename campaign, an accidental sweep -- is refused here.
 L1_BASELINE_AT_S0 = 97
-L1_DELIBERATE_SHRINK = 1  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion;
+L1_DELIBERATE_SHRINK = 3  # documents.label's ARMS_UNDECLARED_CONSEQUENCE conversion;
 #: and `fix/skills-critical-review`, where compressing the four per-document
-#: consumers' own comments dropped one prose mention of the first host by name.
-#: Re-measured at the upstream-sync merge (2026-09-13): still 96 occurrences
-#: in one file with the adopt port in; net unchanged against the pre-merge
-#: count, so no NEW deliberate move is recorded for the port.
+#: consumers' own comments dropped one prose mention of the first host by name
+#: (2 total). `the-comparison-nobody-asked-for` (Unit 4b, design D12) removed
+#: the bare local variable `proposal` -- `cmd_probe`'s own `wiring_proposal`
+#: call site and its `"wiring": proposal,` return-dict line -- in favour of
+#: the `PROBE_DRAFTS` dict comprehension's `drafts` variable, dropping 2 more
+#: standalone occurrences of the word (`\bproposal\b` never matches inside
+#: the identifier `wiring_proposal`, since there is no word boundary before
+#: it -- only the bare variable name itself ever counted here).
+#: upstream-sync 2026-09-15: re-measured over the merged engine -- 94
+#: occurrences, a 3-shrink from S0. Upstream alone measured 97-4=93; the merge
+#: lands at 94 because the fork's adopt-delta prose also spells the word
+#: (fork pre-merge measured 96). Measured over the merged tree, never assumed.
 #: A shrink in this count is the direction this pin wants -- it is recorded
 #: rather than absorbed because an unexplained MOVE is the defect, in either
 #: direction: a rename campaign looks exactly like this from outside.

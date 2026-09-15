@@ -96,10 +96,10 @@ OBJECTIVE_FLOW = {
                         "own, laid out the way this skill expects, the kit's "
                         "destinations materialized, and the map from "
                         "mathematical object to module approved",
-         "behindWhen": "`structure` reports no scaffold gaps and the benchmark "
-                       "declaration carries the revision and premises the map "
-                       "was approved with -- which is what `materialize "
-                       "--stage objects` refuses without"},
+         "behindWhen": "`structure` reports no scaffold gaps and "
+                       "`__implementation__` carries the revision and "
+                       "premises the map was approved with -- which is what "
+                       "`materialize --stage objects` refuses without"},
         {"stage": "fidelity",
          "establishes": "the code says what the bound revision says, and every "
                         "claim it makes carries an invariant with a test",
@@ -113,7 +113,8 @@ OBJECTIVE_FLOW = {
         {"stage": "declaration",
          "establishes": "what the experiment compares, over which statistical "
                         "unit, by which metric, and what it produces",
-         "behindWhen": "the benchmark declaration is answered rather than "
+         "behindWhen": "`__implementation__`'s premises are answered and the "
+                       "benchmark declaration is answered rather than "
                        "sitting at its scaffolded empty value"},
         {"stage": "rehearsal",
          "establishes": "the declared flow runs end to end with its own "

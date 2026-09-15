@@ -21,10 +21,6 @@ from pathlib import Path
 
 # The one-way dependency this file's own docstring claims: the production
 # engine never imports this script; this script imports the engine.
-# `writable_at_scaffold_time` used to be defined twice — once here, once
-# (now) as the production check `materialize --stage scaffold` refuses on
-# (`STAGE_CANNOT_ANSWER`) — and a duplicate is exactly how the two could
-# drift without either copy being wrong on its own.
 #
 # Cut 1 (`the-engine-leaves-its-skill`): the engine now lives under
 # `_core/implementation/engine/`, serves no domain of its own, and refuses
@@ -35,65 +31,69 @@ _HERE = Path(__file__).resolve()
 os.environ.setdefault("IMPLEMENTATION_DOMAIN_PROFILE",
                       str(_HERE.parents[1] / "impl_profile.py"))
 sys.path.insert(0, str(_HERE.parents[2] / "_core" / "implementation" / "engine"))
-from implementation_engine import IGNORE_ENTRIES, writable_at_scaffold_time  # noqa: E402,F401
+from implementation_engine import (  # noqa: E402
+    IGNORE_ENTRIES,
+    SKILL_ROOT,
+    authored_package_init,
+    package_name,
+    scaffold_destinations,
+    scaffold_kit_source,
+    scaffold_substitute_body,
+    writable_at_scaffold_time,
+)
 
-DEFAULT_KIT = Path(__file__).resolve().parents[1] / "assets" / "kit"
+DEFAULT_KIT = SKILL_ROOT / "assets" / "kit"
 
 
 def main(target: str, name: str, seed: str, kit: str | None = None) -> int:
     KIT = Path(kit).resolve() if kit else DEFAULT_KIT
     root = Path(target).resolve()
-    pkg = name.replace("-", "_")
+    pkg = package_name(name)
+    package_init = f"src/{pkg}/__init__.py"
 
-    package = root / "src" / pkg
-    package.mkdir(parents=True, exist_ok=True)
-    # The package exports the target's own modules, and step 9 has written none
-    # of them yet. `__all__` used to be read off `assets/kit/src/` — the stage-2
-    # template directory — so a scaffold advertised a name that existed only
-    # because the template beside it had been copied in, unparsable and all.
-    (package / "__init__.py").write_text(
-        f'"""Reference implementation of the {name} formulation.\n\n'
-        "Each module declares the sections and equations it implements in\n"
-        "`__provenance__`, and every invariant listed there has a matching\n"
-        "test under tests/.\n"
-        '"""\n\n'
-        "__all__ = []\n"
-    )
+    # design D9: `scaffold_destinations(name)` is the ONE list the writer and
+    # the gap-reporter both read. This file used to re-implement the scaffold
+    # stage imperatively at three separate sites -- the package init, the
+    # benchmark package's declaration, and the report seal -- and a fourth
+    # site added by a later movement would have had to remember to update
+    # this file too. The loop below removes the duplication instead of
+    # policing it: `MaterializeScaffoldAgreementTests` asserts the two lists
+    # agree, and now that assertion is a tautology by construction.
+    for destination in scaffold_destinations(name):
+        full = root / destination
+        full.parent.mkdir(parents=True, exist_ok=True)
 
-    # The benchmark's declaration, copied verbatim like every other kit file —
-    # never substituted, never populated. `arms`, `search`, `report` and
-    # `distribution` stay whatever the shipped template says (empty), because
-    # nothing here has run a search, wired an arm or measured a split yet.
-    benchmark_package = root / "src" / f"{pkg}_Benchmark"
-    benchmark_package.mkdir(parents=True, exist_ok=True)
-    declaration = KIT / "src_benchmark" / "__init__.py"
-    (benchmark_package / "__init__.py").write_text(declaration.read_text())
+        if destination == package_init:
+            # The one scaffold destination with no kit source: `src/` has no
+            # modules yet because step 9 has written none of them, so this
+            # file is engine-authored rather than copied. Preserved
+            # verbatim: `experimental-implementation` ships no `assets/kit/`
+            # at all, and this is the one write that never needs one.
+            full.write_text(authored_package_init(name))
+            continue
 
-    # The report seal, staged in `nb/` beside the notebooks that print it but
-    # placed inside the package, the way `benchmark.py` and `verdict.py` are.
-    # `_here()` reads the repository off `parents[1]`, so this is the one
-    # location from which a notebook's stamp matches what `verify` recomputes.
-    seal = KIT / "nb" / "report_digest.py"
-    (benchmark_package / seal.name).write_text(seal.read_text())
-
-    tests = root / "tests"
-    tests.mkdir(parents=True, exist_ok=True)
-    for test in sorted((KIT / "tests").glob("*.py")):
-        body = test.read_text().replace("{{PKG}}", pkg).replace("{{SEED}}", seed)
-        # `test_invariants.py` and `test_synthetic.py` are step 9's, not step
-        # 5's. They stay in the kit until the map that answers their tokens
-        # exists; a scaffold that wrote them shipped two files pytest could not
-        # collect, and `test_smoke.py`'s own `{{MODULE}}` survives because it
-        # sits inside a string rather than where a name has to be.
-        if writable_at_scaffold_time(body):
-            (tests / test.name).write_text(body)
-
-    notebooks = root / name / "Notebooks"
-    notebooks.mkdir(parents=True, exist_ok=True)
-    (notebooks / "verification.ipynb").write_text(
-        (KIT / "nb" / "verification.ipynb").read_text()
-        .replace("{{PKG}}", pkg).replace("{{SEED}}", seed)
-    )
+        # Kit sources resolve under the caller-supplied KIT, never under
+        # SKILL_ROOT: `scaffold_kit_source` answers in terms of the skill's
+        # OWN kit, and the fourth argument exists precisely so a neutral
+        # fixture kit can stand in for it. Re-rooting every destination
+        # under the passed KIT keeps that promise for the whole loop, not
+        # just the sites this file used to special-case -- a paper forge
+        # must not carry one paper's content into its own test suite.
+        source = scaffold_kit_source(destination, name)
+        relative = source.relative_to(SKILL_ROOT / "assets" / "kit")
+        body = scaffold_substitute_body(
+            (KIT / relative).read_text(encoding="utf-8"), name, seed)
+        if destination.endswith(".py") and not writable_at_scaffold_time(body):
+            # `conftest.py`, `sweep.py` and `admissibility.py` are not tests
+            # and were never asked for, so a scaffold built from exactly
+            # this list could not be collected without them; but
+            # `test_invariants.py`/`test_synthetic.py`-shaped templates
+            # still carry step 9's own tokens (`{{FUNCTION_NAME}}`,
+            # `{{INVARIANT_ID}}`, `{{EXPECTATION}}`) at scaffold time, and
+            # nothing here could have answered them yet. Left unwritten
+            # rather than shipped unparsable.
+            continue
+        full.write_text(body, encoding="utf-8")
 
     pyproject = root / "pyproject.toml"
     text = pyproject.read_text() if pyproject.exists() else (

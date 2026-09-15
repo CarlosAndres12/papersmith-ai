@@ -43,6 +43,11 @@ no throwaway box, leaving `manifest` nothing to guard; and this change ships no 
 `counts` nothing to measure. Remaining chain 1 → 2 → 4 → 5 ≈ 1,130, inside 1,200.
 
 **Deferral recorded as a named follow-up, not dropped:** follow-up change
+**Nota, 2026-09-14:** ese cambio de seguimiento nunca se creó, así que esta nota
+apuntaba a una carpeta inexistente. La deuda vive ahora en la sección
+**Limitaciones conocidas** del `README.md`, que sí viaja con el repositorio.
+Lo que sigue se conserva como el registro de qué llevaba:
+
 `the-manifest-that-proves-containment` carries slice 3 (`manifest`, `counts`), **success criteria
 6 and 8**, spec Group 6 in full, and the two slice-3 inversion locks (`manifest` change detection;
 `counts` on a summary-less capture → `unreadable`). Reason: session budget, not scope doubt.

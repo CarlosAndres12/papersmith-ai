@@ -1,6 +1,6 @@
 """The stdout characterization seal for `proposal-implementation`'s CLI.
 
-Built across `openspec/changes/the-seal-before-the-cut/`: proposal.md, design.md,
+Built across `openspec/changes/archive/2026-09-11-the-seal-before-the-cut/`: proposal.md, design.md,
 tasks.md. Proves preservation across the later profile-driven extraction
 (`the-engine-leaves-its-skill` and its successors) by capturing byte-exact stdout
 and exit status for all 20 subcommands against a fixed corpus, and hosts the two
