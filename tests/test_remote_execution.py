@@ -20081,6 +20081,183 @@ class NestedPathSerializationTests(unittest.TestCase):
         self.assertIsInstance(printed["smokeLedgerPath"], str)
         self.assertIsInstance(printed["requiredEvidence"][1], str)
 
+    def test_the_distribute_command_prints_a_nested_path(self) -> None:
+        """`distribute` (2869) prints `result` whole, with no `default=str`
+        net at all -- not even a hand-named single key. `status` acquired
+        its nested `smoke.ledgerPath` block the same way this payload
+        could acquire a nested `staleness` block: a later caller adds a
+        sub-dict to `cmd_distribute`'s own return value and nobody
+        revisits this print site.
+        """
+        payload = {
+            "units": 1,
+            "places": 1,
+            "assigned": 1,
+            "unplaced": [],
+            "assignments": [
+                {
+                    "worker": "w1",
+                    "requested": 1,
+                    "cap": 2,
+                    "inFlight": 0,
+                    "granted": 1,
+                    "inFlightSource": "list_active",
+                    "units": ["u1"],
+                }
+            ],
+            "skipped": [],
+            "consentToken": "deadbeef",
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+        }
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_distribute", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "distribute",
+                "--target", "/tmp/nowhere",
+                "--entrypoint", "/tmp/nowhere/a.ipynb",
+                "--backend", "fake",
+                "--unit", "u1",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["places"], 1)
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_reconcile_command_prints_a_nested_path(self) -> None:
+        """`reconcile` (2971) prints `result` whole -- same no-net shape as
+        `distribute` -- after popping `arbitration` off it for stderr.
+        """
+        payload = {
+            "orphanRemote": [],
+            "orphanLocal": [],
+            "resolved": [],
+            "remote": {"status": "read", "reason": None},
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+            "arbitration": [],
+        }
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_reconcile", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "reconcile",
+                "--target", "/tmp/nowhere",
+                "--entrypoint", "/tmp/nowhere/a.ipynb",
+                "--worker", "w1",
+                "--backend", "fake",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["remote"]["status"], "read")
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_readiness_command_prints_a_nested_path(self) -> None:
+        """`readiness` (3081) prints `result` whole and resolves no
+        backend at all -- it takes no `adapter` parameter, the same
+        "reports and resolves nothing" discipline `status` holds.
+        """
+        payload = {
+            "ready": False,
+            "reason": "latest smoke record does not match",
+            "latestSmokeRecord": None,
+            "staleness": {"status": "stale", "jobFolder": Path("/tmp/nowhere/job")},
+        }
+
+        buffer = io.StringIO()
+        with unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_readiness", return_value=payload
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "readiness",
+                "--job-dir", "/tmp/nowhere/job",
+                "--worker", "w1",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["ready"], False)
+        self.assertIsInstance(printed["staleness"]["jobFolder"], str)
+
+    def test_the_poll_command_prints_a_nested_value(self) -> None:
+        """`poll` (2891) hand-names exactly two keys off the returned
+        `Status` -- `state` and `detail` -- and `Status.__post_init__`
+        only ever validates `state` against the seam's own vocabulary;
+        `detail` carries whatever a backend hands back. A backend
+        reporting a structured `detail` (not the plain string every
+        adapter happens to send today) is exactly the same latent shape
+        as `status`'s own `smoke.ledgerPath`.
+        """
+        status_result = SimpleNamespace(
+            state="queued",
+            detail={"raw": Path("/tmp/nowhere/detail")},
+        )
+
+        buffer = io.StringIO()
+        with self._backend_patched(), unittest.mock.patch.object(
+            REMOTE_CLI, "cmd_poll", return_value=status_result
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "poll",
+                "--submission-id", "s1",
+                "--backend", "fake",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["state"], "queued")
+        self.assertIsInstance(printed["detail"]["raw"], str)
+
+    def test_the_generate_job_command_prints_a_nested_path(self) -> None:
+        """`generate-job` (3025) prints its own literal dict with no net
+        either, and it carries `staleness` -- the exact sub-dict
+        `_staleness_for()` builds and the exact shape `status` broke on
+        once already, one layer up.
+
+        `--commit` is passed explicitly so `JOBFOLDER.pin_source()`
+        returns `"explicit"` without ever touching git; `generate_job`
+        and `read` are mocked outright, so this drives no real job-folder
+        generation and touches no adapter, backend or credential at all.
+        """
+        destination = Path("/tmp/nowhere/tools/fakesvc/jobx")
+        job_folder = SimpleNamespace(
+            run_config={"commit": "a" * 40},
+            staleness={
+                "status": "stale",
+                "reason": None,
+                "changedPaths": [Path("/tmp/nowhere/x.py")],
+            },
+        )
+
+        buffer = io.StringIO()
+        with unittest.mock.patch.object(
+            REMOTE_CLI.JOBFOLDER, "generate_job", return_value=destination
+        ), unittest.mock.patch.object(
+            REMOTE_CLI.JOBFOLDER, "read", return_value=job_folder
+        ), contextlib.redirect_stdout(buffer):
+            code = REMOTE_CLI.main([
+                "generate-job",
+                "--target", "/tmp/nowhere",
+                "--service", "fakesvc",
+                "--job-name", "jobx",
+                "--product", "P",
+                "--commit", "a" * 40,
+                "--repo-url", "https://example.invalid/repo.git",
+                "--repo-ref", "main",
+                "--run-module", "m",
+                "--run-function", "f",
+            ])
+
+        self.assertEqual(code, 0)
+        printed = json.loads(buffer.getvalue())
+        self.assertEqual(printed["commitSource"], "explicit")
+        self.assertIsInstance(printed["staleness"]["changedPaths"][0], str)
+
 
 class PushSurfaceHookTests(unittest.TestCase):
     """`scripts/hooks/refuse_offpath_push.py` (design §5): a tripwire, not

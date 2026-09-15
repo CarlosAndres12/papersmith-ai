@@ -8,11 +8,13 @@ import { commitDerivedState, saveRevisionReceipt } from './derived-state-store.j
 import { rebuildDerivedState } from './derived-state-builder.js';
 import { parseManagedRevisionFilename } from './revision-lifecycle-store.js';
 import type { ManagedInitialRevisionReceipt } from './revision-receipt.js';
+import { artifact, initialRevisionFilename, isInitialRevision } from './artifact-naming.js';
+import { violations as canonicalFormViolations } from './preservation.js';
+import type { PreservationViolation } from './types.js';
 
 export type { InitialRevisionGuideFragment };
 
-const MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
-const MANAGED_INITIAL_REVISION_FILENAME = /^research-concept-[a-z0-9]+(?:-[a-z0-9]+)*-r01\.md$/;
+const MANAGED_ARTIFACT_MARKER = artifact.marker;
 
 function sha256(bytes: Buffer): string {
 	return createHash('sha256').update(bytes).digest('hex');
@@ -21,7 +23,8 @@ function sha256(bytes: Buffer): string {
 /** Explicit v1 candidate produced from the caller's idea+guide (spec I1, I2, I5); never the fixed scientific-workflow `CreateR01PayloadV1` contract. */
 export type InitialRevisionCandidate = {
 	filename: string;
-	revision: 'r01';
+	/** The profile's own first-revision label (`artifact.revisionLabel(1)`), never a literal: the file is named by that label too, and a caller that read a fixed `'r01'` here got a label the document on disk does not carry. A TypeScript literal cannot depend on a runtime profile value, and this project runs no type checker at all, so the guard is a domain's own initial-revision test suite, never this annotation. */
+	revision: string;
 	markdown: string;
 	canonicalMetadata: CanonicalProposalMetadata;
 };
@@ -29,7 +32,7 @@ export type InitialRevisionCandidate = {
 /** Injectable seam (HARD test-isolation constraint): lets callers check "does a managed proposal already exist" without any real filesystem access. */
 export type InitialRevisionExistingProposalPort = { hasManagedProposal(): Promise<boolean> };
 
-export type InitialRevisionPublicationResult = { filename: string; revision: 'r01'; documentSha256: string; bytesWritten: number };
+export type InitialRevisionPublicationResult = { filename: string; revision: string; documentSha256: string; bytesWritten: number };
 
 /** Injectable seam (HARD test-isolation constraint): lets tests capture the rendered candidate in memory instead of writing a real proposal `.md`. */
 export type InitialRevisionPublicationPort = { publish(candidate: InitialRevisionCandidate): Promise<InitialRevisionPublicationResult> };
@@ -37,8 +40,9 @@ export type InitialRevisionPublicationPort = { publish(candidate: InitialRevisio
 export type CreateInitialRevisionInput = { idea: string; guideFragments?: readonly InitialRevisionGuideFragment[] };
 
 export type CreateInitialRevisionResult =
-	| { status: 'created'; filename: string; revision: 'r01'; documentSha256: string; canonicalMetadata: CanonicalProposalMetadata; markdown: string }
-	| { status: 'blocked'; code: 'INITIAL_IDEA_REQUIRED' | 'MANAGED_PROPOSAL_ALREADY_EXISTS' };
+	| { status: 'created'; filename: string; revision: string; documentSha256: string; canonicalMetadata: CanonicalProposalMetadata; markdown: string }
+	| { status: 'blocked'; code: 'INITIAL_IDEA_REQUIRED' | 'MANAGED_PROPOSAL_ALREADY_EXISTS' | 'INITIAL_IDEA_SINGLE_SENTENCE' }
+	| { status: 'blocked'; code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION'; violations: readonly PreservationViolation[] };
 
 /**
  * Explicit, user-triggered creation of the first managed proposal (spec I1). Never auto-bootstraps:
@@ -60,9 +64,49 @@ export class InitialRevisionCreationService {
 		if (!idea) return { status: 'blocked', code: 'INITIAL_IDEA_REQUIRED' };
 		if (await this.existingProposal.hasManagedProposal()) return { status: 'blocked', code: 'MANAGED_PROPOSAL_ALREADY_EXISTS' };
 		const composed = this.renderer.renderFromIdea({ idea, guideFragments: input.guideFragments });
-		const filename = `research-concept-${composed.slug}-r01.md`;
-		if (!MANAGED_INITIAL_REVISION_FILENAME.test(filename)) throw new Error('INITIAL_REVISION_FILENAME_INVALID');
-		const candidate: InitialRevisionCandidate = { filename, revision: 'r01', markdown: composed.markdown, canonicalMetadata: composed.canonicalMetadata };
+		// An idea with no second sentence collapses `title` and `sectionHeading` to the same
+		// bytes, by construction: `sectionHeading`'s fallback chain ends in `sentences[0] ?? idea`,
+		// which is character for character what `title` computes on the line above it
+		// (`initial-revision-renderer.ts`). The document then goes out with `# X` and `## X`
+		// identical, and what that costs was measured on both hosts:
+		//
+		//   a domain with no canonical-form rules of its own  v1 IS created, and can never be
+		//       edited: every locus query against it is ambiguous and blocked, and a second
+		//       CREATE is refused MANAGED_PROPOSAL_ALREADY_EXISTS. The only exit is moving
+		//       files by hand, outside this engine entirely.
+		//   a domain that declares them  the renderer's triplication trips that domain's OWN
+		//       canonical form, so an idea obeying every rule its skill states cannot become
+		//       v1 at all -- and the refusal blames the author for a repetition THIS ENGINE
+		//       introduced.
+		//
+		// Refused here rather than repaired in the renderer: this engine cannot write a section
+		// heading the author did not write. `sentences` splits on `(?<=[.!?])\s+`, so "one
+		// sentence" means "no sentence-ending punctuation" -- newlines and blank lines do not
+		// supply one, which is why an idea laid out over several lines still collapses.
+		if (composed.canonicalMetadata.title === composed.canonicalMetadata.sectionHeading) {
+			return { status: 'blocked', code: 'INITIAL_IDEA_SINGLE_SENTENCE' };
+		}
+		// Canonical form, over the COMPOSED v1 rather than over the idea alone.
+		//
+		// Every other publication path in this engine runs `validateCandidate`, whose
+		// `canonicalForm` term is exactly this rule set, before a byte is written. This one ran
+		// nothing: `renderFromIdea` injects each declared source's fragment VERBATIM, so
+		// whatever a source document happens to contain -- a report table already carrying
+		// numbers, a URL nobody verified -- became v1 unexamined, and only a later successor
+		// whose locus happened to cover that region would ever notice. For a domain whose whole
+		// canonical form is "this document plans work that has not happened", that is the exact
+		// failure the gate exists to prevent, and it is silent.
+		//
+		// `violations` and not `delta`: a violation is never an intentional change, so it
+		// blocks outright rather than asking for an acknowledgement (`preservation.ts`). There
+		// is nothing to acknowledge at v1 anyway -- no predecessor exists, so no atom can be
+		// lost. A profile whose rule set recognizes nothing here returns `[]` and this is a
+		// no-op, which is why `proposal-deliberation` is unaffected.
+		const violations = canonicalFormViolations(composed.markdown);
+		if (violations.length) return { status: 'blocked', code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION', violations };
+		const filename = initialRevisionFilename(composed.slug);
+		if (!isInitialRevision(filename)) throw new Error('INITIAL_REVISION_FILENAME_INVALID');
+		const candidate: InitialRevisionCandidate = { filename, revision: artifact.revisionLabel(1), markdown: composed.markdown, canonicalMetadata: composed.canonicalMetadata };
 		let published: InitialRevisionPublicationResult;
 		try {
 			published = await this.publication.publish(candidate);
@@ -80,7 +124,7 @@ export class InitialRevisionCreationService {
 
 async function canonicalProposalsDirectory(projectRoot: string): Promise<string> {
 	const root = await realpath(resolve(projectRoot));
-	const directory = resolve(root, 'proposals');
+	const directory = resolve(root, artifact.directory);
 	let existing: string | undefined;
 	try {
 		existing = await realpath(directory);
@@ -98,7 +142,7 @@ async function canonicalProposalsDirectory(projectRoot: string): Promise<string>
 }
 
 function initialRevisionLockPath(root: string): string {
-	return join(root, '.proposal-deliberation', 'locks', 'initial-revision.lock');
+	return join(root, artifact.sidecarRoot, 'locks', 'initial-revision.lock');
 }
 
 /**
@@ -151,11 +195,11 @@ async function releaseInitialRevisionCreationLock(lockPath: string): Promise<voi
  * `.md` atomically and only when the target does not already exist (guarded further by the
  * project-wide single-winner lock above), then writes the derived-state and receipt sidecars in
  * the SAME layout ordinary edit/materialization publication produces (`derived-state-store.ts`'s
- * `.proposal-deliberation/state/<filename>.json` COMMITTED manifest and `.proposal-deliberation/receipts/<filename>.json`
+ * profile-derived state/<filename>.json COMMITTED manifest and receipts/<filename>.json
  * receipt) -- re-audit cleanup (issue #2). Without these sidecars, `readCanonicalManagedRevisionInventory`
  * (`revision-lifecycle-store.ts`) hard-requires a COMMITTED state json and reports the whole inventory as
  * `inconsistent`, degrading scientific-workflow admission for an otherwise perfectly valid, freshly
- * created r01.
+ * created first revision.
  */
 export function createFilesystemInitialRevisionPublicationPort(projectRoot: string): InitialRevisionPublicationPort {
 	return {

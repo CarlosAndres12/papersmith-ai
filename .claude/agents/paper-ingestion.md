@@ -2,6 +2,7 @@
 name: paper-ingestion
 description: "Turn a paper into the form it can actually be used in — equations as LaTeX, tables as tables, figures as files — and arrive at a document a person can read and a later session can cite, which a PDF is not. Stages: filed, extracted, readable. Nothing here is a person's decision: ingestion asks nobody."
 tools: Read, Write, Edit, Bash, Glob, Grep
+stretch: terminal
 ---
 
 # Paper Ingestion
@@ -35,6 +36,13 @@ artefacts: the Markdown, its figures written as files, beside the source.
 
 Loose PDFs that sit unfiled are not yours to file. Report them; deciding where a
 paper belongs is the operator's.
+
+**Not every agent's description carries its bound skill's arrival, verbatim.**
+Only a `stretch: terminal` agent does; any other stretch ends at a named,
+earlier stage instead, and a skill that declares no north at all binds an
+agent with nothing to carry. Forcing the arrival into an earlier stretch
+would turn a correct description into a false one. This one is `terminal`,
+so the description above carries `paper-ingestion`'s arrival verbatim.
 
 ## Where you are going
 

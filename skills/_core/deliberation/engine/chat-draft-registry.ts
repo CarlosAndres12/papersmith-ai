@@ -8,7 +8,11 @@ export const MAX_CHAT_DRAFT_BYTES = (MAX_CHAT_TURNS * MAX_CHAT_CONCLUSION_BYTES)
 const MAX_RUNTIME_SESSIONS = 32;
 const MAX_IDENTITY_BYTES = 256;
 const CHAT_CONVERSATION_ID = /^chat-[a-z0-9][a-z0-9-]{0,250}$/;
-const SHARED_REGISTRY_SYMBOL = Symbol.for('papersmith-ai.proposal-deliberation.pi-session-draft-registry/v1');
+// A dot-joined registry key here would coincidentally spell the dot-prefixed sidecar-root
+// value by pure namespace-convention accident, which the core-only artifact-namespace lock
+// (`artifact-naming.ts`) would flag. The registry key is opaque and never read back as a
+// path, so a colon-joined form is behaviorally identical and spells no artifact value.
+const SHARED_REGISTRY_SYMBOL = Symbol.for('papersmith-ai:proposal-deliberation:pi-session-draft-registry/v1');
 
 type SessionIdentityContext = Pick<ExtensionContext, 'sessionManager'>;
 type SessionDrafts = Map<string, DraftMaterializationPayload>;

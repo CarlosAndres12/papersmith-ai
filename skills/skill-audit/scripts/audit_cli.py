@@ -305,6 +305,70 @@ def numeral_mismatches(path):
 # syntax-tree gate above has something unambiguous to guard.
 # --------------------------------------------------------------------------
 
+def _reported_interpreter_version(path):
+    """The `(major, minor, micro)` a candidate interpreter reports for its
+    own `--version`, or `None` if it cannot be run at all or does not
+    answer in the shape CPython and its distributions use."""
+    try:
+        completed = subprocess.run(
+            [path, "--version"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = (completed.stdout or "") + (completed.stderr or "")
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    return tuple(int(part) for part in match.groups()) if match else None
+
+
+def resolve_min_version_interpreter(name, min_version):
+    """An absolute path to a `name`-family interpreter meeting `min_version`
+    (e.g. `"3.10"`), found on this process's own `PATH` -- or `(None,
+    checked)` if none does, where `checked` maps every path this looked at
+    to the version it reported (`None` where even `--version` could not be
+    read).
+
+    `name` is checked first, under its own declared spelling, so a `PATH`
+    where it already satisfies `min_version` changes nothing. Failing that,
+    this looks for its version-suffixed siblings (`python3.10`,
+    `python3.11`, ...) on the same `PATH`: a recipe naming a bare `python3`
+    cannot know in advance which minor release a given machine parks under
+    that name, only that its own subject needs at least `min_version` to be
+    importable at all. This is deliberately unrelated to `run_exits`'s own
+    `interpreterAllowlist`, which admits an act's `argv[0]` for path
+    resolution and never resolves a version -- reusing it here would gate
+    the wrong thing.
+    """
+    required = tuple(int(part) for part in min_version.split("."))
+    base = "python3" if name in ("python", "python3") else name
+    candidates = [name] + [f"{base}.{minor}" for minor in range(9, 21)]
+    checked = {}
+    for candidate in dict.fromkeys(candidates):
+        resolved = shutil.which(candidate)
+        if not resolved or resolved in checked:
+            continue
+        checked[resolved] = _reported_interpreter_version(resolved)
+    satisfying = sorted(
+        (version, path) for path, version in checked.items()
+        if version and version >= required)
+    return (satisfying[0][1], checked) if satisfying else (None, checked)
+
+
+def _interpreter_gap_message(name, min_version, checked):
+    """A refusal that names the cause: what was required, and exactly what
+    was found instead -- never a bare `unprobeable` standing in for it."""
+    if not checked:
+        return (
+            f"this recipe's argv[0] {name!r} needs Python >= {min_version} "
+            "to import the subject at all, and no interpreter answering "
+            "that name (or a versioned sibling) could be found on PATH")
+    found = ", ".join(
+        f"{path} -> {'.'.join(map(str, version)) if version else 'unreadable'}"
+        for path, version in sorted(checked.items()))
+    return (
+        f"this recipe's argv[0] {name!r} needs Python >= {min_version} to "
+        f"import the subject at all; every interpreter found on PATH falls "
+        f"short of it ({found})")
+
+
 def probe_code_side(recipe, subject, timeout=30):
     """The running subject's own roster, taken out of its own refusal.
 
@@ -317,10 +381,26 @@ def probe_code_side(recipe, subject, timeout=30):
     because the two probes genuinely differ: a Node host writes its refusal as
     JSON to stdout and exits `1`, while `argparse` writes `invalid choice` to
     stderr and exits `2`. One hardcoded contract would fit neither.
+
+    A recipe may also declare `minInterpreterVersion` when its subject
+    cannot even be imported under an older release sharing its argv[0]'s
+    name (a bare `python3` may resolve to Python 3.9 on one machine and
+    3.12 on another): a bare `argv[0]` is then resolved to whichever
+    `PATH` candidate actually satisfies it, or this raises naming both the
+    requirement and every version this machine offered instead -- so the
+    subject's own refusal is never confused with an inability to reach it.
     """
     argv = list(recipe["argv"])
     if not argv or not all(isinstance(part, str) for part in argv):
         raise Unprobeable("the recipe's argv must be a list of strings")
+
+    min_version = recipe.get("minInterpreterVersion")
+    if min_version and "/" not in argv[0]:
+        resolved0, checked = resolve_min_version_interpreter(argv[0], min_version)
+        if resolved0 is None:
+            raise Unprobeable(
+                _interpreter_gap_message(argv[0], min_version, checked))
+        argv[0] = resolved0
 
     subject = Path(subject).resolve()
     where = subject
@@ -337,7 +417,7 @@ def probe_code_side(recipe, subject, timeout=30):
         # semicolon must reach the subject as one literal argument, not as two
         # commands. There is no shell in this path to interpret it.
         completed = subprocess.run(
-            argv, cwd=str(where), shell=False,
+            argv, cwd=str(where), shell=False, env=probe_child_env(),
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
         raise Unprobeable(f"the recipe's argv[0] is not executable: {error}")
@@ -430,7 +510,7 @@ def drive_guard_candidate(drive, candidate, subject, timeout):
                 "--subject")
     try:
         completed = subprocess.run(
-            argv, cwd=str(where), shell=False,
+            argv, cwd=str(where), shell=False, env=probe_child_env(),
             capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError as error:
         raise Unprobeable(
@@ -638,7 +718,7 @@ def interpolate_gate_token(text, repo, subject, box, candidate):
 #: half of that soundness condition. `assert_no_subject_reference` below is
 #: the other half, for a recipe that embeds the subject's path directly
 #: rather than through the token -- the exact shape of the tar recipe this
-#: change replaces (`git archive HEAD:.claude/skills/skill-audit`, no
+#: change replaces (`git archive HEAD:skills/skill-audit`, no
 #: `{subject}` token in sight).
 FROM_ZERO_TOKENS = STRUCTURE_TOKENS - {"subject"}
 
@@ -669,6 +749,34 @@ BOX_STEP_KINDS = ("exec", "driver")
 #: credential whose name matches neither pattern.
 DRIVER_ENV_ALLOWLIST = ("HOME", "LANG", "LC_ALL", "PATH", "TERM", "TMPDIR",
                         "USER")
+
+
+def probe_child_env():
+    """The environment a PROBED subject is driven under: `DRIVER_ENV_ALLOWLIST`
+    and nothing else.
+
+    Same allowlist as `constructed_child_env` below, same stated reason -- to
+    keep a child from inheriting the whole environment. It was applied to
+    driven steps and not to the two probe paths, which ran with no `env=` at
+    all. That is where it mattered most: an ambient variable deciding which
+    domain a shared engine serves made the auditor drive the SIBLING and report
+    its roster under this subject's name. Measured: 21 accepted operations with
+    a clean environment, 20 with the sibling's profile inherited, because one
+    verb is registered only where a second document exists.
+
+    No `names` parameter, unlike its sibling: a probe drives the subject as an
+    ordinary process, and there is no recipe field for it to ask for more. An
+    audit whose subject is chosen by ambient state is not deriving from the
+    subject.
+
+    Delegates rather than repeating the comprehension, because
+    `ChildEnvConstructionSweepTests` holds `constructed_child_env` as the one
+    place a child environment is built -- and it caught this function's first
+    draft doing exactly that.
+    """
+    env, _missing = constructed_child_env(
+        DRIVER_ENV_ALLOWLIST, "a probed subject")
+    return env
 
 
 def constructed_child_env(names, label, hint=""):
@@ -740,7 +848,7 @@ def assert_no_subject_reference(text, subject, repo):
 
     This is what actually catches the tar recipe's own defect: its argv
     never used `{subject}`, it spelled the path out by hand
-    (`HEAD:.claude/skills/skill-audit`). Refusing the token alone would
+    (`HEAD:skills/skill-audit`). Refusing the token alone would
     have missed it.
     """
     subject_abs = str(subject)

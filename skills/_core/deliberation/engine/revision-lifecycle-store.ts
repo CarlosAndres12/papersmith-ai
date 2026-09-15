@@ -3,11 +3,21 @@ import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { derivedStatePath, receiptPath, validateStoredState } from './derived-state-store.js';
 import { PARSER_VERSION, sha256, type BaseDocument, type LifecycleRevision, type RevisionLifecycleArtifact, type RevisionWithdrawalMetadata, type WithdrawalRecord } from './types.js';
 import { LifecycleService } from './lifecycle-service.js';
+import { artifact as artifactConfig, managedRevisionFilename, parseManagedRevision, publicRelativePaths, strictManagedRevision, strictRevisionLabel } from './artifact-naming.js';
 
-const MANAGED=/^research-concept-(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?r\d{2,}\.md$/;
+const MANAGED=strictManagedRevision;
 const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA=/^[0-9a-f]{64}$/;
-const MARKER=Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+// The marker comes from the profile, like every other site in core. It was a literal
+// here, justified by a Python cross-language guard that read THIS FILE by regex as the
+// canonical source of truth -- a choice of where the guard looks, not a constraint: the
+// profile's artifact config was already in scope (`artifactConfig`, above). The copy cost
+// behaviour, not tidiness: `markerOwned` recognition compared against the literal while
+// the rest of the engine recognised through the profile, so a domain declaring its own
+// marker got an inventory holding a managed revision while nothing was the latest, and
+// no decision tree has a branch for that. The guard now reads the profile's own
+// declaration, which is what both languages actually have to agree about.
+const MARKER=Buffer.from(artifactConfig.marker);
 const METADATA_KEYS=['schemaVersion','operationId','operationTimestamp','requestedFilename','revision','documentSha256','sourceRevision','sourceFilename','reason','artifacts','inventoryDigest','preWithdrawalLatestFilename'];
 
 export type ManagedRevisionIdentity={filename:string;lineage:string;revision:string;revisionNumber:number;sourceFilename:string;sourceRevision:string};
@@ -31,18 +41,18 @@ export type ValidatedWithdrawal={
 function exactKeys(value:unknown,keys:string[]) { return !!value&&typeof value==='object'&&JSON.stringify(Object.keys(value).sort())===JSON.stringify([...keys].sort()); }
 function within(root:string,candidate:string) { const rel=relative(root,candidate); return rel===''||(!rel.startsWith(`..${sep}`)&&rel!=='..'&&!isAbsolute(rel)); }
 function block(code:string):never { throw new Error(code); }
-function immutableRelativePath(publicRelativePath:string) { return publicRelativePath.startsWith('proposals/')?`artifacts/${publicRelativePath}`:`artifacts/${publicRelativePath.replace(/^\.proposal-deliberation\//,'')}`; }
+function immutableRelativePath(publicRelativePath:string) { const directoryPrefix=`${artifactConfig.directory}/`; return publicRelativePath.startsWith(directoryPrefix)?`artifacts/${publicRelativePath}`:`artifacts/${publicRelativePath.replace(new RegExp(`^${artifactConfig.sidecarRoot.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\/`),'')}`; }
 
 export function parseManagedRevisionFilename(filename:string):ManagedRevisionIdentity {
- if (basename(filename)!==filename||!MANAGED.test(filename)) block('INVALID_MANAGED_REVISION_FILENAME');
- const match=filename.match(/^research-concept-(?:(.+)-)?r(\d+)\.md$/)!;
- const revisionNumber=Number(match[2]);
+ if (basename(filename)!==filename||!MANAGED(filename)) block('INVALID_MANAGED_REVISION_FILENAME');
+ const parsed=parseManagedRevision(filename)!;
+ const revisionNumber=parsed.ordinal;
  if (!Number.isSafeInteger(revisionNumber)||revisionNumber<1) block('INVALID_MANAGED_REVISION_FILENAME');
- const lineage=match[1]??'ROOT';
- const revision=`r${match[2]}`;
- const prior=String(revisionNumber-1).padStart(match[2].length,'0');
- const sourceFilename=lineage==='ROOT'?`research-concept-r${prior}.md`:`research-concept-${lineage}-r${prior}.md`;
- return {filename,lineage,revision,revisionNumber,sourceFilename,sourceRevision:`r${prior}`};
+ const lineage=parsed.lineage;
+ const revision=parsed.revision;
+ const sourceFilename=managedRevisionFilename(lineage,revisionNumber-1);
+ const sourceRevision=artifactConfig.revisionLabel(revisionNumber-1);
+ return {filename,lineage,revision,revisionNumber,sourceFilename,sourceRevision};
 }
 
 export function assertWithdrawalOperationId(operationId:string) {
@@ -52,10 +62,10 @@ export function assertWithdrawalOperationId(operationId:string) {
 
 export function lifecyclePublicRelativePaths(filename:string) {
  parseManagedRevisionFilename(filename);
- return [`proposals/${filename}`,`.proposal-deliberation/state/${filename}.json`,`.proposal-deliberation/receipts/${filename}.json`] as const;
+ return publicRelativePaths(filename);
 }
 
-export function withdrawalRootPath(root:string) { return join(resolve(root),'.proposal-deliberation','withdrawn'); }
+export function withdrawalRootPath(root:string) { return join(resolve(root),artifactConfig.sidecarRoot,'withdrawn'); }
 export function withdrawalOperationPath(root:string,operationId:string) { return join(withdrawalRootPath(root),assertWithdrawalOperationId(operationId)); }
 export function withdrawalStagingPath(root:string,operationId:string) { return join(withdrawalRootPath(root),`.staging-${assertWithdrawalOperationId(operationId)}`); }
 export function restoreStagingPath(root:string,operationId:string) { return join(withdrawalRootPath(root),`.restore-staging-${assertWithdrawalOperationId(operationId)}`); }
@@ -125,13 +135,13 @@ function pickCanonicalLatest(candidates:ManagedRevisionCandidate[]):{tied:Manage
 export async function resolveLatestManagedRevision(projectRoot:string,options:ResolveLatestManagedRevisionOptions={}):Promise<LatestManagedRevisionResolution> {
  const root=await canonicalRoot(projectRoot);
  let entries;
- try { entries=(await readdir(join(root,'proposals'),{withFileTypes:true})).filter(entry=>entry.isFile()&&MANAGED.test(entry.name)); }
+ try { entries=(await readdir(join(root,artifactConfig.directory),{withFileTypes:true})).filter(entry=>entry.isFile()&&MANAGED(entry.name)); }
  catch { block('PROPOSALS_UNREADABLE'); }
  const candidates:ManagedRevisionCandidate[]=[];
  for (const entry of entries!) {
   if (options.markerOwned) {
    let bytes:Buffer;
-   try { bytes=await readFile(join(root,'proposals',entry.name)); }
+   try { bytes=await readFile(join(root,artifactConfig.directory,entry.name)); }
    catch { continue; }
    if (!bytes.subarray(0,MARKER.length).equals(MARKER)) continue;
   }
@@ -167,13 +177,13 @@ export async function discoverManagedRevision(input:{projectRoot:string;filename
  if (state.manifest.revision!==identity.revision) block('MANAGED_STATE_REVISION_MISMATCH');
  if (!receipt||receipt.targetFilename!==identity.filename||receipt.targetRevision!==identity.revision||receipt.documentShaAfter!==documentSha256||receipt.derivedStateStatus!=='COMMITTED') block('MANAGED_RECEIPT_IDENTITY_MISMATCH');
  if (receipt.sourceRevision!==identity.sourceRevision||receipt.sourceFilename!==identity.sourceFilename) block('MANAGED_RECEIPT_SOURCE_MISMATCH');
- const sourceBytes=await regularBytes(root,join(root,'proposals',identity.sourceFilename),'SOURCE_REVISION_MISSING');
+ const sourceBytes=await regularBytes(root,join(root,artifactConfig.directory,identity.sourceFilename),'SOURCE_REVISION_MISSING');
  if (!sourceBytes.subarray(0,MARKER.length).equals(MARKER)) block('SOURCE_REVISION_UNMANAGED');
  let publicEntries;
- try { publicEntries=await readdir(join(root,'proposals'),{withFileTypes:true}); }
+ try { publicEntries=await readdir(join(root,artifactConfig.directory),{withFileTypes:true}); }
  catch { block('PROPOSALS_UNREADABLE'); }
  for (const entry of publicEntries) {
-  if (!entry.isFile()||!MANAGED.test(entry.name)||entry.name===identity.filename) continue;
+  if (!entry.isFile()||!MANAGED(entry.name)||entry.name===identity.filename) continue;
   const later=parseManagedRevisionFilename(entry.name);
   if (later.lineage!==identity.lineage||later.revisionNumber<=identity.revisionNumber) continue;
   if (later.revisionNumber===identity.revisionNumber+1) block('LATER_DEPENDENT_REVISION_EXISTS');
@@ -194,7 +204,7 @@ export async function discoverManagedRevision(input:{projectRoot:string;filename
 export const validateWithdrawalEligibility=discoverManagedRevision;
 
 export function validateWithdrawalMetadata(value:any,operationId:string) {
- if (!exactKeys(value,METADATA_KEYS)||value.schemaVersion!=='1'||value.operationId!==operationId||!UUID.test(value.operationId)||!MANAGED.test(value.requestedFilename)||!/^r\d{2,}$/.test(value.revision)||!SHA.test(value.documentSha256)||!/^r\d{2,}$/.test(value.sourceRevision)||!MANAGED.test(value.sourceFilename)||typeof value.reason!=='string'||!value.reason||Buffer.byteLength(value.reason)>500||!MANAGED.test(value.preWithdrawalLatestFilename)||!Number.isFinite(Date.parse(value.operationTimestamp))) block('INVALID_WITHDRAWAL_METADATA');
+ if (!exactKeys(value,METADATA_KEYS)||value.schemaVersion!=='1'||value.operationId!==operationId||!UUID.test(value.operationId)||!MANAGED(value.requestedFilename)||!strictRevisionLabel(value.revision)||!SHA.test(value.documentSha256)||!strictRevisionLabel(value.sourceRevision)||!MANAGED(value.sourceFilename)||typeof value.reason!=='string'||!value.reason||Buffer.byteLength(value.reason)>500||!MANAGED(value.preWithdrawalLatestFilename)||!Number.isFinite(Date.parse(value.operationTimestamp))) block('INVALID_WITHDRAWAL_METADATA');
  const identity=parseManagedRevisionFilename(value.requestedFilename);
  if (identity.revision!==value.revision||identity.sourceRevision!==value.sourceRevision||identity.sourceFilename!==value.sourceFilename||identity.revisionNumber===1) block('INVALID_WITHDRAWAL_METADATA_IDENTITY');
  if (!Array.isArray(value.artifacts)||value.artifacts.length!==3) block('INVALID_WITHDRAWAL_INVENTORY');
@@ -237,7 +247,7 @@ export async function findWithdrawal(input:{projectRoot:string;operationId?:stri
     if (sha256(bytes)!==artifact.sha256) block('WITHDRAWAL_ARTIFACT_SHA_MISMATCH');
     artifacts.push({...artifact,absolutePath,bytes});
    }
-   const document=artifacts.find(artifact=>artifact.publicRelativePath.startsWith('proposals/'))!;
+   const document=artifacts.find(artifact=>artifact.publicRelativePath.startsWith(`${artifactConfig.directory}/`))!;
    const stateArtifact=artifacts.find(artifact=>artifact.publicRelativePath.includes('/state/'))!;
    const receiptArtifact=artifacts.find(artifact=>artifact.publicRelativePath.includes('/receipts/'))!;
    if (!document.bytes.subarray(0,MARKER.length).equals(MARKER)||sha256(document.bytes)!==metadata.documentSha256) block('WITHDRAWAL_DOCUMENT_IDENTITY_MISMATCH');
@@ -292,12 +302,12 @@ export type CanonicalManagedRevisionInventory =
 export async function readCanonicalManagedRevisionInventory(projectRoot:string):Promise<CanonicalManagedRevisionInventory> {
  try {
   const root=await canonicalRoot(projectRoot);
-  const entries=await readdir(join(root,'proposals'),{withFileTypes:true});
+  const entries=await readdir(join(root,artifactConfig.directory),{withFileTypes:true});
   const revisions:Array<{filename:string;revision:string;documentSha256:string;revisionNumber:number}>=[];
   for(const entry of entries) {
-   if(!entry.isFile()||!MANAGED.test(entry.name)) continue;
+   if(!entry.isFile()||!MANAGED(entry.name)) continue;
    const identity=parseManagedRevisionFilename(entry.name);
-   const document=await regularBytes(root,join(root,'proposals',entry.name),'MANAGED_DOCUMENT_MISSING');
+   const document=await regularBytes(root,join(root,artifactConfig.directory,entry.name),'MANAGED_DOCUMENT_MISSING');
    if(!document.subarray(0,MARKER.length).equals(MARKER)) block('UNMANAGED_REVISION');
    const documentSha256=sha256(document);
    const state=parseJson(await regularBytes(root,derivedStatePath(root,entry.name),'MANAGED_STATE_MISSING'),'MALFORMED_MANAGED_STATE');

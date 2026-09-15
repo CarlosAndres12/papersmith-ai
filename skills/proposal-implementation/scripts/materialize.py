@@ -15,17 +15,27 @@ neutral fixture kit instead: a paper forge must not carry one paper's content.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-# The one-way dependency this file's own docstring claims:
-# `implementation_cli.py`, the production engine, never imports this script;
-# this script imports the engine. `writable_at_scaffold_time` used to be
-# defined twice — once here, once (now) as the production check
-# `materialize --stage scaffold` refuses on (`STAGE_CANNOT_ANSWER`) — and a
-# duplicate is exactly how the two could drift without either copy being
-# wrong on its own.
-from implementation_cli import IGNORE_ENTRIES, writable_at_scaffold_time  # noqa: F401
+# The one-way dependency this file's own docstring claims: the production
+# engine never imports this script; this script imports the engine.
+# `writable_at_scaffold_time` used to be defined twice — once here, once
+# (now) as the production check `materialize --stage scaffold` refuses on
+# (`STAGE_CANNOT_ANSWER`) — and a duplicate is exactly how the two could
+# drift without either copy being wrong on its own.
+#
+# Cut 1 (`the-engine-leaves-its-skill`): the engine now lives under
+# `_core/implementation/engine/`, serves no domain of its own, and refuses
+# to start without a profile -- this script is a second host reaching it,
+# exactly the way the published launcher (`implementation_cli.py`, now a
+# 22-line hand-over, never re-exporting the engine's own names) does.
+_HERE = Path(__file__).resolve()
+os.environ.setdefault("IMPLEMENTATION_DOMAIN_PROFILE",
+                      str(_HERE.parents[1] / "impl_profile.py"))
+sys.path.insert(0, str(_HERE.parents[2] / "_core" / "implementation" / "engine"))
+from implementation_engine import IGNORE_ENTRIES, writable_at_scaffold_time  # noqa: E402,F401
 
 DEFAULT_KIT = Path(__file__).resolve().parents[1] / "assets" / "kit"
 

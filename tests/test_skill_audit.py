@@ -395,6 +395,17 @@ def run_cli(*argv, cwd=None, timeout=60):
         shell=False, capture_output=True, text=True, timeout=timeout)
 
 
+import orphan_sweep
+
+
+def setUpModule() -> None:
+    """This suite materializes fixtures inside the live repository, because
+    the code under test resolves its workspace from `FORGE_ROOT` and offers
+    no override. Its own `addCleanup` handles the normal exit; nothing
+    handles a killed process. Sweeping first means a previous run's corpse
+    cannot be read as this run's evidence -- which has produced failures
+    pointing at entirely the wrong defect."""
+    orphan_sweep.sweep_and_report()
 class SkillHouseShapeTests(unittest.TestCase):
     """The skill exists, in the shape the five existing skills actually have.
 
@@ -704,6 +715,28 @@ class VocabularyTests(unittest.TestCase):
             thin, {},
             "a lexicon entry has to say why the forge owns the word")
 
+    #: Exemptions to the floor guard below, admitted one `(file, word)` pair at
+    #: a time with the argument written down here rather than in a commit
+    #: message — the same discipline `forge_vocabulary.FORGE_SERVICE_VOCABULARY`
+    #: documents for its own file-level exemptions. `SKILL.md`'s own asset
+    #: table (`## The shipped files`) exists so that a shipped file is never
+    #: undeclared -- this skill's own account of the `remote-execution` gap
+    #: (same section) is what that omission costs. `kaggle-accounts` is one of
+    #: five subjects this change adds an `accepted-operations` recipe for, and
+    #: it is the first subject in this skill's own history whose name IS the
+    #: one hosted-service word the floor bans. Leaving its row out of the
+    #: table to keep this guard green would silently recreate the exact
+    #: undeclared-file defect the table exists to prevent; renaming the
+    #: recipe to dodge the word would break the `<subject>.<surface>.json`
+    #: naming every other recipe in `references/probes/` already follows,
+    #: trading a real gap for a cosmetic one. The word appears here in
+    #: exactly one place -- the asset table's path cell for that one file --
+    #: naming the subject `skill-audit` was pointed at, never adopting it as
+    #: this skill's own vocabulary.
+    _FLOOR_EXEMPTIONS = {
+        ("SKILL.md", "kaggle"),
+    }
+
     def test_no_floor_word_appears_in_the_skill_itself(self):
         """The floor, applied — not merely declared.
 
@@ -717,6 +750,8 @@ class VocabularyTests(unittest.TestCase):
         for path in shipped:
             text = path.read_text(encoding="utf-8").lower()
             for word in FORGE_VOCABULARY_FLOOR:
+                if (path.name, word) in self._FLOOR_EXEMPTIONS:
+                    continue
                 with self.subTest(path=path.name, word=word):
                     self.assertNotIn(
                         word, text,
@@ -1285,6 +1320,145 @@ class TokenPresenceTests(BoxMixin, unittest.TestCase):
             "is not one of", completed.stdout + completed.stderr,
             "omitting the key must not produce a refusal; a probe built on "
             "token-absence would recover no roster at all")
+
+
+class MinInterpreterVersionTests(BoxMixin, unittest.TestCase):
+    """K5: a recipe whose subject needs a newer interpreter than whatever
+    `python3` resolves to on this machine's `PATH` -- `remote-execution`'s
+    `adapter.py` imports `Callable[[], tuple[int, int] | None]` at module
+    load, which is a `TypeError` under 3.9 and fine under 3.10+ -- must
+    either find a satisfying interpreter elsewhere on `PATH` and derive
+    normally, or refuse by naming both versions. It must never fall back to
+    the bare, causeless `unprobeable` a mismatched `exit` produces today.
+
+    Both fixtures here are synthetic shims rather than the real system
+    `python3`, so this suite proves the mechanism without depending on
+    which CPython minor releases happen to be installed wherever it runs.
+    """
+
+    #: A subject only importable under Python >= 3.10: the exact construct
+    #: from the measured defect (`adapter.py:373`), followed by an
+    #: `argparse` refusal so a successful run still yields a roster.
+    SUBJECT_SOURCE = (
+        "from typing import Callable\n"
+        "X = Callable[[], tuple[int, int] | None]\n"
+        "import argparse\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('op', choices=['fetch', 'poll'])\n"
+        "parser.parse_args()\n"
+    )
+
+    EXTRACT = r"invalid choice: '__AUDIT_NONCE__' \(choose from (?P<roster>[^)]+)\)"
+
+    #: A `python3` shim that behaves exactly like this machine's real
+    #: `/usr/bin/python3` against `SUBJECT_SOURCE`: reports 3.9.6, and dies
+    #: importing the subject before `argparse` is ever reached.
+    BAD_PYTHON3 = (
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then echo 'Python 3.9.6'; exit 0; fi\n"
+        "echo \"TypeError: unsupported operand type(s) for |\" 1>&2\n"
+        "exit 1\n"
+    )
+
+    def _good_python_shim(self, reported_version):
+        """A shim that CLAIMS `reported_version` for `--version` but
+        delegates every other call to the real interpreter running this
+        test suite -- which is a genuine >=3.10, so the subject really
+        does run, and a real `argparse` refusal is what comes back."""
+        return (
+            "#!/bin/sh\n"
+            f"if [ \"$1\" = \"--version\" ]; then echo 'Python {reported_version}'; exit 0; fi\n"
+            f"exec \"{sys.executable}\" \"$@\"\n"
+        )
+
+    def _shim(self, binroot, name, script):
+        path = binroot / name
+        path.write_text(script, encoding="utf-8")
+        path.chmod(0o755)
+        return path
+
+    def _run_roster(self, box, spec, path_dirs):
+        env = dict(os.environ, PATH=os.pathsep.join(str(d) for d in path_dirs))
+        result = subprocess.run(
+            [sys.executable, str(CLI), "roster", "--subject", str(box),
+             "--probe-spec", str(spec), "--repo-root", str(box)],
+            cwd=str(box), shell=False, capture_output=True, text=True,
+            timeout=60, env=env)
+        try:
+            return result, json.loads(result.stdout)
+        except json.JSONDecodeError:
+            raise AssertionError(
+                f"roster exited {result.returncode} without JSON on "
+                f"stdout.\nstdout={result.stdout!r}\nstderr={result.stderr!r}")
+
+    def test_a_newer_interpreter_on_path_is_found_and_used(self):
+        box = self.make_box("min_interp_found")
+        self.write(box, "subject.py", self.SUBJECT_SOURCE)
+        binroot = box / "bin"
+        binroot.mkdir()
+        self._shim(binroot, "python3", self.BAD_PYTHON3)
+        self._shim(binroot, "python3.12", self._good_python_shim("3.12.9"))
+        spec = self.recipe(
+            box, surface="s", probe="refusal",
+            argv=["python3", "subject.py", "__AUDIT_NONCE__"], cwd=".",
+            stream="stderr", exit=2, extract=self.EXTRACT, split=", ",
+            minInterpreterVersion="3.10", doctrineSites=[])
+
+        result, payload = self._run_roster(box, spec, [binroot])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(payload["code"]), ["fetch", "poll"])
+
+    def test_no_satisfying_interpreter_names_both_versions(self):
+        box = self.make_box("min_interp_missing")
+        self.write(box, "subject.py", self.SUBJECT_SOURCE)
+        binroot = box / "bin"
+        binroot.mkdir()
+        self._shim(binroot, "python3", self.BAD_PYTHON3)
+        spec = self.recipe(
+            box, surface="s", probe="refusal",
+            argv=["python3", "subject.py", "__AUDIT_NONCE__"], cwd=".",
+            stream="stderr", exit=2, extract=self.EXTRACT, split=", ",
+            minInterpreterVersion="3.10", doctrineSites=[])
+
+        result, payload = self._run_roster(box, spec, [binroot])
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(payload["status"], "unprobeable")
+        self.assertIn("3.10", payload["error"])
+        self.assertIn("3.9.6", payload["error"])
+        self.assertNotEqual(
+            payload["error"].strip(), "",
+            "a refusal must name the cause, never stand in silently behind "
+            "the bare unprobeable status")
+
+
+class RemoteExecutionMinInterpreterTests(unittest.TestCase):
+    """K5, against the real `remote-execution` subject and this machine's
+    real `PATH` -- no shim. Reproduces the measured defect exactly: system
+    `python3` is 3.9.6, `adapter.py` needs >= 3.10 at import time. Fixed
+    means this now derives, the way it already does when `PATH` happens to
+    put a >=3.10 `python3` first."""
+
+    REMOTE_EXECUTION = FORGE / "skills" / "remote-execution"
+    ACCEPTED_OPS_SPEC = PROBES / "remote-execution.accepted-operations.json"
+    SMOKE_SUBS_SPEC = PROBES / "remote-execution.smoke-subcommands.json"
+
+    def test_accepted_operations_derives_the_full_roster(self):
+        result, payload = roster_json(self.ACCEPTED_OPS_SPEC, self.REMOTE_EXECUTION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["unregistered"], [])
+        self.assertEqual(payload["phantom"], [])
+        self.assertEqual(
+            sorted(payload["code"]),
+            ["distribute", "fetch", "generate-job", "poll", "readiness",
+             "reconcile", "smoke", "status", "submit"])
+
+    def test_smoke_subcommands_derives_without_phantom_or_unregistered(self):
+        result, payload = roster_json(self.SMOKE_SUBS_SPEC, self.REMOTE_EXECUTION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["unregistered"], [])
+        self.assertEqual(payload["phantom"], [])
 
 
 class SelfAuditSubcommandRosterTests(unittest.TestCase):
@@ -8704,3 +8878,107 @@ class EnumerationReachCardinalityTests(unittest.TestCase):
             set(cli.ENUMERATION_SOURCES),
             {"derived", "literal-collection", "single-namespace",
              "filtered-subset"})
+
+
+class RosterProbeEnvironmentTests(unittest.TestCase):
+    """A roster probe must derive from its SUBJECT, not from whatever the
+    parent process happens to be carrying.
+
+    `constructed_child_env` exists for exactly this and says so: "this
+    allowlist exists to keep a driver from inheriting the whole environment".
+    It was applied to driven steps and never to `probe_code_side`, which
+    called `subprocess.run` with no `env=` at all -- so the subject inherited
+    everything, including the variable that decides which domain a shared
+    engine serves.
+
+    Measured before this test existed: the two-document host's own refusal
+    names 21 verbs, and 20 under an inherited sibling profile, because `agree`
+    is registered only where `len(DOCUMENTS) > 1`. The auditor reported the
+    sibling's behaviour under this subject's name and called it derived. That
+    is worse than a wrong count: it is the wrong subject, silently.
+    """
+
+    SUBJECT = FORGE / "skills" / "experimental-implementation"
+    SPEC = PROBES / "experimental-implementation.accepted-operations.json"
+    SIBLING_PROFILE = (FORGE / "skills"
+                       / "proposal-implementation" / "impl_profile.py")
+
+    def test_an_ambient_domain_profile_cannot_redirect_the_subject(self):
+        previous = os.environ.get("IMPLEMENTATION_DOMAIN_PROFILE")
+        os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = str(self.SIBLING_PROFILE)
+        try:
+            _result, payload = roster_json(self.SPEC, self.SUBJECT)
+        finally:
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_DOMAIN_PROFILE", None)
+            else:
+                os.environ["IMPLEMENTATION_DOMAIN_PROFILE"] = previous
+        self.assertIn(
+            "agree", payload.get("code", []),
+            "the subject was driven under an inherited profile: `agree` is "
+            "registered only where a second document exists, so its absence "
+            "means the auditor read the sibling and reported it as this one")
+
+
+class NewlyCoveredSubjectRosterTests(unittest.TestCase):
+    """M16: the auditor barely audited the forge -- four of nine skills held
+    an `accepted-operations` recipe, and `paper-ingestion`,
+    `experimental-deliberation`, `experimental-implementation`,
+    `kaggle-accounts` and `paper-writing` held none. A recipe that cannot
+    derive a real roster is a recipe that does not work, so every one of the
+    five recipes this change adds is driven here for real, against its own
+    live subject on disk -- never a fixture standing in for it.
+
+    `paper-ingestion` has no CLI subcommand roster at all (`extract_pdf.py`
+    takes flags, not a verb), so its recipe derives the accepted-flag set out
+    of `argparse`'s own usage line instead of an `invalid choice` message --
+    still the subject's own words, never a second parser of its source.
+    """
+
+    SKILLS = FORGE / "skills"
+
+    #: (subject directory name, expected accepted-operations count). The
+    #: count is asserted rather than re-derived here, for the same reason
+    #: `RefusalProbeTests.test_the_refusal_yields_the_accepted_set` above
+    #: hardcodes `9` for `proposal-deliberation`: it is the number the
+    #: subject's own refusal names today, and a real change to that number
+    #: is exactly what a hardcoded count exists to catch.
+    _CASES = (
+        ("paper-ingestion", 4),
+        ("experimental-deliberation", 9),
+        ("experimental-implementation", 22),
+        ("kaggle-accounts", 5),
+        ("paper-writing", 17),
+    )
+
+    def test_each_new_recipe_derives_a_real_nonempty_roster(self):
+        for name, expected_count in self._CASES:
+            with self.subTest(subject=name):
+                subject = self.SKILLS / name
+                spec = PROBES / f"{name}.accepted-operations.json"
+                self.assertTrue(spec.is_file(), f"no shipped recipe at {spec}")
+                result, payload = roster_json(spec, subject)
+                self.assertEqual(result.returncode, 0, payload)
+                self.assertNotEqual(
+                    payload["code"], [],
+                    "an empty roster is an inability to look wearing a "
+                    "comparison's shape")
+                self.assertEqual(
+                    len(payload["code"]), expected_count,
+                    f"{name}'s own refusal named a different set today: "
+                    f"{payload['code']}")
+
+    def test_every_new_recipe_declares_itself_in_the_shipped_files_table(self):
+        """`SKILL.md`'s own `## The shipped files` table is this skill's
+        closed roster of what it ships; a probe file with no row is the exact
+        undeclared-file defect the table's own prose warns about
+        (`remote-execution.accepted-operations.json`, shipped one commit
+        before its own row landed)."""
+        text = SKILL_MD.read_text(encoding="utf-8")
+        for name, _ in self._CASES:
+            with self.subTest(subject=name):
+                row_path = f"references/probes/{name}.accepted-operations.json"
+                self.assertIn(
+                    row_path, text,
+                    f"{row_path} ships without a row in SKILL.md's own "
+                    "shipped-files table")

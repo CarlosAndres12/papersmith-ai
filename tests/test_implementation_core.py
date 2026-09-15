@@ -12,6 +12,8 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +35,12 @@ import impl_references  # noqa: E402
 import impl_refusals  # noqa: E402
 
 CLI_SCRIPT = REPOSITORY_ROOT / "skills/proposal-implementation/scripts/implementation_cli.py"
+#: The engine source (meaning 2, design.md M2): what `CoreNamesNoDomainTests`
+#: reads for `PRODUCT_DIRS`/`SOURCE_ROOTS` -- the launcher above exposes
+#: none of the engine's attributes (design.md D1), so this lock must load
+#: the engine directly, never the launcher it used to be the same file as.
+ENGINE_SCRIPT = (REPOSITORY_ROOT
+                 / "skills/_core/implementation/engine/implementation_engine.py")
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -181,6 +189,26 @@ class DirtyWorktreeGuardTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "DIRTY_WORKTREE")
 
 
+class NonForgeInterpreterGuardTests(unittest.TestCase):
+    """`require_non_forge_interpreter`: TANDA B M3 -- `cmd_env`'s sole call,
+    with no test anywhere before this. Isolation between the forge's own
+    venvs and a target's is enforced by this alone."""
+
+    def setUp(self) -> None:
+        self._original_prefix = sys.prefix
+        self.addCleanup(setattr, sys, "prefix", self._original_prefix)
+
+    def test_a_forge_owned_venv_prefix_is_refused(self):
+        sys.prefix = str(impl_layout.FORGE_ROOT / "skills" / "some-skill" / ".venv")
+        with self.assertRaises(impl_refusals.Refused) as caught:
+            impl_guards.require_non_forge_interpreter()
+        self.assertEqual(caught.exception.code, "FORGE_INTERPRETER")
+
+    def test_a_target_or_system_interpreter_is_accepted(self):
+        sys.prefix = str(impl_layout.WORKSPACE / "some-target" / ".venv")
+        self.assertIsNone(impl_guards.require_non_forge_interpreter())
+
+
 class PrefixMappingTests(unittest.TestCase):
     """Moves break paths exactly as renames do, and the mapping is what fixes them."""
 
@@ -204,6 +232,132 @@ class PrefixMappingTests(unittest.TestCase):
             [])
 
 
+class ReferencePatternAnchoringTests(unittest.TestCase):
+    """`is_nesting` and `reference_pattern`'s anchoring: TANDA B M2 -- had
+    no test anywhere, and decides whether `scan_reference_updates` double
+    counts an already-migrated path."""
+
+    def test_is_nesting_true_when_new_merely_nests_old_deeper(self):
+        self.assertTrue(impl_references.is_nesting("Cat", "Name/Cat"))
+
+    def test_is_nesting_false_for_a_pure_rename(self):
+        self.assertFalse(impl_references.is_nesting("Alpha", "Beta"))
+
+    def test_unanchored_pattern_matches_mid_path(self):
+        pattern = impl_references.reference_pattern("Images/", "path prefix", False)
+        self.assertIsNotNone(pattern.search(".../blob/main/Images/Cats/"))
+
+    def test_anchored_pattern_refuses_a_mid_path_hit(self):
+        """An already-migrated `Name/Category/` must not read as a fresh hit
+        of the bare `Category/` prefix -- only a boundary-preceded one counts."""
+        pattern = impl_references.reference_pattern("Category/", "path prefix", True)
+        self.assertIsNone(pattern.search("Name/Category/x.csv"))
+        self.assertIsNotNone(pattern.search("Category/x.csv"))
+
+
+class ScanReferenceUpdatesTests(unittest.TestCase):
+    """`scan_reference_updates`: TANDA B M2 -- `return []` here leaves
+    `plan`'s `referenceUpdates` and `apply`'s rewrite silently empty."""
+
+    def _tmp(self) -> Path:
+        d = Path(tempfile.mkdtemp(prefix="_core_refs_"))
+        self.addCleanup(shutil.rmtree, d, True)
+        return d
+
+    def test_a_pure_rename_is_found_anywhere_in_the_path(self):
+        target = self._tmp()
+        (target / "doc.md").write_text(".../blob/main/Images/Cats/x.csv\n")
+        updates = impl_references.scan_reference_updates(
+            target, [("Images", "Renamed")], ["doc.md"])
+        self.assertEqual(len(updates), 1)
+        self.assertEqual(updates[0]["occurrences"], 1)
+        self.assertFalse(updates[0]["anchored"])
+
+    def test_a_nesting_mapping_is_anchored_and_does_not_double_count(self):
+        target = self._tmp()
+        (target / "doc.md").write_text(
+            "Name/Category/x.csv and Category/y.csv\n")
+        updates = impl_references.scan_reference_updates(
+            target, [("Category", "Name/Category")], ["doc.md"])
+        self.assertEqual(len(updates), 1)
+        self.assertTrue(updates[0]["anchored"])
+        self.assertEqual(updates[0]["occurrences"], 1)
+
+    def test_identical_old_and_new_is_skipped(self):
+        target = self._tmp()
+        (target / "doc.md").write_text("Alpha/x\n")
+        self.assertEqual(
+            impl_references.scan_reference_updates(
+                target, [("Alpha", "Alpha")], ["doc.md"]),
+            [])
+
+    def test_a_quoted_single_segment_rename_is_flagged_too(self):
+        target = self._tmp()
+        (target / "doc.py").write_text('root = "Alpha"\n')
+        updates = impl_references.scan_reference_updates(
+            target, [("Alpha", "Beta")], ["doc.py"])
+        self.assertIn("quoted path segment", {u["kind"] for u in updates})
+
+
+class ScanStaleReferencesTests(unittest.TestCase):
+    """`scan_stale_references`: TANDA B M2 -- `return []` here leaves
+    `verify`'s `structure.staleReferences` permanently empty, un-gating
+    `structure_ok`."""
+
+    PATTERN = (re.compile(r"([A-Za-z]+)/([A-Za-z]+)"),)
+
+    def _tmp(self) -> Path:
+        d = Path(tempfile.mkdtemp(prefix="_core_stale_"))
+        self.addCleanup(shutil.rmtree, d, True)
+        return d
+
+    def test_a_reference_to_a_populated_directory_is_not_stale(self):
+        target = self._tmp()
+        (target / "Images" / "Cats").mkdir(parents=True)
+        (target / "Images" / "Cats" / "a.jpg").write_text("x")
+        (target / "doc.md").write_text("see Images/Cats\n")
+        self.assertEqual(
+            impl_references.scan_stale_references(
+                target, "OtherProduct", ["doc.md"], self.PATTERN),
+            [])
+
+    def test_a_reference_to_a_missing_directory_is_stale(self):
+        target = self._tmp()
+        (target / "doc.md").write_text("see Images/Cats\n")
+        self.assertEqual(
+            impl_references.scan_stale_references(
+                target, "OtherProduct", ["doc.md"], self.PATTERN),
+            [{"file": "doc.md", "references": ["Images/Cats"]}])
+
+    def test_an_empty_directory_a_git_mv_left_behind_still_reads_stale(self):
+        target = self._tmp()
+        (target / "Images" / "Cats").mkdir(parents=True)
+        (target / "doc.md").write_text("see Images/Cats\n")
+        self.assertEqual(
+            impl_references.scan_stale_references(
+                target, "OtherProduct", ["doc.md"], self.PATTERN),
+            [{"file": "doc.md", "references": ["Images/Cats"]}])
+
+    def test_a_directory_holding_only_gitkeep_reads_as_unresolved_too(self):
+        target = self._tmp()
+        holder = target / "Images" / "Cats"
+        holder.mkdir(parents=True)
+        (holder / ".gitkeep").write_text("")
+        (target / "doc.md").write_text("see Images/Cats\n")
+        self.assertEqual(
+            impl_references.scan_stale_references(
+                target, "OtherProduct", ["doc.md"], self.PATTERN),
+            [{"file": "doc.md", "references": ["Images/Cats"]}])
+
+    def test_a_reference_naming_the_current_folder_is_exempt(self):
+        target = self._tmp()
+        (target / "doc.md").write_text("see Images/Cats\n")
+        self.assertEqual(
+            impl_references.scan_stale_references(
+                target, "Images", ["doc.md"], self.PATTERN),
+            [])
+
+
 class CoreNamesNoDomainTests(unittest.TestCase):
     """The core that names one domain is a core only one skill can use.
 
@@ -213,7 +367,11 @@ class CoreNamesNoDomainTests(unittest.TestCase):
 
     @staticmethod
     def _cli_module():
-        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", CLI_SCRIPT)
+        os.environ.setdefault(
+            "IMPLEMENTATION_DOMAIN_PROFILE",
+            str(REPOSITORY_ROOT
+               / "skills/proposal-implementation/impl_profile.py"))
+        spec = importlib.util.spec_from_file_location("impl_cli_for_lock", ENGINE_SCRIPT)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -241,6 +399,27 @@ class CoreNamesNoDomainTests(unittest.TestCase):
         self.assertTrue((impl_layout.FORGE_ROOT / "skills").is_dir())
         self.assertEqual(impl_layout.WORKSPACE,
                          REPOSITORY_ROOT / "implementations")
+
+
+class ZeroBareDataLiteralTests(unittest.TestCase):
+    """F5's class finished (`a-data-directory-somebody-can-owe`, B1,
+    design.md D6, task 5.2): `PRODUCT_DATA` taken off the CLI -- never
+    hardcoded here -- and asserted to appear quoted exactly once in the
+    engine's own source: the `PRODUCT_DIRS` tuple. Every other former
+    bare `"Data"` site (`classify`, `build_plan`'s `with_data`
+    expression, `cmd_verify`) now reads `PRODUCT_DATA`, never the
+    literal; derived from the CLI rather than restated, this holds a
+    fifth product category to the same rule the day one appears."""
+
+    def test_the_quoted_literal_appears_exactly_once(self):
+        cli = CoreNamesNoDomainTests._cli_module()
+        needle = f'"{cli.PRODUCT_DATA}"'
+        source = ENGINE_SCRIPT.read_text(encoding="utf-8")
+        self.assertEqual(
+            source.count(needle), 1,
+            f"{needle!r} must appear quoted exactly once in the engine's "
+            "own source -- the PRODUCT_DIRS tuple -- with every other "
+            "bare-Data site reading PRODUCT_DATA instead")
 
 
 class UnbackedTickTests(unittest.TestCase):

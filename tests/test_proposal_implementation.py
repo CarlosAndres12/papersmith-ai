@@ -28,12 +28,24 @@ import unittest.mock
 from pathlib import Path
 
 FORGE = Path(__file__).resolve().parents[1]
+#: The published launcher (meaning 1: what a reader runs, what
+#: `CLI_INVOCATION` names) and, unchanged, the skill root's own anchor
+#: (meaning 3: `CLI.parent.parent`, below) -- this path never moved.
 CLI = FORGE / "skills/proposal-implementation/scripts/implementation_cli.py"
-sys.path.insert(0, str(CLI.parent))
-import implementation_cli as impl  # noqa: E402  (path set above)
-# `implementation_cli`'s own import of `impl_layout` etc. already put
-# `_core/implementation` on `sys.path`; this reaches the same module the CLI
-# reads its position grammar through, never a second copy.
+#: The engine source (meaning 2: what source-reading guards parse, and what
+#: `impl` resolves to below) -- separate from `CLI` since the launcher
+#: deliberately exposes none of the engine's own attributes (design.md D1,
+#: `tests/test_implementation_profile.py
+#: ::LauncherExposesNoEngineAttributeTests`).
+ENGINE = FORGE / "skills/_core/implementation/engine/implementation_engine.py"
+os.environ.setdefault(
+    "IMPLEMENTATION_DOMAIN_PROFILE",
+    str(FORGE / "skills/proposal-implementation/impl_profile.py"))
+sys.path.insert(0, str(ENGINE.parent))
+import implementation_engine as impl  # noqa: E402  (path set above)
+# `implementation_engine`'s own import of `impl_layout` etc. already put
+# `_core/implementation` on `sys.path`; this reaches the same module the
+# engine reads its position grammar through, never a second copy.
 import impl_availability  # noqa: E402
 import impl_position  # noqa: E402
 import impl_steps  # noqa: E402
@@ -391,6 +403,17 @@ def doctrine_scaffold(case, name="Example-Method", seed="7",
     return box
 
 
+import orphan_sweep
+
+
+def setUpModule() -> None:
+    """This suite materializes fixtures inside the live repository, because
+    the code under test resolves its workspace from `FORGE_ROOT` and offers
+    no override. Its own `addCleanup` handles the normal exit; nothing
+    handles a killed process. Sweeping first means a previous run's corpse
+    cannot be read as this run's evidence -- which has produced failures
+    pointing at entirely the wrong defect."""
+    orphan_sweep.sweep_and_report()
 class NormalizeNameTests(unittest.TestCase):
     def assertPair(self, raw, directory, package):
         resolved = impl.normalize_name(raw)
@@ -448,6 +471,85 @@ class NormalizeNameTests(unittest.TestCase):
             twice = impl.normalize_name(once["directory"])
             self.assertEqual(once["directory"], twice["directory"], raw)
             self.assertEqual(once["package"], twice["package"], raw)
+
+
+class NameRefusalRosterTests(unittest.TestCase):
+    """SKILL.md's `name` row publishes a CLOSED roster of four still-live
+    refusal codes. A roster that names a code the guard can no longer raise
+    is exactly the defect this file's other roster tests already close in
+    the opposite direction (a code raised but never documented) -- so this
+    holds it both ways: every documented code must actually fire, and
+    nothing fires that is not documented.
+
+    Held to one concrete trigger per code rather than to fuzzing: fuzzing
+    proves a rate, a trigger proves reachability, and reachability is the
+    only claim the roster makes.
+    """
+
+    ROW_MARKER = "| `name` |"
+
+    def name_row(self) -> str:
+        text = SKILL_MD.read_text(encoding="utf-8")
+        row = next((line for line in text.splitlines()
+                    if line.startswith(self.ROW_MARKER)), None)
+        self.assertIsNotNone(row, "SKILL.md carries no `name` row to read a roster from")
+        return row
+
+    def documented_codes(self) -> set[str]:
+        row = self.name_row()
+        sentence = row[row.index("Refuses"):]
+        return set(re.findall(r"`(NAME_[A-Z_]+)`", sentence))
+
+    #: One `raw` per documented code, chosen so `normalize_name` raises that
+    #: exact code and no other -- the reachability proof itself.
+    TRIGGERS = {
+        "NAME_EMPTY": "",
+        "NAME_HAS_NO_WORDS": "-_-",
+        "NAME_NOT_ALPHANUMERIC": "café",
+        "NAME_STARTS_WITH_DIGIT": "2tolla",
+    }
+
+    def raised_code(self, raw):
+        try:
+            impl.normalize_name(raw)
+        except impl.NameRefused as refused:
+            return str(refused).partition(":")[0]
+        return None
+
+    def test_the_documented_roster_is_exactly_the_four_name_codes(self):
+        self.assertEqual(
+            self.documented_codes(), set(self.TRIGGERS),
+            "SKILL.md's `name` row documents a different set of codes than "
+            "this test holds triggers for -- the roster and the fixture "
+            "must be updated together")
+
+    def test_every_documented_code_is_actually_reachable(self):
+        # This is the measured defect: NAME_NOT_ALPHANUMERIC's guard sat
+        # behind a tokenizer that only ever emitted already-alphanumeric
+        # tokens, so the guard two lines below it could never see a token
+        # that failed it. "café" is that reachability proof for the code
+        # that used to have none.
+        for code, raw in self.TRIGGERS.items():
+            with self.subTest(code=code):
+                self.assertEqual(
+                    self.raised_code(raw), code,
+                    f"SKILL.md publishes {code!r} as a live refusal on "
+                    f"`name`, but {raw!r} did not raise it")
+
+    def test_non_ascii_letters_are_refused_not_silently_dropped(self):
+        # The behaviour the reachable guard replaces: before this, a
+        # character no ASCII pattern matched simply vanished from the
+        # name instead of being refused -- "münchen" silently became
+        # "M-Nchen". Refusing is what "café" above already proves;
+        # this pins the corruption it replaces as the reason.
+        with self.assertRaises(impl.NameRefused):
+            impl.normalize_name("münchen")
+
+    def test_ascii_only_names_still_pass_the_alphanumeric_guard(self):
+        # The other direction: an ASCII-only name must not start failing
+        # the same guard that now also catches non-ASCII input.
+        for raw in ("fem tolla", "FEM-TOLLA", "femTolla", "tolla v2"):
+            impl.normalize_name(raw)  # must not raise
 
 
 class NameCommandTests(unittest.TestCase):
@@ -2327,7 +2429,7 @@ class CouplingSurfacingTests(unittest.TestCase):
         Found by mutation: removing `+ sequence_block_detail(...)` from the
         refusal cost nothing until this existed.
         """
-        arbol = ast.parse(CLI.read_text(encoding="utf-8"))
+        arbol = ast.parse(ENGINE.read_text(encoding="utf-8"))
         sitios = [
             nodo for nodo in ast.walk(arbol)
             if isinstance(nodo, ast.Call)
@@ -2831,7 +2933,7 @@ class AgreementWitnessThreeStateTests(unittest.TestCase):
         returns disagree on their key set -- the same uniform-key-set
         doctrine `position_state`'s own docstring states for itself.
         """
-        keys = returned_keys(CLI, "agreements_state")
+        keys = returned_keys(ENGINE, "agreements_state")
         self.assertIn("witness", keys)
         self.assertIn("note", keys)
 
@@ -3835,7 +3937,7 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
 class ResolverCrossReaderAgreementTests(unittest.TestCase):
     """A declaration living only in `config.py` must not be a split verdict.
 
-    Before the resolver, `unreached_mathematics`'s caller and `verify`'s
+    Before the resolver, `unreached_modules`'s caller and `verify`'s
     `benchmark` block saw a `config.py`-only declaration while
     `report_contract`, `search_state` and `distribution_state` did not — the
     same declaration, four different answers. This walks `cmd_verify` end to
@@ -4766,7 +4868,7 @@ def _module(revision, sections, equations, imports=""):
 class UndeclaredArmsTests(unittest.TestCase):
     """An empty `arms` switches off the join nothing else in the flow crosses.
 
-    `unreached_mathematics`'s own docstring says it: "This is the join nothing
+    `unreached_modules`'s own docstring says it: "This is the join nothing
     else in the flow crosses." It reads `declaration["arms"]` to build the map
     from section to claiming arm, so with `arms: {}` the map is empty, every
     module's `declaredBy` comes back empty, and the answer is `[]` -- whatever
@@ -6150,6 +6252,14 @@ class ForgeVocabularyDefinitionTests(unittest.TestCase):
 #: the other fails on an admission whose file no longer carries the word, so an
 #: entry cannot outlive the argument that bought it.
 FORGE_FLOOR_SURFACE_ADMISSIONS: dict[str, dict[str, str]] = {
+    "skill-audit/SKILL.md": {
+        "kaggle": "one row of the asset table, naming the probe recipe whose "
+                  "SUBJECT is the skill three entries below -- the word is in "
+                  "that skill's own directory name, so an asset table listing "
+                  "the recipe cannot avoid it without ceasing to say which "
+                  "recipe it means. Not a loan from any research project: the "
+                  "auditor names what it audits",
+    },
     "kaggle-accounts/SKILL.md": {
         "kaggle": "this skill's entire subject is one hosted service's "
                   "accounts, named in its own directory name and its doctrine's "
@@ -6859,6 +6969,51 @@ class LatestRevisionDiscoveryTests(unittest.TestCase):
         self.assertIsNone(impl.latest_revision(None))
 
 
+class NonRevisionSha256ScalarsAreDocumentCountInvariantTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 12, design.md D2/C6):
+    `cmd_verify`'s `module["stale"]` (over `prov.get("revision")`),
+    `benchmark`'s `built_against`/`staleRevision`, `admissibility_record`'s
+    returned `revision`, and `fidelity`'s `latestRevision`/`revisionSource`.
+
+    **Measured finding, recorded rather than silently absorbed** (per this
+    session's own findings policy): all five reads compare or report a
+    revision NAME (`args.revision`/a module's own declared string), never a
+    per-document content hash. A revision's name is, by this cut's own
+    central design (M5, D1b: one name resolved against every declared
+    document's own directory), the SAME string across every document --
+    there is no second name for a second document to diverge into. None of
+    these five sites reference `DOCUMENTS`/`len(DOCUMENTS)` anywhere, and
+    none needs to: their Cut-3 shape is their Cut-2 shape, unedited,
+    confirmed here rather than assumed. This is NOT a shape change to the
+    deliverable -- it is the same "every scalar wire field keeps today's
+    exact shape" invariant D2's own table already states for every class,
+    applied to five reads whose natural per-document extension is empty.
+
+    No production code changes in this phase; this class is verification
+    only, locking the finding in rather than leaving it to be re-derived
+    (or silently invalidated by a later change) the next time a document
+    joins the profile.
+    """
+
+    def test_none_of_the_five_c6_sites_reference_documents_or_its_length(self):
+        source = ENGINE.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        cmd_verify = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "cmd_verify")
+        body = ast.get_source_segment(source, cmd_verify)
+        for anchor in ('module["stale"] = bool(revision) and module["revision"] != revision',
+                      'built_against = declaration.get("revision")',
+                      'stale_revision = bool(revision) and built_against != revision',
+                      '"latestRevision": revision,',
+                      '"revisionSource": "argument" if args.revision else ('):
+            self.assertIn(anchor, body, anchor)
+        admissibility_source = ast.get_source_segment(source, next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "admissibility_record"))
+        self.assertIn('"revision": record.get("revision")', admissibility_source)
+
+
 class VerifyDiscoversTheNewestRevisionTests(unittest.TestCase):
     """La costura, de punta a punta: el banco atado a una revisión vieja mientras
     en `proposals/` ya vive una más nueva, y nadie pasa `--revision`.
@@ -6980,6 +7135,78 @@ class VerifyAgreementWitnessTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout)
         agreements = json.loads(proc.stdout)["agreements"]
         self.assertEqual(agreements["witness"]["summary"], "1 of 2 witnessed")
+
+
+class FindingsDocumentRoutingTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 13, design.md D6/C7):
+    `well_formed`'s `document` requirement, `finding_impact`'s per-document
+    `class` mapping, and `remedy_compatibility`'s per-document notation
+    routing. All three are gated on the CALLER's own explicit argument --
+    `require_document`/`sources_by_document` -- never a module-level
+    document count read internally, so each stays directly testable
+    regardless of how many documents any particular process has loaded.
+    """
+
+    def test_valid_document_field_accepts_label_or_list_rejects_empty(self):
+        self.assertTrue(impl._valid_document_field("math"))
+        self.assertTrue(impl._valid_document_field(["math", "exp"]))
+        self.assertFalse(impl._valid_document_field(""))
+        self.assertFalse(impl._valid_document_field([]))
+        self.assertFalse(impl._valid_document_field(None))
+        self.assertFalse(impl._valid_document_field([""]))
+
+    def test_well_formed_demands_document_only_when_required(self):
+        findings = [{"id": "f1"}]
+        # Unchanged: not required by default, passes exactly as it always has.
+        self.assertEqual(impl.well_formed(findings), findings)
+        with self.assertRaises(impl.Refused) as ctx:
+            impl.well_formed(findings, require_document=True)
+        self.assertEqual(ctx.exception.code, "MALFORMED_FINDINGS")
+        self.assertIn("document", ctx.exception.detail)
+
+        named = [{"id": "f1", "document": "math"}]
+        self.assertEqual(impl.well_formed(named, require_document=True), named)
+
+    def test_finding_impact_stays_scalar_without_sources_by_document(self):
+        finding = {"id": "f1", impl.REMEDY_LOCUS_KEY: ["3.1"]}
+        result = impl.finding_impact(finding, "no citation here")
+        self.assertIsInstance(result["class"], str)
+
+    def test_finding_impact_becomes_per_document_when_sources_given(self):
+        finding = {"id": "f1", impl.REMEDY_LOCUS_KEY: ["3.1", "3.2"],
+                   "document": ["math", "exp"]}
+        sources = {"math": "structural here", "exp": "plain"}
+        result = impl.finding_impact(finding, sources["math"], sources)
+        self.assertIsInstance(result["class"], dict)
+        self.assertEqual(set(result["class"]), {"math", "exp"})
+        # Two remedy loci (> 1), so both documents grade "structural"
+        # regardless of citation count -- the scalar fields
+        # (locus/introducesNotation) are unaffected by the reshape.
+        self.assertEqual(result["class"]["math"], "structural")
+        self.assertEqual(result[impl.NOTATION_KEYS["locus"]], 2)
+
+    def test_remedy_compatibility_routes_a_findings_uses_to_its_own_document(self):
+        """A finding naming document `exp` and citing notation that exists
+        ONLY in `exp`'s own text must not be reported incompatible for not
+        finding it in document 0's text."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "r1.md").write_text("nothing here", encoding="utf-8")
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(root)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = previous
+        self.addCleanup(restore)
+
+        findings = [{"id": "f1", "uses": ["E[x]"], "document": "exp"}]
+        sources = {"math": "nothing here", "exp": "E[x] appears here"}
+        result = impl.remedy_compatibility(findings, "r1.md", sources)
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["undefinedNotation"], [])
 
 
 class EquationTagRecognitionTests(unittest.TestCase):
@@ -7132,6 +7359,64 @@ class EquationTagRecognitionTests(unittest.TestCase):
             any("absent from the revision" in reason
                 for reason in result["inadmissible"]["cites-nothing-real"]),
             result["inadmissible"])
+
+
+class AdmissibilityDualShapeReadTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 8, design.md D5, C3):
+    `admissibility_record`'s dual-shape read.
+
+    `tests/fixtures/admissibility/scalar.json` is a COMMITTED, pre-Cut-3
+    three-key `admissibility.json` (`revision`, `revisionSha256`,
+    `findings`) -- exactly the shape `cmd_admit` wrote before this class
+    landed. Its `revisionSha256` was computed offline against the sibling
+    committed fixture `tests/fixtures/admissibility/r1.md`; both travel
+    together. A fixture this change itself generates could never prove
+    backward compatibility (design.md D5's own reasoning), so this one
+    predates the change entirely.
+    """
+
+    FIXTURE_DIR = FORGE / "tests" / "fixtures" / "admissibility"
+
+    def _box_with_scalar_fixture(self) -> Path:
+        box = FORGE / "implementations" / f"_admissibility_dual_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "tests" / "admissibility.json").write_text(
+            (self.FIXTURE_DIR / "scalar.json").read_text(encoding="utf-8"),
+            encoding="utf-8")
+        return box
+
+    def _proposals_root(self) -> Path:
+        """Points `IMPLEMENTATION_PROPOSALS` directly at the fixture
+        directory itself -- `r1.md` already lives there, committed, so no
+        second copy of its bytes is needed to make it readable as a
+        revision."""
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS")
+        os.environ["IMPLEMENTATION_PROPOSALS"] = str(self.FIXTURE_DIR)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS"] = previous
+
+        self.addCleanup(restore)
+
+    def test_a_scalar_shape_admissibility_file_still_reads(self):
+        self._proposals_root()
+        box = self._box_with_scalar_fixture()
+        result = impl.admissibility_record(box, "r1.md")
+        self.assertEqual(result["status"], "present")
+        self.assertEqual(result["revision"], "r1.md")
+        self.assertIn("f1", result["findings"])
+
+    def test_extra_document_entries_are_empty_under_one_document(self):
+        """The write-side helper `cmd_admit` will route through (D5): under
+        THIS process's own one-document profile, it must answer an empty
+        list, never a KeyError or a phantom entry for a document that was
+        never declared. Exercises a symbol that does not exist before
+        Phase 8's implementation lands -- AttributeError, genuinely red."""
+        self.assertEqual(impl._admissibility_extra_documents("r1.md"), [])
 
 
 class SearchDeclarationShapeTests(unittest.TestCase):
@@ -7474,6 +7759,159 @@ class ScaffoldImportClosureTests(unittest.TestCase):
                          proc.stdout[-3000:])
         self.assertNotIn("error", proc.stdout.splitlines()[-1].lower(),
                          proc.stdout[-3000:])
+
+
+class AdmissibilityRevisionGuardTests(unittest.TestCase):
+    """L2: `ruled_revision` returned the revision an admissibility ruling was
+    made against and had zero callers anywhere in the kit -- `require_admissible`
+    checked the verdict but never the revision, so a remedy measured after the
+    proposal moved to a newer revision (without re-running `admit`) passed
+    silently. The mismatch only surfaced later, at `verify`'s sha256 check on
+    `admissibility_record`. Wired here: `require_admissible` now calls
+    `ruled_revision` itself and refuses immediately when it disagrees with
+    the revision this suite was scaffolded for.
+    """
+
+    KIT_TESTS = SKILL_ROOT / "assets" / "kit" / "tests"
+    REVISION = "r05"
+
+    def _module(self, box):
+        source = scaffold_substitute(
+            (self.KIT_TESTS / "admissibility.py").read_text(encoding="utf-8"),
+            revision=self.REVISION)
+        path = box / "admissibility.py"
+        path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(
+            f"kit_admissibility_{box.name}", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def _box(self, ruling):
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "admissibility.json").write_text(json.dumps(ruling), encoding="utf-8")
+        return box
+
+    def test_ruled_revision_reads_the_ruling_s_own_revision(self):
+        box = self._box({"revision": self.REVISION, "findings": {}})
+        module = self._module(box)
+        self.assertEqual(module.ruled_revision(), self.REVISION)
+
+    def test_measuring_under_a_stale_ruling_is_refused_immediately(self):
+        # Reachable red: before the wire, `require_admissible` never called
+        # `ruled_revision` at all, so a ruling made against "r04" measured
+        # a finding cleanly under a suite scaffolded for "r05".
+        box = self._box({"revision": "r04", "findings": {"f1": {"admissible": True}}})
+        module = self._module(box)
+        with self.assertRaises(AssertionError) as ctx:
+            module.require_admissible("f1")
+        message = str(ctx.exception)
+        self.assertIn("r04", message)
+        self.assertIn(self.REVISION, message)
+
+    def test_measuring_under_the_ruled_revision_still_works(self):
+        box = self._box({"revision": self.REVISION, "findings": {"f1": {"admissible": True}}})
+        module = self._module(box)
+        module.require_admissible("f1")  # must not raise
+
+    def test_an_inadmissible_finding_under_the_right_revision_still_refuses(self):
+        """The revision guard must not swallow the existing admissibility
+        check -- both refusals stay reachable, in either order."""
+        box = self._box({"revision": self.REVISION,
+                         "findings": {"f1": {"admissible": False, "reasons": ["nope"]}}})
+        module = self._module(box)
+        with self.assertRaises(AssertionError) as ctx:
+            module.require_admissible("f1")
+        self.assertIn("nope", str(ctx.exception))
+
+
+class BenchmarkDeviceSelectionAfterDeletionTests(unittest.TestCase):
+    """L2: `resolve_device` shipped in `nb/benchmark.py` with zero references
+    anywhere in the forge, including both notebooks -- the real run path reads
+    `reduction.device` (a config string, default `"cpu"`) straight into
+    `torch.device(...)`. Deleted rather than wired: unlike `ruled_revision`,
+    there is no real call site this could attach to; auto-detection was never
+    plumbed into the config the run actually reads. This proves the deletion
+    left the real path intact.
+    """
+
+    SOURCE = KIT / "nb" / "benchmark.py"
+
+    def test_resolve_device_no_longer_ships(self):
+        self.assertNotIn("resolve_device", self.SOURCE.read_text(encoding="utf-8"))
+
+    def test_the_module_still_parses_and_device_still_comes_from_config(self):
+        source = self.SOURCE.read_text(encoding="utf-8")
+        ast.parse(source)  # the cut must not leave a dangling reference behind
+        self.assertIn("device = torch.device(reduction.device)", source)
+
+
+class RngFixtureRequestedByTemplateTests(unittest.TestCase):
+    """L2: `conftest.py`'s `rng` fixture had no requester anywhere in the
+    kit -- `test_synthetic.py`'s own stub built an identical local generator
+    off the identical `SEED` instead of asking pytest for the shared one, and
+    `sweep.py` did too. Wired here: the synthetic stub now takes `rng` as a
+    parameter, and a live pytest run over the substituted pair proves the
+    fixture actually delivers the seeded generator, not just that the text
+    matches. `sweep.py`'s local stays -- it is a plain function, never a
+    pytest item, and needs a seed that varies by index; the comment left in
+    place there says so.
+    """
+
+    KIT_TESTS = SKILL_ROOT / "assets" / "kit" / "tests"
+    SEED = "7"
+
+    def _box(self, expectation, assertion, *, with_conftest=True):
+        box = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        if with_conftest:
+            conftest = scaffold_substitute(
+                (self.KIT_TESTS / "conftest.py").read_text(encoding="utf-8"),
+                seed=self.SEED)
+            (box / "conftest.py").write_text(conftest, encoding="utf-8")
+        synthetic = scaffold_substitute(
+            (self.KIT_TESTS / "test_synthetic.py").read_text(encoding="utf-8"),
+            seed=self.SEED)
+        synthetic = synthetic.replace("{{EXPECTATION}}", expectation)
+        synthetic = synthetic.replace("    raise NotImplementedError\n", assertion)
+        (box / "test_synthetic.py").write_text(synthetic, encoding="utf-8")
+        return box
+
+    def _run(self, box):
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-q", str(box)],
+            capture_output=True, text=True)
+
+    def test_the_stub_receives_the_fixture_conftest_actually_seeds(self):
+        """With `conftest.py` in scope, the wired stub runs and `rng` is the
+        generator the fixture seeds -- the ordinary, expected case."""
+        box = self._box(
+            "receives_the_shared_generator",
+            "    expected = np.random.default_rng(SEED)\n"
+            "    assert rng.integers(0, 10**9) == expected.integers(0, 10**9)\n")
+        proc = self._run(box)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    def test_removing_the_fixture_breaks_the_stub_that_requests_it(self):
+        # Reachable red: before the wire, the stub built its OWN generator
+        # from `SEED` and needed no fixture at all, so a run with no
+        # `conftest.py` on the collection path still passed -- proof it was
+        # never actually asking pytest for `rng`. After the wire, the same
+        # run cannot even collect: `rng` has no provider.
+        box = self._box(
+            "needs_the_shared_generator",
+            "    assert isinstance(rng, np.random.Generator)\n",
+            with_conftest=False)
+        proc = self._run(box)
+        output = proc.stdout + proc.stderr
+        self.assertNotEqual(proc.returncode, 0, output)
+        self.assertIn("rng", output)
+
+    def test_the_stub_no_longer_shadows_the_fixture_with_a_private_copy(self):
+        source = (self.KIT_TESTS / "test_synthetic.py").read_text(encoding="utf-8")
+        self.assertNotIn("np.random.default_rng(SEED)", source)
+        self.assertRegex(source, r"def test_\{\{EXPECTATION\}\}\(rng\)")
 
 
 class ReportSealPlacementTests(unittest.TestCase):
@@ -8582,7 +9020,7 @@ class KitAssetRegisterTests(unittest.TestCase):
     def test_the_forge_side_register_is_explicit_and_earns_its_place(self):
         """Named, and provably used by the forge. A category nobody has to
         justify becomes the place unregistered files go to be forgotten."""
-        lines = CLI.read_text(encoding="utf-8").splitlines()
+        lines = ENGINE.read_text(encoding="utf-8").splitlines()
         for asset, reason in self.FORGE_SIDE.items():
             self.assertTrue((SKILL_ROOT / asset).is_file(), asset)
             self.assertTrue(reason.strip(), asset)
@@ -9353,6 +9791,9 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
 
     STORE = (FORGE / "skills/_core/deliberation"
              / "engine/revision-lifecycle-store.ts")
+    #: The marker's declaration, on the side that declares it. The store reads it
+    #: from here now, so this is where the two languages meet.
+    PROFILE = FORGE / "skills/proposal-deliberation/profile.ts"
 
     DECLARATION = (
         "__benchmark__ = {\n"
@@ -9407,12 +9848,24 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
     # -- the marker is one contract in two languages -----------------------
 
     def test_the_marker_is_the_one_the_publisher_writes(self):
-        """Restating the bytes here would be a third copy of the rule. It is read
-        out of the store that writes them, so the day one side moves this goes
-        red instead of the two silently disagreeing again."""
-        published = re.search(r"const MARKER=Buffer\.from\('(.*?)'\);",
-                              self.STORE.read_text(encoding="utf-8"))
-        self.assertTrue(published, "the deliberation store declares no MARKER")
+        """Restating the bytes here would be a third copy of the rule, so it is read
+        out of the other side instead -- the day one moves, this goes red rather
+        than the two silently disagreeing again.
+
+        Read from the PROFILE, not from the store. The store used to declare the
+        bytes as its own literal and this guard pointed at that literal, which is
+        what kept the copy alive: the store compared `markerOwned` against it while
+        the rest of the engine recognised through the profile, so a domain declaring
+        its own marker got an inventory holding a managed revision while nothing was
+        the latest. The profile's single-line declaration is what both languages
+        actually have to agree about, and it is the same anchored shape
+        `tests/test_agents.py` already reads a profile with.
+        """
+        published = re.search(r'^\s*marker:\s*"((?:[^"\\]|\\.)*)"\s*,?\s*$',
+                              self.PROFILE.read_text(encoding="utf-8"),
+                              re.MULTILINE)
+        self.assertTrue(published,
+                        "the deliberation profile declares no single-line `marker`")
         expected = published.group(1).encode("utf-8").decode("unicode_escape")
 
         self.assertEqual(impl.MANAGED_ARTIFACT_MARKER, expected.encode("utf-8"))
@@ -10130,7 +10583,7 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
         would make the harness a production path whatever any document said.
         """
         harness = self.harness()
-        engine_source = CLI.read_text(encoding="utf-8")
+        engine_source = ENGINE.read_text(encoding="utf-8")
 
         self.assertNotIn(
             harness.stem, self.import_roots(engine_source),
@@ -10147,7 +10600,7 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
             f"script gets shelled without being imported: {mentions}")
 
         self.assertIn(
-            CLI.stem, self.import_roots(harness.read_text(encoding="utf-8")),
+            ENGINE.stem, self.import_roots(harness.read_text(encoding="utf-8")),
             f"{harness.name} no longer imports the engine, so the one-way "
             "dependency this asserts the direction of is not there to assert")
 
@@ -11312,11 +11765,11 @@ class MaterializeDegradedGuaranteeTests(unittest.TestCase):
         self.assertIn(self.MARKER_B, text)
 
     def test_argparse_help_states_the_degraded_guarantee(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn("Degrades the guarantee", source)
 
     def test_the_adopted_json_output_states_the_degraded_guarantee(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn(self.MARKER_B, source)
 
 
@@ -12258,6 +12711,92 @@ class SeventhScaffoldBlockTests(unittest.TestCase):
         self.assertTrue(impl._declaration_is_blank(self.declared_blocks()))
 
 
+class ExtraDocumentFidelityStatusTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 14, design.md D7/C8),
+    signature rewritten Cut 3 slice C (`the-second-document-verified-on-
+    its-own-terms`, design.md D4/D5): `_extra_document_fidelity_status`
+    -- one document beyond document 0's own `fidelity_status`, now folded
+    from that document's own `conditions` dict (`staleModules`/
+    `missingProvenance`/`invariantsWithoutTest`/`unreachedModules`,
+    `cmd_verify`'s own `conditions_by_index[N]` shape) plus whether THIS
+    document's own revision text resolves. A pure, module-level function
+    (never a closure inside `cmd_verify`), so it stays directly testable
+    regardless of how many documents any particular process has loaded --
+    `IMPLEMENTATION_PROPOSALS_1` overrides `revision_source`'s own
+    `index=1` root without ever touching `DOCUMENTS[1]`, which this
+    one-document process's profile does not declare.
+    """
+
+    #: The four-key shape `cmd_verify`'s own `conditions_by_index[N]`
+    #: builds, all empty -- the "nothing fired" baseline every case below
+    #: starts from and overrides one key of at a time.
+    _EMPTY_CONDITIONS = {
+        "staleModules": [], "missingProvenance": [],
+        "invariantsWithoutTest": [], "unreachedModules": [],
+    }
+
+    def _extra_root(self, revision_text: str | None = "some text"):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        if revision_text is not None:
+            (root / "r1.md").write_text(revision_text, encoding="utf-8")
+        previous = os.environ.get("IMPLEMENTATION_PROPOSALS_1")
+        os.environ["IMPLEMENTATION_PROPOSALS_1"] = str(root)
+
+        def restore():
+            if previous is None:
+                os.environ.pop("IMPLEMENTATION_PROPOSALS_1", None)
+            else:
+                os.environ["IMPLEMENTATION_PROPOSALS_1"] = previous
+        self.addCleanup(restore)
+
+    def test_unknown_when_no_revision_or_the_documents_own_text_is_unresolvable(self):
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                None, 1, self._EMPTY_CONDITIONS, False),
+            "unknown")
+        self._extra_root(revision_text=None)  # root exists, "r1.md" does not
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, False),
+            "unknown")
+
+    def test_drift_when_any_condition_fires(self):
+        self._extra_root()
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, {**self._EMPTY_CONDITIONS, "staleModules": ["modA"]},
+                False),
+            "drift")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "missingProvenance": ["modB"]}, False),
+            "drift")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "invariantsWithoutTest": ["inv"]}, False),
+            "drift")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1,
+                {**self._EMPTY_CONDITIONS, "unreachedModules": [{"module": "m"}]},
+                False),
+            "drift")
+
+    def test_undeclared_and_ok(self):
+        self._extra_root()
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, True),
+            "undeclared")
+        self.assertEqual(
+            impl._extra_document_fidelity_status(
+                "r1.md", 1, self._EMPTY_CONDITIONS, False),
+            "ok")
+
+
 class VerifyStatusRosterTests(unittest.TestCase):
     """The Output Contract enumerated eleven statuses and `verify` reports
     thirteen.
@@ -12287,7 +12826,7 @@ class VerifyStatusRosterTests(unittest.TestCase):
     IDENTITY_KEYS = frozenset({"command", "target", "name"})
 
     def reported_statuses(self):
-        return sorted(set(returned_keys(CLI, "cmd_verify")) - self.IDENTITY_KEYS)
+        return sorted(set(returned_keys(ENGINE, "cmd_verify")) - self.IDENTITY_KEYS)
 
     def status_rows(self):
         tables = markdown_table_rows(
@@ -12387,7 +12926,7 @@ class VerifyStatusRosterTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
         copy = scratch / "renamed_cli.py"
         copy.write_text(
-            CLI.read_text(encoding="utf-8").replace(
+            ENGINE.read_text(encoding="utf-8").replace(
                 '        "lfs": lfs_state(target),',
                 '        "largeFiles": lfs_state(target),'),
             encoding="utf-8")
@@ -12440,7 +12979,7 @@ class ProbeReportedFactsRosterTests(unittest.TestCase):
     IDENTITY_KEYS = frozenset({"status", "target", "name", "kind"})
 
     def reported_facts(self):
-        return sorted(set(returned_keys(CLI, "cmd_probe")) - self.IDENTITY_KEYS)
+        return sorted(set(returned_keys(ENGINE, "cmd_probe")) - self.IDENTITY_KEYS)
 
     def fact_rows(self):
         tables = markdown_table_rows(
@@ -12477,7 +13016,7 @@ class ProbeReportedFactsRosterTests(unittest.TestCase):
         so the row has a sub-table, and the sub-table is derived from the
         function that computes the second half.
         """
-        derived = sorted(returned_keys(CLI, "remote_execution_jobs_state"))
+        derived = sorted(returned_keys(ENGINE, "remote_execution_jobs_state"))
         documented = sorted(row[0].strip("`") for row in self.job_fact_rows())
         self.assertEqual(
             sorted(set(derived) - set(documented)), [],
@@ -13662,7 +14201,7 @@ class WorkedInvocationRosterTests(unittest.TestCase):
             USAGE_MD.read_text(encoding="utf-8"))))
 
     def dispatched_commands(self):
-        return dict_literal_keys(CLI, "COMMANDS")
+        return dict_literal_keys(ENGINE, "COMMANDS")
 
     def test_every_command_the_cli_dispatches_has_a_worked_invocation(self):
         dispatched = self.dispatched_commands()
@@ -14096,7 +14635,7 @@ class ShardRefusalCrossJoinTests(unittest.TestCase):
         """Red by construction: the `none`, `absent` and `undeclared` branches
         return `shardsDisagree` and omit `shardsArrived`, so which keys a
         caller gets depends on which branch answered."""
-        self.assertIn("shardsArrived", returned_keys(CLI, "distribution_state"))
+        self.assertIn("shardsArrived", returned_keys(ENGINE, "distribution_state"))
 
     DECLARATION = (
         "__benchmark__ = {\n"
@@ -15534,6 +16073,56 @@ class PositionModuleTests(unittest.TestCase):
     def test_absent_block_is_a_state_not_an_error(self):
         self.assertIsNone(impl_position.locate_block(b"# Doc\n\nNo block here.\n"))
 
+    # --- Cut 3 (`a-revision-is-two-documents`, D3): the optional `documents=` group ---
+
+    def test_a_documents_group_round_trips_through_render_and_locate_block(self):
+        """A two-document header: `revision=`/`sha256=` still name document
+        0, and the trailing group carries the rest, round-tripped exactly."""
+        extra = [{"label": "experiments", "revision": "r1.md",
+                  "revisionSha256": "b" * 64}]
+        header = {**self.HEADER, "documents": extra}
+        items = [{"ordinal": 1, "mark": " ", "text": "x",
+                  "witness": {"kind": "record", "operand": None}}]
+        text = impl_position.render(header, items).encode("utf-8")
+        self.assertIn(b"documents=", text)
+
+        block = impl_position.locate_block(text)
+        self.assertEqual(block["revision"], self.HEADER["revision"])
+        self.assertEqual(block["revisionSha256"], self.HEADER["revisionSha256"])
+        self.assertEqual(block["target"], self.HEADER["target"])
+        self.assertEqual(block["documents"], extra)
+
+    def test_a_header_without_documents_key_emits_no_group_and_decodes_to_none(self):
+        """Byte-identical to this function's pre-Cut-3 output: no `documents`
+        key at all (never an empty list) produces the exact same opener
+        bytes, and reading it back answers `documents: None`, never `[]` --
+        the two are distinct states (D3's own distinction, mirrored from
+        `locate_block`'s own absent-vs-empty discipline elsewhere)."""
+        items = [{"ordinal": 1, "mark": " ", "text": "x",
+                  "witness": {"kind": "record", "operand": None}}]
+        text = impl_position.render(self.HEADER, items)
+        expected_opener = (
+            f"<!-- position revision={self.HEADER['revision']} "
+            f"sha256={self.HEADER['revisionSha256']} "
+            f"derivedAt={self.HEADER['derivedAt']} "
+            f"session={self.HEADER['session']} target={self.HEADER['target']} -->")
+        self.assertTrue(text.startswith(expected_opener))
+        self.assertNotIn("documents=", text)
+
+        block = impl_position.locate_block(text.encode("utf-8"))
+        self.assertIsNone(block["documents"])
+
+    def test_a_malformed_documents_group_raises_position_block_malformed(self):
+        malformed = (
+            b"<!-- position revision=r1.md sha256=" + b"a" * 64 +
+            b" derivedAt=2026-08-27T00:00:00Z session=s0 target=final "
+            b"documents=not-valid-base64!!! -->\n"
+            b"- [ ] 1. x. `@record`\n"
+            b"<!-- /position -->\n")
+        with self.assertRaises(impl.Refused) as ctx:
+            impl_position.locate_block(malformed)
+        self.assertEqual(ctx.exception.code, "POSITION_BLOCK_MALFORMED")
+
     # --- derive(): three-valued, per witness kind, never guessing on absence ---
 
     def test_derive_record_ticks_on_found_and_required_scale_satisfied(self):
@@ -16137,6 +16726,37 @@ class PositionKeyExitStatusTests(unittest.TestCase):
             stale = impl.position_state(root, "Method", evidence, "r01.md", "some content")
             self.assertEqual(stale["status"], "stale")
 
+    # --- Cut 3 (`a-revision-is-two-documents`, Phase 10, D2/C1) ---
+
+    def test_bound_to_helper_computes_current_stale_unknown(self):
+        """The comparison `position_state` has always made for document 0,
+        extracted into its own function (`_bound_to`) so the SAME
+        arithmetic serves every document under two or more -- never a
+        second copy drifting beside it. Exercises a symbol that does not
+        exist before this phase's implementation lands."""
+        sha = hashlib.sha256(b"real text").hexdigest()
+        self.assertEqual(impl._bound_to(None, None, sha), "unknown")
+        self.assertEqual(impl._bound_to("r1.md", None, sha), "unknown")
+        self.assertEqual(impl._bound_to("r1.md", "real text", sha), "current")
+        self.assertEqual(impl._bound_to("r1.md", "different text", sha), "stale")
+
+    def test_position_state_accepts_extra_sources_and_stays_scalar_under_one_document(self):
+        """The new `extra_sources` parameter (additive, default `None`) must
+        not change `boundTo`'s shape under THIS process's own real
+        one-document profile -- a dict here, instead of the plain string
+        every existing caller and test already reads, would be exactly the
+        byte-identity break D2 forbids. Also exercises a signature that
+        does not accept this keyword before this phase's implementation
+        lands (`TypeError`)."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.write_position(root, "x")
+            evidence = {"smokeReady": {"job1": True}}
+            result = impl.position_state(
+                root, "Method", evidence, None, None, extra_sources=["anything"])
+            self.assertIsInstance(result["boundTo"], str)
+            self.assertEqual(result["boundTo"], "unknown")
+
     def test_position_key_never_changes_exit_status(self):
         box = FORGE / "implementations" / f"_e2e_position_{os.getpid()}"
         try:
@@ -16586,6 +17206,71 @@ class StepOperandRefusalTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout)
         result = json.loads(proc.stdout)
         self.assertEqual(result["status"], "unchanged")
+
+
+class PositionDocumentCountMismatchTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 9, design.md D3): a
+    position header carrying a `documents=` group, read under THIS
+    process's own real one-document profile, is refused rather than
+    half-read. Runs against the real launcher (a subprocess, matching this
+    file's own `--about`-adjacent conventions), so `impl.DOCUMENTS`'
+    module-import-time value never has to be faked -- it already IS one
+    document, the real profile every other test in this file already runs
+    under.
+    """
+
+    #: A valid base64-encoded compact `documents=` payload
+    #: (`[{"label": "experiments", "revision": "r1.md",
+    #: "revisionSha256": "b"*64}]`), computed offline against the exact
+    #: production encoding this cut adds -- never hand-typed.
+    DOCUMENTS_GROUP = (
+        "W3sibGFiZWwiOiJleHBlcmltZW50cyIsInJldmlzaW9uIjoicjEubWQiLCJyZXZpc2lvblNoYT"
+        "I1NiI6ImJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJi"
+        "YmJiYmJiYmJiYmJiYmIifV0=")
+
+    PROPOSAL_TEXT = "## 1\ntexto\n"
+    PROPOSAL_SHA256 = hashlib.sha256(PROPOSAL_TEXT.encode("utf-8")).hexdigest()
+
+    def _proposals(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        (root / "r1.md").write_text(self.PROPOSAL_TEXT, encoding="utf-8")
+        return root
+
+    def _box(self):
+        box = FORGE / "implementations" / f"_e2e_position_doc_mismatch_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        (box / "tests").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text("", encoding="utf-8")
+        return box
+
+    def run_cli(self, *args, proposals=None):
+        env = dict(os.environ)
+        if proposals is not None:
+            env["IMPLEMENTATION_PROPOSALS"] = str(proposals)
+        return subprocess.run([sys.executable, str(CLI), *args],
+                              capture_output=True, text=True, cwd=FORGE, env=env)
+
+    def test_a_documents_group_read_under_a_one_document_profile_refuses(self):
+        box = self._box()
+        header = (
+            f"<!-- position revision=r1.md sha256={self.PROPOSAL_SHA256} "
+            f"derivedAt=2026-08-27T00:00:00Z session=s0 target=final "
+            f"documents={self.DOCUMENTS_GROUP} -->\n")
+        (box / "Method" / "AGREED.md").write_text(
+            header + "- [ ] 1. Something. `@record`\n<!-- /position -->\n",
+            encoding="utf-8")
+        proc = self.run_cli("position", "--target", str(box), "--name", "Method",
+                            "--revision", "r1.md", "--session", "s1",
+                            proposals=self._proposals())
+        self.assertEqual(proc.returncode, 2, proc.stdout)
+        self.assertEqual(json.loads(proc.stdout)["code"],
+                         "POSITION_HEADER_DOCUMENT_COUNT_MISMATCH")
 
 
 class PositionRecordMalformedTests(unittest.TestCase):
@@ -18041,12 +18726,19 @@ class CrashCaptureTests(unittest.TestCase):
         """Reachability, constructed: `COMMANDS["step"]` is monkeypatched to
         raise a plain `RuntimeError` -- an exception `except Refused` never
         catches. The raise itself happens inside a stdlib `unittest.mock`
-        frame, never inside `implementation_cli.py`, which is exactly the
+        frame, never inside the engine's own file, which is exactly the
         "deepest frame is stdlib" hazard the design names: the recorded
         file must be `main()`'s own frame (the LAST forge frame still on
         the traceback), and its digest must be the file's CURRENT bytes,
         computed through the identical `current_file_digest` the ladder
         check re-derives against.
+
+        Post-move (Cut 1): `main()` executes from the ENGINE's own file
+        (`_core/implementation/engine/implementation_engine.py`), which is
+        still under `FORGE_ROOT/skills` and so still qualifies as
+        the "last forge frame" -- the recorded file and digest name the
+        engine, never the launcher, which never appears on this traceback
+        at all (in-process `impl.main(...)` never runs the launcher).
         """
         box = self._box()
         boom = unittest.mock.Mock(side_effect=RuntimeError("boom"))
@@ -18060,10 +18752,10 @@ class CrashCaptureTests(unittest.TestCase):
         self.assertEqual(len(defects), 1)
         self.assertEqual(defects[0]["command"], "step")
         self.assertEqual(defects[0]["session"], "s1")
-        self.assertTrue(defects[0]["file"].endswith("implementation_cli.py"),
+        self.assertTrue(defects[0]["file"].endswith("implementation_engine.py"),
                         defects[0]["file"])
         self.assertEqual(defects[0]["fileSha256"],
-                         impl_position.current_file_digest(CLI))
+                         impl_position.current_file_digest(ENGINE))
 
     def test_the_original_exception_type_and_message_propagate_unchanged(self):
         box = self._box()
@@ -20619,7 +21311,7 @@ class AgreementWitnessSingleWritePathTests(unittest.TestCase):
     """
 
     def call_site_functions(self, name: str) -> set[str]:
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         enclosing: dict[int, str] = {}
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -20657,7 +21349,7 @@ class AgreementWitnessSingleWritePathTests(unittest.TestCase):
         scratch = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, scratch, ignore_errors=True)
         mutated = scratch / "mutated_cli.py"
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         injected = source.replace(
             "def cmd_discuss(args: argparse.Namespace) -> dict:",
             "def cmd_discuss(args: argparse.Namespace) -> dict:\n"
@@ -20942,12 +21634,19 @@ class GateCommandTests(unittest.TestCase):
         # (the presented `--authorization` value is consumed, never echoed
         # back as if `gate` had just invented it).
         self.assertNotIn("token", "".join(result.keys()).lower())
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- the real success path the 29-case seal corpus
+        # cannot reach on its own (`gate-e0`/`gate-e1` both refuse on a
+        # dummy authorization token before minting anything), so this is
+        # where the byte-identity guarantee is actually provable.
+        self.assertNotIn("documentRevisions", result)
 
         ledger = box / "Method" / ".implementation" / "position.jsonl"
         events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
         gate_event = next(e for e in events if e["kind"] == "gate")
         self.assertEqual(gate_event["jobName"], "job1")
         self.assertEqual(gate_event["justification"], "Rehearsal passed at the pinned commit.")
+        self.assertNotIn("documentRevisions", gate_event)
         # Single-use: consumption is a SEPARATE appended event, never a
         # mutation of the `authorization` event it spends.
         self.assertEqual(events[-1]["kind"], "authorization-consumed")
@@ -21240,13 +21939,13 @@ class AuthorizationBindingKeysStructuralTests(unittest.TestCase):
     def test_all_three_binding_key_spellings_agree(self):
         tuple_keys = set(impl._AUTHORIZATION_BINDING_KEYS)
 
-        binding_return_keys = set(returned_keys(CLI, "_authorization_binding"))
+        binding_return_keys = set(returned_keys(ENGINE, "_authorization_binding"))
         self.assertEqual(
             tuple_keys, binding_return_keys,
             "_authorization_binding's own return must name exactly the "
             "keys _AUTHORIZATION_BINDING_KEYS declares")
 
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         cmd_gate = next(
             node for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == "cmd_gate")
@@ -21264,6 +21963,49 @@ class AuthorizationBindingKeysStructuralTests(unittest.TestCase):
             tuple_keys, gate_binding_keys,
             "cmd_gate's inline gate_binding dict must name exactly the "
             "keys _AUTHORIZATION_BINDING_KEYS declares")
+
+
+def _function_body_source(function: str) -> str:
+    """One named function's own source text, read from `ENGINE` by `ast` --
+    never `inspect.getsource`, which needs the module imported and would
+    read whatever copy `sys.modules` happens to hold. Nested definitions
+    are NOT included (a plain `ast.get_source_segment` over the top-level
+    `FunctionDef` node already excludes a nested one's own body from the
+    walk this reads, since the segment is a byte range, not a walk)."""
+    text = ENGINE.read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    node = next(n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == function)
+    return ast.get_source_segment(text, node)
+
+
+class LedgerDocumentRevisionsWiringTests(unittest.TestCase):
+    """Cut 3 (`a-revision-is-two-documents`, Phase 11, design.md D2/C5):
+    `cmd_gate`'s gate event + return, `cmd_offer`'s offer event + return,
+    and `cmd_close`'s `prior_close` comparison, `not_open` return, `close`
+    event and `closed` return all gain an additive `documentRevisions` key.
+
+    Proven structurally, by counting the literal `"documentRevisions"` key
+    string inside each function's own source text (`ast.get_source_segment`,
+    never `inspect.getsource`): a live two-document process cannot be
+    reached inside this shared test session, since `impl.DOCUMENTS` is
+    resolved once, at import, under this file's own real one-document
+    profile (the same constraint Phase 10's own tests already state).
+    `cmd_gate` already carries ONE occurrence (`gate_binding`, C4/Phase 7);
+    this phase's own two sites (event + return) bring it to three.
+    """
+
+    def test_cmd_gate_carries_three_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_gate").count('"documentRevisions"'), 3)
+
+    def test_cmd_offer_carries_two_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_offer").count('"documentRevisions"'), 2)
+
+    def test_cmd_close_carries_four_document_revisions_sites(self):
+        self.assertEqual(
+            _function_body_source("cmd_close").count('"documentRevisions"'), 4)
 
 
 class ProposeCommandTests(unittest.TestCase):
@@ -22751,7 +23493,7 @@ class OfferCommandTests(unittest.TestCase):
     # --- ACTION_IDS: pinned three ways ---------------------------------
 
     def test_action_ids_constant_covers_every_id_literal_in_the_source_and_at_runtime(self):
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         literal_ids = set(re.findall(r'"id":\s*"([a-z-]+)"', source))
         self.assertEqual(literal_ids, set(impl.ACTION_IDS))
 
@@ -22808,7 +23550,7 @@ class OfferCommandTests(unittest.TestCase):
         independently-written check either one could disagree with, and
         never a call that moved to some third place unnoticed.
         """
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertIn("import impl_availability", source)
         sites = self._availability_call_sites(source)
         self.assertEqual(
@@ -22824,7 +23566,7 @@ class OfferCommandTests(unittest.TestCase):
         checks first -- never a fourth, hand-written branch reimplementing
         the same four questions.
         """
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         sites = self._availability_call_sites(source)
         self.assertEqual(
             sites["position_honest"], {"cmd_close"},
@@ -23280,6 +24022,10 @@ class OfferCommandTests(unittest.TestCase):
                                   "witness": {"kind": "rehearsal", "operand": "job1"}}])
 
         result = impl.cmd_offer(self._offer_args(box, answer="yes", units=["u2", "u1"]))
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- byte-identity, proven directly against this real
+        # `offer` call's own return dict.
+        self.assertNotIn("documentRevisions", result)
         launch = next(a for a in result["actions"] if a["id"] == "launch")
         self.assertEqual(launch["binding"]["units"], ["u2", "u1"])
         self.assertNotIn("--worker", launch["command"])
@@ -23607,13 +24353,20 @@ class CloseCommandTests(unittest.TestCase):
                              "--revision", self.PROPOSAL_REVISION, "--session", "s1",
                              proposals=proposals)
         self.assertEqual(first.returncode, 0, first.stdout)
-        self.assertEqual(json.loads(first.stdout)["status"], "closed")
+        first_result = json.loads(first.stdout)
+        self.assertEqual(first_result["status"], "closed")
+        # Cut 3 (`a-revision-is-two-documents`, C5): additive, absent under
+        # one document -- proven against both branches this test already
+        # reaches (a fresh close AND a repeat, `not_open`, close).
+        self.assertNotIn("documentRevisions", first_result)
 
         second = self.run_cli("close", "--target", str(box), "--name", "Method",
                               "--revision", self.PROPOSAL_REVISION, "--session", "s1",
                               proposals=proposals)
         self.assertEqual(second.returncode, 0, second.stdout)
-        self.assertEqual(json.loads(second.stdout)["status"], "not_open")
+        second_result = json.loads(second.stdout)
+        self.assertEqual(second_result["status"], "not_open")
+        self.assertNotIn("documentRevisions", second_result)
 
         ledger = box / "Method" / ".implementation" / "position.jsonl"
         events = [json.loads(line) for line in ledger.read_text(encoding="utf-8").splitlines()]
@@ -24653,7 +25406,7 @@ class StepCommandTests(unittest.TestCase):
         """Design mechanism 2, corrected: every `gate` consumer still
         selects on the exact string "gate", and this ledger line remains
         invisible to `remote_cli.py` and to `impl_position.py` entirely.
-        `implementation_cli.py` now carries exactly ONE selection of that
+        The engine now carries exactly ONE selection of that
         ledger kind, and it lives in `_ledger_step_events`. The original,
         blanket "nowhere" was correct only until a witness kind that reads
         this ledger's own events was ever added; a later revision pinned it
@@ -24676,7 +25429,7 @@ class StepCommandTests(unittest.TestCase):
         position_source = Path(impl_position.__file__).read_text(encoding="utf-8")
         self.assertIsNone(pattern.search(position_source))
 
-        impl_source = (CLI.parent / "implementation_cli.py").read_text(encoding="utf-8")
+        impl_source = ENGINE.read_text(encoding="utf-8")
         hits = list(pattern.finditer(impl_source))
         self.assertEqual(
             len(hits), 1,
@@ -24793,7 +25546,7 @@ class CmdStepDigestTests(unittest.TestCase):
         self.assertEqual(events[-1]["suiteDigest"], impl.suite_digest(box))
 
     def test_the_returned_response_dict_never_gains_suite_digest(self):
-        self.assertNotIn("suiteDigest", returned_keys(CLI, "cmd_step"))
+        self.assertNotIn("suiteDigest", returned_keys(ENGINE, "cmd_step"))
 
 
 class StepVerdictsTests(unittest.TestCase):
@@ -25568,7 +26321,7 @@ class UndeclaredOptionalDeclarationTests(unittest.TestCase):
         key nested under `search`/`distribution` ships invisible to
         `VerifyStatusRosterTests` -- the identical defect this test exists
         to keep from recurring."""
-        self.assertIn("undeclaredOptional", returned_keys(CLI, "cmd_verify"))
+        self.assertIn("undeclaredOptional", returned_keys(ENGINE, "cmd_verify"))
 
 
 class UndeclaredBlockingDeclarationTests(unittest.TestCase):
@@ -25888,8 +26641,8 @@ class UndeclaredBlockingDeclarationTests(unittest.TestCase):
         function's own return, so a key nested anywhere ships invisible to
         `VerifyStatusRosterTests` -- the identical constraint that decided
         `undeclaredOptional`'s own placement."""
-        self.assertIn("undeclaredBlocking", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredBlocking", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredBlocking", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredBlocking", returned_keys(ENGINE, "cmd_probe"))
 
     def test_both_documents_tell_a_reader_the_key_exists(self):
         """A status that reached the JSON is worth nothing to a reader never
@@ -25909,12 +26662,12 @@ class UndeclaredBlockingDeclarationTests(unittest.TestCase):
         time a witness kind changes what it reads. The set is derived from
         the sequence, so the function that derives it must read the rosters
         generically and name no field of either one."""
-        source = ast.parse(CLI.read_text(encoding="utf-8"))
+        source = ast.parse(ENGINE.read_text(encoding="utf-8"))
         derived = next(node for node in ast.walk(source)
                        if isinstance(node, ast.FunctionDef)
                        and node.name == "blocking_undeclared_state")
         body = ast.get_source_segment(
-            CLI.read_text(encoding="utf-8"), derived)
+            ENGINE.read_text(encoding="utf-8"), derived)
         body = body[body.index('"""', body.index('"""') + 3) + 3:]
         for field in (*impl.SEARCH_OPTIONAL, *impl.DISTRIBUTION_OPTIONAL):
             self.assertNotIn(f'"{field}"', body, field)
@@ -26080,7 +26833,7 @@ class ShardlessRungDiagnosisTests(unittest.TestCase):
         that cannot be checked at all" -- would be asserting a mark the
         refusal does not check. Same defect as the two the roster already
         carries, and it would have been introduced by this change."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         opener = source.index("def cmd_gate(")
         body = source[source.index('"POSITION_SHARDS_UNDECLARED",', opener):]
         message = body[:body.index('")')]
@@ -26342,8 +27095,8 @@ class UnreachableLadderTests(unittest.TestCase):
         """`undeclaredLadder`'s own placement decision, for the identical two
         reasons: top-level or `VerifyStatusRosterTests` never sees it, and out
         of `probe` because it names no work about to be run."""
-        self.assertIn("unreachableLadder", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("unreachableLadder", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("unreachableLadder", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("unreachableLadder", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_usage_reference_tells_a_reader_how_to_read_it(self):
         usage = USAGE_MD.read_text(encoding="utf-8")
@@ -26528,8 +27281,8 @@ class UndeclaredLadderTests(unittest.TestCase):
         retires on every single call. If `nextStep` ever grew a rung-aware
         answer, this is the test to overturn.
         """
-        self.assertIn("undeclaredLadder", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredLadder", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredLadder", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredLadder", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_usage_reference_tells_a_reader_how_to_read_it(self):
         """Same doctrine as `undeclaredOptional`'s own documentation test: a
@@ -27218,7 +27971,7 @@ class UnbackedPositionExitPublicationTests(unittest.TestCase):
         ones."""
         # `returned_keys` raises unless every dict return agrees, so reading it
         # at all is the branch-agreement half; the membership below is the key.
-        self.assertIn("resolve", returned_keys(CLI, "cmd_position"))
+        self.assertIn("resolve", returned_keys(ENGINE, "cmd_position"))
 
     def test_an_absent_block_answers_the_key_rather_than_omitting_it(self):
         proposals = self._proposals()
@@ -27832,10 +28585,20 @@ _ENGLISH_COUNTS = {
     # of the `cmd_*` bodies alone.
     110: "One hundred and ten", 111: "One hundred and eleven",
     112: "One hundred and twelve",
-    # `adopt` surveys an external folder and applies the approved plan behind
-    # the same gate, adding one invocation defect (`SOURCE_NOT_FOUND`) and one
-    # work state (`ADOPT_AMBIGUOUS`).
+    # Cut 3 (`a-revision-is-two-documents`, Phase 9, D3): one new reachable
+    # work-state code, `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`.
+    113: "One hundred and thirteen",
+    # `each-document-names-its-own-revision`, Phase 3, D3: one new reachable
+    # work-state code, `DOCUMENT_REVISION_UNREADABLE` -- measured here, never
+    # predicted, exactly as 113 itself was.
     114: "One hundred and fourteen",
+    # `the-agreement-nothing-computes`, Phase 3, D3: `agree` joins
+    # `GATING_COMMANDS` unconditionally, so the roster grows to ten gating
+    # commands (was nine) and two new work-state codes join the sixty-five
+    # already there, giving sixty-seven -- both measured, never predicted
+    # (design.md guessed 117; the real delta off 114 is +2, not +3).
+    67: "Sixty-seven",
+    116: "One hundred and sixteen",
 }
 
 
@@ -27997,7 +28760,7 @@ def unreadable_refusal_sites() -> set[tuple[str, str]]:
     is asserted rather than tolerated.
     """
     sites = set()
-    for source in (CLI, *sorted(CORE_IMPLEMENTATION.glob("*.py"))):
+    for source in (ENGINE, *sorted(CORE_IMPLEMENTATION.glob("*.py"))):
         tree = ast.parse(source.read_text(encoding="utf-8"))
         sites |= {(source.name, owner)
                   for owner, code in _refusal_sites(tree, "<module>")
@@ -28009,7 +28772,7 @@ def reachable_refusal_codes() -> set[str]:
     """Every refusal code a gating command can raise, derived from source.
 
     The lock the roster is actually held to, and the replacement for a union of
-    `raised_refusal_codes(CLI, "cmd_*")` -- which stops at the `cmd_*` body and
+    `raised_refusal_codes(ENGINE, "cmd_*")` -- which stops at the `cmd_*` body and
     therefore could not see `DIRTY_WORKTREE`, `FORGE_DEFECT_OPEN`, the whole
     `GATE_AUTHORIZATION_*` family or any of the position grammar's own parse
     refusals. Forty-two codes were invisible to it while every one of them
@@ -28051,7 +28814,7 @@ def reachable_refusal_codes() -> set[str]:
     site inside the CLI would widen to codes already classified and prove
     little -- which is exactly what `unreadable_refusal_sites` is for.
     """
-    tree = ast.parse(CLI.read_text(encoding="utf-8"))
+    tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
     definitions = {node.name: node for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
     roots = [f"cmd_{command}" for command in impl.GATING_COMMANDS]
@@ -28095,7 +28858,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
 
     The second incident, and why "reach" replaced "raise". The roster that
     closed the first one was populated from a union of
-    `raised_refusal_codes(CLI, "cmd_*")`, which stops at the `cmd_*` body. One
+    `raised_refusal_codes(ENGINE, "cmd_*")`, which stops at the `cmd_*` body. One
     `step` call then refused twice in one session: `STEP_SEQUENCE_NOT_REACHED`,
     raised in `cmd_step` and classified, with its `resolve`; and
     `DIRTY_WORKTREE`, raised in `impl_guards` one file over, with nothing.
@@ -28126,7 +28889,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         """
         codes = set()
         for command in impl.GATING_COMMANDS:
-            codes |= raised_refusal_codes(CLI, f"cmd_{command}")
+            codes |= raised_refusal_codes(ENGINE, f"cmd_{command}")
         return codes
 
     def test_every_refusal_reachable_from_a_gating_command_is_classified(self):
@@ -28134,7 +28897,7 @@ class GatingRefusalRosterTests(unittest.TestCase):
         NOT built from.
 
         The defect on record. `GATING_REFUSALS` was populated from a union of
-        `raised_refusal_codes(CLI, "cmd_*")`, which walks one function body and
+        `raised_refusal_codes(ENGINE, "cmd_*")`, which walks one function body and
         stops at its own file, and the blind spot was documented and then
         populated from anyway. A live session ran the declared flow and got two
         refusals from the same `step` call's neighbourhood:
@@ -28191,10 +28954,10 @@ class GatingRefusalRosterTests(unittest.TestCase):
         unresolvable-reason lookup. A third goes red here."""
         self.assertEqual(
             unreadable_refusal_sites(),
-            {("implementation_cli.py", "cmd_name"),
+            {("implementation_engine.py", "cmd_name"),
              ("impl_steps.py", "_verdict_result")})
 
-    def test_the_derivation_finds_the_measured_one_hundred_and_fourteen(self):
+    def test_the_derivation_finds_the_measured_one_hundred_and_thirteen(self):
         """Sanity check on the derivation itself, not on the roster: a change
         that adds, removes or renames a refusal anywhere a gating command can
         reach should move this number, never a typo in the walk above.
@@ -28208,11 +28971,39 @@ class GatingRefusalRosterTests(unittest.TestCase):
         altogether. The forty-two it gained were not added by any change; they
         were always raised, always reachable, and never seen. One hundred and
         twelve is that reading plus `PRODUCT_DIR_MISNAMED`, which nine write
-        verbs now raise before they can open a second product tree.
-        One hundred and fourteen is that reading plus `SOURCE_NOT_FOUND`
-        and `ADOPT_AMBIGUOUS`, which `adopt` raises for its survey.
+        verbs now raise before they can open a second product tree. One
+        hundred and thirteen (`a-revision-is-two-documents`, Cut 3, D3) is
+        that reading plus `POSITION_HEADER_DOCUMENT_COUNT_MISMATCH`, raised
+        inside `cmd_position` itself -- measured here, never predicted, per
+        that change's own design. One hundred and fourteen
+        (`each-document-names-its-own-revision`, D3) is that reading plus
+        `DOCUMENT_REVISION_UNREADABLE`, raised inside
+        `_extra_document_revisions` -- measured here, never predicted.
+        One hundred and sixteen (`the-agreement-nothing-computes`, D3) is
+        that reading plus `AGREEMENT_CROSSING_UNDECLARED` and
+        `AGREEMENT_DOCUMENTS_DISAGREE`, both raised inside `cmd_agree` --
+        `agree` joins `GATING_COMMANDS` unconditionally (design.md D9), so
+        both are reachable under every profile regardless of whether
+        `agree` is itself registered in `COMMANDS`. Measured at exactly
+        +2, correcting design.md's own prediction of 117 (114 + 2 is 116,
+        not 117 -- the design's arithmetic assumed D1's OWN prediction of
+        115 as this phase's starting point, but D1 measured 114, unmoved;
+        this phase's own delta is +2, not +3).
         """
-        self.assertEqual(len(reachable_refusal_codes()), 114)
+        self.assertEqual(len(reachable_refusal_codes()), 116)
+
+    def test_agree_joins_gating_commands_unconditionally_never_this_profiles_own_commands(self):
+        """`the-agreement-nothing-computes` (Slice D, design.md D9, tasks.md
+        3.1): the reaching case for the ABSENT half is this file's own
+        already-loaded single-document profile. `agree` must NOT be a
+        parser choice here (`COMMANDS` stays byte-identical to today,
+        M8) -- but `cmd_agree`'s two codes must still be derivable by
+        `reachable_refusal_codes()` under this same profile, which is
+        possible only if `GATING_COMMANDS` names it UNCONDITIONALLY
+        (D9's own reverse-lock requirement, the same shape
+        `COMPOSE_AMBIGUOUS_DOCUMENT` failed and was reverted for)."""
+        self.assertNotIn("agree", impl.COMMANDS)
+        self.assertIn("agree", impl.GATING_COMMANDS)
 
     def test_the_roster_classifies_nothing_a_gating_command_cannot_raise(self):
         """The reverse direction, and the half the forward lock cannot give.
@@ -28292,9 +29083,15 @@ class GatingRefusalRosterTests(unittest.TestCase):
                             if value == kind)
                   for kind in (impl.INVOCATION_DEFECT, impl.WORK_STATE)}
         skill = " ".join(SKILL_MD.read_text(encoding="utf-8").split())
+        # `the-agreement-nothing-computes` (D3): the gating-command count
+        # is now READ off `GATING_COMMANDS` rather than hardcoded as
+        # "nine" -- `agree` joined it unconditionally (design.md D9), so a
+        # literal "nine" here would go stale the moment a tenth command
+        # joined, exactly the drift this test's own docstring warns against.
+        gating_count = _english_count(len(impl.GATING_COMMANDS)).lower()
         self.assertIn(
             f"{_english_count(len(impl.GATING_REFUSALS))} distinct codes are "
-            "reachable from the ten gating commands", skill)
+            f"reachable from the {gating_count} gating commands", skill)
         self.assertIn(
             f"an *invocation* defect** ({counts[impl.INVOCATION_DEFECT]} "
             "codes)", skill)
@@ -29460,7 +30257,7 @@ class UnfinishableFlowTests(unittest.TestCase):
         proof is that `cmd_step` still raises the identical code.
         """
         self.assertIn("STEP_SEQUENCE_NOT_REACHED",
-                      raised_refusal_codes(CLI, "cmd_step"))
+                      raised_refusal_codes(ENGINE, "cmd_step"))
 
     # --- end to end, through `verify` itself --------------------------------
 
@@ -30399,7 +31196,7 @@ class MisnamedProductDirGuardTests(unittest.TestCase):
         produce -- so the derived set is also checked against the nine verbs
         the skill documents as writing.
         """
-        tree = ast.parse(CLI.read_text(encoding="utf-8"))
+        tree = ast.parse(ENGINE.read_text(encoding="utf-8"))
         commands = [node for node in tree.body
                     if isinstance(node, ast.FunctionDef)
                     and node.name.startswith("cmd_")]
@@ -30540,7 +31337,7 @@ class StepMeasuredLastRunTests(unittest.TestCase):
         the ledger already held, so `__steps__` gains nothing a repository
         built from zero would have to be made to ship. A future
         `expectedMinutes` read anywhere in the engine goes red here."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         for invented in ("expectedMinutes", "expectedSeconds", "budgetMinutes"):
             for quoted in (f'"{invented}"', f"'{invented}'"):
                 with self.subTest(key=quoted):
@@ -31017,8 +31814,8 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         undocumented -- the constraint every sibling key in `cmd_verify`
         carries. Absent from `probe` for the identical reason the others are:
         it names no work about to be run, only a declaration to make."""
-        self.assertIn("undeclaredStepNotebooks", returned_keys(CLI, "cmd_verify"))
-        self.assertNotIn("undeclaredStepNotebooks", returned_keys(CLI, "cmd_probe"))
+        self.assertIn("undeclaredStepNotebooks", returned_keys(ENGINE, "cmd_verify"))
+        self.assertNotIn("undeclaredStepNotebooks", returned_keys(ENGINE, "cmd_probe"))
 
     def test_the_report_never_gates_verify(self):
         """Reported, never demanded: a repository may legitimately compute in
@@ -31518,8 +32315,10 @@ class KitDemandsEveryStepKeyTests(unittest.TestCase):
     the roster fails this until the kit's own example names it.
     """
 
-    KIT = (Path(impl.__file__).resolve().parent.parent
-           / "assets" / "kit" / "src_benchmark" / "__init__.py")
+    #: The skill's own asset (meaning 3), never derived from `impl.__file__`
+    #: -- `impl` is the ENGINE module post-move (design.md D1), and the
+    #: engine's own file location is no longer under this skill at all.
+    KIT = SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py"
 
     def test_the_kit_example_names_every_key_the_skill_reads(self) -> None:
         example = self.KIT.read_text(encoding="utf-8")
@@ -31747,6 +32546,10 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
                         "the published interpreter does not exist")
         self.assertEqual(Path(tokens[1]), CLI)
         self.assertTrue(Path(tokens[1]).is_absolute(), tokens[1])
+        # R2/D4's guard: the equality above alone would still pass against a
+        # `CLI_PATH` someone re-pointed at the engine (a constant that moved
+        # WITH the mutation). This names the thing that must never happen.
+        self.assertNotEqual(Path(tokens[1]), ENGINE)
 
     def test_the_script_is_not_executable_so_the_interpreter_is_load_bearing(self):
         """The fact that decides the design rather than an aesthetic
@@ -31762,7 +32565,7 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
         """Derived, not listed. Three command strings were hardcoded beside
         the two builders, and a fourth added later would ship the old,
         unrunnable shape with nothing noticing."""
-        source = CLI.read_text(encoding="utf-8")
+        source = ENGINE.read_text(encoding="utf-8")
         self.assertNotIn('"implementation_cli.py', source)
         self.assertNotIn("'implementation_cli.py", source)
 
@@ -31816,284 +32619,54 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
                         f"{ran.stderr!r}")
 
 
-class AdoptCommandTests(unittest.TestCase):
-    """`adopt` — an external folder becomes a workspace target in two phases.
+class SkillRootValueTests(unittest.TestCase):
+    """R1 (design.md D2): `SKILL_ROOT` resolves to the skill directory --
+    pinned as a literal, never derived from the moved engine's own
+    location. `SKILL_ROOT` breaks the instant the engine moves, and breaks
+    SILENTLY (19 reader lines resolve under the wrong root); this pin is
+    what makes a wrong `kit.root` observable instead."""
 
-    The survey copies the source under `implementations/`, commits the copy
-    and writes `adoption-plan.json`; the human gate sits between the phases;
-    the apply revalidates the surveyed bytes, places the draft as the managed
-    v1, migrates the code in one commit, writes the scaffold stage, records
-    each adopted file and closes with the `verify` report. Every test below
-    drives the real CLI as a subprocess against a real source folder, a real
-    target and a fixture deliberation root, the way the materialize command
-    tests do.
-    """
-
-    NAME = "Adopt-Target"
-    SEED = "7"
-    MARKER = "<!-- proposal-workspace:artifact:v1 -->\n"
-
-    def _source(self, tag, files):
-        """An external folder outside the workspace holding `files`."""
-        root = Path(tempfile.mkdtemp(prefix=f"adopt_src_{os.getpid()}_{tag}_"))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        for relative, content in files:
-            path = root / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-        return root
-
-    def _source_snapshot(self, root):
-        """Every regular file under `root` by content hash, `.git` aside."""
-        snapshot = {}
-        for path in sorted(root.rglob("*")):
-            if path.is_file() and ".git" not in path.relative_to(root).parts:
-                snapshot[str(path.relative_to(root))] = hashlib.sha256(
-                    path.read_bytes()).hexdigest()
-        return snapshot
-
-    def _target(self, tag):
-        """A target path under `implementations/` that does not exist yet."""
-        box = (FORGE / "implementations"
-               / f"_adopt_{tag}_{os.getpid()}_{id(self)}")
-        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
-        return box
-
-    def _project(self):
-        """A fixture deliberation root with an empty `proposals/` directory,
-        bound to both sides that read it: the Python CLI through
-        `IMPLEMENTATION_PROPOSALS`, the engine through
-        `PROPOSAL_DELIBERATION_PROJECT_ROOT`."""
-        root = Path(tempfile.mkdtemp(prefix=f"adopt_proposals_{os.getpid()}_"))
-        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
-        (root / "proposals").mkdir()
-        return root
-
-    def run_cli(self, *args, project=None):
-        env = dict(os.environ)
-        if project is not None:
-            env["IMPLEMENTATION_PROPOSALS"] = str(project / "proposals")
-            env["PROPOSAL_DELIBERATION_PROJECT_ROOT"] = str(project)
-        proc = subprocess.run([sys.executable, str(CLI), *args],
-                              capture_output=True, text=True, cwd=FORGE,
-                              env=env)
-        return json.loads(proc.stdout or "{}"), proc.returncode, proc
-
-    def _survey(self, source, box, project, name=None):
-        return self.run_cli(
-            "adopt", "--source", str(source), "--target", str(box),
-            "--name", name or self.NAME, project=project)
-
-    def _apply(self, box, plan, project, name=None, session="s1"):
-        return self.run_cli(
-            "adopt", "--apply", "--target", str(box),
-            "--name", name or self.NAME, "--plan", str(plan),
-            "--session", session, project=project)
-
-    def _basic_source(self, tag="basic"):
-        return self._source(tag, [
-            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
-            ("draft.md", "# A short draft\n\nSome mathematics here.\n"),
-            ("README.md", "project notes\n"),
-        ])
-
-    def test_survey_leaves_the_source_untouched(self):
-        """Survey purity: the source is copied, never moved, never edited."""
-        source = self._basic_source()
-        before = self._source_snapshot(source)
-        box = self._target("purity")
-        payload, code, proc = self._survey(source, box, self._project())
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        self.assertEqual(payload["status"], "surveyed")
-        self.assertEqual(self._source_snapshot(source), before,
-                         "the survey must not write into the source")
-        self.assertFalse((source / ".git").exists(),
-                         "the survey must not git-touch the source")
-        self.assertTrue((box / "compute.py").is_file())
-        self.assertTrue((box / "adoption-plan.json").is_file())
-
-    def test_survey_writes_the_plan_binding_the_surveyed_bytes(self):
-        """The plan names the source hash, the paper candidate, the
-        reorganization scale and all thirteen scaffold gaps of a fresh tree."""
-        source = self._basic_source()
-        box = self._target("plan")
-        payload, code, proc = self._survey(source, box, self._project())
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        plan = json.loads((box / "adoption-plan.json").read_text(
-            encoding="utf-8"))
-        self.assertEqual(plan["sourceTreeHash"], payload["sourceTreeHash"])
-        self.assertEqual(plan["sourceTreeHash"], impl._adopt_tree_hash(box),
-                         "the copy hashes to the surveyed bytes once the "
-                         "plan file itself is excluded")
-        self.assertEqual(plan["paper"],
-                         {"candidate": "draft.md", "mode": "adopt-as-v1"})
-        self.assertEqual(plan["reorganization"]["scale"], "reviewable")
-        self.assertEqual(len(plan["scaffoldGaps"]), 13,
-                         "a fresh tree opens the eleven destinations plus "
-                         "the two merge anchors")
-        self.assertEqual(plan["adoptFiles"], [])
-        self.assertIn("adopt --apply", payload["nextCommand"])
-
-    def test_survey_with_no_draft_is_code_only(self):
-        """Zero candidates propose nothing: the paper leg has nothing to do."""
-        source = self._source("codeonly", [
-            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
-            ("README.md", "a readme is never the paper\n"),
-        ])
-        box = self._target("codeonly")
-        payload, code, proc = self._survey(source, box, self._project())
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        self.assertEqual(payload["paper"],
-                         {"candidate": None, "mode": "adopt-as-v1"})
-
-    def test_survey_refuses_ambiguous_drafts_before_copying_anything(self):
-        """Several drafts refuse `ADOPT_AMBIGUOUS`, and the refusal leaves no
-        target behind: choosing among drafts is the gate's decision."""
-        source = self._source("ambiguous", [
-            ("first.md", "# first\n"),
-            ("second.md", "# second\n"),
-        ])
-        box = self._target("ambiguous")
-        payload, code, proc = self._survey(source, box, self._project())
-        self.assertEqual(code, 2, proc.stdout)
-        self.assertEqual(payload["status"], "refused")
-        self.assertEqual(payload["code"], "ADOPT_AMBIGUOUS")
-        self.assertFalse(box.exists(),
-                         "a refused survey must leave nothing behind")
-
-    def test_survey_refuses_a_missing_source_and_an_existing_target(self):
-        box = self._target("guards")
-        payload, code, _ = self.run_cli(
-            "adopt", "--source", str(box.parent / "no_such_folder"),
-            "--target", str(box), "--name", self.NAME)
-        self.assertEqual(code, 2, payload)
-        self.assertEqual(payload["code"], "SOURCE_NOT_FOUND")
-        source = self._basic_source(tag="conflict")
-        box.mkdir(parents=True)
-        payload, code, _ = self._survey(source, box, self._project())
-        self.assertEqual(code, 2, payload)
-        self.assertEqual(payload["code"], "DESTINATION_CONFLICT")
-
-    def test_apply_refuses_a_stale_plan_and_writes_nothing(self):
-        """A copy that moved since the survey refuses `PLAN_STALE`: no paper
-        is placed and no migration commit lands."""
-        project = self._project()
-        source = self._basic_source(tag="stale")
-        box = self._target("stale")
-        payload, code, proc = self._survey(source, box, project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        (box / "compute.py").write_text(
-            (box / "compute.py").read_text(encoding="utf-8") + "TAMPERED = 1\n",
-            encoding="utf-8")
-        payload, code, proc = self._apply(
-            box, box / "adoption-plan.json", project)
-        self.assertEqual(code, 2, proc.stdout)
-        self.assertEqual(payload["code"], "PLAN_STALE")
+    def test_skill_root_names_the_skill_not_the_engines_own_parent(self):
         self.assertEqual(
-            list((project / "proposals").iterdir()), [],
-            "a stale apply must place no paper")
-        log = subprocess.run(["git", "-C", str(box), "log", "--oneline"],
-                             capture_output=True, text=True, check=True)
-        self.assertEqual(len(log.stdout.strip().splitlines()), 1,
-                         "a stale apply must commit no migration")
+            impl.SKILL_ROOT,
+            FORGE / "skills" / "proposal-implementation")
+        self.assertNotEqual(impl.SKILL_ROOT, ENGINE.parent)
 
-    def test_apply_refuses_a_plan_from_another_name(self):
-        """The binding covers the name as well as the bytes: `PLAN_MISMATCH`."""
-        project = self._project()
-        source = self._basic_source(tag="mismatch")
-        box = self._target("mismatch")
-        payload, code, proc = self._survey(source, box, project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        payload, code, _ = self._apply(
-            box, box / "adoption-plan.json", project, name="Other-Name")
-        self.assertEqual(code, 2, payload)
-        self.assertEqual(payload["code"], "PLAN_MISMATCH")
+    def test_a_wrong_skill_root_silently_breaks_every_kit_source_lookup(self):
+        """Measured at apply (R1, task 6.1): re-deriving `SKILL_ROOT` from
+        the engine's own `__file__` (a real, reverted edit to the moved
+        engine, run through the real seal comparison suite -- never a
+        monkeypatch, since that mutation's effect is on a real subprocess)
+        moved exactly ONE of the 28 sealed cases to a nonzero exit:
+        `materialize`. Every kit-source-reading case (`verify-a`,
+        `verify-b`, ...) was unaffected -- those fixtures' target files
+        already do not byte-match the kit's own templates, so `kitSource`
+        already reports `None` under the CORRECT root too. Design.md's own
+        prediction that the `kitSource` carriers would also move does not
+        hold for this corpus; recorded here rather than silently repeated.
 
-    def test_apply_places_the_paper_and_records_adopted_files(self):
-        """End to end: the draft becomes the managed v1 with a passing
-        consistency, the migration lands in one commit, the scaffold stage
-        writes, and a kit destination the copy already held is recorded with
-        `kind: "adopted"` — responsibility, never provenance."""
-        project = self._project()
-        source = self._source("receipt", [
-            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
-            ("draft.md", "# A short draft\n\nSome mathematics here.\n"),
-            ("tests/test_smoke.py",
-             '"""Hand-written smoke."""\n\n\ndef test_hand_written():\n'
-             "    assert True\n"),
-        ])
-        box = self._target("receipt")
-        payload, code, proc = self._survey(source, box, project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        plan = json.loads((box / "adoption-plan.json").read_text(
-            encoding="utf-8"))
-        self.assertEqual([entry["path"] for entry in plan["adoptFiles"]],
-                         ["tests/test_smoke.py"])
-        self.assertEqual(plan["adoptFiles"][0]["kind"], "adopted")
-
-        payload, code, proc = self._apply(
-            box, box / "adoption-plan.json", project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        self.assertEqual(payload["status"], "applied")
-
-        paper = payload["paper"]
-        self.assertEqual(paper["status"], "adopted")
-        self.assertEqual(paper["revision"], "research-concept-r01.md")
-        self.assertEqual(paper["consistency"]["status"], "PASS")
-        placed = project / "proposals" / "research-concept-r01.md"
-        self.assertTrue(placed.is_file())
-        with placed.open("rb") as handle:
-            self.assertEqual(
-                handle.read(len(self.MARKER.encode("utf-8"))),
-                self.MARKER.encode("utf-8"),
-                "the adopted v1 carries the managed marker as its first bytes")
-        self.assertEqual(
-            (project / "proposals" / "draft.md").exists(), False,
-            "only the managed rename stands under proposals/")
-
-        migration = payload["migration"]
-        self.assertEqual(migration["moved"], 1)
-        self.assertTrue((box / "src" / "legacy" / "compute.py").is_file())
-        self.assertTrue((box / "draft.md").is_file(),
-                        "documentation stays where it is")
-        log = subprocess.run(["git", "-C", str(box), "log", "--oneline"],
-                             capture_output=True, text=True, check=True)
-        self.assertEqual(len(log.stdout.strip().splitlines()), 2,
-                         "survey commit plus exactly one migration commit")
-
-        receipt = json.loads(
-            (box / ".implementation" / "materialization.json").read_text(
-                encoding="utf-8"))
-        entry = next(e for e in receipt["entries"]
-                     if e["path"] == "tests/test_smoke.py")
-        self.assertEqual(entry["kind"], "adopted")
-        self.assertIn("names who wrote them", entry["guarantee"])
-        self.assertEqual(
-            entry["writtenSha256"],
-            hashlib.sha256(
-                (box / "tests" / "test_smoke.py").read_bytes()).hexdigest())
-
-        structure = payload["verify"]["structure"]
-        self.assertEqual(structure["scaffoldGaps"], [])
-        self.assertEqual(structure["unrecordedScaffold"], [])
-        self.assertEqual(structure["scaffoldDrift"], [])
-        self.assertEqual(structure["objectDrift"], [])
-        self.assertEqual(structure["harnessDrift"], [])
-
-    def test_apply_without_a_draft_places_no_paper(self):
-        """Code-only adoption skips the paper leg and still migrates."""
-        project = self._project()
-        source = self._source("codeonly-apply", [
-            ("compute.py", '"""Legacy module."""\nVALUE = 41\n'),
-        ])
-        box = self._target("codeonly-apply")
-        payload, code, proc = self._survey(source, box, project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        payload, code, proc = self._apply(
-            box, box / "adoption-plan.json", project)
-        self.assertEqual(code, 0, proc.stdout + proc.stderr)
-        self.assertEqual(payload["paper"]["status"], "code-only")
-        self.assertEqual(
-            list((project / "proposals").iterdir()), [],
-            "code-only adoption places nothing under proposals/")
-        self.assertTrue((box / "src" / "legacy" / "compute.py").is_file())
+        This is the permanent, safe, in-process guard for WHY `materialize`
+        breaks: with a wrong `SKILL_ROOT`, every kit-source lookup silently
+        resolves to a path that does not exist, rather than refusing
+        loudly -- the exact silent failure mode R1 names.
+        """
+        name = "Method"
+        with unittest.mock.patch.object(impl, "SKILL_ROOT", ENGINE.parent):
+            for destination in impl.object_destinations(name):
+                source = impl.object_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)
+            for destination in impl.harness_destinations(name):
+                source = impl.harness_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)
+            for destination in impl.scaffold_destinations(name):
+                # `KIT_SEAL` is one of the 19 `SKILL_ROOT` reader lines, but
+                # bound once at IMPORT time as a module-level constant, so
+                # patching `impl.SKILL_ROOT` after import does not move it
+                # -- a fact about ITS OWN reach, not about this guard.
+                if destination.endswith(impl.KIT_SEAL.name):
+                    continue
+                source = impl.scaffold_kit_source(destination, name)
+                if source is not None:
+                    self.assertFalse(source.exists(), destination)

@@ -5,8 +5,17 @@ invocation of `scripts/implementation_cli.py`: standard library only, no keys, n
 network. Each command prints one JSON object; exit code `2` means a guard
 refused and nothing was touched.
 
-Run the CLI with a **system** interpreter (`python3`). It refuses to run from a
-forge virtualenv, so it can never hand the forge's interpreter to a target venv.
+Run the CLI with a **system** interpreter (`python3`), and it must be **3.10 or
+newer**. It refuses to run from a forge virtualenv, so it can never hand the forge's
+interpreter to a target venv — but the floor is a separate requirement from that
+refusal, and it is not enforced: under an older `python3`, `verify` reaches
+`remote-execution`'s adapter, which evaluates `tuple[int, int] | None` at import time,
+and the command dies with `TypeError: unsupported operand type(s) for |` instead of
+refusing. Worse than a crash: `main()` records that exception as an open defect, and an
+open defect then refuses `step`, `gate`, `offer`, `close`, `settle`, `apply`, `admit`
+and `materialize` until somebody closes it. Check with `python3 --version` before the
+first command; this is not the same thing as `env`'s `--python` floor for the TARGET's
+venv, which is enforced and refuses `PYTHON_BELOW_FLOOR`.
 
 ## 0. Bind the revision
 
@@ -59,7 +68,8 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py name \
 ```
 
 ```json
-{ "status": "ok", "name": "Example-Method", "package": "Example_Method" }
+{ "status": "ok", "input": "deep set", "directory": "Deep-Set",
+  "package": "Deep_Set" }
 ```
 
 It is the one command that takes no `--target`: normalizing a name runs before a
@@ -80,6 +90,7 @@ Check `pythonVersion` in the response: the templates declare `requires-python
 ```json
 {
   "command": "env",
+  "target": "…/implementations/<repo>",
   "status": "created",
   "pythonVersion": "Python 3.12.4",
   "interpreter": "…/implementations/<repo>/.venv/bin/python",
@@ -87,8 +98,11 @@ Check `pythonVersion` in the response: the templates declare `requires-python
   "nextCommand": "…/pip install -r …/assets/requirements-dev.txt -r …/requirements.txt",
   "manifests": {
     "rows": [{"name": "requirements.txt", "status": "honoured"}],
-    "args": ["-r", "…/requirements.txt"]
-  }
+    "args": ["-r", "…/requirements.txt"],
+    "absentNote": "…"
+  },
+  "lfs": {"status": "none", "patterns": []},
+  "note": "Run every target command through this interpreter. Never the forge's."
 }
 ```
 
@@ -110,8 +124,17 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py plan \
 
 ```json
 {
+  "command": "plan",
+  "target": "…/implementations/<repo>",
+  "name": "Example-Method",
   "status": "drift",
   "renames": [],
+  "referenceUpdates": [],
+  "reorganization": {
+    "decisionCount": 2,
+    "breakdown": {"moves": 2, "renames": 0, "referenceUpdates": 0},
+    "carriedFiles": 2, "limit": 15, "scale": "reviewable"
+  },
   "createDirs": ["Example-Method/Notebooks", "Example-Method/Results", "Example-Method/Models", "src/Example_Method", "tests"],
   "moves": [
     { "from": "analysis.ipynb", "to": "Example-Method/Notebooks/analysis.ipynb", "reason": "notebook" },
@@ -140,6 +163,13 @@ non-empty.
 `status` is `compliant` only when there is nothing left to decide: no move, no
 rename, no missing directory, no scaffold gap **and** no `conflicts` or
 `unclassified`. A tree `apply` is about to refuse is never reported as settled.
+
+`reorganization` sizes the whole plan before anybody reads it file by file:
+`decisionCount` is the moves, renames and reference updates added together, its
+`breakdown` says which of the three they were, `carriedFiles` counts the files that
+travel, and `scale` compares the count against `limit`. Use it to decide whether the
+plan is one a person can review in a sitting or one worth splitting; it decides
+nothing on its own.
 
 ### `renames` beats a pile of moves
 
@@ -485,8 +515,12 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py verify \
 
 ```json
 {
+  "command": "verify",
+  "target": "…/implementations/<repo>",
+  "name": "Example-Method",
   "structure": { "status": "ok", "missingDirs": [], "strayModules": [],
-                 "staleReferences": [], "scaffoldGaps": [] },
+                 "staleReferences": [], "scaffoldGaps": [],
+                 "unparsableTests": [] },
   "fidelity": {
     "status": "drift",
     "latestRevision": "research-concept-r05.md",
@@ -650,6 +684,13 @@ The ruling is written into the target and the remedy suite reads it before
 measuring anything: without it every `test_remedy_<id>` fails immediately, and a
 finding ruled inadmissible is never measured while the others still run. Only
 the verdict travels — the revision's text stays in the forge.
+
+Refuses `REVISION_UNREADABLE` when the pinned document 0 revision cannot be
+read, and, under a profile declaring more than one document,
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond it has no
+readable revision of its own (no family found, ambiguous families, or a
+discovered name that does not read) — the same code and cause every other
+binding-write command shares.
 
 Order is the whole point. A remedy that cites a missing equation or leans on
 undefined notation would otherwise be swept over 200 configurations, and those
@@ -981,10 +1022,19 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py position \
 ```
 
 ```json
-{ "status": "written", "holder": "Method/AGREED.md",
-  "wrote": [2], "left": [1], "unmeasured": [3],
+{ "command": "position", "target": "…/implementations/<repo>",
+  "name": "Example-Method",
+  "status": "written", "holder": "Method/AGREED.md",
+  "wrote": [2], "left": [1], "unmeasured": [3], "unbacked": [],
+  "revision": "research-concept-r05.md",
+  "revisionSha256": "9251935…",
   "sequence": [ "..." ] }
 ```
+
+`revisionSha256` is the hash of the revision the header is bound to, and it is
+what makes a clean `verify` mean something: a revision can be rewritten in place
+under the same filename, and only the hash catches that. `revision` names the
+file; `revisionSha256` says which bytes.
 
 `status` is `"written"` only when something actually moved — a mark flipped, or
 the header rebound to a different revision. Nothing to flip and nothing to
@@ -1524,9 +1574,12 @@ other hand edit this file does not itself perform.
 Records that some file this forge itself ships is currently wrong — a bug in
 `implementation_cli.py`, a stale claim in `SKILL.md`, anything under
 `skills/`. While it stays open, `step`, `gate`, `offer`, `close`,
-`settle`, `apply` and `admit` all refuse `FORGE_DEFECT_OPEN` for this exact
-`<target>/<name>`; `probe`, `verify`, `position`, `plan`, `compose`,
-`handoff` and `discuss` stay reachable throughout. `main()` also appends this
+`settle`, `apply`, `admit` and `materialize` all refuse `FORGE_DEFECT_OPEN` for
+this exact `<target>/<name>`; `probe`, `verify`, `position`, `plan`, `compose`,
+`handoff`, `discuss` and `propose` stay reachable throughout. Both rosters name
+every verb: a verb missing from both reads as undecided, and the two that were
+missing turned out to sit on opposite sides — `materialize` refuses, `propose`
+does not. `main()` also appends this
 same kind of event on its own, with no `defect` call at all, the moment any
 OTHER exception reaches it while dispatching a command — see SKILL.md's
 "When the forge itself crashes mid-flow".
@@ -1678,6 +1731,11 @@ refusal's own `resolve` carries:
   service account's username, which is why `workers` beside it is a count, and
   a backend name is a service name. The `discuss` command it carries does run
   unedited; paste it, answer it, and the answer lands in the record.
+- **`structure.unparsableTests`** — the test files under `tests/` whose source
+  could not be parsed, so nothing could be read out of them. A gap key names a
+  file that is MISSING; this one names a file that is there and unreadable, and
+  the difference matters because a suite that cannot be parsed is not a suite
+  that passes. `[]` when every test file parses.
 - **`structure.resolve`** — a list, one entry per gap key (`scaffoldGaps`,
   `objectGaps`, `harnessGaps`) that names anything, `[]` when the repository is
   fully materialized. Each entry names the exact `materialize --stage` that
@@ -1893,9 +1951,13 @@ is even read; the refusal is identical whether the target's ledger holds no
 appends a new event — it is never compared against, or deduplicated against,
 any prior `offer` event's answer. Refuses `OFFER_ANSWER_NOT_A_TOKEN` when
 `--answer` is given something other than `yes`/`no`, and
-`REVISION_UNREADABLE` when the pinned revision cannot be read. It does not
-touch a token an earlier `offer` already minted; see `gate`'s own closing
-paragraph for that gap, stated in full there.
+`REVISION_UNREADABLE` when the pinned revision cannot be read, and
+`DOCUMENT_REVISION_UNREADABLE` when a declared document beyond document 0
+has no readable revision of its own — no family found in its own
+directory, more than one family found there (ambiguous), or a discovered
+name that does not read; the detail names the index, label, directory and
+cause. It does not touch a token an earlier `offer` already minted; see
+`gate`'s own closing paragraph for that gap, stated in full there.
 
 Every published `launch` action's `binding` carries a minted `authorization`
 token — a digest over the engine's own re-derived binding (job, commit,
@@ -2318,19 +2380,24 @@ state, alongside the scenarios — not verified by hand once.
 Every refusal leaves the CLI through one handler and prints the same JSON:
 `status`, `code`, `detail`, exit `2`, nothing appended anywhere. Refusals a call
 to one of the ten **gating** commands can reach — `apply`, `admit`, `gate`,
-`offer`, `close`, `step`, `settle`, `materialize`, `position`, `adopt` — carry one more
-thing, and which ones carry it is itself the answer to a question:
+`offer`, `close`, `step`, `settle`, `materialize`, `position`, `agree` — carry
+one more thing. `agree` is on that roster but not on this skill's command line:
+it is registered only for a profile declaring more than one document, and this
+one declares a single document. Its codes are reachable here in the sense the
+roster means — derivable from a module-level function — and unreachable in the
+sense a reader cares about, which is that no invocation of this skill raises
+them. Which refusals carry the extra key is itself the answer to a question:
 
 > Can the caller clear this by changing the invocation alone, without touching
 > the repository?
 
 **Yes — an invocation defect.** The detail already names the flag, the token or
-the mutual exclusion. Fifty codes, and nothing is published beside them:
+the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `SETTLE_STDIN_CONFLICT`, `OFFER_ANSWER_NOT_A_TOKEN`, `MATERIALIZE_MODE_REQUIRED`,
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-four codes, including
+carries a `resolve` key saying what. Sixty-seven codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

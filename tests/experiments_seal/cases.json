@@ -1,0 +1,111 @@
+[
+  {"id": "name", "command": "name", "fixture": null, "proposals": false,
+   "argv": ["--name", "Trial"]},
+
+  {"id": "verify-a", "command": "verify", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial"]},
+
+  {"id": "verify-b", "command": "verify", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial"]},
+
+  {"id": "verify-b-declared", "command": "verify", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
+  {"id": "verify-a-declared", "command": "verify", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
+  {"id": "verify-b-undeclared", "command": "verify", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-0.md"]},
+
+  {"id": "plan-b-declared", "command": "plan", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "dataset-1.md"]},
+
+  {"id": "probe", "command": "probe", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md"]},
+
+  {"id": "position-e1", "command": "position", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1",
+            "--revision", "trial-2.md",
+            "--sequence", "[{\"text\": \"First step.\", \"witness\": {\"kind\": \"record\"}}]",
+            "--target-level", "standing"]},
+
+  {"id": "position-e0", "command": "position", "fixture": "A", "proposals": false,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1",
+            "--revision", "trial-2.md",
+            "--sequence", "[{\"text\": \"First step.\", \"witness\": {\"kind\": \"record\"}}]",
+            "--target-level", "standing"]},
+
+  {"id": "discuss", "command": "discuss", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--about", "record",
+            "--question", "Is this settled?", "--answer", "Yes."]},
+
+  {"id": "step", "command": "step", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1", "--step", "measure"]},
+
+  {"id": "settle", "command": "settle", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1",
+            "--about", "record", "--text", "New text.", "--under", "## Ladder"]},
+
+  {"id": "defect", "command": "defect", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1",
+            "--file", "<FORGE>/skills/_core/implementation/impl_refusals.py",
+            "--detail", "found an issue"]},
+
+  {"id": "walk", "command": "walk", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1"]},
+
+  {"id": "env", "command": "env", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--python", "/nonexistent/python"]},
+
+  {"id": "plan-a", "command": "plan", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial"]},
+
+  {"id": "plan-b", "command": "plan", "fixture": "B", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial"]},
+
+  {"id": "apply", "command": "apply", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--plan", "<PLAN>"]},
+
+  {"id": "propose", "command": "propose", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--session", "s1",
+            "--job", "job-1", "--worker", "w1", "--rationale", "Because it is time."]},
+
+  {"id": "gate-e1", "command": "gate", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md",
+            "--session", "s1", "--job", "job-1", "--worker", "w1",
+            "--justification", "Because it is time."]},
+
+  {"id": "offer-e1", "command": "offer", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md",
+            "--session", "s1", "--answer", "yes"]},
+
+  {"id": "close-e1", "command": "close", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md",
+            "--session", "s1"]},
+
+  {"id": "handoff-e1", "command": "handoff", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-2.md"]},
+
+  {"id": "verify-t", "command": "verify", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-t.md"]},
+
+  {"id": "admit-t", "command": "admit", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-t.md"]},
+
+  {"id": "compose-t", "command": "compose", "fixture": "T", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--finding", "heading-fix", "--entry-text",
+            "## 1\n\nOld first entry text.\n\n## 2\n\nSecond entry text.\n"]},
+
+  {"id": "agree-undeclared", "command": "agree", "fixture": "A", "proposals": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision", "trial-1.md"]},
+
+  {"id": "agree-disagree", "command": "agree", "fixture": "A", "proposals": true,
+   "crossingTarget": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision",
+            "trial-crossing-disagree.md"]},
+
+  {"id": "agree-acknowledge-one", "command": "agree", "fixture": "A",
+   "proposals": true, "crossingTarget": true,
+   "argv": ["--target", "<TARGET>", "--name", "Trial", "--revision",
+            "trial-crossing-disagree.md", "--acknowledge", "absent:5"]}
+]

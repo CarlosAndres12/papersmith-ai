@@ -1,0 +1,21 @@
+{
+  "findings": {
+    "f1": {
+      "admissible": true,
+      "adoption": {
+        "reason": "fixture",
+        "state": "unknown"
+      },
+      "impact": {
+        "citedElsewhere": 0,
+        "class": "local",
+        "introducesNotation": 0,
+        "locus": 1
+      },
+      "introduces": [],
+      "reasons": []
+    }
+  },
+  "revision": "r1.md",
+  "revisionSha256": "58b09ae2014436a88303d7ceef13ee0f7a8e1a7f6948ae79464bed1851472a8b"
+}

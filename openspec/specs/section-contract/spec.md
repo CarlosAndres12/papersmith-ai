@@ -1,0 +1,249 @@
+# Section Contract Specification
+
+## Purpose
+
+Every file under `sections/` carries a machine-readable front-matter header above
+its unchanged prose. A reader interprets the header's structure and never the
+prose, so a user who rewrites, adds, reorders, or deletes a contract still has a
+working skill. This spec pins the header schema, the two closed vocabularies
+(facts, declarations), the citations regime, the transcription rule for `after`
+edges, and the refusal each violation must raise.
+
+## Requirements
+
+### Requirement: Front Matter Schema
+
+Each contract file MUST carry a front-matter header with a mandatory `section`
+id, a mandatory `position` (rendering place), an optional `after` (list of
+section ids), an optional `mode` (the section-level default drafting mode),
+and a mandatory `blocks` list in order. Each block MUST declare `id`,
+`requires_facts`, `requires_declarations`, and `citations`; each block MAY
+declare `optional`, its own `after`, its own `mode` (overriding the
+section-level default when present), and a `figure` object. A `figure`
+object, when present, MUST declare `ordered`, `excludes`,
+`caption_enumerates`, `caption_decodes`, and `mandatory`; it MAY additionally
+declare `components_from`, naming the one fact whose value IS the diagram's
+full expected component list — declared only when that equality genuinely
+holds (the diagram is that one fact's own list by contract), and omitted (or
+explicit `null`) for a block whose diagram is a composite crossing over
+several categories of content that no single fact's value can equal. A
+header missing any mandatory field, carrying a key outside this widened
+schema, or a `figure` object missing any of its five required subkeys, MUST
+refuse `MALFORMED_HEADER` (or `MALFORMED_FIGURE_OBLIGATION` for the `figure`
+case) naming the missing or unknown key. Everything below the header MUST be
+passed through unread.
+
+#### Scenario: Valid header parses
+
+- GIVEN a contract file with `section`, `position`, and a `blocks` list where
+  every block carries `id`, `requires_facts`, `requires_declarations`, `citations`
+- WHEN the reader parses it
+- THEN it returns a structured header with no refusal
+
+#### Scenario: Missing mandatory field refuses
+
+- GIVEN a contract file whose header omits `position`
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `position`
+
+#### Scenario: A block inherits the section-level mode
+
+- GIVEN a header declaring `mode` at the top level and a block that declares
+  no `mode` of its own
+- WHEN the reader resolves that block's effective mode
+- THEN it resolves to the section-level `mode`
+
+#### Scenario: A block's own mode overrides the section-level default
+
+- GIVEN a header declaring `mode` at the top level and one block declaring a
+  different `mode`
+- WHEN the reader resolves that block's effective mode
+- THEN it resolves to the block's own `mode`, not the section's
+
+#### Scenario: A valid `figure` object parses
+
+- GIVEN a block declaring `figure: {components_from: contributions, ordered:
+  true, excludes: [dataset, baseline], caption_enumerates: true,
+  caption_decodes: true, mandatory: true}`
+- WHEN the reader parses it
+- THEN it accepts the block with no refusal
+
+#### Scenario: A `figure` object missing a subkey refuses
+
+- GIVEN a block's `figure` object with no `caption_decodes` key
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_FIGURE_OBLIGATION` naming `caption_decodes`
+
+#### Scenario: A `figure` object without `components_from` parses
+
+- GIVEN a block declaring `figure: {ordered: false, excludes: [], caption_enumerates: true,
+  caption_decodes: false, mandatory: true}` (no `components_from` key)
+- WHEN the reader parses it
+- THEN it accepts the block with no refusal, and `components_from` resolves to `None`
+
+### Requirement: Closed Fact Vocabulary
+
+`requires_facts` entries MUST be drawn only from the ten ids: `formulation`,
+`contributions`, `problem-statement`, `gap`, `dataset`, `experimental-design`,
+`implementation`, `results`, `limitations`, `skeleton`. A fact id outside this
+set MUST refuse `UNKNOWN_FACT` naming the offending id, derived from one
+declaration so an unclassified value goes red rather than silent.
+
+#### Scenario: A listed fact parses
+
+- GIVEN a block declaring `requires_facts: [results]`
+- WHEN the reader parses it
+- THEN it accepts `results` with no refusal
+
+#### Scenario: An unlisted fact refuses
+
+- GIVEN a block declaring `requires_facts: [discussion]`
+- WHEN the reader parses it
+- THEN it refuses `UNKNOWN_FACT` naming `discussion`
+
+### Requirement: Closed Declaration Vocabulary
+
+`requires_declarations` entries MUST be drawn only from: `author-roles`,
+`grant-title`, `grant-code`, `repository-url`, `keyword-bounds`,
+`classification-line` — operator-supplied inputs derived from no fact. A
+declaration id outside this set MUST refuse `UNKNOWN_DECLARATION` naming the
+offending id, derived from the same one-declaration mechanism as the fact
+vocabulary.
+
+#### Scenario: A listed declaration parses
+
+- GIVEN back matter's Author Contributions block declaring
+  `requires_declarations: [author-roles]`
+- WHEN the reader parses it
+- THEN it accepts `author-roles` with no refusal
+
+#### Scenario: An unlisted declaration refuses
+
+- GIVEN a block declaring `requires_declarations: [reviewer-name]`
+- WHEN the reader parses it
+- THEN it refuses `UNKNOWN_DECLARATION` naming `reviewer-name`
+
+### Requirement: Closed Citations Regime
+
+Each block's `citations` MUST be exactly one of `discovery`, `resolution`, or
+`none`. Any other value MUST refuse `UNKNOWN_CITATIONS_REGIME` naming the
+offending value.
+
+#### Scenario: A valid regime parses
+
+- GIVEN a block declaring `citations: discovery`
+- WHEN the reader parses it
+- THEN it accepts the value with no refusal
+
+#### Scenario: An invalid regime refuses
+
+- GIVEN a block declaring `citations: maybe`
+- WHEN the reader parses it
+- THEN it refuses `UNKNOWN_CITATIONS_REGIME` naming `maybe`
+
+### Requirement: Byte-Clean Header Insertion
+
+Inserting front matter into the ten shipped contracts MUST NOT change one byte
+of the prose below the header. The acceptance evidence is a digest of each
+file's body computed before and after insertion, per file, matching exactly.
+A visual review is not evidence.
+
+#### Scenario: Digest matches after insertion
+
+- GIVEN the ten `sections/*.md` files as committed before this change, and their
+  post-header bodies after this change
+- WHEN a digest is computed over each file's body below the header, both before
+  and after
+- THEN the ten before/after digest pairs are byte-identical
+
+### Requirement: Transcribed `after` Edges Only
+
+An `after` edge MUST be admitted only when the contract's own prose states it.
+Across the ten shipped contracts exactly three edges exist: section `abstract`
+after section `conclusions` (conclusions' own prose: "The abstract is written
+after this section, because it compresses it"); the introduction's block 3
+after section `related-work` (introduction's own prose: "When a Related Work
+section exists, this block is written after it"); and section
+`title-and-keywords` after every section the `skeleton` fact declares as body
+(title-and-keywords' own prose: "Every keyword appears in the body" resolved
+against the skeleton's body-section list). A test MUST assert the shipped edge
+set is exactly these three; a fourth or different edge on any shipped contract
+fails that test.
+
+#### Scenario: The shipped edge set is exactly three
+
+- GIVEN the ten contracts' parsed headers
+- WHEN every `after` edge, section- and block-level, is collected
+- THEN the collected set contains exactly the three transcribed edges above and
+  no other
+
+#### Scenario: An invented edge on a shipped contract fails
+
+- GIVEN a shipped contract's header edited to add a fourth `after` edge not
+  backed by that contract's own prose
+- WHEN the edge-set test runs
+- THEN it fails, naming the untranscribed edge
+
+#### Implementation note (recorded at apply, not re-opening the decision)
+
+The third edge above — `title-and-keywords` after every section the
+`skeleton` fact declares as body — is implemented as **position-derived**,
+not enumerated in `title-and-keywords`'s header and not resolved against the
+`skeleton` fact. Measured at design time: `skeleton` occurs exactly once
+across all ten contracts (`sections/06-introduction.md`, unblocking
+introduction block 6) and names no body-section list anywhere, so the literal
+resolution this scenario's parenthetical describes has nothing to read. The
+reader instead computes "the body" as every section whose `position` is
+strictly between `abstract`'s and `back-matter`'s (positions 3–9), looked up
+by section id and never by a hardcoded integer or a filename — the same
+seven targets design.md's rejected "enumerate seven targets" option would
+have named. `tests/test_paper_contract.py::GraphTests` therefore holds two
+separate assertions rather than one three-element set: exactly two literal,
+header-declared cross-section `after` edges (`abstract`→`conclusions`,
+`introduction.block-3`→`related-work`), and the third edge proven separately
+as a property of the derived writing order. This document's scenario above
+is left as written, historically accurate about the intended data-vs-code
+split; this note is the correction for a reader implementing it today.
+
+### Requirement: Headers Written Before `mode` Existed
+
+`sections/*.md` carry no front-matter header as committed today — Phase 2's
+insertion has not landed. If a header is ever inserted without `mode` before
+this widening lands, that header remains schema-valid after this change: an
+absent `mode` at both levels is optional absence, not a violation. Such a
+block resolves to no effective mode, and `write`'s readiness stage MUST
+refuse to draft it rather than assume a mode. The schema alone cannot
+distinguish "no mode was ever transcribed" from "a mode was removed" — both
+are the same absent key — so the remedy is never a code-guessed value: an
+operator transcribes `mode` from the contract's own prose, the same as any
+`after` edge, and a header is never silently rewritten by inference.
+
+#### Scenario: A header with no mode at either level cannot be drafted
+
+- GIVEN a block whose header declares no `mode`, at section or block level
+- WHEN `write`'s readiness stage evaluates that block
+- THEN it refuses rather than assuming a default mode
+
+### Requirement: Closed Mode Vocabulary And Transcription
+
+A `mode` declaration, at either level, MUST be an object carrying `value`
+(exactly one of `transposition` or `argument`) and `source` (`{file, quote}`)
+— the same shape `_validate_after_list` already enforces for `after` edges.
+A `value` outside the pair MUST refuse `UNKNOWN_MODE` naming the offending
+value. `mode` MUST be admitted only where the contract's own prose states it,
+mirroring the transcription discipline already required of `after` edges.
+
+#### Scenario: A valid mode value parses
+
+- GIVEN a block declaring `mode: {value: transposition, source: {file:
+  "01-materials-and-methods.md", quote: "The proposal already exists. This
+  section does not choose it, improve it, or argue for it"}}`
+- WHEN the reader parses it
+- THEN it accepts `transposition` with no refusal
+
+#### Scenario: An invalid mode value refuses
+
+- GIVEN a block declaring `mode: {value: exposition, source: {file: "...",
+  quote: "..."}}`
+- WHEN the reader parses it
+- THEN it refuses `UNKNOWN_MODE` naming `exposition`

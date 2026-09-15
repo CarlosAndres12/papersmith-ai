@@ -4,11 +4,17 @@ import { lstat, mkdir, open, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, normalize, relative, resolve, sep } from 'node:path';
 import { writeTask } from './runtime-metrics.js';
 import { resolveLatestManagedRevision } from './revision-lifecycle-store.js';
+import { documentPath } from './artifact-naming.js';
 
 const DEFAULT_DRAFT_DIRECTORY = 'drafts';
 const DEFAULT_ALLOWED_EXTENSIONS = ['.md'] as const;
 const MAX_DRAFT_BYTES = 256 * 1024;
-const MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n');
+// Finding M7: this file used to also declare a hardcoded
+// `MANAGED_ARTIFACT_MARKER = Buffer.from('<!-- proposal-workspace:artifact:v1 -->\n')`
+// here. Unlike `patch-compiler.ts`'s copy, this one had zero readers anywhere in the
+// file -- dead from the moment it was written, not merely wrong for a domain that
+// changed its marker. Deleted rather than rewired to `artifact.marker`, since wiring a
+// value nothing reads would still leave a declaration with no reason to exist.
 const SAFE_METADATA_PART = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export type DraftDocumentMetadata = {
@@ -129,7 +135,7 @@ export function defaultDraftNamingStrategy(metadata: DraftNamingInput): string {
 async function defaultManagedDocumentInventory(projectRoot: string): Promise<readonly ManagedDocumentInventoryEntry[]> {
 	const resolution = await resolveLatestManagedRevision(projectRoot, { markerOwned: true }).catch(() => undefined);
 	if (!resolution || resolution.status === 'empty') return [];
-	return [{ path: `proposals/${resolution.latest.filename}`, revision: String(resolution.latest.revisionNumber) }];
+	return [{ path: documentPath(resolution.latest.filename), revision: String(resolution.latest.revisionNumber) }];
 }
 
 function resolvePolicy(policy: DraftMaterializationPolicy): ResolvedPolicy {
