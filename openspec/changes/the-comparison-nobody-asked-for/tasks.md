@@ -771,11 +771,12 @@ Chain strategy: pending
   "uncommitted seal corpus" mutation-proof control every prior unit
   documented, clears on commit). `tests.test_implementation_domain_lock`
   28/28 after the pin recount above.
-- **Authored-line count**: `git diff --numstat` totals 682 changed lines
-  (604 insertions/78 deletions) across 8 files; excluding the two
+- **Authored-line count**: `git diff --numstat f5c3511 HEAD` (the full unit,
+  both commits, against Unit 6c's own closing commit) totals 852 changed
+  lines (757 insertions/95 deletions) across 8 files; excluding the two
   generated-goldens seal corpora (18 lines, mechanically regenerated, not
-  authored) that is **664 authored lines against the ~1000 floor** —
-  roughly two-thirds of the floor, not an overrun. Reported honestly
+  authored) that is **834 authored lines against the ~1000 floor** —
+  roughly five-sixths of the floor, not an overrun. Reported honestly
   rather than padded: this unit's own measured ripple (above) was
   genuinely smaller than the design's own worst-case forecast, which the
   design itself named as a floor precisely because it could not rule out
