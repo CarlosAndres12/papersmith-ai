@@ -3881,7 +3881,8 @@ class UsageReferenceTests(unittest.TestCase):
 # touched, and the wall between reporting and repairing is the product.
 # ==========================================================================
 
-REPORT = (FORGE / "openspec" / "changes" / "the-skill-that-audits-the-others"
+REPORT = (FORGE / "openspec" / "changes" / "archive"
+          / "2026-09-14-the-skill-that-audits-the-others"
           / "audit-proposal-deliberation-operations.md")
 
 #: Not a private copy. This slice deletes the one that used to live here and
