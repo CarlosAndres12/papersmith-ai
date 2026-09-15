@@ -2054,18 +2054,18 @@ def undeclared_ladder_state(target: Path, name: str,
     """
     if levels:
         return None
-    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return None
     # The file that WOULD carry it, chosen in the order
     # `resolve_levels_declaration` reads them, so the path named here is the
     # one a reader's own declaration would actually be found at.
     holder = next((candidate for candidate in ("__init__.py", "config.py")
-                   if (bench_root / candidate).is_file()), None)
+                   if (root / candidate).is_file()), None)
     if holder is None:
         return None
     return {"declaration": LEVELS_DECLARATION,
-            "path": (bench_root / holder).relative_to(target).as_posix(),
+            "path": (root / holder).relative_to(target).as_posix(),
             "consequence": LADDER_UNDECLARED_CONSEQUENCE}
 
 
@@ -2214,15 +2214,15 @@ def undeclared_records_state(target: Path, name: str, records: dict) -> dict | N
     """
     if records:
         return None
-    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return None
     holder = next((candidate for candidate in ("__init__.py", "config.py")
-                   if (bench_root / candidate).is_file()), None)
+                   if (root / candidate).is_file()), None)
     if holder is None:
         return None
     return {"declaration": RECORDS_DECLARATION,
-            "path": (bench_root / holder).relative_to(target).as_posix(),
+            "path": (root / holder).relative_to(target).as_posix(),
             "consequence": RECORDS_UNDECLARED_CONSEQUENCE}
 
 
@@ -2289,16 +2289,16 @@ def undeclared_produces_state(target: Path, name: str, steps: dict) -> list[dict
     """
     if not steps:
         return []
-    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return []
     holder = next((candidate for candidate in ("__init__.py", "config.py")
-                   if (bench_root / candidate).is_file()), None)
+                   if (root / candidate).is_file()), None)
     if holder is None:
         return []
     return [{"step": step, "declaration": f"{STEPS_DECLARATION}[{step!r}]"
                                           f"[{PRODUCES_KEY!r}]",
-             "path": (bench_root / holder).relative_to(target).as_posix(),
+             "path": (root / holder).relative_to(target).as_posix(),
              "consequence": PRODUCES_UNDECLARED_CONSEQUENCE}
             for step, entry in sorted(steps.items())
             if not (isinstance(entry, dict) and entry.get(PRODUCES_KEY))]
@@ -2432,16 +2432,16 @@ def undeclared_step_notebooks_state(target: Path, name: str,
     """
     if not steps:
         return []
-    bench_root = target / "src" / f"{package_name(name)}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return []
     holder = next((candidate for candidate in ("__init__.py", "config.py")
-                   if (bench_root / candidate).is_file()), None)
+                   if (root / candidate).is_file()), None)
     if holder is None:
         return []
     return [{"step": step, "declaration": f"{STEPS_DECLARATION}[{step!r}]"
                                           f"[{PRODUCES_KEY!r}]",
-             "path": (bench_root / holder).relative_to(target).as_posix(),
+             "path": (root / holder).relative_to(target).as_posix(),
              "consequence": STEP_NOTEBOOK_UNDECLARED_CONSEQUENCE}
             for step, entry in sorted(steps.items())
             if not _step_notebook_roots(entry if isinstance(entry, dict)
@@ -4470,16 +4470,224 @@ def scaffold_kit_source(destination: str, name: str) -> Path | None:
     return mapping.get(destination)
 
 
+#: The four sibling literals `authored_package_init` prefills, with their
+#: guidance comments, restated here rather than imported so this file never
+#: depends on the harness for its own production path
+#: (`test_the_production_engine_never_reaches_the_harness`) — the same reason
+#: `_DEFAULT_PYPROJECT` states for itself. Moved out of the kit's scaffold
+#: asset (`assets/kit/src_benchmark/__init__.py`) onto this engine-authored
+#: destination (design D10): `revision`/`premises` (design D1) and
+#: `__levels__`/`__steps__`/`__records__` (design D2) are all facts about the
+#: METHOD, not the comparison, so they travel with `src/<Package>/__init__.py`
+#: rather than staying behind in `src/<Package>_Benchmark/__init__.py`.
+#:
+#: Prefilled empty rather than left absent, for the identical reason the kit's
+#: own scaffold always has: `resolve_*`'s blank-is-undeclared machinery treats
+#: the two the same, but the comment naming each field is what SKILL.md's own
+#: steps point an agent at — deleting it would replace a template with an
+#: instruction to remember four field names by heart.
+_DEFAULT_PACKAGE_DECLARATIONS = (
+    "__implementation__ = {\n"
+    '    # The managed revision this declaration is bound to, e.g. "r01.md" --\n'
+    "    # a filename under proposals/,\n"
+    "    # asked for by the flow, never invented here.\n"
+    '    "revision": "",\n'
+    "\n"
+    "    # What kind of prediction the protocol assumes, over which unit,\n"
+    "    # by which metric and in which direction it is judged, e.g.:\n"
+    '    #     "premises": {\n'
+    '    #         "prediction": "a class label per subject",\n'
+    '    #         "statisticalUnit": "subject",\n'
+    '    #         "metric": "balancedAccuracy",\n'
+    '    #         "direction": "higher",\n'
+    "    #     }\n"
+    '    "premises": {},\n'
+    "}\n"
+    "\n"
+    "# The ordered ladder of rungs a position-section step can reach, entirely\n"
+    "# in this repository's own words -- the forge holds no rung name of its\n"
+    "# own, only the arithmetic that compares two of these names by position\n"
+    "# (see `impl_position.level_index`). A step earns a rung by naming this\n"
+    "# file's own ladder explicitly on its witness (`` `@rehearsal:level <job>`\n"
+    "# `` in `AGREED.md`'s position section); a step with no `:level` marker is\n"
+    "# two-state and never reads this list at all. Left empty until named -- a\n"
+    "# repository whose position items are entirely two-state needs no ladder\n"
+    "# here, and one is never invented on its behalf. A second, independent\n"
+    "# top-level literal, held apart from `__implementation__` above for the\n"
+    "# same reason `resolve_levels_declaration`'s own docstring states.\n"
+    "#\n"
+    "# Example (a repository with no remote service at all still has a ladder):\n"
+    '#     __levels__ = ["local", "cluster"]\n'
+    "__levels__: list = []\n"
+    "\n"
+    "# A callable this repository's own code can run, isolated, under this\n"
+    "# repository's own venv -- named and resolved statically by the forge\n"
+    "# (module + function, never imported here), then imported and called\n"
+    "# inside the target's own interpreter, never the forge's. A third,\n"
+    "# independent top-level literal, held apart from `__implementation__` for\n"
+    "# the identical reason `__levels__` is: see `resolve_steps_declaration`'s\n"
+    "# own docstring. Left empty until a step exists -- a repository with\n"
+    "# nothing local to run in isolation needs none, and one is never invented\n"
+    "# on its behalf.\n"
+    "#\n"
+    "# Each entry carries `module` and `function`, and one further key that is\n"
+    "# asked of every step and defaulted for none: `produces`, the list of\n"
+    "# path roots -- relative to the product folder -- that this step and only\n"
+    "# this step writes into. `step` snapshots the product folder before and\n"
+    "# after every run and reports what changed on each side of those roots,\n"
+    "# which is the only way it can tell a step that returned having written\n"
+    "# nothing from one that produced its whole output, or a step that stayed\n"
+    "# in its own tree from one that wrote into a neighbour's. Leave it out\n"
+    "# and BOTH readings are switched off for that step: `verify` says so, per\n"
+    "# step, in `undeclaredProduces`, and nothing here defaults a root on your\n"
+    "# behalf -- the forge never guesses which work belongs to which step.\n"
+    "#\n"
+    "# The pattern that key exists to make possible, and the one worth\n"
+    "# scaffolding on the first day rather than discovering after a run: a\n"
+    "# flow has two kinds of step, and each one owns a notebook.\n"
+    "#\n"
+    "#   - a step that COMPUTES -- it orchestrates this package's own\n"
+    "#     library, writes data, and draws nothing;\n"
+    "#   - a step that DRAWS -- it reads what the computing step left on\n"
+    "#     disk and renders tables, figures and conclusions.\n"
+    "#\n"
+    "# Each names its own notebook among its `produces` roots, so a pilot\n"
+    "# executes both of them AS notebooks. That is the point of the split:\n"
+    "# the artefact that is later handed to a worker elsewhere is a\n"
+    "# notebook, so a pilot that exercises anything else has not tested\n"
+    "# what gets sent.\n"
+    "#\n"
+    "# Collapsing the two into one step is a legitimate design and nothing\n"
+    "# in this forge refuses it -- but what it costs is written down here\n"
+    "# so the choice is made rather than defaulted into. A figure can no\n"
+    "# longer be redrawn without paying for the computation behind it\n"
+    "# again; and whichever half is left outside a notebook is the half\n"
+    "# the pilot never exercised in the shape it will be sent in. `verify`\n"
+    "# says so, per step, in `undeclaredStepNotebooks`, and it never\n"
+    "# refuses -- it names what the absence costs and leaves the design\n"
+    "# yours.\n"
+    "#\n"
+    "# And one more key, asked of every step and defaulted for none:\n"
+    "# `placement`, which says WHERE the step runs once the flow leaves\n"
+    "# rehearsal scale -- \"local\" on this machine, or \"remote\" on a worker.\n"
+    "# A remote one also names two more: the `job` folder that carries it\n"
+    "# and the `service` that folder lives under. Nothing else ties a step\n"
+    "# to a job, and the forge deliberately does not invent that link --\n"
+    "# which work goes through which job folder is this repository's\n"
+    "# layout, not the forge's to guess. The service is yours to name for\n"
+    "# a harder reason: the forge may read a service name to walk a\n"
+    "# directory and must reduce it to a count before returning anything,\n"
+    "# so nothing there can name one, and it cannot discover one either --\n"
+    "# adapters register lazily, so the registry is empty until somebody\n"
+    "# names one.\n"
+    "#\n"
+    "# It is a DECLARATION and not a decision recorded somewhere else, and\n"
+    "# the reason is worth having on the first day. That routing gets\n"
+    "# decided in conversation, and a conversation lands in the ledger\n"
+    "# under `.implementation/` -- free prose, in a directory `.gitignore`\n"
+    "# excludes. So a decision left there can be neither consumed (nothing\n"
+    "# parses a sentence into a route) nor travelled with (a clone\n"
+    "# receives none of it), while the walk that has to act on it runs\n"
+    "# from a clone. The ledger keeps the REASON, with its numbers; this\n"
+    "# key carries the FACT, which is the half a machine reads.\n"
+    "#\n"
+    "# Leave it out and the walk cannot route that step: it knows the step\n"
+    "# exists, what it produces and where it sits in the order, and not\n"
+    "# whether it runs here or elsewhere. `verify` says so, per step, in\n"
+    "# `undeclaredPlacement`, and it never refuses -- but nothing defaults\n"
+    "# it either. Routing an unrouted step by convention is how a run\n"
+    "# measured in days lands somewhere nobody chose, so `probe`'s own\n"
+    "# `flowActs` reports that step as `blocked` and names what is missing\n"
+    "# rather than picking for you.\n"
+    "#\n"
+    "# Example -- two steps, each owning its own notebook, each saying\n"
+    "# where it runs:\n"
+    "#     __steps__ = {\n"
+    '#         "computation": {\n'
+    '#             "module": "Example_Method_Benchmark.steps",\n'
+    '#             "function": "run_computation",\n'
+    "#             # Where this step sits in the order, and what it\n"
+    "#             # consumes from the steps above it. `advances` is the\n"
+    "#             # position item this step produces evidence for;\n"
+    "#             # `reads` is empty here because nothing precedes it,\n"
+    "#             # and an empty list is an answer -- it is what tells a\n"
+    "#             # remote rehearsal there is no upstream output to wait\n"
+    "#             # for.\n"
+    '#             "advances": 1,\n'
+    '#             "reads": [],\n'
+    "#             # Writes data and draws nothing. Its notebook is what\n"
+    "#             # the pilot executes and what a worker elsewhere would\n"
+    "#             # be handed.\n"
+    '#             "produces": ["Results/computation",\n'
+    '#                          "Notebooks/computation.ipynb"],\n'
+    "#             # The expensive half, so it goes to a worker at full\n"
+    "#             # scale -- and it names the job folder that carries it\n"
+    "#             # there.\n"
+    '#             "placement": "remote",\n'
+    '#             "job": "computation",\n'
+    '#             "service": "the-service-you-send-to",\n'
+    "#         },\n"
+    '#         "rendering": {\n'
+    '#             "module": "Example_Method_Benchmark.steps",\n'
+    '#             "function": "run_rendering",\n'
+    '#             "advances": 2,\n'
+    "#             # What it consumes, named: this is the link a remote\n"
+    "#             # rehearsal reads to refuse before opening a notebook\n"
+    "#             # whose inputs are not there yet, naming each missing\n"
+    "#             # root and which step writes it.\n"
+    '#             "reads": ["Results/computation"],\n'
+    "#             # Reads what \"computation\" left behind and renders. It\n"
+    "#             # writes no data of its own, so its notebook is the\n"
+    "#             # whole of what it produces -- and it can be re-run on\n"
+    "#             # its own, without paying for the computation again.\n"
+    '#             "produces": ["Notebooks/rendering.ipynb"],\n'
+    "#             # Seconds of drawing, and the artefact a person reads.\n"
+    "#             # Sending it to a worker would put the thing somebody\n"
+    "#             # has to read behind a download and buy nothing, so it\n"
+    "#             # stays here and names no job.\n"
+    '#             "placement": "local",\n'
+    "#         },\n"
+    "#     }\n"
+    "__steps__: dict = {}\n"
+    "\n"
+    "# A target-chosen name mapped to the record it addresses -- a leveled\n"
+    "# `@record:level <name>` witness in AGREED.md's position section reaches\n"
+    "# exactly one entry here, deriving its rung through the identical\n"
+    "# arithmetic the benchmark's own `search` block already uses\n"
+    "# (`impl_position._record_scale_level`). A fourth, independent top-level\n"
+    "# literal, held apart from `__implementation__` for the identical reason\n"
+    "# `__levels__`/`__steps__` are: see `resolve_records_declaration`'s own\n"
+    "# docstring. Left empty until a record is named -- a repository whose\n"
+    "# leveled `@record` witness stays the bare, operand-less form needs no\n"
+    "# entry here, and one is never invented on its behalf.\n"
+    "#\n"
+    "# Example:\n"
+    "#     __records__ = {\n"
+    '#         "main": {\n'
+    '#             "path": "product/results.json",\n'
+    '#             "requiredScale": {"seeds": 3},\n'
+    "#         },\n"
+    "#     }\n"
+    "__records__: dict = {}\n"
+)
+
+
 def authored_package_init(name: str) -> str:
     """`src/<Package>/__init__.py`'s content: authored, never copied.
 
     Exports the target's own modules, and step 9 has written none of them
-    yet, so it exports nothing.
+    yet, so it exports nothing. Grows, after the docstring and `__all__`, the
+    four sibling declarations `_DEFAULT_PACKAGE_DECLARATIONS` prefills empty
+    (design D10): `__implementation__`, `__levels__`, `__steps__`,
+    `__records__`, in that order — declarations after exports, so a later
+    edit to `__all__` and a later edit to a declaration never collide in the
+    same region of the file.
     """
     return (f'"""Reference implementation of the {name} {ARTIFACT_NOUN}.\n\n'
             f"{AUTHORED_INIT_SENTENCE}"
             '"""\n\n'
-            "__all__ = []\n")
+            "__all__ = []\n\n"
+            f"{_DEFAULT_PACKAGE_DECLARATIONS}")
 
 
 def writable_at_scaffold_time(source: str) -> bool:
@@ -6557,20 +6765,25 @@ def read_declaration(path: Path, name: str) -> dict | None:
 
 #: The seven top-level blocks the kit's scaffold writes (see
 #: `assets/kit/src_benchmark/__init__.py`), and the value each one carries when
-#: nobody has answered it yet: `""` for the lone scalar, `{}` for the six
-#: containers. Named once here so "blank" has one definition every reader of
-#: the resolver's `"declared"`/`"undeclared"` split shares, rather than each
-#: caller inventing its own idea of empty.
+#: nobody has answered it yet: `{}` for every container. Named once here so
+#: "blank" has one definition every reader of the resolver's
+#: `"declared"`/`"undeclared"` split shares, rather than each caller
+#: inventing its own idea of empty.
+#:
+#: Movement 2 (design D1) moved `revision` and `premises` off this mapping
+#: and into `IMPLEMENTATION_BLOCKS`: they are facts about the METHOD, not
+#: about the comparison, and `__benchmark__` is the comparison's own file.
+#: Five blocks remain here, not seven.
 BENCHMARK_BLOCKS = {
-    "revision": "", "premises": {}, "arms": {},
-    "search": {}, "report": {}, "distribution": {},
+    "arms": {}, "search": {}, "report": {}, "distribution": {},
     "entry": {"module": "", "function": ""},
 }
 
 
-def _declaration_is_blank(contract: dict) -> bool:
-    """True when every block is present at its empty value — a scaffold
-    nobody has written into yet, not a declaration with content.
+def _declaration_is_blank(contract: dict, blocks: dict = BENCHMARK_BLOCKS) -> bool:
+    """True when every block in `blocks` is present at its own empty value in
+    `contract` — a scaffold nobody has written into yet, not a declaration
+    with content.
 
     Emptiness means something different at this level than it does inside a
     single block: `distribution_state` already treats `perEnvironment: []` as
@@ -6579,14 +6792,19 @@ def _declaration_is_blank(contract: dict) -> bool:
     the whole `distribution` block is empty" the same way — a blank *block* is
     unambiguously unanswered, never a result.
 
-    Compared against `BENCHMARK_BLOCKS`' own template value rather than bare
-    truthiness, because `entry`'s blank value is `{"module": "", "function":
-    ""}` — a non-empty dict, unlike every other block's `{}` or `""`. Bare
-    truthiness would read that dict as an answer nobody gave, the moment a
-    target is first materialized.
+    Compared against each block's own template value rather than bare
+    truthiness, because `BENCHMARK_BLOCKS["entry"]`'s blank value is
+    `{"module": "", "function": ""}` — a non-empty dict, unlike every other
+    block's `{}` or `""`. Bare truthiness would read that dict as an answer
+    nobody gave, the moment a target is first materialized.
+
+    Generalized over `blocks` rather than an eighth hardcoded shape (design
+    D1): `resolve_implementation_declaration` calls this with
+    `IMPLEMENTATION_BLOCKS`, its own two-block mapping, rather than teaching
+    this function a second declaration's blank rule by hand.
     """
     return all(contract.get(block, value) == value
-               for block, value in BENCHMARK_BLOCKS.items())
+               for block, value in blocks.items())
 
 
 def resolve_benchmark_declaration(target: Path, name: str) -> dict:
@@ -6620,7 +6838,7 @@ def resolve_benchmark_declaration(target: Path, name: str) -> dict:
 
     **A blank literal is `"undeclared"`, not `"declared"`.** The kit's scaffold
     (`assets/kit/src_benchmark/__init__.py`) writes a `__benchmark__` that
-    parses cleanly — seven blocks, each at its empty value — the moment a
+    parses cleanly — five blocks, each at its empty value — the moment a
     target is materialized, before anybody has answered a single one. Treating
     a successful parse alone as `"declared"` would make that scaffold read as
     a finished declaration on the day it is created, which is the defect this
@@ -6668,6 +6886,87 @@ def resolve_benchmark_declaration(target: Path, name: str) -> dict:
             "detail": None, "contract": declaration}
 
 
+def declaration_root(target: Path, name: str) -> Path:
+    """The one shared root `resolve_implementation_declaration` and its three
+    first-flow siblings (`resolve_levels_declaration`, `resolve_steps_declaration`,
+    `resolve_records_declaration`) all read from: the method's own package,
+    never the comparison's (design D2).
+
+    `resolve_benchmark_declaration` keeps its own `bench_root`, unrouted
+    through this seam on purpose — the two roots answer genuinely different
+    questions after Movement 2, and folding them together would be the next
+    drift this file would have to close.
+    """
+    return target / "src" / package_name(name)
+
+
+#: What the method's own package declares about the document it was written
+#: against, and the yardstick it is judged by — split out of `__benchmark__`
+#: (design D1) because both are facts about the METHOD, not about the
+#: comparison: `src/<Package>_Benchmark/__init__.py` is the comparison's own
+#: file, and neither belongs there.
+IMPLEMENTATION_DECLARATION = "__implementation__"
+
+#: The two blocks `__implementation__` binds, and the value each carries when
+#: nobody has answered it yet. Fourth member of the `__levels__`/`__steps__`/
+#: `__records__` family living beside it in `src/<Package>/__init__.py`.
+IMPLEMENTATION_BLOCKS = {"revision": "", "premises": {}}
+
+
+def resolve_implementation_declaration(target: Path, name: str) -> dict:
+    """The one place every reader gets `__implementation__` from.
+
+    Mirrors `resolve_benchmark_declaration` one size down: the same
+    `{status, path, detail, contract}` quadruple, the same
+    `absent`/`undeclared`/`declared` vocabulary, and the same
+    blank-is-undeclared rule (`_declaration_is_blank`, called with
+    `IMPLEMENTATION_BLOCKS` rather than taught a second hardcoded shape —
+    that function's own docstring forbids the latter).
+
+    `status` is `"absent"` only when `declaration_root(target, name)` itself
+    does not exist — which, once the scaffold stage has run, never happens:
+    every scaffolded target has `src/<Package>/__init__.py`. Searched in the
+    same `__init__.py`-first, `config.py`-second order
+    `resolve_benchmark_declaration` uses, for the identical reason: a target
+    may bind `__implementation__` in `config.py` alone.
+
+    **`premises` has no reader beyond this one.** Its content stays
+    unvalidated; only its location changed, exactly as ruled (design D1).
+    """
+    root = declaration_root(target, name)
+    if not root.is_dir():
+        return {"status": "absent", "path": None, "detail": None, "contract": {}}
+    declaration = None
+    found = None
+    for candidate in ("__init__.py", "config.py"):
+        path = root / candidate
+        result = read_declaration(path, IMPLEMENTATION_DECLARATION)
+        if result is not None:
+            declaration, found = result, path
+            break
+    if declaration is None:
+        return {
+            "status": "undeclared", "path": None,
+            "detail": f"no {IMPLEMENTATION_DECLARATION} in __init__.py or "
+                      "config.py: nothing says which revision this "
+                      "implementation is built against",
+            "contract": {},
+        }
+    if "__error__" in declaration:
+        return {"status": "undeclared", "path": str(found.relative_to(target)),
+                "detail": declaration["__error__"], "contract": {}}
+    if _declaration_is_blank(declaration, IMPLEMENTATION_BLOCKS):
+        return {
+            "status": "undeclared", "path": str(found.relative_to(target)),
+            "detail": f"{IMPLEMENTATION_DECLARATION} parses, but both blocks "
+                      "are still at their empty value: neither a revision "
+                      "nor premises have been answered yet",
+            "contract": {},
+        }
+    return {"status": "declared", "path": str(found.relative_to(target)),
+            "detail": None, "contract": declaration}
+
+
 #: The name PR10 (`the-position-nobody-holds`, level grammar) reads an
 #: ordered ladder from — a second, independent top-level literal beside
 #: `__benchmark__`, never a new field inside it.
@@ -6677,14 +6976,17 @@ LEVELS_DECLARATION = "__levels__"
 def resolve_levels_declaration(target: Path, name: str) -> list[str]:
     """The ordered rung ladder `__levels__` names, or `[]` when nothing does.
 
-    Read the same way `resolve_benchmark_declaration` reads `__benchmark__`
-    (`__init__.py` first, then `config.py`), but held apart from it rather
-    than added as an eighth block: `_declaration_is_blank`'s "seven blocks"
-    is `__benchmark__`'s own invariant, and a target may name its ladder long
-    before it answers a single one of those seven — or never answer any of
-    them at all, on a repository whose position items are entirely two-state
-    and therefore need no ladder read here at all. Held apart for the same
-    reason `search`'s `requiredScale` is declared apart from the scale it is
+    Read the same way `resolve_implementation_declaration` reads
+    `__implementation__` — `declaration_root(target, name)`, `__init__.py`
+    first, then `config.py` — the method's own package, not the comparison's
+    (design D2): a target's rung ladder is Flow A's own declaration, not
+    something a benchmark package should have to exist for. Held apart from
+    `__implementation__` rather than added as a third block to it: a target
+    may name its ladder long before it answers either of
+    `IMPLEMENTATION_BLOCKS`' two blocks — or never answer either at all, on a
+    repository whose position items are entirely two-state and therefore
+    need no ladder read here at all. Held apart for the same reason
+    `search`'s `requiredScale` is declared apart from the scale it is
     running at (`SEARCH_DECLARATION`'s own docstring): folding the two
     together would let one silently gate the other.
 
@@ -6704,12 +7006,11 @@ def resolve_levels_declaration(target: Path, name: str) -> list[str]:
     (`[]`), the same silent-rather-than-crashing rule `declared_dimension_names`
     already applies to a `DIMENSIONS` bound to something other than a dict.
     """
-    package = package_name(name)
-    bench_root = target / "src" / f"{package}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return []
     for candidate in ("__init__.py", "config.py"):
-        result = read_declaration(bench_root / candidate, LEVELS_DECLARATION)
+        result = read_declaration(root / candidate, LEVELS_DECLARATION)
         if isinstance(result, list):
             return [str(level) for level in result]
         if result is not None:
@@ -6717,11 +7018,11 @@ def resolve_levels_declaration(target: Path, name: str) -> list[str]:
     return []
 
 
-#: A third top-level literal, held apart from `__benchmark__` for the same
-#: reason `LEVELS_DECLARATION` is: `step` names a callable to RUN, not
-#: something `resolve_benchmark_declaration`'s seven-block "declared"/
+#: A third top-level literal, held apart from `__implementation__` for the
+#: same reason `LEVELS_DECLARATION` is: `step` names a callable to RUN, not
+#: something `resolve_implementation_declaration`'s two-block "declared"/
 #: "undeclared" verdict is about, and `_declaration_is_blank` must never
-#: learn an eighth shape to compare against.
+#: learn a third shape to compare against.
 STEPS_DECLARATION = "__steps__"
 
 
@@ -6730,11 +7031,12 @@ def resolve_steps_declaration(target: Path, name: str) -> dict:
     nothing does.
 
     Read exactly the way `resolve_levels_declaration` reads `__levels__`
-    (`__init__.py` first, then `config.py`, `ast`-only, no import) and held
-    just as apart from `__benchmark__`: a target may declare a step long
-    before it has answered a single one of `__benchmark__`'s seven blocks,
-    or never answer any of them at all on a repository whose only work is
-    local. Each entry carries the same `{module, function}` shape
+    (`declaration_root`, `__init__.py` first, then `config.py`, `ast`-only,
+    no import) and held just as apart from `__implementation__`: a target
+    may declare a step long before it has answered either of
+    `IMPLEMENTATION_BLOCKS`' two blocks, or never answer either at all on a
+    repository whose only work is local. Each entry carries the same
+    `{module, function}` shape
     `__benchmark__["entry"]` already uses — mirrored on purpose, not shared,
     because a step and the harness entry are resolved by two different
     processes (this one, statically, for the name; the target's own
@@ -6748,12 +7050,11 @@ def resolve_steps_declaration(target: Path, name: str) -> dict:
     (missing `module`/`function` is `STEP_MALFORMED`); this function only
     ever answers "declared, or not", never validates what it found.
     """
-    package = package_name(name)
-    bench_root = target / "src" / f"{package}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return {}
     for candidate in ("__init__.py", "config.py"):
-        result = read_declaration(bench_root / candidate, STEPS_DECLARATION)
+        result = read_declaration(root / candidate, STEPS_DECLARATION)
         if isinstance(result, dict):
             return result
         if result is not None:
@@ -6761,10 +7062,10 @@ def resolve_steps_declaration(target: Path, name: str) -> dict:
     return {}
 
 
-#: A fourth top-level literal, held apart from `__benchmark__` for the
+#: A fourth top-level literal, held apart from `__implementation__` for the
 #: identical reason `STEPS_DECLARATION` is: a named record's own found/scale
 #: state is measured by the `search`/`records` join (`named_records_state`),
-#: never routed through `_declaration_is_blank`'s seven-block
+#: never routed through `_declaration_is_blank`'s two-block
 #: "declared"/"undeclared" verdict.
 RECORDS_DECLARATION = "__records__"
 
@@ -6774,11 +7075,12 @@ def resolve_records_declaration(target: Path, name: str) -> dict:
     when nothing does.
 
     Read exactly the way `resolve_steps_declaration` reads `__steps__`
-    (`__init__.py` first, then `config.py`, `ast`-only, no import) and held
-    just as apart from `__benchmark__`: a target may name a record long
-    before it has answered a single one of `__benchmark__`'s seven blocks,
-    or never answer any of them at all on a repository whose only leveled
-    `@record:level` witness is the bare, operand-less one.
+    (`declaration_root`, `__init__.py` first, then `config.py`, `ast`-only,
+    no import) and held just as apart from `__implementation__`: a target
+    may name a record long before it has answered either of
+    `IMPLEMENTATION_BLOCKS`' two blocks, or never answer either at all on a
+    repository whose only leveled `@record:level` witness is the bare,
+    operand-less one.
 
     A value of any shape other than a dict is read as nothing declared
     (`{}`), the same silent-rather-than-crashing rule
@@ -6788,12 +7090,11 @@ def resolve_records_declaration(target: Path, name: str) -> dict:
     reader that opens an entry, and it reads defensively rather than
     trusting this resolver to have ruled on it.
     """
-    package = package_name(name)
-    bench_root = target / "src" / f"{package}_Benchmark"
-    if not bench_root.is_dir():
+    root = declaration_root(target, name)
+    if not root.is_dir():
         return {}
     for candidate in ("__init__.py", "config.py"):
-        result = read_declaration(bench_root / candidate, RECORDS_DECLARATION)
+        result = read_declaration(root / candidate, RECORDS_DECLARATION)
         if isinstance(result, dict):
             return result
         if result is not None:
@@ -15529,12 +15830,20 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     # is obeyed as given — a caller pinning one is answering this question, not
     # asking it. Otherwise it is DISCOVERED, and only then does the field named
     # `latestRevision` mean what it says. The family is derived from a name that
-    # arrived as data: the bench's own declared revision first, since that is the
-    # binding the check exists to age, and a module's provenance when no bench has
-    # declared one yet. Both are names this code was handed, never ones it knows.
+    # arrived as data: the target's own declared revision first, since that is
+    # the binding the check exists to age, and a module's provenance when
+    # nothing has declared one yet. Both are names this code was handed, never
+    # ones it knows.
+    #
+    # Read from `__implementation__` (design D1/D3), unconditionally: `contract`
+    # is already `{}` on `absent`/`undeclared`, so `.get("revision")` answers
+    # `None` there without a second explicit gate. A target with no benchmark
+    # package is, after this change, the ordinary pre-acceptance state of every
+    # first-flow target — never a reason to fall back to a module's own
+    # provenance revision in place of the one the target itself declared.
     resolved = resolve_benchmark_declaration(target, name)
-    declared_revision = (resolved["contract"] or {}).get("revision") \
-        if resolved["status"] == "declared" else None
+    implementation_declared = resolve_implementation_declaration(target, name)
+    declared_revision = (implementation_declared["contract"] or {}).get("revision")
     family = declared_revision or next(
         (m["revision"] for m in modules if m.get("revision")), None)
     discovery = revision_discovery(family)
@@ -15595,9 +15904,23 @@ def cmd_verify(args: argparse.Namespace) -> dict:
                       else "bound to an older revision, but none of its sections moved",
         })
 
-    # The bench declares no provenance — it implements no claim — but it does
-    # declare which revision it was built against and which sections each arm
-    # exercises, so a changed section can name the arms it reaches.
+    # `revision`'s second, independent reader (design D3): whether the
+    # implementation's own declared revision is the one currently resolved
+    # above, and which numbered sections moved between the two. Computed
+    # once, from the SAME `__implementation__` read `declared_revision`
+    # already named, and reported on all three `benchmark.status` branches
+    # below — revision drift is a property of the implementation, not of
+    # whether a comparison has been accepted, so a target with no benchmark
+    # package at all reports it exactly as one with an accepted comparison
+    # does, never silently, and never a stale revision paired with an empty
+    # set of changed sections merely because no benchmark package exists yet.
+    built_against = declared_revision
+    moved = changed_sections(revision_source(built_against), target_source)
+    stale_revision = bool(revision) and built_against != revision
+
+    # The bench declares no provenance — it implements no claim — but its own
+    # `arms` block still names which sections each arm exercises, so a
+    # changed section can name the arms it reaches.
     bench_package = f"{package_name(name)}_Benchmark"
     unreached: list[dict] = []
     if resolved["status"] == "absent":
@@ -15605,17 +15928,21 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         # appears on some branches and not others vanishes for exactly the
         # callers that took the early ones. `None` here and one line below is
         # the honest answer -- `status` already carries the word, and
-        # `structure.scaffoldGaps` already names the file that is missing, so
-        # a second sentence would be one fact answered twice.
+        # `structure.harnessGaps` already names the file that is missing (the
+        # benchmark package is a harness destination, materialized only once
+        # a comparison is accepted), so a second sentence would be one fact
+        # answered twice. This is the ordinary pre-acceptance state of every
+        # Flow A target, never a defect.
         benchmark = {"status": "absent", "package": f"src/{bench_package}",
-                     "note": None}
+                     "revision": built_against, "staleRevision": stale_revision,
+                     "changedSections": moved, "note": None}
     elif resolved["status"] == "undeclared":
         benchmark = {"status": "undeclared", "package": f"src/{bench_package}",
+                     "revision": built_against, "staleRevision": stale_revision,
+                     "changedSections": moved,
                      "detail": resolved["detail"], "note": None}
     else:
         declaration = resolved["contract"]
-        built_against = declaration.get("revision")
-        moved = changed_sections(revision_source(built_against), target_source)
         arms = declaration.get("arms") or {}
         reached = {arm: sorted(set(spec.get("sections", [])) & set(moved),
                                key=lambda n: (len(n), n))
@@ -15624,7 +15951,6 @@ def cmd_verify(args: argparse.Namespace) -> dict:
         unreached = unreached_modules(
             modules, declaration,
             benchmark_reach(target, package_name(name), bench_package))
-        stale_revision = bool(revision) and built_against != revision
         benchmark = {
             # An arm that never calls what it claims outranks an arm built against an
             # older revision: the first says the experiment is not measuring what it
@@ -16460,6 +16786,42 @@ def _write_kit_stage(target: Path, name: str, stage: str, destinations: list[str
     }
 
 
+def _implementation_predates_relocation(target: Path, name: str) -> dict | None:
+    """`revision`/`premises` still bound at the pre-relocation home
+    (`src/<Package>_Benchmark/__init__.py`'s own `__benchmark__`), read
+    directly rather than through `resolve_benchmark_declaration` — whose
+    blank check no longer looks at these two blocks now that Movement 2
+    moved them off `BENCHMARK_BLOCKS` onto `IMPLEMENTATION_BLOCKS`. Routing
+    through the shrunk resolver would silently drop a pre-existing
+    `revision`/`premises` pair the moment every other bench block happens to
+    be blank, which is exactly the migration this function exists to detect
+    rather than lose (design §7).
+
+    Returns the raw `{revision, premises}` pair when either is non-blank at
+    the old home, `None` when it never bound them there — a target that
+    never declared at all, one whose declaration is unparsable, or one
+    already migrated. Never raises: an unreadable old home is read the same
+    as an absent one, leaving `_stage_objects` to report
+    `OBJECT_MAP_NOT_APPROVED` rather than a migration refusal it cannot
+    substantiate.
+    """
+    package = package_name(name)
+    bench_root = target / "src" / f"{package}_Benchmark"
+    if not bench_root.is_dir():
+        return None
+    for candidate in ("__init__.py", "config.py"):
+        result = read_declaration(bench_root / candidate, BENCHMARK_DECLARATION)
+        if result is None:
+            continue
+        if "__error__" in result:
+            return None
+        revision, premises = result.get("revision"), result.get("premises")
+        if revision or premises:
+            return {"revision": revision, "premises": premises}
+        return None
+    return None
+
+
 def _stage_objects(target: Path, name: str, seed: str) -> dict:
     """Writes the three step-9 kit destinations as raw, `{{PKG}}`/`{{SEED}}`-
     substituted templates — deliberately NOT gated by
@@ -16480,26 +16842,47 @@ def _stage_objects(target: Path, name: str, seed: str) -> dict:
 
     Gated on the step-8 object map having been approved and recorded:
     SKILL.md step 8 requires `revision`/`premises` to be written into
-    `src/<Package>_Benchmark/__init__.py` before any step-9 code, and
-    `resolve_benchmark_declaration` is the one place that fact is already
-    read from disk — reused rather than inventing a second way to ask it.
+    `src/<Package>/__init__.py` before any step-9 code, and
+    `resolve_implementation_declaration` is the one place that fact is
+    already read from disk — reused rather than inventing a second way to
+    ask it (design D1/D3, relocated from `resolve_benchmark_declaration`:
+    the object map is a fact about the method, not the comparison).
+
+    A target scaffolded before this relocation binds `revision`/`premises`
+    at the OLD home instead (`src/<Package>_Benchmark/__init__.py`'s own
+    `__benchmark__`) — see `_implementation_predates_relocation`. That is a
+    distinct, named condition from a target that never declared at all
+    (design §7), and this gate refuses it by a different code before ever
+    reaching `OBJECT_MAP_NOT_APPROVED`.
     """
-    declared = resolve_benchmark_declaration(target, name)
+    declared = resolve_implementation_declaration(target, name)
     contract = declared["contract"]
     # The two blocks the message names, asked for by name. This gated on
     # `status != "declared"`, and that status is `"undeclared"` only when
-    # `_declaration_is_blank` holds -- when ALL SEVEN blocks still carry their
-    # scaffold value. So a declaration answering any single one of them opened
-    # this gate, and `search` is exactly the block a target can answer long
-    # before step 8: measured with `revision: ""`, `premises: {}` and only
-    # `search` written, the status is `"declared"`, the gate opened, and the
-    # refusal's own sentence described the state that was true and did not
-    # refuse. The name of the code and this function's own docstring both say
+    # `_declaration_is_blank` holds -- when BOTH blocks still carry their
+    # scaffold value. So a declaration answering either of them opened this
+    # gate. The name of the code and this function's own docstring both say
     # the object map is what is gated on, so the check moved to the message
     # rather than the other way round.
     unwritten = [block for block in ("revision", "premises")
                  if not contract.get(block)]
     if declared["status"] != "declared" or unwritten:
+        predates = _implementation_predates_relocation(target, name)
+        if predates is not None:
+            old_path = f"src/{package_name(name)}_Benchmark/__init__.py"
+            new_path = f"src/{package_name(name)}/__init__.py"
+            raise Refused(
+                "OBJECT_MAP_AT_OLD_HOME",
+                f"{old_path} still binds revision/premises, and {new_path} "
+                "is blank: this target was scaffolded before the change "
+                "that relocated __implementation__ into the method's own "
+                "package. Move revision, premises, and any of "
+                "__levels__/__steps__/__records__ this target declared "
+                "(and any other top-level literal the old file carries, "
+                "whether this engine reads it or not) into the new file by "
+                f"hand, then re-seal with `materialize --authored "
+                f"{new_path}`. See SKILL.md's migration procedure.",
+            )
         # Named one by one, never as "revision/premises": a refusal that lists
         # a block already fully written sends somebody to re-read what is
         # already right. On an absent or blank declaration both are unwritten
@@ -16507,7 +16890,7 @@ def _stage_objects(target: Path, name: str, seed: str) -> dict:
         raise Refused(
             "OBJECT_MAP_NOT_APPROVED",
             "The step-8 object map has not been approved yet: "
-            f"src/{package_name(name)}_Benchmark/__init__.py declares no "
+            f"src/{package_name(name)}/__init__.py declares no "
             + " and no ".join(unwritten or ["revision", "premises"])
             + ". --stage objects writes scaffolding for step "
             "9's authoring, not before that approval is recorded.",
@@ -16956,8 +17339,11 @@ GATING_REFUSALS: dict[str, str] = {
     # first) and simply has not been written, so no other spelling of the call
     # finds a file nobody authored.
     "MATERIALIZE_PATH_ABSENT": WORK_STATE,
-    # The approval lives in the target's own benchmark package.
+    # The approval lives in the target's own method package (design D1/D3).
     "OBJECT_MAP_NOT_APPROVED": WORK_STATE,
+    # A target scaffolded before that relocation still binds the approval at
+    # the old, pre-relocation home -- distinct from never having declared it.
+    "OBJECT_MAP_AT_OLD_HOME": WORK_STATE,
     # A scaffold destination still carries a token this stage cannot answer.
     "STAGE_CANNOT_ANSWER": WORK_STATE,
 
@@ -17749,11 +18135,20 @@ _WORK_STATE_RESOLUTIONS = {
               "one; write it now, or name the destination that was written, "
               "and why?"),
     "OBJECT_MAP_NOT_APPROVED": lambda args: _refusal_question(
-        args, "the object map is not approved -- the target's benchmark "
-              "package declares no revision or premises (the refusal detail "
-              "names which) -- and this stage writes scaffolding for the "
-              "authoring that follows that approval; record the approval now, "
-              "or say why the scaffolding runs ahead of it, and why?"),
+        args, "the object map is not approved -- the target's own package "
+              "declares no revision or premises in __implementation__ (the "
+              "refusal detail names which) -- and this stage writes "
+              "scaffolding for the authoring that follows that approval; "
+              "record the approval now, or say why the scaffolding runs "
+              "ahead of it, and why?"),
+    "OBJECT_MAP_AT_OLD_HOME": lambda args: _refusal_question(
+        args, "the object map is still bound at the pre-relocation home -- "
+              "this target was scaffolded before __implementation__ existed "
+              "(the refusal detail names both the old and the new location) "
+              "-- move revision, premises, and any of __levels__/__steps__/"
+              "__records__ this target declared into the new file by hand, "
+              "then re-seal it with materialize --authored, or say why the "
+              "migration has not happened, and why?"),
     "STAGE_CANNOT_ANSWER": lambda args: _refusal_question(
         args, "a scaffold destination still carries an unresolved token after "
               "this stage substituted everything it can answer (the refusal "

@@ -430,24 +430,56 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: Six SHRANK, and are recorded here for the same reason: the engine's
 #: module docstring stopped hand-listing four subcommands argparse already
 #: prints in full, and the compressed comments gave the rest back. `against` 184->183, `approved` 29->28, `commands` 19->18, `readable` 24->23, `resolves` 32->31, `whose` 145->144.
+#: `the-comparison-nobody-asked-for` (Unit 2, design.md D1/D2/D3/D10):
+#: `revision`/`premises` relocated off `__benchmark__` onto their own
+#: `__implementation__` literal (`resolve_implementation_declaration`,
+#: `declaration_root`, `_implementation_predates_relocation`), and the
+#: three sibling resolvers' docstrings were rewritten to point at the new
+#: root. `authored_package_init` grew a ~100-line prefilled-empty template
+#: (`_DEFAULT_PACKAGE_DECLARATIONS`) carrying the guidance comments moved
+#: out of the kit asset, and `cmd_verify`'s two revision readers were
+#: rewritten to source `__implementation__` unconditionally. All of that is
+#: new engine prose, not a domain word: twenty-seven words already exempted
+#: here read naturally inside it and grew. `after` 79->84, `against`
+#: 183->184, `agreed` 24->26, `answered` 71->73, `answers` 99->100,
+#: `before` 228->232, `benchmark` 91->98, `beside` 92->94, `check`
+#: 150->151, `compares` 23->24, `declaration` 191->202, `empty` 113->120,
+#: `isolated` 4->5, `leave` 9->11, `leaves` 34->35, `local` 30->34,
+#: `longer` 46->47, `materialized` 10->11, `module` 189->193, `object`
+#: 28->29, `place` 51->54, `produces` 44->46, `rather` 332->341, `remote`
+#: 55->58, `reported` 142->143, `ruled` 8->9, `scaffolded` 4->7,
+#: `something` 69->70, `steps` 133->135, `value` 233->235, `whose`
+#: 144->148.
+#: Two SHRANK: docstring compression elsewhere in the same edit gave two
+#: words back. `invariant` 22->21, `measured` 141->140.
+#: Eight LEFT THE DENYLIST ENTIRELY and their pins are removed, not
+#: shrunk to zero: `experimental-implementation/impl_profile.py`'s
+#: "standing" stage was rewritten in the same commit (design D3, task
+#: 2.15) to name the relocated gate the identical way
+#: `proposal-implementation`'s own profile does, so `carries`,
+#: `materialize`, `objects`, `premises`, `refuses` and `stage` are now
+#: BOTH profiles' own north vocabulary -- ordinary engine vocabulary,
+#: never single-owner again. `named` and `readable` left with them: they
+#: were the exact words the rewritten sentence replaced, and neither
+#: survives in the other profile's own north either. A word leaving the
+#: denylist needs no exemption at all, dead or otherwise.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 76, "admissible": 3, "after": 79, "against": 183,
-    "agreed": 24, "answered": 71, "answers": 99, "approved": 28,
-    "audit": 15, "before": 228, "benchmark": 91, "beside": 92,
-    "carries": 178, "check": 150, "checkable": 3, "claim": 35,
-    "command": 268, "commands": 18, "compares": 23, "declaration": 191,
-    "destinations": 37, "empty": 113, "established": 4, "experiment": 24,
+    "actually": 76, "admissible": 3, "after": 84, "against": 184,
+    "agreed": 26, "answered": 73, "answers": 100, "approved": 28,
+    "audit": 15, "before": 232, "benchmark": 98, "beside": 94,
+    "check": 151, "checkable": 3, "claim": 35, "command": 268,
+    "commands": 18, "compares": 24, "declaration": 202,
+    "destinations": 37, "empty": 120, "established": 4, "experiment": 24,
     "experiments": 6, "implementations": 2, "incomplete": 28,
-    "invariant": 22, "isolated": 4, "leave": 9, "leaves": 34, "local": 30,
-    "longer": 46, "makes": 43, "materialize": 31, "materialized": 10,
-    "measured": 141, "measurement": 42, "module": 189, "named": 177,
-    "notebooks": 107, "object": 28, "objects": 19, "pilot": 119,
-    "place": 51, "premises": 7, "produces": 44, "rather": 332,
-    "readable": 23, "recorded": 75, "refuses": 93, "remedy": 54,
-    "remote": 55, "reported": 142, "resolves": 31, "ruled": 8,
-    "runnable": 15, "scaffolded": 4, "sitting": 9, "small": 4,
-    "something": 69, "stage": 82, "steps": 133, "sweep": 7,
-    "validated": 7, "value": 233, "whose": 144, "write": 107, "wrong": 51,
+    "invariant": 21, "isolated": 5, "leave": 11, "leaves": 35,
+    "local": 34, "longer": 47, "makes": 43, "materialized": 11,
+    "measured": 140, "measurement": 42, "module": 193, "notebooks": 107,
+    "object": 29, "pilot": 119, "place": 54, "produces": 46,
+    "rather": 341, "recorded": 75, "remedy": 54, "remote": 58,
+    "reported": 143, "resolves": 31, "ruled": 9, "runnable": 15,
+    "scaffolded": 7, "sitting": 9, "small": 4, "something": 70,
+    "steps": 135, "sweep": 7, "validated": 7, "value": 235, "whose": 148,
+    "write": 107, "wrong": 51,
 }
 
 

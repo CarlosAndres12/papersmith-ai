@@ -291,8 +291,11 @@ python3 .claude/skills/proposal-implementation/scripts/implementation_cli.py mat
 The three destinations SKILL.md step 9 names: `src/<Package>/module.py`,
 `tests/test_invariants.py`, `tests/test_synthetic.py`. Same plan/clean-worktree
 preflight as `--stage scaffold`, plus one more: it refuses
-`OBJECT_MAP_NOT_APPROVED` until `src/<Package>_Benchmark/__init__.py` carries
-step 8's `revision`/`premises`. Unlike scaffold, this write is **not** gated on
+`OBJECT_MAP_NOT_APPROVED` until `src/<Package>/__init__.py`'s `__implementation__`
+carries step 8's `revision`/`premises` — or, on a target scaffolded before this
+literal existed and whose old `src/<Package>_Benchmark/__init__.py` still binds
+them, `OBJECT_MAP_AT_OLD_HOME`, naming both locations (SKILL.md step 8's
+migration procedure). Unlike scaffold, this write is **not** gated on
 the result parsing — `writable_at_scaffold_time`'s `ast.parse` check is scoped
 to the scaffold stage on purpose. All three templates carry tokens
 (`{{FUNCTION_NAME}}`, `{{INVARIANT_ID}}`, `{{EXPECTATION}}`, ...) sitting
@@ -2250,7 +2253,8 @@ state, alongside the scenarios — not verified by hand once.
 | `PLAN_REQUIRED` | `materialize --stage` needs `--plan <approved plan JSON>`. |
 | `SEED_REQUIRED` | `materialize --stage scaffold` needs `--seed`, substituted into `{{SEED}}`. |
 | `STAGE_CANNOT_ANSWER` | A scaffold-stage `.py` destination still fails `ast.parse` after `{{PKG}}`/`{{SEED}}` substitution — its remaining token answers a later step. Names the file. Never raised by `objects`/`harness`: their three destinations are either written with tokens deliberately left standing (`objects`) or already parse cleanly (`harness`'s two `.py` files). |
-| `OBJECT_MAP_NOT_APPROVED` | `materialize --stage objects` ran before step 8's `revision`/`premises` were recorded in `src/<Package>_Benchmark/__init__.py`. The detail names whichever of the two is still blank, so a half-written map does not send you back to re-read the half that is already right. Get that declaration approved and written first. |
+| `OBJECT_MAP_NOT_APPROVED` | `materialize --stage objects` ran before step 8's `revision`/`premises` were recorded in `src/<Package>/__init__.py`'s `__implementation__`. The detail names whichever of the two is still blank, so a half-written map does not send you back to re-read the half that is already right. Get that declaration approved and written first. |
+| `OBJECT_MAP_AT_OLD_HOME` | `materialize --stage objects` ran on a target scaffolded before this change: `src/<Package>_Benchmark/__init__.py` still binds `revision`/`premises` there, and `src/<Package>/__init__.py`'s `__implementation__` is blank. Distinct from `OBJECT_MAP_NOT_APPROVED` — this target once declared, at the old home — and names both locations. Follow SKILL.md step 8's migration procedure: scaffold, hand-move the literals (including any this skill has no reader for), `materialize --authored`, delete the orphaned seal copy, re-execute notebooks. |
 | `SCAFFOLD_DRIFT` | (`verify`, reported in `structure.scaffoldDrift`, never raised) A receipt-recorded scaffold destination's on-disk bytes no longer match its `writtenSha256`. Release the seal with `materialize --authored <path>` after declaring the edit. `objects`/`harness` destinations get the identical check under `structure.objectDrift`/`structure.harnessDrift`. |
 | `UNRECORDED_SCAFFOLD` | (`verify`, reported in `structure.unrecordedScaffold`, never raised) A scaffold destination exists on disk with no receipt entry — most often because the target was scaffolded before this command existed. Remedy: `materialize --adopt <path>`, one path at a time, deliberately. **This degrades the guarantee**: adoption records who is responsible for the bytes, never that they came from the kit — the record names who wrote them, not that the engine owns them. `objects`/`harness` destinations get the identical check under `structure.unrecordedObjects`/`structure.unrecordedHarness`. |
 | `NOT_A_KIT_DESTINATION` | `materialize --authored`/`--adopt` named a path outside the seventeen kit destinations (eleven scaffold, three objects, three harness). The receipt is not a general-purpose ledger. |
@@ -2280,7 +2284,7 @@ the mutual exclusion. Forty-nine codes, and nothing is published beside them:
 `NOT_A_GIT_REPO`, `GATE_ELECTION_REQUIRED` and the rest. Retype the call.
 
 **No — a work state.** Somebody has to act on the repository, so the payload
-carries a `resolve` key saying what. Sixty-eight codes, including
+carries a `resolve` key saying what. Sixty-nine codes, including
 `POSITION_DISAGREES`, `AGREEMENT_DISAGREES`, `POSITION_STALE`, `DIRTY_WORKTREE`,
 `GATE_AUTHORIZATION_CONSUMED`, `STEP_MODULE_MISSING`,
 `POSITION_RUNG_SKIPPED`, `POSITION_STEP_UNKNOWN`, `STEPS_UNDECLARED`,

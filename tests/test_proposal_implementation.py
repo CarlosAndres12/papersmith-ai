@@ -3905,11 +3905,11 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': 'r01.md'}\n", encoding="utf-8")
+                "__benchmark__ = {'search': {'what': 'x'}}\n", encoding="utf-8")
             resolved = impl.resolve_benchmark_declaration(root, "Method")
         self.assertEqual(resolved["status"], "declared")
         self.assertEqual(resolved["path"], "src/Method_Benchmark/__init__.py")
-        self.assertEqual(resolved["contract"], {"revision": "r01.md"})
+        self.assertEqual(resolved["contract"], {"search": {"what": "x"}})
 
     def test_declared_in_config_py_alone_is_found(self):
         """The defect this resolver closes: a declaration living only in
@@ -3917,22 +3917,22 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (self.bench(root) / "config.py").write_text(
-                "__benchmark__ = {'revision': 'r01.md'}\n", encoding="utf-8")
+                "__benchmark__ = {'search': {'what': 'x'}}\n", encoding="utf-8")
             resolved = impl.resolve_benchmark_declaration(root, "Method")
         self.assertEqual(resolved["status"], "declared")
         self.assertEqual(resolved["path"], "src/Method_Benchmark/config.py")
-        self.assertEqual(resolved["contract"], {"revision": "r01.md"})
+        self.assertEqual(resolved["contract"], {"search": {"what": "x"}})
 
     def test_init_py_takes_precedence_over_config_py(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             bench = self.bench(root)
             (bench / "__init__.py").write_text(
-                "__benchmark__ = {'revision': 'fromInit'}\n", encoding="utf-8")
+                "__benchmark__ = {'search': {'what': 'fromInit'}}\n", encoding="utf-8")
             (bench / "config.py").write_text(
-                "__benchmark__ = {'revision': 'fromConfig'}\n", encoding="utf-8")
+                "__benchmark__ = {'search': {'what': 'fromConfig'}}\n", encoding="utf-8")
             resolved = impl.resolve_benchmark_declaration(root, "Method")
-        self.assertEqual(resolved["contract"]["revision"], "fromInit")
+        self.assertEqual(resolved["contract"]["search"]["what"], "fromInit")
 
     def test_an_unparsable_declaration_is_undeclared_with_the_parse_error(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -3953,7 +3953,7 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': '', 'premises': {}, 'arms': {}, "
+                "__benchmark__ = {'arms': {}, "
                 "'search': {}, 'report': {}, 'distribution': {}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_benchmark_declaration(root, "Method")
@@ -3961,19 +3961,166 @@ class ResolveBenchmarkDeclarationTests(unittest.TestCase):
         self.assertIn("empty", resolved["detail"])
         self.assertEqual(resolved["contract"], {})
 
-    def test_one_answered_block_among_five_blank_ones_is_declared(self):
+    def test_one_answered_block_among_four_blank_ones_is_declared(self):
         """The other pole: a single answer anywhere is enough to leave
         `undeclared` behind, because `arms`/`search`/`report`/`distribution`
         each report their own state once the whole declaration is `declared`."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': 'r01.md', 'premises': {}, "
-                "'arms': {}, 'search': {}, 'report': {}, 'distribution': {}}\n",
+                "__benchmark__ = {'arms': {'baseline': {'sections': ['1']}}, "
+                "'search': {}, 'report': {}, 'distribution': {}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_benchmark_declaration(root, "Method")
         self.assertEqual(resolved["status"], "declared")
-        self.assertEqual(resolved["contract"]["revision"], "r01.md")
+        self.assertEqual(resolved["contract"]["arms"],
+                         {"baseline": {"sections": ["1"]}})
+
+
+class ResolveImplementationDeclarationTests(unittest.TestCase):
+    """`resolve_implementation_declaration`'s own contract (design D1),
+    mirroring `ResolveBenchmarkDeclarationTests` one size down: same
+    `{status, path, detail, contract}` quadruple, read from the method's
+    own package via `declaration_root`, never the benchmark's."""
+
+    def root_of(self, root: Path) -> Path:
+        path = root / "src" / "Method"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def test_no_package_directory_is_absent(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "absent")
+        self.assertIsNone(resolved["path"])
+        self.assertIsNone(resolved["detail"])
+        self.assertEqual(resolved["contract"], {})
+
+    def test_directory_with_neither_file_declaring_is_undeclared(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.root_of(root)
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "undeclared")
+        self.assertIsNone(resolved["path"])
+        self.assertIn("__implementation__", resolved["detail"])
+        self.assertEqual(resolved["contract"], {})
+
+    def test_declared_in_init_py_is_found(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (self.root_of(root) / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'r01.md'}\n", encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "declared")
+        self.assertEqual(resolved["path"], "src/Method/__init__.py")
+        self.assertEqual(resolved["contract"], {"revision": "r01.md"})
+
+    def test_declared_in_config_py_alone_is_found(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (self.root_of(root) / "config.py").write_text(
+                "__implementation__ = {'revision': 'r01.md'}\n", encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "declared")
+        self.assertEqual(resolved["path"], "src/Method/config.py")
+        self.assertEqual(resolved["contract"], {"revision": "r01.md"})
+
+    def test_init_py_takes_precedence_over_config_py(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            package = self.root_of(root)
+            (package / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'fromInit'}\n", encoding="utf-8")
+            (package / "config.py").write_text(
+                "__implementation__ = {'revision': 'fromConfig'}\n", encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["contract"]["revision"], "fromInit")
+
+    def test_an_unparsable_declaration_is_undeclared_with_the_parse_error(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (self.root_of(root) / "__init__.py").write_text(
+                "__implementation__ = {\n", encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "undeclared")
+        self.assertEqual(resolved["path"], "src/Method/__init__.py")
+        self.assertIn("unparsable", resolved["detail"])
+        self.assertEqual(resolved["contract"], {})
+
+    def test_a_declaration_that_parses_with_both_blocks_blank_is_undeclared(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (self.root_of(root) / "__init__.py").write_text(
+                "__implementation__ = {'revision': '', 'premises': {}}\n",
+                encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "undeclared")
+        self.assertIn("empty", resolved["detail"])
+        self.assertEqual(resolved["contract"], {})
+
+    def test_premises_answered_alone_is_declared(self):
+        """`revision` need not be the one that is answered first -- either
+        block alone is enough to leave `undeclared` behind."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (self.root_of(root) / "__init__.py").write_text(
+                "__implementation__ = {'revision': '', "
+                "'premises': {'metric': 'accuracy'}}\n",
+                encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "declared")
+        self.assertEqual(resolved["contract"]["premises"], {"metric": "accuracy"})
+
+    def test_root_is_the_method_package_never_the_benchmark_package(self):
+        """A declaration sitting only in the sibling `_Benchmark` package
+        must not be found here -- the two roots are genuinely different
+        questions after Movement 2 (design D2)."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            self.root_of(root)
+            bench = root / "src" / "Method_Benchmark"
+            bench.mkdir(parents=True)
+            (bench / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'wrong-side.md'}\n",
+                encoding="utf-8")
+            resolved = impl.resolve_implementation_declaration(root, "Method")
+        self.assertEqual(resolved["status"], "undeclared")
+        self.assertEqual(resolved["contract"], {})
+
+
+class DeclarationRootTests(unittest.TestCase):
+    """`declaration_root` — the one shared seam (design D2)."""
+
+    def test_declaration_root_is_the_method_package(self):
+        target = Path("/tmp/whatever-not-touched")
+        self.assertEqual(impl.declaration_root(target, "Method"),
+                         target / "src" / "Method")
+
+    def test_the_three_sibling_resolvers_and_implementation_share_it(self):
+        """A shared root, proven by mutation rather than by reading the
+        source: `declaration_root` moves, and all four resolvers move
+        with it."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            package = root / "src" / "OtherName"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'r01.md'}\n"
+                "__levels__ = ['local']\n"
+                "__steps__ = {'run': {'module': 'm', 'function': 'f'}}\n"
+                "__records__ = {'main': {'path': 'p'}}\n",
+                encoding="utf-8")
+            self.assertEqual(
+                impl.resolve_implementation_declaration(root, "OtherName")["contract"]
+                    ["revision"], "r01.md")
+            self.assertEqual(impl.resolve_levels_declaration(root, "OtherName"),
+                             ["local"])
+            self.assertEqual(impl.resolve_steps_declaration(root, "OtherName"),
+                             {"run": {"module": "m", "function": "f"}})
+            self.assertEqual(impl.resolve_records_declaration(root, "OtherName"),
+                             {"main": {"path": "p"}})
 
 
 class ResolverCrossReaderAgreementTests(unittest.TestCase):
@@ -4929,13 +5076,22 @@ class UndeclaredArmsTests(unittest.TestCase):
     """
 
     DECLARED = ("__benchmark__ = {\n"
-                "    'revision': 'r01.md',\n"
                 "    'arms': {'floor': {'sections': ['3']}},\n"
                 "}\n")
+    #: `arms` is the block under test, blank on purpose; `report` is answered
+    #: so the declaration as a whole still reads `declared` rather than
+    #: `undeclared` (which would report `[]` for a different reason --
+    #: nothing was ever asked -- and hide the fact this class exists to
+    #: measure).
     SILENT = ("__benchmark__ = {\n"
-              "    'revision': 'r01.md',\n"
               "    'arms': {},\n"
+              "    'report': {'renderers': ['tables.render']},\n"
               "}\n")
+
+    #: `revision` (design D1) -- kept in step with `DECLARED`/`SILENT`'s own
+    #: `--revision r01.md`, or `staleRevision` reads `True` against an
+    #: `__implementation__` this class never meant to be testing.
+    IMPLEMENTATION = "__implementation__ = {'revision': 'r01.md'}\n"
 
     def verify_with(self, declaration, suffix):
         box = FORGE / "implementations" / f"_arms_{suffix}_{os.getpid()}_{id(self)}"
@@ -4944,7 +5100,8 @@ class UndeclaredArmsTests(unittest.TestCase):
             (box / directory).mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self.IMPLEMENTATION, encoding="utf-8")
         # A module that declares a section, so there IS something to cross.
         (box / "src/Method/never_called.py").write_text(
             _module("r01.md", ["3"], ["12"]), encoding="utf-8")
@@ -5003,7 +5160,8 @@ class UndeclaredArmsTests(unittest.TestCase):
             (box / directory).mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self.IMPLEMENTATION, encoding="utf-8")
         (box / "src/Method/sectionless.py").write_text(
             _module("r01.md", [], ["12"]), encoding="utf-8")
         (box / "src/Method_Benchmark/__init__.py").write_text(
@@ -5075,9 +5233,9 @@ class UnreachedMathematicsEndToEndTests(unittest.TestCase):
     un módulo, y un fixture con nombres de un método real sugeriría que sí.
     """
 
+    IMPLEMENTATION_DECLARATION = "__implementation__ = {'revision': 'r01.md'}\n"
     DECLARATION = (
         "__benchmark__ = {\n"
-        "    'revision': 'r01.md',\n"
         "    'arms': {\n"
         "        'floor': {'sections': ['3']},\n"
         "        'full': {'sections': ['3', '5']},\n"
@@ -5093,7 +5251,8 @@ class UnreachedMathematicsEndToEndTests(unittest.TestCase):
             (box / "tests").mkdir(parents=True)
             subprocess.run(["git", "init", "-q", str(box)], check=True,
                            capture_output=True)
-            (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+            (box / "src/Method/__init__.py").write_text(
+                self.IMPLEMENTATION_DECLARATION, encoding="utf-8")
             # Imported by the harness, and the only way the next one is reached.
             (box / "src/Method/called.py").write_text(
                 _module("r01.md", ["3"], ["11"],
@@ -6929,12 +7088,11 @@ class MaterializeBenchmarkDeclarationTests(unittest.TestCase):
         self.assertIsNotNone(value, "no literal __benchmark__ assignment found")
         self.assertEqual(
             set(value),
-            {"revision", "premises", "arms", "search", "report", "distribution",
-             "entry"})
+            {"arms", "search", "report", "distribution", "entry"})
         for key, field in value.items():
             if key == "entry":
-                # The seventh block's own blank shape: a dict of two blank
-                # scalars, not an empty container like the other six.
+                # `entry`'s own blank shape: a dict of two blank scalars,
+                # not an empty container like the other four.
                 self.assertEqual(field, {"module": "", "function": ""},
                                  f"{key!r} is not empty: {field!r}")
                 continue
@@ -7045,7 +7203,7 @@ class NonRevisionSha256ScalarsAreDocumentCountInvariantTests(unittest.TestCase):
             if isinstance(n, ast.FunctionDef) and n.name == "cmd_verify")
         body = ast.get_source_segment(source, cmd_verify)
         for anchor in ('module["stale"] = bool(revision) and module["revision"] != revision',
-                      'built_against = declaration.get("revision")',
+                      'built_against = declared_revision',
                       'stale_revision = bool(revision) and built_against != revision',
                       '"latestRevision": revision,',
                       '"revisionSource": "argument" if args.revision else ('):
@@ -7064,14 +7222,16 @@ class VerifyDiscoversTheNewestRevisionTests(unittest.TestCase):
     atado a cualquier cosa y el flujo no tenía nada que decir.
     """
 
+    #: `revision` lives in `__implementation__` at the method's own package
+    #: since design D1/D3 -- `__benchmark__` keeps only `arms`.
+    IMPLEMENTATION_DECLARATION = "__implementation__ = {'revision': 'draft-1.md'}\n"
     DECLARATION = (
         "__benchmark__ = {\n"
-        "    'revision': 'draft-1.md',\n"
         "    'arms': {'floor': {'sections': ['3']}},\n"
         "}\n"
     )
 
-    def verify_in(self, *proposals, revision=None):
+    def verify_in(self, *proposals, revision=None, with_benchmark=True):
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         for name in proposals:
@@ -7080,12 +7240,14 @@ class VerifyDiscoversTheNewestRevisionTests(unittest.TestCase):
         box = FORGE / "implementations" / f"_e2e_latest_{os.getpid()}_{id(self)}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         (box / "src/Method").mkdir(parents=True)
-        (box / "src/Method_Benchmark").mkdir(parents=True)
         (box / "tests").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
-            self.DECLARATION, encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self.IMPLEMENTATION_DECLARATION, encoding="utf-8")
+        if with_benchmark:
+            (box / "src/Method_Benchmark").mkdir(parents=True)
+            (box / "src/Method_Benchmark/__init__.py").write_text(
+                self.DECLARATION, encoding="utf-8")
 
         argv = [sys.executable, str(CLI), "verify", "--target", str(box),
                 "--name", "Method"]
@@ -7117,6 +7279,34 @@ class VerifyDiscoversTheNewestRevisionTests(unittest.TestCase):
         self.assertEqual(fidelity["latestRevision"], "draft-1.md")
         self.assertEqual(fidelity["revisionSource"], "argument")
         self.assertFalse(fidelity["benchmark"]["staleRevision"])
+
+    def test_the_revision_family_resolves_with_no_benchmark_package_present(self):
+        """Design D3, the single highest-risk edit: `declared_revision` and
+        `staleRevision` must read `__implementation__` UNCONDITIONALLY, not
+        gated on a benchmark package existing -- after this change, `absent`
+        is the ordinary pre-acceptance state of every Flow A target, not an
+        error state (spec "revision's Two Independent Readers... Preserved",
+        scenario "The revision family resolves with no benchmark package
+        present"). RED against pre-D3 code: without the fix, `declared_revision`
+        falls back to a module's own provenance revision (there is none
+        here), `family` is `None`, and `latestRevision` reads `None` even
+        though `__implementation__` names one plainly."""
+        fidelity = self.verify_in("draft-1.md", with_benchmark=False)
+        self.assertEqual(fidelity["latestRevision"], "draft-1.md")
+        self.assertEqual(fidelity["revisionSource"], "discovered")
+        self.assertEqual(fidelity["benchmark"]["status"], "absent")
+
+    def test_no_spurious_staleness_paired_with_empty_changed_sections(self):
+        """Spec scenario "verify does not report spurious staleness for a
+        target with no benchmark": the SAME target as above, revision
+        correctly discovered, must not report a stale revision against an
+        empty set of changed sections merely because no benchmark package
+        exists. Both fields are reported (D3: unconditional, all three
+        `benchmark.status` branches), and both must be honest."""
+        fidelity = self.verify_in("draft-1.md", with_benchmark=False)
+        self.assertFalse(fidelity["benchmark"]["staleRevision"])
+        self.assertEqual(fidelity["benchmark"]["changedSections"], [])
+        self.assertEqual(fidelity["benchmark"]["revision"], "draft-1.md")
 
     def test_nothing_on_disk_reports_itself_unable(self):
         fidelity = self.verify_in()
@@ -9729,10 +9919,10 @@ class FidelityUndeclaredTests(unittest.TestCase):
 
     DECLARED = (
         "__benchmark__ = {\n"
-        "    'revision': 'r01.md',\n"
         "    'arms': {'floor': {'sections': ['3']}},\n"
         "}\n"
     )
+    IMPLEMENTATION_DECLARED = "__implementation__ = {'revision': 'r01.md'}\n"
 
     MODULE = _module("r01.md", ["3"], ["11"])
 
@@ -9741,7 +9931,7 @@ class FidelityUndeclaredTests(unittest.TestCase):
     WIRING = "from Method.estimator import estimate\n"
 
     def verify(self, *, suffix, declaration, module=None, revision="r01.md",
-               bench_package=True, wiring=None):
+               bench_package=True, wiring=None, implementation=""):
         """A target that is clean on every arm of the headline except the one
         under test: real provenance, and the one invariant it declares tested."""
         box = FORGE / "implementations" / f"_fidelity_undeclared_{suffix}_{os.getpid()}"
@@ -9749,7 +9939,7 @@ class FidelityUndeclaredTests(unittest.TestCase):
         (box / "src/Method").mkdir(parents=True)
         (box / "tests").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(implementation, encoding="utf-8")
         (box / "src/Method/estimator.py").write_text(
             module if module is not None else self.MODULE, encoding="utf-8")
         (box / "tests/test_invariants.py").write_text(
@@ -9846,7 +10036,8 @@ class FidelityUndeclaredTests(unittest.TestCase):
         """The control pole. Without it a ladder that always answered
         `undeclared` would pass every assertion above."""
         fidelity = self.fidelity(suffix="declared", declaration=self.DECLARED,
-                                 wiring=self.WIRING)
+                                 wiring=self.WIRING,
+                                 implementation=self.IMPLEMENTATION_DECLARED)
 
         self.assertEqual(fidelity["benchmark"]["status"], "ok")
         self.assertEqual(fidelity["status"], "ok")
@@ -9885,10 +10076,10 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
 
     DECLARATION = (
         "__benchmark__ = {\n"
-        "    'revision': 'draft-r17.md',\n"
         "    'arms': {'floor': {'sections': ['3']}},\n"
         "}\n"
     )
+    IMPLEMENTATION_DECLARATION = "__implementation__ = {'revision': 'draft-r17.md'}\n"
     WIRING = "from Method.estimator import estimate\n"
 
     def proposals(self, managed=(), unmanaged=(), body="## 3\ntext\n"):
@@ -9917,7 +10108,8 @@ class RevisionDiscoveryMarkerTests(unittest.TestCase):
         (box / "src/Method_Benchmark").mkdir(parents=True)
         (box / "tests").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self.IMPLEMENTATION_DECLARATION, encoding="utf-8")
         (box / "src/Method/estimator.py").write_text(
             _module("draft-r17.md", ["3"], ["11"]), encoding="utf-8")
         (box / "src/Method_Benchmark/__init__.py").write_text(
@@ -10227,17 +10419,17 @@ class PremiseContractAgreementTests(unittest.TestCase):
 
     SKILL_ROOT = CLI.parent.parent
     SKILL_MD = SKILL_ROOT / "SKILL.md"
-    KIT_DECLARATION = SKILL_ROOT / "assets/kit/src_benchmark/__init__.py"
 
     BLOCK = "premises"
 
     def kit_block(self):
-        """The kit writes its example inside a comment, because the value it
-        scaffolds has to stay empty. Uncomment it and read it as the literal
-        it is."""
+        """The engine writes its example inside a comment, because the value
+        it scaffolds has to stay empty -- `premises` moved off the kit's own
+        bench asset onto `authored_package_init`'s template (design D1/D10,
+        Unit 2). Uncomment it and read it as the literal it is."""
         opener = f'"{self.BLOCK}": {{'
         body = []
-        for line in self.KIT_DECLARATION.read_text(encoding="utf-8").splitlines():
+        for line in impl.authored_package_init("Method").splitlines():
             text = line.strip()
             if not text.startswith("#"):
                 continue
@@ -10255,8 +10447,13 @@ class PremiseContractAgreementTests(unittest.TestCase):
     def doctrine_block(self):
         """The doctrine works the whole declaration as an indented literal, so
         it is read as one: a worked example that stopped parsing fails here
-        rather than sitting in a passage nobody notices is broken."""
-        opener = "__benchmark__ = {"
+        rather than sitting in a passage nobody notices is broken.
+
+        `premises` moved off `__benchmark__`'s own worked example onto
+        `__implementation__`'s (design D1, Unit 2): the two literals are
+        siblings in `src/<Package>/__init__.py`, not blocks of the same one.
+        """
+        opener = "__implementation__ = {"
         body = []
         for line in self.SKILL_MD.read_text(encoding="utf-8").splitlines():
             if not body and line.strip() != opener:
@@ -10265,17 +10462,17 @@ class PremiseContractAgreementTests(unittest.TestCase):
             if line.strip() == "}":
                 break
         self.assertNotEqual(body, [],
-                            "the doctrine works no `__benchmark__` example")
+                            "the doctrine works no `__implementation__` example")
 
         tree = ast.parse(textwrap.dedent("\n".join(body)))
         declared = None
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(
-                    isinstance(target, ast.Name) and target.id == "__benchmark__"
+                    isinstance(target, ast.Name) and target.id == "__implementation__"
                     for target in node.targets):
                 declared = ast.literal_eval(node.value)
         self.assertIsNotNone(
-            declared, "the worked example is not a `__benchmark__` literal")
+            declared, "the worked example is not a `__implementation__` literal")
         self.assertIn(self.BLOCK, declared,
                       f"the worked example declares no {self.BLOCK!r}")
         return declared[self.BLOCK]
@@ -10863,14 +11060,14 @@ class MaterializeCommandFixture:
 
     def _declare_object_map(self, box, name=None):
         """Writes step 8's own two blocks (`revision`, `premises`) into
-        `src/<Package>_Benchmark/__init__.py` -- the disk fact
-        `resolve_benchmark_declaration` reads as "the object map is
-        approved". Requires the scaffold stage to have already copied that
-        file in.
+        `src/<Package>/__init__.py`'s `__implementation__` -- the disk fact
+        `resolve_implementation_declaration` reads as "the object map is
+        approved" (design D1/D3). Requires the scaffold stage to have
+        already copied that file in.
         """
         name = name or self.NAME
         package = impl.package_name(name)
-        path = box / "src" / f"{package}_Benchmark" / "__init__.py"
+        path = box / "src" / package / "__init__.py"
         text = path.read_text(encoding="utf-8")
         text = text.replace('"revision": "",', '"revision": "r01.md",', 1)
         text = text.replace(
@@ -10892,10 +11089,13 @@ class MaterializeCommandFixture:
         # Step 8's declaration IS a step-9-style hand-authored edit over a
         # scaffold-sealed file (D2): declare it, or this target drifts
         # (correctly, per A1) on the very file objects/harness now depend on.
+        # Re-sealed at `src/<Package>/__init__.py` since design D1/D10 --
+        # `__implementation__` lives in the method's own package, not the
+        # comparison's.
         package = impl.package_name(name)
         payload, code, proc = self._run_cli(
             "materialize", "--target", str(box), "--name", name,
-            "--authored", f"src/{package}_Benchmark/__init__.py")
+            "--authored", f"src/{package}/__init__.py")
         assert code == 0, proc.stderr
         self._git(box, "add", "-A")
         self._git(box, "commit", "-q", "-m", "object map declared")
@@ -12802,20 +13002,27 @@ class DeclarationBlockRosterTests(unittest.TestCase):
             "**`revision` and `premises` are asked by this flow, never invented.**",
             skill)
         self.assertIn("Flow A's ask for `revision` and `premises`", skill)
+        # `revision`'s own guidance comment moved off the kit asset onto
+        # `authored_package_init`'s template (design D1/D10, Unit 2) --
+        # `__implementation__` no longer lives in `KIT_DECLARATION` at all.
         self.assertIn(
             "asked for by the flow, never invented here",
-            self.KIT_DECLARATION.read_text(encoding="utf-8"))
+            impl.authored_package_init("Method"))
 
 
-class SeventhScaffoldBlockTests(unittest.TestCase):
-    """The scaffold's `__benchmark__` literal gains a seventh block, `entry`,
-    prefilled empty exactly like the other six — and the doctrine's own count
-    of "six blocks" moves to seven with it, named here rather than absorbed
-    silently.
+class FiveBenchmarkBlocksTests(unittest.TestCase):
+    """The scaffold's `__benchmark__` literal, at five blocks since Movement 2
+    (design D1): `revision` and `premises` relocated onto `__implementation__`
+    in the method's own package, leaving `arms`/`search`/`report`/
+    `distribution`/`entry` — the comparison's own five. Renamed from
+    `SeventhScaffoldBlockTests` (Decision 10's own seven-block count, now
+    stale) rather than silently repointed: the count this class polices moved
+    a second time, and that move is named here too.
 
-    This is the one non-additive cost of Decision 10: `probe`'s harness
-    resolution can only stop naming `benchmark.py` for every target once a
-    target has somewhere of its own to declare a different name instead.
+    `entry` remains prefilled empty exactly like the other four: `probe`'s
+    harness resolution can only stop naming `benchmark.py` for every target
+    once a target has somewhere of its own to declare a different name
+    instead (Decision 10's own finding, unaffected by Movement 2).
     """
 
     KIT_DECLARATION = KIT / "src_benchmark" / "__init__.py"
@@ -12829,25 +13036,25 @@ class SeventhScaffoldBlockTests(unittest.TestCase):
                 return ast.literal_eval(node.value)
         self.fail("the kit declares no `__benchmark__` literal")
 
-    def test_the_scaffold_declares_seven_blocks_not_six(self):
+    def test_the_scaffold_declares_five_blocks_not_seven(self):
         declared = self.declared_blocks()
         self.assertEqual(
             sorted(declared),
-            ["arms", "distribution", "entry", "premises", "report",
-             "revision", "search"],
-            "the scaffold must carry exactly seven top-level blocks")
+            ["arms", "distribution", "entry", "report", "search"],
+            "the scaffold must carry exactly five top-level blocks -- "
+            "revision/premises moved to __implementation__ (design D1)")
 
     def test_the_entry_block_is_prefilled_empty(self):
         declared = self.declared_blocks()
         self.assertEqual(declared["entry"], {"module": "", "function": ""})
 
-    def test_the_doctrine_names_seven_blocks_not_six(self):
-        """The prose that counted the blocks has to count seven now, or the
+    def test_the_doctrine_names_five_blocks_not_seven(self):
+        """The prose that counted the blocks has to count five now, or the
         doctrine is the one place still telling a reader the old number."""
         text = SKILL_MD.read_text(encoding="utf-8")
-        self.assertIn("its seven blocks", text)
-        self.assertNotIn("its six blocks", text)
-        self.assertIn("all seven top-level blocks", text)
+        self.assertIn("its five blocks", text)
+        self.assertNotIn("its seven blocks", text)
+        self.assertIn("all five top-level blocks", text)
 
     def test_a_fresh_untouched_scaffold_still_reads_as_blank(self):
         """The seventh block's own blank value is `{"module": "", "function":
@@ -14951,7 +15158,8 @@ class ShardRefusalCrossJoinTests(unittest.TestCase):
         not tell an absent key from an absent answer."""
         box = self.build_target("undeclared")
         (box / "src/Method_Benchmark/__init__.py").write_text(
-            "__benchmark__ = {'revision': 'r01.md'}\n", encoding="utf-8")
+            "__benchmark__ = {'arms': {'floor': {'sections': ['1']}}}\n",
+            encoding="utf-8")
         distribution = self.distribution(box)
 
         self.assertEqual(distribution["status"], "none")
@@ -15316,6 +15524,15 @@ class KitBuiltTargetIntrospectionTests(MaterializeCommandFixture, unittest.TestC
         assert text != before and f'{package}_Benchmark.benchmark' in text
         assert '"renderers"' in text
         path.write_text(text, encoding="utf-8")
+        # `super()._declare_object_map` re-seals `src/<Package>/__init__.py`
+        # (where it wrote `revision`/`premises`) back in
+        # `_fully_materialized_all_stages` -- this edit lands on the
+        # SIBLING file, `__benchmark__`'s own `entry`/`report` blocks, and
+        # needs its own re-seal or it reads as `SCAFFOLD_DRIFT` forever.
+        payload, code, proc = self._run_cli(
+            "materialize", "--target", str(box), "--name", name,
+            "--authored", f"src/{package}_Benchmark/__init__.py")
+        assert code == 0, proc.stderr
 
     def _kit_built_target(self, tag=""):
         """All three stages, a baseline to compare against, a tensor backend,
@@ -15620,19 +15837,25 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
     the SENTENCE was wrong and now reads the state that actually routed there.
     """
 
-    def _box(self, suffix, declaration, *, comparable=False):
+    def _box(self, suffix, declaration, *, comparable=False, implementation=""):
         """`materialize` refuses `DIRTY_WORKTREE` before any gate of its own,
         so the box is committed; and `probe` answers `convert` long before the
         declaration ladder unless there is something to compare against and a
         trainable backend -- `comparable` supplies both, exactly as
-        `UnreachedMathematicsEndToEndTests.probe_with` already has to."""
+        `UnreachedMathematicsEndToEndTests.probe_with` already has to.
+
+        `implementation` writes `src/Method/__init__.py`'s own
+        `__implementation__` literal (design D1) -- the object-map gate's own
+        source since Movement 2 -- kept apart from `declaration` (still
+        `__benchmark__`'s five remaining blocks) for the same reason the two
+        literals are kept apart in production."""
         box = FORGE / "implementations" / f"_assertcheck_{suffix}_{os.getpid()}_{id(self)}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(implementation, encoding="utf-8")
         (box / "src/Method_Benchmark/__init__.py").write_text(
             declaration, encoding="utf-8")
         if comparable:
@@ -15650,8 +15873,6 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
 
     SEARCH_ONLY = (
         "__benchmark__ = {\n"
-        "    'revision': '',\n"
-        "    'premises': {},\n"
         "    'arms': {},\n"
         "    'search': {'what': 'a scalar', 'requiredScale': {'seeds': 3},\n"
         "               'role': 'validation', 'tieRule': 'the smaller wins'},\n"
@@ -15659,11 +15880,18 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         "    'distribution': {},\n"
         "    'entry': {'module': '', 'function': ''},\n"
         "}\n")
-    APPROVED = (
-        "__benchmark__ = {\n"
+    #: `__implementation__` (design D1) -- the object map's own source at the
+    #: new home, `src/Method/__init__.py`. `APPROVED` names it, `SEARCH_ONLY`
+    #: leaves it blank (`""`, `_box`'s own default) so the pre-approval gate
+    #: tests keep exercising an unwritten object map.
+    IMPLEMENTATION_APPROVED = (
+        "__implementation__ = {\n"
         "    'revision': 'r01.md',\n"
         "    'premises': {'prediction': 'a label', 'statisticalUnit': 'subject',\n"
         "                 'metric': 'accuracy', 'direction': 'higher'},\n"
+        "}\n")
+    APPROVED = (
+        "__benchmark__ = {\n"
         "    'arms': {},\n"
         "    'search': {},\n"
         "    'report': {},\n"
@@ -15688,7 +15916,7 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         "    'entry': {'module': '', 'function': ''},\n"
         "}\n")
 
-    def _stage_objects(self, declaration, suffix):
+    def _stage_objects(self, declaration, suffix, *, implementation=""):
         """`_stage_objects` directly rather than through `materialize`: the
         refusal is raised in this top-level helper, not inside
         `cmd_materialize`, and reaching it through the CLI would mean
@@ -15699,7 +15927,7 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         as long as it did: `raised_refusal_codes` walks `cmd_*` bodies only, and
         the roster was populated from it. `reachable_refusal_codes` follows the
         call, and the code is classified now."""
-        box = self._box(suffix, declaration)
+        box = self._box(suffix, declaration, implementation=implementation)
         try:
             return None, impl._stage_objects(box, "Method", "1")
         except impl.Refused as refused:
@@ -15708,9 +15936,10 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
     # --- the gate that opened on a state its own sentence describes --------
 
     def test_a_declaration_with_no_revision_or_premises_is_refused(self):
-        """The measured hole. `_declaration_is_blank` needs all seven blocks
-        empty, so answering any one of them opens this gate -- and `search` is
-        exactly the block a target can answer long before step 8."""
+        """The measured hole. `_declaration_is_blank` needs both blocks of
+        `__implementation__` empty, so answering neither opens this gate --
+        and an answered `__benchmark__` block (`search`) does not change
+        that, since Movement 2 the two declarations gate independently."""
         refused, _ = self._stage_objects(self.SEARCH_ONLY, "searchonly")
         self.assertIsNotNone(refused, "the gate opened on an unapproved map")
         self.assertEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
@@ -15722,7 +15951,8 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         gate must still open, and it must open on exactly what its sentence
         asks for -- `revision` and `premises`, nothing else. A refusal nobody
         can clear is the defect one over from a gate nobody can trip."""
-        refused, result = self._stage_objects(self.APPROVED, "approved")
+        refused, result = self._stage_objects(
+            self.APPROVED, "approved", implementation=self.IMPLEMENTATION_APPROVED)
         self.assertIsNone(refused, refused and refused.detail)
         self.assertEqual(result["stage"], "objects")
 
@@ -15730,9 +15960,12 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         """A refusal that says "revision/premises" over a declaration whose
         `premises` is fully written sends somebody to re-read a block that is
         already right."""
-        declaration = self.APPROVED.replace("'revision': 'r01.md',", "'revision': '',")
-        refused, _ = self._stage_objects(declaration, "halfway")
+        implementation = self.IMPLEMENTATION_APPROVED.replace(
+            "'revision': 'r01.md',", "'revision': '',")
+        refused, _ = self._stage_objects(
+            self.APPROVED, "halfway", implementation=implementation)
         self.assertIsNotNone(refused)
+        self.assertEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
         self.assertIn("revision", refused.detail)
         self.assertNotIn("premises", refused.detail)
 
@@ -15741,9 +15974,69 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         code -- a tightening that renamed the existing refusal would be a
         second change wearing this one's clothes."""
         refused, _ = self._stage_objects(
-            "__benchmark__ = {'revision': '', 'premises': {}, 'arms': {}, "
+            "__benchmark__ = {'arms': {}, "
             "'search': {}, 'report': {}, 'distribution': {}, "
             "'entry': {'module': '', 'function': ''}}\n", "blank")
+        self.assertIsNotNone(refused)
+        self.assertEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
+
+    # --- the migration refusal (design §7, spec "A Declaration Predating
+    # This Change Is Migrated In Full") ------------------------------------
+
+    OLD_HOME_DECLARATION = (
+        "__benchmark__ = {\n"
+        "    'revision': 'r01.md',\n"
+        "    'premises': {'prediction': 'a label', 'statisticalUnit': 'subject',\n"
+        "                 'metric': 'accuracy', 'direction': 'higher'},\n"
+        "    'arms': {},\n"
+        "    'search': {},\n"
+        "    'report': {},\n"
+        "    'distribution': {},\n"
+        "    'entry': {'module': '', 'function': ''},\n"
+        "}\n")
+
+    def test_a_declaration_predating_relocation_refuses_by_a_distinct_code(self):
+        """A target scaffolded before this change carries `revision`/
+        `premises` at the old home; the new home is blank. Distinct from
+        `OBJECT_MAP_NOT_APPROVED` -- this target once declared -- and names
+        both locations (spec scenario "A pre-existing declaration at the
+        old home is named, not silently lost")."""
+        refused, _ = self._stage_objects(self.OLD_HOME_DECLARATION, "oldhome")
+        self.assertIsNotNone(refused)
+        self.assertEqual(refused.code, "OBJECT_MAP_AT_OLD_HOME")
+        self.assertNotEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
+        self.assertIn("src/Method_Benchmark/__init__.py", refused.detail)
+        self.assertIn("src/Method/__init__.py", refused.detail)
+
+    def test_a_never_declared_target_still_refuses_the_plain_code(self):
+        """The opposite fact must not share the migration refusal's code
+        (spec scenario "A never-declared target is unaffected"): nothing at
+        either home is exactly today's ordinary unapproved state."""
+        refused, _ = self._stage_objects(self.SEARCH_ONLY, "neverdeclared")
+        self.assertIsNotNone(refused)
+        self.assertEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
+
+    def test_the_one_time_remedy_moves_the_declaration_and_the_gap_closes(self):
+        """Spec scenario "The one-time remedy moves the declaration and the
+        gap closes": moving `revision`/`premises` into `__implementation__`
+        at the new home -- the documented SKILL.md step-8 procedure, done by
+        hand -- clears `OBJECT_MAP_AT_OLD_HOME` exactly as it would for a
+        natively-scaffolded target."""
+        box = self._box("remedied", self.OLD_HOME_DECLARATION,
+                        implementation=self.IMPLEMENTATION_APPROVED)
+        try:
+            refused, result = None, impl._stage_objects(box, "Method", "1")
+        except impl.Refused as exc:
+            refused, result = exc, None
+        self.assertIsNone(refused, refused and refused.detail)
+        self.assertEqual(result["stage"], "objects")
+
+    def test_an_unreadable_old_home_does_not_crash_the_gate(self):
+        """`_implementation_predates_relocation` never raises: an unparsable
+        old-home file is read the same as an absent one, and the gate falls
+        through to its ordinary refusal rather than propagating a parse
+        error the object-map gate was never asked about."""
+        refused, _ = self._stage_objects("__benchmark__ = {\n", "unparsable")
         self.assertIsNotNone(refused)
         self.assertEqual(refused.code, "OBJECT_MAP_NOT_APPROVED")
 
@@ -15861,6 +16154,132 @@ class MessagesThatAssertWhatTheyCheckTests(unittest.TestCase):
         (path / "src" / "Method_Benchmark" / "__init__.py").write_text(
             declaration, encoding="utf-8")
         return path
+
+
+class LiveTargetMigrationFixtureTests(unittest.TestCase):
+    """Task 2.19's concrete fixture: shaped after
+    `implementations/Domain_Adaptation`'s old-home declaration, per owner
+    instruction, never the live target itself (that repository is separate
+    and this change's commit does not touch it -- design §7's boundary).
+
+    Non-blank `revision`/`premises`, non-empty `__levels__`/`__steps__`/
+    `__records__`, plus one extra top-level literal (`__environment__`,
+    mirroring the live target's own unread one) nothing in this forge ever
+    reads. Walks all four spec scenarios under "A Declaration Predating
+    This Change Is Migrated In Full": (a) never-declared, (b) old-home-only
+    named distinctly, (c) the one-time remedy moves all five literals
+    verbatim, (d) the unread literal survives unchanged.
+    """
+
+    OLD_HOME = (
+        "__benchmark__ = {\n"
+        "    'revision': 'research-concept-r17.md',\n"
+        "    'premises': {'prediction': 'a class label', "
+        "'statisticalUnit': 'subject',\n"
+        "                 'metric': 'accuracy', 'direction': 'higher'},\n"
+        "    'arms': {'baseline': {'sections': ['3']}},\n"
+        "    'search': {}, 'report': {}, 'distribution': {},\n"
+        "    'entry': {'module': '', 'function': ''},\n"
+        "}\n"
+        "__levels__ = ['none', 'pilot', 'remote']\n"
+        "__steps__ = {'train': {'module': 'Method_Benchmark.steps', "
+        "'function': 'run'}}\n"
+        "__records__ = {'main': {'path': 'Results/main.json'}}\n"
+        # The literal no forge-owned reader anywhere ever looks for --
+        # mirroring the live target's own `__environment__`.
+        "__environment__ = {'python': '3.11', 'cuda': '12.1'}\n"
+    )
+
+    def _box(self, suffix):
+        box = FORGE / "implementations" / f"_migration_{suffix}_{os.getpid()}_{id(self)}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src" / "Method").mkdir(parents=True)
+        (box / "src" / "Method_Benchmark").mkdir(parents=True)
+        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            self.OLD_HOME, encoding="utf-8")
+        return box
+
+    def test_a_never_declared_target_refuses_exactly_as_today(self):
+        """Scenario 'A never-declared target is unaffected'."""
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "src" / "Method").mkdir(parents=True)
+            (root / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+            with self.assertRaises(impl.Refused) as ctx:
+                impl._stage_objects(root, "Method", "1")
+        self.assertEqual(ctx.exception.code, "OBJECT_MAP_NOT_APPROVED")
+
+    def test_an_old_home_only_declaration_is_named_not_silently_lost(self):
+        """Scenario 'A pre-existing declaration at the old home is named,
+        not silently lost'."""
+        box = self._box("named")
+        with self.assertRaises(impl.Refused) as ctx:
+            impl._stage_objects(box, "Method", "1")
+        self.assertEqual(ctx.exception.code, "OBJECT_MAP_AT_OLD_HOME")
+        self.assertNotEqual(ctx.exception.code, "OBJECT_MAP_NOT_APPROVED")
+
+    def test_the_remedy_moves_all_five_literals_and_the_gap_closes(self):
+        """Scenarios 'The one-time remedy moves the declaration and the gap
+        closes' and 'The engine-recognized sibling declarations migrate in
+        full': after the documented by-hand move (SKILL.md step 8), the
+        gate proceeds exactly as it would for a natively-scaffolded target,
+        and `__levels__`/`__steps__`/`__records__` all resolve at the new
+        home, unchanged."""
+        box = self._box("remedy")
+
+        # The one-time remedy, performed exactly as SKILL.md step 8
+        # documents it: hand-move every top-level literal from the old
+        # home into the new, verbatim. Never edit the old file's fields in
+        # place -- only their location changes.
+        new_home = box / "src" / "Method" / "__init__.py"
+        new_home.write_text(
+            "__implementation__ = {\n"
+            "    'revision': 'research-concept-r17.md',\n"
+            "    'premises': {'prediction': 'a class label', "
+            "'statisticalUnit': 'subject',\n"
+            "                 'metric': 'accuracy', 'direction': 'higher'},\n"
+            "}\n"
+            "__levels__ = ['none', 'pilot', 'remote']\n"
+            "__steps__ = {'train': {'module': 'Method_Benchmark.steps', "
+            "'function': 'run'}}\n"
+            "__records__ = {'main': {'path': 'Results/main.json'}}\n"
+            "__environment__ = {'python': '3.11', 'cuda': '12.1'}\n",
+            encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            "__benchmark__ = {\n"
+            "    'arms': {'baseline': {'sections': ['3']}},\n"
+            "    'search': {}, 'report': {}, 'distribution': {},\n"
+            "    'entry': {'module': '', 'function': ''},\n"
+            "}\n", encoding="utf-8")
+
+        result = impl._stage_objects(box, "Method", "1")
+        self.assertEqual(result["stage"], "objects")
+
+        self.assertEqual(impl.resolve_levels_declaration(box, "Method"),
+                         ["none", "pilot", "remote"])
+        self.assertEqual(
+            impl.resolve_steps_declaration(box, "Method"),
+            {"train": {"module": "Method_Benchmark.steps", "function": "run"}})
+        self.assertEqual(impl.resolve_records_declaration(box, "Method"),
+                         {"main": {"path": "Results/main.json"}})
+
+    def test_a_literal_this_forge_never_reads_still_survives_the_move(self):
+        """Scenario 'A literal the forge has no reader for is still
+        preserved' -- the one obligation no forge-owned check could ever
+        report failing on its own, per the spec's own reasoning. Read with
+        the identical generic AST reader every named resolver in this
+        engine is built over (`read_declaration`), never a dedicated
+        `resolve_environment_declaration` this engine does not have."""
+        box = self._box("unread")
+        new_home = box / "src" / "Method" / "__init__.py"
+        new_home.write_text(
+            "__implementation__ = {'revision': 'research-concept-r17.md', "
+            "'premises': {}}\n"
+            "__environment__ = {'python': '3.11', 'cuda': '12.1'}\n",
+            encoding="utf-8")
+        survived = impl.read_declaration(new_home, "__environment__")
+        self.assertEqual(survived, {"python": "3.11", "cuda": "12.1"})
 
 
 class HarnessStatusResolutionTests(unittest.TestCase):
@@ -16737,12 +17156,17 @@ class KitScaffoldLevelsDeclarationJoinTests(unittest.TestCase):
     *annotated* assignment (`__levels__: list = [...]`, `ast.AnnAssign`), but
     `read_declaration` walked only `ast.Assign`. A target that uses the
     scaffold the skill itself ships therefore declared a ladder the skill
-    could not read — the writer (`assets/kit/src_benchmark/__init__.py`) and
-    the reader (`read_declaration`, and everything built on it) are in the
-    same work unit and were never crossed until this test.
+    could not read — the writer and the reader (`read_declaration`, and
+    everything built on it) are in the same work unit and were never crossed
+    until this test.
+
+    `__levels__` moved off the kit's own bench asset onto
+    `authored_package_init`'s own template (design D2/D10, Unit 2): the
+    "shipped source" this class reads against is that function's output,
+    never a static file, and the annotated form travelled with it unchanged.
 
     Not "an annotated assignment parses" in the abstract: this reads the
-    exact file the kit ships, unmodified, through the exact reader every
+    exact text the engine ships, unmodified, through the exact reader every
     caller uses.
     """
 
@@ -16750,32 +17174,37 @@ class KitScaffoldLevelsDeclarationJoinTests(unittest.TestCase):
                 / "assets/kit/src_benchmark/__init__.py")
 
     def test_the_shipped_scaffold_s_annotated_levels_literal_is_readable(self):
-        """The kit's own `__levels__: list = []` -- an `ast.AnnAssign`, not
-        an `ast.Assign` -- must be read as an empty list declared, not as
-        nothing declared. Before the fix this fails: `read_declaration`
-        returns `None` for a file that plainly declares `__levels__`.
+        """`authored_package_init`'s own `__levels__: list = []` -- an
+        `ast.AnnAssign`, not an `ast.Assign` -- must be read as an empty
+        list declared, not as nothing declared. Before the fix this fails:
+        `read_declaration` returns `None` for a file that plainly declares
+        `__levels__`.
         """
-        result = impl.read_declaration(self.KIT_INIT, "__levels__")
+        with tempfile.TemporaryDirectory() as raw:
+            path = Path(raw) / "__init__.py"
+            path.write_text(impl.authored_package_init("Method"), encoding="utf-8")
+            result = impl.read_declaration(path, "__levels__")
         self.assertIsNotNone(
-            result, "read_declaration saw no __levels__ in the kit's own "
-            "scaffold, which declares one as `__levels__: list = []`")
+            result, "read_declaration saw no __levels__ in the engine's own "
+            "authored template, which declares one as `__levels__: list = []`")
         self.assertEqual(result, [])
 
     def test_a_filled_in_annotated_levels_literal_is_readable_end_to_end(self):
-        """The realistic case: a target copies the scaffold and fills the
-        ladder in, keeping the annotation exactly as shipped. Exercises the
-        full join through `resolve_levels_declaration`, the function every
-        caller actually uses -- not `read_declaration` in isolation.
+        """The realistic case: a target scaffolds via `authored_package_init`
+        and fills the ladder in, keeping the annotation exactly as shipped.
+        Exercises the full join through `resolve_levels_declaration`, the
+        function every caller actually uses -- not `read_declaration` in
+        isolation.
         """
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            bench = root / "src" / "Method_Benchmark"
-            bench.mkdir(parents=True)
-            source = self.KIT_INIT.read_text(encoding="utf-8").replace(
+            package = root / "src" / "Method"
+            package.mkdir(parents=True)
+            source = impl.authored_package_init("Method").replace(
                 "__levels__: list = []",
                 '__levels__: list = ["local", "cluster"]')
             self.assertIn('__levels__: list = ["local", "cluster"]', source)
-            (bench / "__init__.py").write_text(source, encoding="utf-8")
+            (package / "__init__.py").write_text(source, encoding="utf-8")
             levels = impl.resolve_levels_declaration(root, "Method")
         self.assertEqual(levels, ["local", "cluster"])
 
@@ -16797,11 +17226,13 @@ class KitScaffoldLevelsDeclarationJoinTests(unittest.TestCase):
         """Sweep result: `__benchmark__` goes through the same
         `read_declaration` reader. It is a plain `ast.Assign` in the shipped
         kit, not annotated -- unaffected by the `AnnAssign` hole, confirmed
-        directly against the shipped file rather than assumed.
+        directly against the shipped file rather than assumed. `revision`
+        moved off `__benchmark__` (design D1); `arms` is the block that
+        remains.
         """
         result = impl.read_declaration(self.KIT_INIT, "__benchmark__")
         self.assertIsNotNone(result)
-        self.assertIn("revision", result)
+        self.assertIn("arms", result)
 
     def test_the_shipped_scaffold_s_dimensions_literal_is_also_unaffected(self):
         """Sweep result: `DIMENSIONS` is read by a separate, bespoke AST walk
@@ -17282,10 +17713,11 @@ class StepOperandRefusalTests(unittest.TestCase):
         (box / "tests").mkdir(parents=True)
         (box / "Method").mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             f"__steps__ = {declare_steps!r}\n" if declare_steps is not None else "",
             encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            "", encoding="utf-8")
         return box
 
     def run_cli(self, *args, proposals=None):
@@ -17465,8 +17897,7 @@ class PositionRecordMalformedTests(unittest.TestCase):
             (box / directory).mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
+        (box / "src/Method/__init__.py").write_text(
             f"__levels__ = {self.LADDER!r}\n__records__ = {records!r}\n",
             encoding="utf-8")
         (box / "Method/AGREED.md").write_text(
@@ -17601,12 +18032,13 @@ class PositionRecordUnknownTests(unittest.TestCase):
         (box / "tests").mkdir(parents=True)
         (box / "Method").mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
         declaration = f"__levels__ = {ladder!r}\n" if ladder is not None else ""
         if declare_records is not None:
             declaration += f"__records__ = {declare_records!r}\n"
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             declaration, encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            "", encoding="utf-8")
         return box
 
     def run_cli(self, *args, proposals=None):
@@ -17765,9 +18197,10 @@ class PositionRungLadderTests(unittest.TestCase):
         (box / "tests").mkdir(parents=True)
         (box / "Method").mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "" if ladder is None else f"__levels__ = {ladder!r}\n", encoding="utf-8")
+        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+            "", encoding="utf-8")
         return box
 
     def _shards(self, box):
@@ -22320,8 +22753,11 @@ class RungNotAttainedGateTests(unittest.TestCase):
         without ever tripping `POSITION_DISAGREES` or `POSITION_UNBACKED`
         along the way -- the identical restraint that keeps this fixture
         from needing a `position --reconcile` pass between the two."""
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
-            "__levels__ = ['floor', 'pilot', 'full']\n"
+        path = box / "src" / "Method" / "__init__.py"
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        path.write_text(
+            existing
+            + "__levels__ = ['floor', 'pilot', 'full']\n"
             "__records__ = {'main': {'path': 'r.json', "
             "'requiredScale': {'seeds': 3}}}\n",
             encoding="utf-8")
@@ -24701,15 +25137,21 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
     """`__steps__` -- read exactly the way `resolve_levels_declaration` reads
     `__levels__` (design "Execute a Declared Local Step" — decision "entries
     carry {module, function}, no kwargs"; spec "`__steps__` declaration
-    surface"), held apart from `__benchmark__` for the identical reason.
+    surface"), held apart from `__implementation__` for the identical reason,
+    from `declaration_root` -- the method's own package, since design D2.
     """
+
+    def package(self, root: Path) -> Path:
+        path = root / "src" / "Method"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def bench(self, root: Path) -> Path:
         path = root / "src" / "Method_Benchmark"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def test_no_benchmark_directory_is_empty(self):
+    def test_no_package_directory_is_empty(self):
         with tempfile.TemporaryDirectory() as raw:
             self.assertEqual(
                 impl.resolve_steps_declaration(Path(raw), "Method"), {})
@@ -24717,13 +25159,13 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
     def test_directory_with_no_declaration_is_empty(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            self.bench(root)
+            self.package(root)
             self.assertEqual(impl.resolve_steps_declaration(root, "Method"), {})
 
     def test_declared_in_init_py_is_found(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__steps__ = {'verification': {'module': 'Method_Benchmark.steps', "
                 "'function': 'run_verification'}}\n", encoding="utf-8")
             resolved = impl.resolve_steps_declaration(root, "Method")
@@ -24733,7 +25175,7 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
     def test_declared_in_config_py_alone_is_found(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "config.py").write_text(
+            (self.package(root) / "config.py").write_text(
                 "__steps__ = {'a': {'module': 'm', 'function': 'f'}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_steps_declaration(root, "Method")
@@ -24742,7 +25184,7 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
     def test_a_non_dict_value_reads_as_nothing_declared(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__steps__ = ['verification']\n", encoding="utf-8")
             self.assertEqual(impl.resolve_steps_declaration(root, "Method"), {})
 
@@ -24752,37 +25194,40 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
         the plain form would never see the scaffold's own shape."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__steps__: dict = {'a': {'module': 'm', 'function': 'f'}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_steps_declaration(root, "Method")
         self.assertEqual(resolved, {"a": {"module": "m", "function": "f"}})
 
-    def test_resolves_without_reading_or_mutating_the_benchmark_declaration(self):
+    def test_resolves_without_reading_or_mutating_the_implementation_declaration(self):
         """Spec scenario 'Declared step resolves'."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': 'r01.md'}\n"
+            (self.package(root) / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'r01.md'}\n"
                 "__steps__ = {'a': {'module': 'm', 'function': 'f'}}\n",
                 encoding="utf-8")
             steps = impl.resolve_steps_declaration(root, "Method")
-            benchmark = impl.resolve_benchmark_declaration(root, "Method")
+            implementation = impl.resolve_implementation_declaration(root, "Method")
         self.assertEqual(steps, {"a": {"module": "m", "function": "f"}})
-        self.assertEqual(benchmark["contract"], {"revision": "r01.md"})
+        self.assertEqual(implementation["contract"], {"revision": "r01.md"})
 
     def test_steps_never_flips_the_benchmark_verdict_when_every_block_is_blank(self):
         """Spec scenario '`__steps__` never flips the benchmark verdict':
-        `_declaration_is_blank` checks only `BENCHMARK_BLOCKS`, so a target
-        declaring `__steps__` while every `__benchmark__` block sits at its
-        scaffold-empty value still reads `undeclared`."""
+        the two literals live in different files since Movement 2, so a
+        target declaring `__steps__` at the method's own package while
+        every `__benchmark__` block sits blank at the comparison's package
+        still reads that comparison `undeclared`."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': '', 'premises': {}, 'arms': {}, "
-                "'search': {}, 'report': {}, 'distribution': {}, "
-                "'entry': {'module': '', 'function': ''}}\n"
+            (self.package(root) / "__init__.py").write_text(
                 "__steps__ = {'a': {'module': 'm', 'function': 'f'}}\n",
+                encoding="utf-8")
+            (self.bench(root) / "__init__.py").write_text(
+                "__benchmark__ = {'arms': {}, "
+                "'search': {}, 'report': {}, 'distribution': {}, "
+                "'entry': {'module': '', 'function': ''}}\n",
                 encoding="utf-8")
             steps = impl.resolve_steps_declaration(root, "Method")
             benchmark = impl.resolve_benchmark_declaration(root, "Method")
@@ -24793,15 +25238,21 @@ class ResolveStepsDeclarationTests(unittest.TestCase):
 class ResolveRecordsDeclarationTests(unittest.TestCase):
     """`__records__` -- read exactly the way `resolve_steps_declaration` reads
     `__steps__` (design D1; spec "`__records__` declaration"), held apart
-    from `__benchmark__` for the identical reason.
+    from `__implementation__` for the identical reason, from
+    `declaration_root` -- the method's own package, since design D2.
     """
+
+    def package(self, root: Path) -> Path:
+        path = root / "src" / "Method"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def bench(self, root: Path) -> Path:
         path = root / "src" / "Method_Benchmark"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def test_no_benchmark_directory_is_empty(self):
+    def test_no_package_directory_is_empty(self):
         with tempfile.TemporaryDirectory() as raw:
             self.assertEqual(
                 impl.resolve_records_declaration(Path(raw), "Method"), {})
@@ -24809,13 +25260,13 @@ class ResolveRecordsDeclarationTests(unittest.TestCase):
     def test_directory_with_no_declaration_is_empty(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            self.bench(root)
+            self.package(root)
             self.assertEqual(impl.resolve_records_declaration(root, "Method"), {})
 
     def test_declared_in_init_py_is_found(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__records__ = {'main': {'path': 'product/results.json', "
                 "'requiredScale': {'seeds': 3}}}\n", encoding="utf-8")
             resolved = impl.resolve_records_declaration(root, "Method")
@@ -24825,7 +25276,7 @@ class ResolveRecordsDeclarationTests(unittest.TestCase):
     def test_declared_in_config_py_alone_is_found(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "config.py").write_text(
+            (self.package(root) / "config.py").write_text(
                 "__records__ = {'a': {'path': 'p.json', 'requiredScale': {}}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_records_declaration(root, "Method")
@@ -24837,11 +25288,11 @@ class ResolveRecordsDeclarationTests(unittest.TestCase):
         keep."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            bench = self.bench(root)
-            (bench / "__init__.py").write_text(
+            package = self.package(root)
+            (package / "__init__.py").write_text(
                 "__records__ = {'a': {'path': 'p.json', 'requiredScale': {}}}\n",
                 encoding="utf-8")
-            (bench / "config.py").write_text(
+            (package / "config.py").write_text(
                 "__records__ = {'b': {'path': 'q.json', 'requiredScale': {}}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_records_declaration(root, "Method")
@@ -24850,7 +25301,7 @@ class ResolveRecordsDeclarationTests(unittest.TestCase):
     def test_a_non_dict_value_reads_as_nothing_declared(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__records__ = ['main']\n", encoding="utf-8")
             self.assertEqual(impl.resolve_records_declaration(root, "Method"), {})
 
@@ -24860,35 +25311,37 @@ class ResolveRecordsDeclarationTests(unittest.TestCase):
         the plain form would never see the scaffold's own shape."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
+            (self.package(root) / "__init__.py").write_text(
                 "__records__: dict = {'a': {'path': 'p.json', 'requiredScale': {}}}\n",
                 encoding="utf-8")
             resolved = impl.resolve_records_declaration(root, "Method")
         self.assertEqual(resolved, {"a": {"path": "p.json", "requiredScale": {}}})
 
-    def test_resolves_without_reading_or_mutating_the_benchmark_declaration(self):
+    def test_resolves_without_reading_or_mutating_the_implementation_declaration(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': 'r01.md'}\n"
+            (self.package(root) / "__init__.py").write_text(
+                "__implementation__ = {'revision': 'r01.md'}\n"
                 "__records__ = {'a': {'path': 'p.json', 'requiredScale': {}}}\n",
                 encoding="utf-8")
             records = impl.resolve_records_declaration(root, "Method")
-            benchmark = impl.resolve_benchmark_declaration(root, "Method")
+            implementation = impl.resolve_implementation_declaration(root, "Method")
         self.assertEqual(records, {"a": {"path": "p.json", "requiredScale": {}}})
-        self.assertEqual(benchmark["contract"], {"revision": "r01.md"})
+        self.assertEqual(implementation["contract"], {"revision": "r01.md"})
 
     def test_records_never_flips_the_benchmark_verdict_when_every_block_is_blank(self):
         """The identical arm's-length relationship `resolve_steps_declaration`
-        already keeps with `_declaration_is_blank`: `__records__` sits
-        outside `BENCHMARK_BLOCKS` entirely."""
+        already keeps: the two literals live in different files since
+        Movement 2."""
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
-            (self.bench(root) / "__init__.py").write_text(
-                "__benchmark__ = {'revision': '', 'premises': {}, 'arms': {}, "
-                "'search': {}, 'report': {}, 'distribution': {}, "
-                "'entry': {'module': '', 'function': ''}}\n"
+            (self.package(root) / "__init__.py").write_text(
                 "__records__ = {'a': {'path': 'p.json', 'requiredScale': {}}}\n",
+                encoding="utf-8")
+            (self.bench(root) / "__init__.py").write_text(
+                "__benchmark__ = {'arms': {}, "
+                "'search': {}, 'report': {}, 'distribution': {}, "
+                "'entry': {'module': '', 'function': ''}}\n",
                 encoding="utf-8")
             records = impl.resolve_records_declaration(root, "Method")
             benchmark = impl.resolve_benchmark_declaration(root, "Method")
@@ -24998,7 +25451,7 @@ class StepCommandTests(unittest.TestCase):
         return head
 
     def _declare(self, box, steps):
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             f"__steps__ = {steps!r}\n", encoding="utf-8")
 
     def run_cli(self, *args, env=None):
@@ -25289,8 +25742,7 @@ class StepCommandTests(unittest.TestCase):
         (box / "src" / "Method").mkdir(parents=True)
         (box / "src" / "Method_Benchmark").mkdir(parents=True)
         (box / "Method").mkdir(parents=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {'verification': {'module': 'Method_Benchmark.steps', "
             "'function': 'run'}}\n", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
@@ -25643,7 +26095,7 @@ class CmdStepDigestTests(unittest.TestCase):
         subprocess.run(git + ["commit", "-qm", "toy"], check=True, capture_output=True)
 
     def _declare(self, box, steps):
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             f"__steps__ = {steps!r}\n", encoding="utf-8")
 
     def run_cli(self, *args):
@@ -25882,7 +26334,7 @@ class StepVerdictsParityTests(unittest.TestCase):
 
     def test_all_three_builders_agree_on_step_verdicts(self):
         box = self._box()
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {'run_suite': {'module': 'Method_Benchmark.steps', "
             "'function': 'run_ok'}}\n", encoding="utf-8")
         (box / "src" / "Method_Benchmark" / "steps.py").write_text(
@@ -25914,7 +26366,7 @@ class StepVerdictsParityTests(unittest.TestCase):
         key at all -- this assertion is what tells that apart from the
         fixed state, using the same fixture as the test above."""
         box = self._box()
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {'run_suite': {'module': 'Method_Benchmark.steps', "
             "'function': 'run_ok'}}\n", encoding="utf-8")
         (box / "src" / "Method_Benchmark" / "steps.py").write_text(
@@ -27027,10 +27479,11 @@ class UnreachableLadderTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
-            "__benchmark__ = {'revision': 'r1.md'}\n"
+        (box / "src/Method/__init__.py").write_text(
+            "__implementation__ = {'revision': 'r1.md'}\n"
             f"__levels__ = {ladder!r}\n", encoding="utf-8")
+        (box / "src/Method_Benchmark/__init__.py").write_text(
+            "", encoding="utf-8")
         (box / "Method/AGREED.md").write_text(
             "<!-- position revision=r1.md sha256=" + "a" * 64 + " "
             "derivedAt=2026-08-27T00:00:00Z session=s0 target=floor -->\n"
@@ -27253,9 +27706,9 @@ class UnreachableLadderTests(unittest.TestCase):
 
     def test_the_kit_still_invents_no_rung_of_its_own(self):
         """The report names ladder lengths and never a rung, so nothing here
-        gives the scaffold a reason to prefill `__levels__`."""
-        kit = KIT / "src_benchmark" / "__init__.py"
-        tree = ast.parse(kit.read_text(encoding="utf-8"))
+        gives `authored_package_init`'s own template a reason to prefill
+        `__levels__` (moved off the kit's bench asset, design D2/D10)."""
+        tree = ast.parse(impl.authored_package_init("Method"))
         declared = [node for node in tree.body
                     if isinstance(node, ast.AnnAssign)
                     and isinstance(node.target, ast.Name)
@@ -27297,23 +27750,25 @@ class UndeclaredLadderTests(unittest.TestCase):
     """
 
     def _box(self, suffix, *, declaration):
-        """A target that COULD carry a ladder: a real benchmark package with a
+        """A target that COULD carry a ladder: a real method package with a
         real declaration file. A box without one would make every assertion
         here vacuous -- it would have nowhere to write `__levels__` even if it
-        wanted to."""
+        wanted to. `declaration` writes `src/Method/__init__.py` (design D2:
+        `__levels__` lives with `__implementation__`, not `__benchmark__`)."""
         box = FORGE / "implementations" / f"_ladder_{suffix}_{os.getpid()}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
+        (box / "src/Method/__init__.py").write_text(
             declaration, encoding="utf-8")
+        (box / "src/Method_Benchmark/__init__.py").write_text(
+            "", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
         return box
 
-    NO_LADDER = "__benchmark__ = {'revision': 'r1.md'}\n__levels__: list = []\n"
-    A_LADDER = ("__benchmark__ = {'revision': 'r1.md'}\n"
+    NO_LADDER = "__implementation__ = {'revision': 'r1.md'}\n__levels__: list = []\n"
+    A_LADDER = ("__implementation__ = {'revision': 'r1.md'}\n"
                 "__levels__ = ['first', 'second']\n")
 
     def verify(self, box):
@@ -27331,7 +27786,7 @@ class UndeclaredLadderTests(unittest.TestCase):
             self._box("silent", declaration=self.NO_LADDER))["undeclaredLadder"]
         self.assertIsNotNone(report, "a target with no ladder is told nothing")
         self.assertEqual(report["declaration"], impl.LEVELS_DECLARATION)
-        self.assertEqual(report["path"], "src/Method_Benchmark/__init__.py")
+        self.assertEqual(report["path"], "src/Method/__init__.py")
 
     def test_a_declared_ladder_is_reported_nowhere(self):
         """The other half, and the one a weaker lock would survive: a report
@@ -27342,7 +27797,7 @@ class UndeclaredLadderTests(unittest.TestCase):
             self.verify(self._box("named", declaration=self.A_LADDER))
             ["undeclaredLadder"])
 
-    MALFORMED_LADDER = ("__benchmark__ = {'revision': 'r1.md'}\n"
+    MALFORMED_LADDER = ("__implementation__ = {'revision': 'r1.md'}\n"
                         "__levels__ = 'not-a-list'\n")
 
     def test_the_path_names_the_file_the_resolver_would_read_first(self):
@@ -27358,13 +27813,13 @@ class UndeclaredLadderTests(unittest.TestCase):
         `("config.py", "__init__.py")` left all 2196 tests green.
         """
         box = self._box("ordered", declaration=self.MALFORMED_LADDER)
-        (box / "src/Method_Benchmark/config.py").write_text(
+        (box / "src/Method/config.py").write_text(
             "__levels__ = ['first', 'second']\n", encoding="utf-8")
         report = self.verify(box)["undeclaredLadder"]
         self.assertIsNotNone(
             report, "a malformed ladder resolves to no ladder and must report")
         self.assertEqual(
-            report["path"], "src/Method_Benchmark/__init__.py",
+            report["path"], "src/Method/__init__.py",
             "the report must name the file the resolver stops at, not the one "
             "further down the read order that it never reaches")
 
@@ -27400,16 +27855,21 @@ class UndeclaredLadderTests(unittest.TestCase):
         self.assertIsNotNone(silent["undeclaredLadder"])
         self.assertIsNone(silent["position"]["attainedLevel"])
 
-    def test_a_target_with_no_benchmark_package_is_asked_nothing(self):
+    def test_a_target_with_no_method_package_is_asked_nothing(self):
         """The identical restraint `undeclared_optional_state` keeps for a
         target with no search: a repository with nowhere to write the
         declaration has not left a question unanswered, and
-        `structure.scaffoldGaps` already names the file it is missing."""
+        `structure.scaffoldGaps` already names the file it is missing.
+
+        `src/<Package>/` itself absent, never merely the benchmark package
+        (design D2): `__levels__` lives at `declaration_root`, the method's
+        own package, which is the most basic scaffold destination there is
+        -- so "nowhere to write it" now means the scaffold stage has not
+        run at all yet, not merely that no comparison has been accepted."""
         box = FORGE / "implementations" / f"_ladder_bare_{os.getpid()}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
-        for directory in ("src/Method", "Method", "tests"):
+        for directory in ("Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
         self.assertIsNone(self.verify(box)["undeclaredLadder"])
@@ -27458,17 +27918,17 @@ class UndeclaredLadderTests(unittest.TestCase):
     def test_the_kit_still_invents_no_rung_of_its_own(self):
         """The decision about the scaffold, recorded so it is a position and
         not a gap: `__levels__` ships empty and stays empty. A rung name in
-        the kit would be the forge naming a repository's own vocabulary for
-        it, which is the one thing `resolve_levels_declaration` exists to
-        refuse -- and it is the target of this whole report that must fill
-        the ladder in, never the template."""
-        kit = KIT / "src_benchmark" / "__init__.py"
-        tree = ast.parse(kit.read_text(encoding="utf-8"))
+        `authored_package_init`'s own template (design D2/D10) would be the
+        forge naming a repository's own vocabulary for it, which is the one
+        thing `resolve_levels_declaration` exists to refuse -- and it is the
+        target of this whole report that must fill the ladder in, never the
+        template."""
+        tree = ast.parse(impl.authored_package_init("Method"))
         declared = [node for node in tree.body
                     if isinstance(node, ast.AnnAssign)
                     and isinstance(node.target, ast.Name)
                     and node.target.id == "__levels__"]
-        self.assertEqual(len(declared), 1, "the kit declares no `__levels__`")
+        self.assertEqual(len(declared), 1, "the template declares no `__levels__`")
         self.assertEqual(ast.literal_eval(declared[0].value), [])
 
 
@@ -27484,15 +27944,16 @@ class NamedRecordsUndeclaredTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
+        (box / "src/Method/__init__.py").write_text(
             declaration, encoding="utf-8")
+        (box / "src/Method_Benchmark/__init__.py").write_text(
+            "", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
         return box
 
-    NO_RECORDS = "__benchmark__ = {'revision': 'r1.md'}\n__records__: dict = {}\n"
-    A_RECORD = ("__benchmark__ = {'revision': 'r1.md'}\n"
+    NO_RECORDS = "__implementation__ = {'revision': 'r1.md'}\n__records__: dict = {}\n"
+    A_RECORD = ("__implementation__ = {'revision': 'r1.md'}\n"
                 "__records__ = {'main': {'path': 'r.json', 'requiredScale': {}}}\n")
 
     def verify(self, box):
@@ -27509,7 +27970,7 @@ class NamedRecordsUndeclaredTests(unittest.TestCase):
             self._box("silent", declaration=self.NO_RECORDS))["undeclaredRecords"]
         self.assertIsNotNone(report, "a target with no named records is told nothing")
         self.assertEqual(report["declaration"], impl.RECORDS_DECLARATION)
-        self.assertEqual(report["path"], "src/Method_Benchmark/__init__.py")
+        self.assertEqual(report["path"], "src/Method/__init__.py")
 
     def test_a_witness_naming_one_still_reports_and_still_refuses_nothing(self):
         """Spec scenario 'absent __records__, a witness names one': `verify`
@@ -27533,7 +27994,7 @@ class NamedRecordsUndeclaredTests(unittest.TestCase):
             self.verify(self._box("named", declaration=self.A_RECORD))
             ["undeclaredRecords"])
 
-    MALFORMED_RECORDS = ("__benchmark__ = {'revision': 'r1.md'}\n"
+    MALFORMED_RECORDS = ("__implementation__ = {'revision': 'r1.md'}\n"
                         "__records__ = 'not-a-dict'\n")
 
     def test_the_path_names_the_file_the_resolver_would_read_first(self):
@@ -27542,26 +28003,26 @@ class NamedRecordsUndeclaredTests(unittest.TestCase):
         ever reading `config.py` -- the identical proof
         `UndeclaredLadderTests` already keeps for `__levels__`."""
         box = self._box("ordered", declaration=self.MALFORMED_RECORDS)
-        (box / "src/Method_Benchmark/config.py").write_text(
+        (box / "src/Method/config.py").write_text(
             "__records__ = {'main': {'path': 'r.json', 'requiredScale': {}}}\n",
             encoding="utf-8")
         report = self.verify(box)["undeclaredRecords"]
         self.assertIsNotNone(
             report, "a malformed declaration resolves to no records and must report")
         self.assertEqual(
-            report["path"], "src/Method_Benchmark/__init__.py",
+            report["path"], "src/Method/__init__.py",
             "the report must name the file the resolver stops at, not the "
             "one further down the read order that it never reaches")
 
-    def test_no_benchmark_package_is_asked_nothing(self):
+    def test_no_method_package_is_asked_nothing(self):
         """The identical restraint `undeclared_ladder_state` keeps: no
-        benchmark package at all is not a target that left a question
-        unanswered."""
+        `src/<Package>/` at all is not a target that left a question
+        unanswered (design D2: `__records__` lives at `declaration_root`,
+        the method's own package, not the benchmark's)."""
         box = FORGE / "implementations" / f"_records_nopkg_{os.getpid()}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
-        for directory in ("src/Method", "Method", "tests"):
+        for directory in ("Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True, capture_output=True)
         self.assertIsNone(self.verify(box)["undeclaredRecords"])
 
@@ -27582,9 +28043,8 @@ class NamedRecordEvidenceParityTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
-            "__benchmark__ = {'revision': 'r1.md'}\n"
+        (box / "src/Method/__init__.py").write_text(
+            "__implementation__ = {'revision': 'r1.md'}\n"
             "__levels__ = ['floor', 'pilot', 'full']\n"
             "__records__ = {'main': {'path': 'r.json', "
             "'requiredScale': {'seeds': 3}}}\n",
@@ -27671,13 +28131,15 @@ class ExistingInstancesKeepWorkingTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            "__implementation__ = {'revision': 'r1.md'}\n"
+            "__levels__ = ['floor', 'pilot', 'full']\n",
+            encoding="utf-8")
         # No `__records__` at all -- a target scaffolded before this change
         # existed never wrote one.
         (box / "src/Method_Benchmark/__init__.py").write_text(
-            "__benchmark__ = {'revision': 'r1.md', "
-            "'search': {'record': 'r.json', 'requiredScale': {'seeds': 3}}}\n"
-            "__levels__ = ['floor', 'pilot', 'full']\n",
+            "__benchmark__ = {"
+            "'search': {'record': 'r.json', 'requiredScale': {'seeds': 3}}}\n",
             encoding="utf-8")
         (box / "Method" / "r.json").write_text(
             json.dumps({"seeds": 3}), encoding="utf-8")
@@ -28004,12 +28466,13 @@ class UnbackedPositionExitPublicationTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
-        declaration = "__benchmark__ = {'revision': 'r1.md'}\n"
+        declaration = "__implementation__ = {'revision': 'r1.md'}\n"
         if levels is not None:
             declaration += f"__levels__ = {levels!r}\n"
-        (box / "src/Method_Benchmark/__init__.py").write_text(
+        (box / "src/Method/__init__.py").write_text(
             declaration, encoding="utf-8")
+        (box / "src/Method_Benchmark/__init__.py").write_text(
+            "", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
         header = {"revision": self.PROPOSAL_REVISION,
@@ -28523,7 +28986,7 @@ class StepSequenceOrderTests(unittest.TestCase):
         entry = {"module": "Method_Benchmark.work", "function": "run"}
         if advances is not None:
             entry["advances"] = advances
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             f"__steps__ = {{'later': {entry!r}}}\n", encoding="utf-8")
 
     def _run(self, box):
@@ -28567,7 +29030,7 @@ class StepSequenceOrderTests(unittest.TestCase):
         (box / "src" / "Method_Benchmark").mkdir(parents=True, exist_ok=True)
         (box / "src" / "Method_Benchmark" / "work.py").write_text(
             "def run():\n    return 'ran'\n", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {\n"
             "  'early': {'module': 'Method_Benchmark.work', "
             "'function': 'run', 'advances': 1},\n"
@@ -28754,6 +29217,12 @@ _ENGLISH_COUNTS = {
     # seventeen -- measured by running the derivation, never predicted.
     68: "Sixty-eight",
     117: "One hundred and seventeen",
+    # `the-comparison-nobody-asked-for` (Unit 2, design D1/D3): one new
+    # reachable work-state code, `OBJECT_MAP_AT_OLD_HOME` -- the migration
+    # refusal, distinct from `OBJECT_MAP_NOT_APPROVED` -- measured by
+    # running the derivation, never predicted.
+    69: "Sixty-nine",
+    118: "One hundred and eighteen",
 }
 
 
@@ -29143,9 +29612,15 @@ class GatingRefusalRosterTests(unittest.TestCase):
         +2, correcting design.md's own prediction of 117 (114 + 2 is 116,
         not 117 -- the design's arithmetic assumed D1's OWN prediction of
         115 as this phase's starting point, but D1 measured 114, unmoved;
-        this phase's own delta is +2, not +3).
+        this phase's own delta is +2, not +3). One hundred and eighteen
+        (`the-comparison-nobody-asked-for`, Unit 2, design D1/D3, spec "A
+        Declaration Predating This Change Is Migrated In Full") is that
+        reading plus `OBJECT_MAP_AT_OLD_HOME`, raised inside
+        `_stage_objects` and reachable through `materialize` -- the
+        migration refusal, distinct from `OBJECT_MAP_NOT_APPROVED`,
+        naming a target scaffolded before `__implementation__` existed.
         """
-        self.assertEqual(len(reachable_refusal_codes()), 117)
+        self.assertEqual(len(reachable_refusal_codes()), 118)
 
     def test_agree_joins_gating_commands_unconditionally_never_this_profiles_own_commands(self):
         """`the-agreement-nothing-computes` (Slice D, design.md D9, tasks.md
@@ -30428,7 +30903,6 @@ class UnfinishableFlowTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         for directory in ("src/Method", "src/Method_Benchmark", "Method", "tests"):
             (box / directory).mkdir(parents=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
         search = {"what": "one free scalar", "role": "valid",
                   "tieRule": "the smaller value wins"}
         if scale:
@@ -30439,9 +30913,12 @@ class UnfinishableFlowTests(unittest.TestCase):
                          "advances": 2},
                  "three": {"module": "Method_Benchmark.steps", "function": "c",
                            "advances": 3}}
+        (box / "src/Method/__init__.py").write_text(
+            "__implementation__ = {'revision': 'r1.md'}\n"
+            f"__levels__ = {self.LADDER!r}\n__steps__ = {steps!r}\n",
+            encoding="utf-8")
         (box / "src/Method_Benchmark/__init__.py").write_text(
-            "__benchmark__ = " + repr({"revision": "r1.md", "search": search})
-            + f"\n__levels__ = {self.LADDER!r}\n__steps__ = {steps!r}\n",
+            "__benchmark__ = " + repr({"search": search}) + "\n",
             encoding="utf-8")
         (box / "Method/AGREED.md").write_text(
             "<!-- position revision=r1.md sha256=" + "a" * 64 + " "
@@ -30605,12 +31082,16 @@ class PilotGatesTheDeclaredScaleTests(unittest.TestCase):
         "'function': 'a', 'advances': 1,\n"
         "              'produces': ['Notebooks']},")
 
-    def _declaration(self, steps=None):
+    def _declaration(self):
         return ("__benchmark__ = {\n"
-                "    'revision': 'r01.md',\n"
                 "    'arms': {'floor': {'sections': ['3']}, "
                 "'full': {'sections': ['3']}},\n"
                 f"    'search': {self.SEARCH!r},\n"
+                "}\n")
+
+    def _implementation(self, steps=None):
+        return ("__implementation__ = {\n"
+                "    'revision': 'r01.md',\n"
                 "}\n" + (self.STEPS if steps is None else steps))
 
     def build(self, suffix, *, ran=(), notebook_executed=False,
@@ -30622,7 +31103,8 @@ class PilotGatesTheDeclaredScaleTests(unittest.TestCase):
             (box / directory).mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(box)], check=True,
                        capture_output=True)
-        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self._implementation(steps), encoding="utf-8")
         (box / "src/Method/called.py").write_text(
             _module("r01.md", ["3"], ["11"], imports="import torch\n"),
             encoding="utf-8")
@@ -30631,7 +31113,7 @@ class PilotGatesTheDeclaredScaleTests(unittest.TestCase):
             encoding="utf-8")
         (box / "src/Prior/model.py").write_text("import torch\n", encoding="utf-8")
         (box / "src/Method_Benchmark/__init__.py").write_text(
-            self._declaration(steps), encoding="utf-8")
+            self._declaration(), encoding="utf-8")
         (box / "src/Method_Benchmark/wiring.py").write_text(
             self.WIRING, encoding="utf-8")
 
@@ -30894,8 +31376,8 @@ class PilotGatesTheDeclaredScaleTests(unittest.TestCase):
         ordering: `undeclared` means this rule does not apply, and the ladder
         answers exactly what it answered before it existed."""
         box = self.build("noflow")
-        (box / "src/Method_Benchmark/__init__.py").write_text(
-            self._declaration().replace(self.STEPS, ""), encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(
+            self._implementation().replace(self.STEPS, ""), encoding="utf-8")
         probe = self.probe(box)
         self.assertEqual(probe["pilotCompleteness"]["status"], "undeclared")
         self.assertEqual(probe["nextStep"], "search-first")
@@ -30971,8 +31453,9 @@ class ReportDriftHoldsTheDecisionPassTests(unittest.TestCase):
 
     def build(self, suffix, *, output, ran=("first",), digest=None):
         box, _ = ProbeReportedFactsRosterTests.build_target(self, suffix)
-        init = box / "src/Method_Benchmark/__init__.py"
-        init.write_text(self.DECLARATION + self.STEPS, encoding="utf-8")
+        (box / "src/Method_Benchmark/__init__.py").write_text(
+            self.DECLARATION, encoding="utf-8")
+        (box / "src/Method/__init__.py").write_text(self.STEPS, encoding="utf-8")
         # Written after every file under `src/`, so the stamp is the digest of
         # the sources as they finally stand.
         stamped = digest or impl.source_digest(box, impl.package_name("Method"))
@@ -31223,8 +31706,7 @@ class MisnamedProductDirGuardTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         (box / "src" / self.PACKAGE).mkdir(parents=True)
         (box / "src" / f"{self.PACKAGE}_Benchmark").mkdir(parents=True)
-        (box / "src" / self.PACKAGE / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / f"{self.PACKAGE}_Benchmark" / "__init__.py").write_text(
+        (box / "src" / self.PACKAGE / "__init__.py").write_text(
             "__steps__ = {'verification': {'module': "
             f"'{self.PACKAGE}_Benchmark.steps', 'function': 'run_ok'}}}}\n",
             encoding="utf-8")
@@ -31507,8 +31989,7 @@ class StepMeasuredLastRunTests(unittest.TestCase):
         (box / "src" / "Method").mkdir(parents=True)
         (box / "src" / "Method_Benchmark").mkdir(parents=True)
         (box / "Method").mkdir(parents=True, exist_ok=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {'verification': {'module': 'Method_Benchmark.steps',"
             " 'function': 'run_ok'}}\n", encoding="utf-8")
         (box / "src" / "Method_Benchmark" / "steps.py").write_text(
@@ -31578,7 +32059,8 @@ class StepWriteScopeTests(unittest.TestCase):
         (box / "src" / "Method_Benchmark").mkdir(parents=True)
         (box / "Method" / "Results" / "own").mkdir(parents=True)
         (box / "Method" / "Results" / "neighbour").mkdir(parents=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
+        (box / "src" / "Method" / "__init__.py").write_text(
+            f"__steps__ = {steps!r}\n", encoding="utf-8")
         # Same byte length before and after -- `{"value": 1}` -> `{"value": 2}`
         # is exactly the shape of the incident, a field changed inside a JSON
         # nobody opens -- so the detection rests entirely on the mtime half of
@@ -31588,8 +32070,6 @@ class StepWriteScopeTests(unittest.TestCase):
                          box / "Method" / "Results" / "neighbour" / "b.json"):
             artefact.write_text('{"value": 1}', encoding="utf-8")
             os.utime(artefact, (0, 0))
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
-            f"__steps__ = {steps!r}\n", encoding="utf-8")
         (box / "src" / "Method_Benchmark" / "steps.py").write_text(textwrap.dedent(
             """
             import pathlib
@@ -31746,7 +32226,7 @@ class UndeclaredProducesReportTests(unittest.TestCase):
         box = FORGE / "implementations" / f"_e2e_produces_{os.getpid()}_{id(self)}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         if package:
-            root = box / "src" / "Method_Benchmark"
+            root = box / "src" / "Method"
             root.mkdir(parents=True)
             (root / holder).write_text(f"__steps__ = {steps!r}\n",
                                        encoding="utf-8")
@@ -31760,7 +32240,7 @@ class UndeclaredProducesReportTests(unittest.TestCase):
             box, "Method", {"one": {"module": "m", "function": "f"}})
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["step"], "one")
-        self.assertEqual(entries[0]["path"], "src/Method_Benchmark/__init__.py")
+        self.assertEqual(entries[0]["path"], "src/Method/__init__.py")
         self.assertIn("produces", entries[0]["declaration"])
         self.assertEqual(entries[0]["consequence"],
                          impl.PRODUCES_UNDECLARED_CONSEQUENCE)
@@ -31797,8 +32277,7 @@ class UndeclaredProducesReportTests(unittest.TestCase):
         """Constraint (b), asserted rather than promised. A declaration this
         skill reads and the kit does not ship is a field every repository
         built from zero silently defaults past."""
-        template = (KIT / "src_benchmark" / "__init__.py").read_text(
-            encoding="utf-8")
+        template = impl.authored_package_init("Method")
         self.assertIn("__steps__", template)
         self.assertIn('"produces"', template)
         self.assertIn("undeclaredProduces", template,
@@ -31850,7 +32329,7 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         box = FORGE / "implementations" / f"_e2e_stepnb_{os.getpid()}_{id(self)}"
         self.addCleanup(shutil.rmtree, box, ignore_errors=True)
         if package:
-            root = box / "src" / "Method_Benchmark"
+            root = box / "src" / "Method"
             root.mkdir(parents=True)
             (root / holder).write_text(f"__steps__ = {steps!r}\n",
                                        encoding="utf-8")
@@ -31871,7 +32350,7 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         entries = impl.undeclared_step_notebooks_state(box, "Method", steps)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["step"], "one")
-        self.assertEqual(entries[0]["path"], "src/Method_Benchmark/__init__.py")
+        self.assertEqual(entries[0]["path"], "src/Method/__init__.py")
         self.assertIn("produces", entries[0]["declaration"])
         self.assertEqual(entries[0]["consequence"],
                          impl.STEP_NOTEBOOK_UNDECLARED_CONSEQUENCE)
@@ -31996,8 +32475,7 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         after a pilot has run, which is exactly the incident this closes -- so
         the template demonstrates a step that COMPUTES and a step that DRAWS,
         each naming its own notebook, and says what collapsing them costs."""
-        template = (KIT / "src_benchmark" / "__init__.py").read_text(
-            encoding="utf-8")
+        template = impl.authored_package_init("Method")
         example = template[template.index("__steps__ = {"):
                            template.index("__steps__: dict = {}")]
         notebooks = re.findall(r'"(Notebooks/[^"]+)"', example)
@@ -32048,8 +32526,7 @@ class UndeclaredStepNotebookReportTests(unittest.TestCase):
         """The standing instruction, measured on the surfaces this change
         actually adds rather than assumed from the forge-wide scan: the
         consequence sentence and the kit's own worked example."""
-        template = (KIT / "src_benchmark" / "__init__.py").read_text(
-            encoding="utf-8")
+        template = impl.authored_package_init("Method")
         example = template[template.index("__steps__ = {"):
                            template.index("__steps__: dict = {}")]
         for surface, body in (("consequence",
@@ -32473,10 +32950,12 @@ class KitDemandsEveryStepKeyTests(unittest.TestCase):
     #: The skill's own asset (meaning 3), never derived from `impl.__file__`
     #: -- `impl` is the ENGINE module post-move (design.md D1), and the
     #: engine's own file location is no longer under this skill at all.
+    #: `__steps__`'s own worked example moved off this asset onto
+    #: `authored_package_init`'s template (design D1/D10, Unit 2).
     KIT = SKILL_ROOT / "assets" / "kit" / "src_benchmark" / "__init__.py"
 
     def test_the_kit_example_names_every_key_the_skill_reads(self) -> None:
-        example = self.KIT.read_text(encoding="utf-8")
+        example = impl.authored_package_init("Method")
         missing = [key for key in impl.STEP_KEYS
                    if f'"{key}":' not in example]
         self.assertEqual(
@@ -32741,8 +33220,7 @@ class PublishedCommandsRunVerbatimTests(unittest.TestCase):
         (box / "src" / "Method").mkdir(parents=True)
         (box / "src" / "Method_Benchmark").mkdir(parents=True)
         (box / "Method").mkdir(parents=True, exist_ok=True)
-        (box / "src" / "Method" / "__init__.py").write_text("", encoding="utf-8")
-        (box / "src" / "Method_Benchmark" / "__init__.py").write_text(
+        (box / "src" / "Method" / "__init__.py").write_text(
             "__steps__ = {'one': {'module': 'Method_Benchmark.steps',"
             " 'function': 'f'}}\n", encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(box)], check=True,
