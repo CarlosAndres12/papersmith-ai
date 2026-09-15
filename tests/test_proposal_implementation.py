@@ -10123,7 +10123,14 @@ class DerivedScaffoldCountSweepTests(unittest.TestCase):
     #: version numbers, dates, and unrelated prose numerals are legitimate
     #: and out of this sweep's scope -- only the specific words the design
     #: named as having described one of these lists.
-    STALE_COUNT_WORDS = ("eleven", "seventeen", "thirteen")
+    #:
+    #: `"twelve"` is the CURRENT correct maximum, and it belongs here for
+    #: exactly that reason: the rule these files answer to is "derive, never
+    #: transcribe", so writing today's right number by hand is the identical
+    #: defect to leaving yesterday's wrong one. A sweep that denylists only
+    #: retired words catches the past and holds the door open for the next
+    #: one -- which is how a count came to be wrong twice already.
+    STALE_COUNT_WORDS = ("eleven", "twelve", "seventeen", "thirteen")
 
     #: The word must share a LINE with one of these to count as a scaffold/
     #: kit-destination count claim -- not every "eleven"/"seventeen" in
