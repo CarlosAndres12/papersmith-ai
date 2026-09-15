@@ -279,7 +279,7 @@ python3 skills/proposal-implementation/scripts/implementation_cli.py adopt \
   "sourceTreeHash": "4f43…00",
   "paper": { "candidate": "draft.md", "mode": "adopt-as-v1" },
   "reorganization": { "decisionCount": 1, "scale": "reviewable", "…": "…" },
-  "scaffoldGaps": ["…thirteen entries on a fresh tree…"],
+  "scaffoldGaps": ["…the scaffold destinations on a fresh tree…"],
   "adoptFiles": [],
   "plan": "…/implementations/<repo>/adoption-plan.json",
   "scaleNote": "…",
@@ -311,7 +311,7 @@ the decision count and scale (`reviewable` or `large`), alongside the moves,
 renames, reference updates, conflicts and unclassified files. Prior work
 keeps its own package under `src/` and never lands in `src/<Package>/` —
 that is `classify`'s own rule, reused unchanged. `scaffoldGaps` names the
-thirteen scaffold destinations still open. `adoptFiles` names the kit
+scaffold destinations still open. `adoptFiles` names the kit
 destinations the copy already holds, each with `kind: "adopted"` and the
 degraded guarantee spelled out: **the record names who wrote the bytes, not
 that the bytes came from the kit** — adoption records responsibility for
@@ -364,7 +364,7 @@ stay uncommitted for review, then commit.
                               "sourceClassification": "LATEST",
                               "markerPresent": true } },
   "migration": { "commit": "1cd11…", "moved": 1, "…": "…" },
-  "scaffold": { "written": ["…eleven destinations…"], "anchors": ["…"] },
+  "scaffold": { "written": ["…the scaffold destinations…"], "anchors": ["…"] },
   "adopted": [],
   "verify": { "…": "the read-only report" }
 }
