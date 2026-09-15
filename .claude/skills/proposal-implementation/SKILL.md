@@ -1942,12 +1942,23 @@ elsewhere rather than attributed to this machine.
 
 ### `nextStep: "validate"` — run the acid test: the method alone, against its own claim
 
-Reached once the comparison has been declined and this second question is still
-open (`probe`'s four-way branch, all within the one last-among-the-overrides
-position (design D13, D19-D21): unanswered comparison → `benchmark`; comparison
-declined, acid test open → `validate`; both declined → `declined`, naming both
-dates; either decision reopened or freshly answered `"yes"`, nothing yet built →
+Reached one of two ways, and its own PUBLISHED TEXT differs by which (design
+D13, D19-D21, D23a-D23c — a branching sentence under the one rung name, the
+`declare-first`/`build-first` precedent).
+
+**Reached from an absent benchmark package** once the comparison has been
+declined and this second question is still open (`probe`'s four-way branch,
+all within the one last-among-the-overrides position): unanswered comparison
+→ `benchmark`; comparison declined, acid test open → `validate` (the OFFER TO
+RUN, described below); both declined → `declined`, naming both dates; either
+decision reopened or freshly answered `"yes"`, nothing yet built →
 [`build-first`](#nextstep-build-first--a-standing-decision-was-accepted-and-nothing-is-built-yet)).
+
+**Reached from `already-benchmarked`** (Unit 6b, D23a) once a comparison has
+already run AND completed, WITH more than the method's own single arm
+declared, and this transition's own bucket is unanswered — a REPORTING
+STATE, never an offer to run, and covered in its own subsection below
+("Two transitions, and they are not symmetric").
 
 **What it is, and what it is not.** The target's own apparatus, the same one
 `benchmark` above uses, with a single arm: the method alone, on real data, at
@@ -2039,6 +2050,53 @@ was meant for, and this is where that wiring would eventually live. **It
 is not built here** — that is a reader for a literal this change
 deliberately leaves without one, named so the next person finds it rather
 than rediscovers it.
+
+**Two transitions, and they are not symmetric (Unit 6b, design D22/D23).**
+Somebody who already has one of the two — a run acid test, or a run
+comparison — can want the other. The two directions are not the same
+operation, and neither is automatic: both are discussed first, the
+identical `discuss --decision yes|no` gate every other decision surface on
+this ladder already uses.
+
+- **Test → comparison ADDS.** A rival arm answers a different question —
+  "which wins" rather than "does it do what it said" — and gaining that
+  answer does not retract the one already given. The mechanism is D19's
+  token and *nothing else*: re-answer the comparison bucket with
+  `decision: "yes"` and the ladder reports
+  [`build-first`](#nextstep-build-first--a-standing-decision-was-accepted-and-nothing-is-built-yet)
+  exactly as it would for a fresh acceptance — no separate transition
+  surface exists, because two mechanisms this skill already ships already
+  compose it. The acid test's own record is never deleted, overwritten, or
+  re-run by building the comparison.
+
+- **Comparison → test REMOVES NOTHING.** A completed comparison already runs
+  the method on the same data an acid test would use, so the acid-test
+  question is already measured inside the comparison's own record — no new
+  run is required. Reached from `already-benchmarked`, `validate` publishes
+  a REPORTING state, never an offer to run (see above): it names that the
+  answer already lives in the comparison's own record and the arm that is
+  the method, and asks whether to stop asking the comparison's own
+  question about the rival separately. No `validation` draft rides beside
+  this publication — proposing a run here would spend machine time
+  relearning what the repository already knows, this change's own defect
+  class wearing a third mask.
+
+  **Accepting undeclares the rival arm and deletes nothing (D23c).** The
+  transition is a hand edit to the benchmark declaration's own `arms`
+  block — removing the rival's entry, keeping the method's own — re-sealed
+  with `materialize --authored` (D10's own precedent; no new CLI verb).
+  This engine performs no such edit itself: `materialize --authored` only
+  re-seals a receipt over bytes already on disk, the identical restraint
+  every hand-edited declaration in this skill already keeps. Once
+  undeclared, the rival is invisible to every arms-based reader
+  (`unreachedModules`, the wiring crossing, `probe`'s own ladder) going
+  forward — that is what "stop asking" means. **Never touched by either
+  direction**: `<Name>/Results/…`, every executed notebook and its stamp,
+  and every ledger event. "Ceasing to ask about something" and "erasing
+  it" are different operations; this capability performs only the first,
+  because the forge may not assume recoverability — a target's own git
+  history is *that target's* measured property, never a guarantee this
+  engine can check before acting on it.
 
 ### `nextStep: "build-first"` — a standing decision was accepted, and nothing is built yet
 

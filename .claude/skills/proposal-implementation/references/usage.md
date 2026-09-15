@@ -1735,11 +1735,26 @@ whoever reads the output:
   **Wherever the flow reaches the point of running experiments, the question
   is the same one**: continue the flow toward the declared scale, or complement
   the experiments first. Four answers reach that point — `benchmark` (the
-  offer to run), `validate` (the acid test: the method alone, against its own
-  declared prediction, once the comparison has been declined), `piloted` (a
-  run already made below the scale it declared) and `search-first` (a
-  declared search that has chosen nothing yet, and a search is an experiment
-  with a scale of its own). `search-first` used to publish nothing at all.
+  offer to run), `validate` **reached from an absent benchmark package** (the
+  acid test: the method alone, against its own declared prediction, once the
+  comparison has been declined), `piloted` (a run already made below the
+  scale it declared) and `search-first` (a declared search that has chosen
+  nothing yet, and a search is an experiment with a scale of its own).
+  `search-first` used to publish nothing at all.
+
+  **`validate` reached from `already-benchmarked` (Unit 6b, design D23a-c) is
+  the one exception**: a REPORTING state, not an offer to run, so it asks the
+  repair choice instead — do the transition now, or record why it is
+  deliberately deferred — never the experiment choice above. A comparison
+  that has already completed already measures the method alone on the same
+  data an acid test would use, so accepting never spends machine time; it
+  hand-edits the benchmark declaration's own `arms` block to undeclare the
+  rival, re-sealed with `materialize --authored`, and touches nothing else —
+  not `Results/…`, not an executed notebook or its stamp, not a ledger event.
+  See `SKILL.md`'s own `### nextStep: "validate"` section, "Two transitions,
+  and they are not symmetric", for the full account of both directions
+  (test → comparison reuses `build-first`'s own token with no new machinery
+  at all; comparison → test is the one described here).
 
 - **`toDiscuss`** — the question-shaped half of `resolve`, as a list, so a
   reader can treat every open question the same way whichever command reported
@@ -1759,15 +1774,18 @@ missing; and `build-first` (design D21), when it is the comparison's own
 decision that was reopened or freshly accepted. It was guarded on
 `benchmark` alone, and because the `wiring-first` override runs before that
 guard, the one answer naming missing wiring came back with `wiring: null`.
-`validation` is reported at two answers: `validate` — the acid test's own
-draft: the method's modules with no rival, the target's own `__levels__`, a
-`placement` section naming `local`/`remote` and deciding neither, and a
-proposed record entry — and `build-first`, when it is the acid test's own
-decision that was reopened or freshly accepted. `build-first` never
-publishes both at once: exactly one of `wiring`/`validation` is non-`null`
-there, by which decision routed to it (`decisions.comparison.decision` or
-`decisions.validation.decision`), the same discipline every other rung's
-`null`-elsewhere shape already keeps.
+`validation` is reported at two answers: `validate` **reached from an absent
+benchmark package** — the acid test's own draft: the method's modules with
+no rival, the target's own `__levels__`, a `placement` section naming
+`local`/`remote` and deciding neither, and a proposed record entry — and
+`build-first`, when it is the acid test's own decision that was reopened or
+freshly accepted. `build-first` never publishes both at once: exactly one of
+`wiring`/`validation` is non-`null` there, by which decision routed to it
+(`decisions.comparison.decision` or `decisions.validation.decision`), the
+same discipline every other rung's `null`-elsewhere shape already keeps.
+`validate` **reached from `already-benchmarked`** (Unit 6b, D23b) reports
+`validation: null` — a REPORTING state never proposes a run, so no draft of
+how to wire and run one rides beside it.
 
 - **`walk`** — where this repository stands in its own declared flow. Read it
   when you are opening a clean repository to run the flow from the top: it

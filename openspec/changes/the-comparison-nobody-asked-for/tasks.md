@@ -564,17 +564,25 @@ Chain strategy: pending
 > decision with the same field. Chaining after 6a keeps this unit small enough to
 > be one.
 
-- [ ] 6b.1 Test (D22 — hold the "no new machinery" claim to a test, not prose):
+- [x] 6b.1 Test (D22 — hold the "no new machinery" claim to a test, not prose):
       re-answering the comparison bucket with `decision: "yes"` on a target whose
       acid test has already run routes to `build-first` → `materialize --stage
       harness`, using only 6a's token and rung — no new constructor, no new
       state (spec "Adding A Comparison After An Acid Test...", scenario "Wanting a
       comparison after a run acid test is discussed, not automatic").
-- [ ] 6b.2 Test: the acid test's own record is neither deleted nor overwritten
+      - *`TransitionTests.test_reanswering_the_comparison_after_the_acid_test_routes_to_build_first`.
+        Confirmed by reading: this fires through Unit 6a's own shipped branch
+        (`comparison_question in answered` → `_decision_token_from_event ==
+        "yes"` → `build-first`) unedited — no code this unit adds is on that
+        path at all.*
+- [x] 6b.2 Test: the acid test's own record is neither deleted nor overwritten
       when a comparison is subsequently built and run, and continues to answer
       the question it was run to answer (spec, scenario "The acid test's own
       record survives the addition of a rival").
-- [ ] 6b.3 Measurement task (owner-handed, design's own open question, D23a — do
+      - *`TransitionTests.test_the_acid_tests_own_record_survives_a_subsequent_comparison`
+        — a `Results/validation.json`-shaped artifact's bytes are asserted
+        unchanged after re-answering the comparison bucket and probing again.*
+- [x] 6b.3 Measurement task (owner-handed, design's own open question, D23a — do
       not assume, this chain has been burned twice by assumed answers): measure
       whether `validate` should become reachable **only from `already-benchmarked`**
       (a current, complete record) or from **any state with a benchmark package
@@ -582,54 +590,195 @@ Chain strategy: pending
       reading but explicitly did not settle the stale/piloted case; the spec does
       not settle it either. Escalate to the owner/`sdd-spec` for an explicit
       ruling before 6b.4 lands; do not silently pick one.
-- [ ] 6b.4 Make `validate` reachable from `already-benchmarked` (the narrower,
+      - ***Measured, not assumed — the narrow reading is confirmed, not
+        overturned; no escalation needed.*** Every override between
+        `declare-first` and the three-way `benchmark`/`validate`/`declined`
+        branch is a clause of ONE `if`/`elif` chain, gated on `next_step in
+        ("benchmark", "piloted")` or `next_step == "benchmark"` — never on
+        `"already-benchmarked"` anywhere in that chain (confirmed by source
+        scan, `TransitionTests.test_already_benchmarked_is_structurally_
+        isolated_from_the_absent_status_chain`). `probe_state`'s own
+        three-way split (`"current"` / `"stale"` / `"piloted"`) means a
+        stale or piloted record NEVER produces `next_step ==
+        "already-benchmarked"` in the first place — `"piloted"` maps to its
+        own `next_step == "piloted"`, and `"stale"` falls through to
+        `next_step == "benchmark"` (re-offering the comparison, the
+        pre-existing behaviour, unaffected by this unit). D23a's own words
+        ("a current, complete record") are therefore not a policy choice
+        layered on top of an otherwise-ambiguous state — they are the exact,
+        and only, condition that state-machine's own three-way split can
+        express as `"already-benchmarked"`. Widening to "any state with a
+        benchmark package present" would require a SECOND, unrelated
+        reachability path keyed on `resolved["status"]` alone rather than on
+        `next_step`, which nothing in the spec or the shipped code asks for
+        and which would let `validate`'s own down-transition report "the
+        answer already lives here" against a record that is stale or
+        incomplete — the opposite of D23b's own claim. The narrow reading is
+        implemented as the ONLY reading this structure supports without
+        inventing new machinery for a case (stale/piloted) the mission
+        brief itself asked to be left unruled.*
+- [x] 6b.4 Make `validate` reachable from `already-benchmarked` (the narrower,
       designed reading, pending 6b.3's confirmation) with a comparison-present
       precondition (D23a).
-- [ ] 6b.5 Reshape what `validate` reports when reached from a completed
+      - *A SEPARATE `if next_step == "already-benchmarked" and
+        len(comparison_arms) > 1 and (reuse_question not in answered):`,
+        appended immediately after the existing three-way branch rather than
+        chained onto it (Unit 3's ladder ordering is not touched — no
+        existing `elif` clause can ever be true once `next_step` is already
+        `"already-benchmarked"`, so this cannot reorder or shadow anything).
+        "Comparison present" is read as "there is a rival arm beside the
+        method's own to treat as also answering the acid test"
+        (`len(arms) > 1`) — with one arm or none there is nothing to
+        undeclare, the identical restraint `undeclared_arms_note`'s own
+        "which comparison it runs is not the forge's to decide" states for a
+        neighbouring question.*
+- [x] 6b.5 Reshape what `validate` reports when reached from a completed
       comparison (D23b): **not** an offer to build a run — a reporting state that
       names where the answer already lives (the comparison's own record and the
       arm that is the method) and asks whether to change the question being asked
       of it. Branched publication under the same rung name, the
       `_declare_first_publication` precedent again.
-- [ ] 6b.6 Test: the acid-test question, asked after a comparison has already run,
+      - *`_validate_publication` branches on `facts["resultsStatus"]`
+        (`state["status"]`, threaded rather than recomputed — the identical
+        read that already decided whether `nextStep` started as
+        `"already-benchmarked"`). `== "current"` publishes the new
+        `_comparison_reuses_acid_test_question` text via
+        `NEXT_STEP_REPAIR_CHOICE` ("do it now, or record why it is
+        deliberately deferred") rather than `NEXT_STEP_EXPERIMENT_CHOICE` —
+        this state spends no machine time, so the repair-shaped choice fits
+        the family's own established split (repairs vs. experiments) better
+        than reusing the offer's own closing text would. The `validation`
+        draft is suppressed (`draft_names = ()`) for this branch alone, so
+        `probe["validation"]` is `null` here even though the roster's own
+        static `drafts` tuple for `"validate"` stays `("validation",)` —
+        matching `build-first`'s own precedent for a rung whose published
+        content varies by branch-threaded fact beyond what the roster's
+        static shape can express.*
+- [x] 6b.6 Test: the acid-test question, asked after a comparison has already run,
       is answered from the comparison's own existing record with no new run
       required (spec "Treating An Existing Comparison As Also Answering The Acid
       Test...", scenario "The acid-test question is answered from the existing
       comparison record").
-- [ ] 6b.7 Implement the down-transition (D23c): accepting the "treat the
+      - *`TransitionTests.test_the_acid_test_question_is_answered_from_the_
+        existing_comparison_record` — asserts `nextStep == "validate"`,
+        `resolve.kind == "question"`, `wiring is None`, `validation is None`
+        (no draft, per 6b.5's own note), and that the published question is
+        byte-identical to `_comparison_reuses_acid_test_question`'s own
+        construction, never the up-direction's "no rival arm" offer text.*
+- [x] 6b.7 Implement the down-transition (D23c): accepting the "treat the
       existing comparison as also answering the acid test" discussion
       **undeclares** the rival arm — removes its entry from
       `__benchmark__["arms"]` — and does nothing else. Never delete
       `<Name>/Results/…`, executed notebooks, stamps, or ledger events. Discussed
       via a `discuss` bucket with its own one-spelling constructor and 6a's token
       — never automatic.
-- [ ] 6b.8 Test: undeclaring the rival arm makes it invisible to
+      - ***Measured before implementing, and load-bearing for the whole
+        unit's shape: this engine performs no such edit itself, for ANY
+        declaration, ever.*** `_materialize_authored` (the only code path
+        that touches a receipt for a hand-edited declaration) reads bytes
+        already on disk and re-seals a HASH over them — it never parses or
+        rewrites `__benchmark__`'s own content, and no other function in
+        this module writes that literal's content either (confirmed by
+        reading every call site, not assumed). D23c's own reason 3
+        ("the engine names acts; the operator takes them") is therefore not
+        a stylistic preference here but the exact, only mechanism this
+        codebase has ever used for a hand-edited declaration (D10's own
+        precedent, `materialize --authored`, no new CLI verb — the same
+        restraint Unit 2's live-target migration procedure kept, task
+        2.20). "Accepting... undeclares the rival arm... and does nothing
+        else" (this task's own wording) is implemented as: the discuss
+        bucket (`_comparison_reuses_acid_test_question`, its own
+        one-spelling constructor) records 6a's token; the PUBLISHED TEXT
+        names the exact procedure (hand-edit `arms`, keep the method's own
+        entry, re-seal with `materialize --authored`) and states plainly
+        that `Results/…`, executed notebooks and their stamps, and every
+        ledger event are untouched either way. No engine code performs the
+        edit — proved structurally by 6b.10 below, not merely claimed.*
+- [x] 6b.8 Test: undeclaring the rival arm makes it invisible to
       `armsReached`/`unreachedModules` going forward, while its own recorded
       output remains exactly where it was on disk, untouched (spec "The rival's
       arm is not removed by the transition").
-- [ ] 6b.9 Test: the transition never deletes, relocates, or overwrites any record
+      - *`TransitionTests.test_undeclaring_the_rival_makes_it_invisible_
+        while_disk_output_stays` — simulates the operator's own hand edit
+        (per 6b.7's own note), then confirms `resolve_benchmark_declaration`
+        — the one canonical reader every arms-based consumer in this engine
+        routes through (D2) — no longer reports the rival among `arms`,
+        while the rival's own recorded output and the comparison's own
+        results file are byte-identical before and after.*
+- [x] 6b.9 Test: the transition never deletes, relocates, or overwrites any record
       or arm's output a prior run already produced, in **either** direction —
       test → comparison and comparison → test (spec "A Completed Run's Evidence
       Is Never Deleted When The Question Being Asked Changes", both scenarios).
-- [ ] 6b.10 Regression-verification: the forge performs no destructive filesystem
+      - *`TransitionTests.test_the_acid_tests_own_record_survives_a_
+        subsequent_comparison` (test → comparison, 6b.2's own test doubles
+        for this direction) and `.test_the_down_transition_never_deletes_
+        the_rival_arm_in_the_up_direction_either` (a source scan of
+        `_stage_harness` — the only code path that writes under
+        `src/<Package>_Benchmark/` — confirming no delete/unlink call
+        anywhere in it) plus `.test_undeclaring_the_rival_makes_it_
+        invisible_while_disk_output_stays` (comparison → test) together
+        cover both directions.*
+- [x] 6b.10 Regression-verification: the forge performs no destructive filesystem
       act on the strength of an assumption about recoverability it cannot check
       (D23c's second reason) — assert undeclaring an arm issues no delete/move/
       overwrite call anywhere in its own code path (source scan), and that the
       untouched files' own mtimes/hashes are unchanged before and after.
-- [ ] 6b.11 Test: both transitions are discussed, never automatic — no code path
+      - *`TransitionTests.test_no_engine_code_path_deletes_moves_or_
+        overwrites_for_the_transitions` — source-scans
+        `_comparison_reuses_acid_test_question`, `_validate_publication` and
+        `cmd_discuss` for `shutil.rmtree`/`shutil.move`/`.unlink(`/
+        `os.remove`/`os.rename`; none present, structurally (this unit adds
+        no code that could call them — see 6b.7's own note). Paired with
+        `.test_mtimes_of_untouched_files_are_unchanged_by_probing_and_
+        discussing`, which asserts real `st_mtime_ns` equality across a
+        `discuss` call and repeated `probe` calls, not merely a source
+        scan's own claim.*
+- [x] 6b.11 Test: both transitions are discussed, never automatic — no code path
       performs either transition without an explicit `discuss` event recording it
       first (spec scenario "Wanting a comparison after a run acid test is
       discussed, not automatic").
-- [ ] 6b.12 Update `SKILL.md`'s `### nextStep: "validate"` (and/or
+      - *`TransitionTests.test_probing_alone_never_performs_the_up_
+        transition` (repeated `probe`, no `discuss`, `nextStep` never
+        `"build-first"`) and `.test_probing_alone_never_performs_the_down_
+        transition` (repeated `probe` on a down-transition-eligible target
+        with no `discuss` call — the declaration file's own bytes are
+        confirmed unchanged, and `probe`'s own `kind: "read-only"` payload
+        member is asserted on every call).*
+- [x] 6b.12 Update `SKILL.md`'s `### nextStep: "validate"` (and/or
       `"build-first"`) section(s) to describe both transitions, the
       undeclare-not-delete rule, and `validate`'s branched reporting-state
       publication when reached from a completed comparison.
-- [ ] 6b.13 Update `references/usage.md` and roster tests for `validate`'s
+      - *Opening paragraph split into "reached from an absent benchmark
+        package" / "reached from `already-benchmarked`"; a new subsection
+        "Two transitions, and they are not symmetric" added at the section's
+        end, covering both directions and the undeclare-not-delete rule in
+        full.*
+- [x] 6b.13 Update `references/usage.md` and roster tests for `validate`'s
       widened reachability precondition and its branched publication shape.
-- [ ] 6b.14 Regenerate both sealed corpora for the widened `validate` reachability
+      - *The "four answers reach that point" paragraph now marks `validate`
+        reached from an absent package as the experiment-choice case and
+        adds a dedicated paragraph for the down-transition's own repair
+        choice; the `validation` draft paragraph now states `null` for the
+        down-transition branch. Existing roster tests (`NextStepPublication
+        RosterTests`, `NextStepSectionCoverageTests`) needed no edits —
+        confirmed green unedited, since this unit adds no new roster entry
+        and no new top-level `probe` payload key.*
+- [x] 6b.14 Regenerate both sealed corpora for the widened `validate` reachability
       and its branched reporting-state publication. Read the diff, account for
       every moved case.
-- [ ] 6b.15 Run both suites green — **this closes Movement 6 and the change.**
+      - *`tests/seal/digests.json`: no case moved at all — read directly,
+        `probe`'s own digest is byte-identical before and after, because
+        none of this unit's own seal-corpus fixtures reach
+        `already-benchmarked` with more than one arm declared.
+        `tests/experiments_seal/digests.json`: only `propose` moved (its own
+        embedded timestamp), already excluded from comparison/roster via
+        `KNOWN_UNSEALED_REASONS` — the identical, already-documented
+        precedent Units 4/4b recorded for the same case. Regenerated via
+        `tests/seal_capture.py`/`tests/experiments_seal_capture.py` (each
+        runs every case twice and refuses to write on disagreement; both
+        runs self-consistent).*
+- [x] 6b.15 Run both suites green — **this closes Movement 6 and the change.**
+      - *See "What Unit 6b reported" below for full verification evidence.*
 
 ---
 
@@ -781,3 +930,101 @@ Chain strategy: pending
   genuinely smaller than the design's own worst-case forecast, which the
   design itself named as a floor precisely because it could not rule out
   the opposite.
+
+### What Unit 6b reported — the last unit of the change
+
+- **Unit 6b** is committed on branch `unit6b-the-transition-undeclares`,
+  chained off Unit 6a (`d1a13b5`). All 15 tasks (6b.1-6b.15) done. **This
+  closes Movement 6 and `the-comparison-nobody-asked-for` in full.**
+- **6b.3's own measurement, done rather than assumed, confirmed the
+  narrower reading rather than contradicting it — no escalation needed.**
+  See task 6b.3's own note above for the full structural account: every
+  override between `declare-first` and the three-way branch reads `next_
+  step in ("benchmark", "piloted")`, never `"already-benchmarked"`, and
+  `probe_state`'s own three-way split means a stale or piloted record can
+  never PRODUCE `"already-benchmarked"` in the first place. The narrow
+  reading (D23a's "a current, complete record") is the only one this
+  state machine can express without inventing an unrelated second
+  reachability path — measured by source scan
+  (`TransitionTests.test_already_benchmarked_is_structurally_isolated_
+  from_the_absent_status_chain`), not argued in prose alone.
+- **A load-bearing measurement made BEFORE writing any code, not
+  discovered by trial and error**: this engine performs no file-editing
+  act for any declaration, ever — `_materialize_authored` only re-seals a
+  receipt hash over bytes already on disk. This single fact settled the
+  entire shape of the down-transition (task 6b.7's own note has the full
+  account): the "undeclare" act is the operator's own hand edit,
+  documented in the published question text and in `SKILL.md`, never
+  code this unit adds. `TransitionTests.test_no_engine_code_path_deletes_
+  moves_or_overwrites_for_the_transitions` holds this to a source scan,
+  not a claim.
+- **The up-direction (D22) needed no new machinery, and this unit's own
+  tests prove that rather than assume it**: `TransitionTests.test_
+  reanswering_the_comparison_after_the_acid_test_routes_to_build_first`
+  exercises 6a's own shipped `build-first` branch completely unedited —
+  no line this unit adds is on that code path.
+- **No divergence between design and spec surfaced this unit** — unlike
+  every other unit in this chain (2, 4, 4b, 3, 6a each flagged one). The
+  one place a literal design reading (`_validate_publication`'s branch
+  needing to know which state routed to it) required a judgment call —
+  which fact to thread (`facts["resultsStatus"]`, reusing `state["status"]`
+  already read once at the top of `cmd_probe`, rather than inventing a new
+  read) — is recorded in task 6b.5's own note as a design elaboration, not
+  a disagreement: design named the WHAT (branched publication, the
+  `_declare_first_publication` precedent) without naming which existing
+  fact to thread, and the implementation chose the one requiring no new
+  read, matching this codebase's own "thread rather than recompute"
+  discipline everywhere else.
+- **Both sealed corpora moved by the smallest margin of the whole
+  Movement**: `tests/seal/digests.json` did not move AT ALL — `probe`'s
+  own digest is byte-identical before and after, because none of that
+  corpus's own fixtures reach `already-benchmarked` with more than one
+  arm declared. `tests/experiments_seal/digests.json`: only `propose`
+  moved (its own embedded timestamp), already excluded from comparison
+  via `KNOWN_UNSEALED_REASONS` — read directly via
+  `tests/seal_capture.py`/`tests/experiments_seal_capture.py` (each runs
+  every case twice and refuses to write on disagreement; both runs
+  self-consistent), not assumed from the file list.
+- **`M5_PINNED_RESIDUE` needed thirteen pins recounted, zero new
+  admissions, zero removals**: `actually`, `answered`, `answers`, `before`,
+  `benchmark`, `beside`, `declaration`, `measured`, `measurement`, `place`,
+  `rather`, `something`, `value` — all grown by the new engine prose alone
+  (`_comparison_reuses_acid_test_question`'s own docstring and body,
+  `_validate_publication`'s branch, `cmd_probe`'s new reachability branch
+  and fact threading). `SKILL.md`/`references/usage.md` are outside
+  `_engine_files()`'s own scan and needed no pin changes.
+- **Full verification, held to the exact-test-ID standard, not a count
+  match**: `npm test` 640/640 (JS untouched throughout the whole change).
+  The full `tests.test_proposal_implementation` suite run twice on the
+  modified tree, both times 1650 tests, 32 anomalies (25 failures + 7
+  errors, 1 skipped for a missing `pytest` module). A full `git stash` A/B
+  against `d1a13b5` (pristine HEAD, run once, same suite, verbose):
+  **1637 tests, identically 25 failures + 7 errors + 1 skipped** — the
+  +13 against the modified tree's 1650 is exactly `TransitionTests`'
+  own count, and no other class's count moved. The two runs' complete
+  sorted `FAIL:`/`ERROR:` line lists were diffed directly, not eyeballed:
+  `diff before_ids.txt after_ids.txt` exits 0 — **byte-identical, all 32
+  entries**, confirming zero regressions across the entire suite rather
+  than only the classes this unit's own scope touches.
+  `tests.test_implementation_seal` 44/44,
+  `tests.test_experiments_seal` 28/28 (0 failures this time — the
+  "uncommitted seal corpus" mutation-proof control every prior unit
+  documented did not fire, since neither corpus's `probe` case moved).
+  `tests.test_implementation_pair` and `tests.test_experimental_
+  implementation`: 101 tests combined, 101/101 green.
+  `tests.test_implementation_domain_lock` 28/28 after the pin recount
+  above.
+- **Authored-line count**: `git diff --numstat` (working tree against
+  `d1a13b5`) totals 599 changed lines (533 insertions/66 deletions) across
+  6 files; excluding the one generated-goldens seal-corpus JSON file (2
+  lines, mechanically regenerated, not authored) that is **597 authored
+  lines against the ~700 floor** — under the floor, the same direction
+  Unit 6a's own session landed in (834 against ~1000), not an overrun.
+  Most of it (342 lines) is `tests/test_proposal_implementation.py`
+  (`TransitionTests`, 13 tests); the engine itself grew by 108 lines (111
+  insertions, 3 deletions) — a small, additive footprint matching D22's
+  own "no new machinery" claim for the up direction and the manual-edit
+  design for the down direction (task 6b.7's own note).
+- **This closes the change.** Movement 6 (6c → 6a → 6b) and the original
+  five units (1 → 2 → 4 → 4b → 3) are all applied and green. No further
+  unit remains in `tasks.md`.

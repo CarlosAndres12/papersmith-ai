@@ -524,23 +524,32 @@ def build_denylist(profiles: list[dict[str, Any]]) -> dict[str, str]:
 #: 107->109. None shrank and none left the denylist; `test_2` confirms no
 #: new unpinned leak either.
 M5_PINNED_RESIDUE: dict[str, int] = {
-    "actually": 80, "admissible": 3, "after": 89, "against": 189,
-    "agreed": 27, "answered": 92, "answers": 104, "approved": 28,
-    "audit": 15, "before": 243, "benchmark": 105, "beside": 99,
+    "actually": 82, "admissible": 3, "after": 89, "against": 189,
+    "agreed": 27, "answered": 94, "answers": 106, "approved": 28,
+    "audit": 15, "before": 244, "benchmark": 108, "beside": 100,
     "check": 153, "checkable": 3, "claim": 36, "command": 268,
-    "commands": 18, "compares": 24, "declaration": 207,
+    "commands": 18, "compares": 24, "declaration": 209,
     "destinations": 38, "empty": 129, "established": 4, "experiment": 25,
     "experiments": 6, "implementations": 2, "incomplete": 28,
     "invariant": 22, "isolated": 5, "leave": 11, "leaves": 36,
     "local": 37, "longer": 53, "makes": 46, "materialized": 12,
-    "measured": 142, "measurement": 42, "module": 194, "notebooks": 110,
-    "object": 33, "pilot": 123, "place": 53, "produces": 51,
-    "rather": 366, "recorded": 78, "remedy": 54, "remote": 65,
+    "measured": 143, "measurement": 43, "module": 194, "notebooks": 110,
+    "object": 33, "pilot": 123, "place": 54, "produces": 51,
+    "rather": 370, "recorded": 78, "remedy": 54, "remote": 65,
     "reported": 146, "resolves": 31, "ruled": 9, "runnable": 15,
-    "scaffolded": 11, "sitting": 9, "small": 8, "something": 71,
-    "steps": 139, "sweep": 7, "validated": 8, "value": 242, "whose": 154,
+    "scaffolded": 11, "sitting": 9, "small": 8, "something": 72,
+    "steps": 139, "sweep": 7, "validated": 8, "value": 243, "whose": 154,
     "write": 109, "wrong": 51,
 }
+#: Unit 6b (Part B, the transitions): thirteen pins grew from the new
+#: engine prose alone (`_comparison_reuses_acid_test_question`,
+#: `_validate_publication`'s own branch, `cmd_probe`'s new reachability
+#: branch and fact threading) -- `actually`, `answered`, `answers`,
+#: `before`, `benchmark`, `beside`, `declaration`, `measured`,
+#: `measurement`, `place`, `rather`, `something`, `value`. Zero admissions,
+#: zero removals; `SKILL.md`/`references/usage.md` are outside
+#: `_engine_files()`'s own scan, the identical restraint every prior
+#: unit's changelog block already states.
 
 
 class DerivedDenylistTests(unittest.TestCase):

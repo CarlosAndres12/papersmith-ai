@@ -3848,6 +3848,13 @@ def cmd_probe(args) -> dict:
         target, name,
         (implementation_declared["contract"] or {}).get("revision") or "",
         (implementation_declared["contract"] or {}).get("premises") or {})
+    # The down-transition's own construction site (D23a/D23b/D23c, Unit 6b
+    # Part B down), computed the identical "once, reused" way — both for its
+    # own reachability branch below and for `_validate_publication`'s
+    # branched text.
+    comparison_arms = (resolved["contract"] or {}).get("arms") or {}
+    reuse_question = _comparison_reuses_acid_test_question(
+        target, name, comparison_arms)
     # Narrowed to `"undeclared"` only (design D4, Movement 3): `"absent"` is
     # the ordinary pre-acceptance state of every first-flow target now that
     # the benchmark package is no longer scaffolded, so it must fall through
@@ -4002,6 +4009,31 @@ def cmd_probe(args) -> dict:
             else:
                 next_step = "declined"
 
+    # D23a/D23b (Unit 6b Part B down): `validate` becomes reachable from
+    # `already-benchmarked` too, not only from an absent benchmark package
+    # (the gap D23a names) -- once a comparison actually exists to answer
+    # it from. `len(comparison_arms) > 1` is "comparison present" read as
+    # "there is a rival arm beside the method's own to treat as also
+    # answering the acid test" -- with one arm or none there is no rival,
+    # `undeclared_arms_note`'s own "which comparison it runs is not the
+    # forge's to decide" restraint applied to this question too.
+    #
+    # A SEPARATE `if`, never another `elif` chained onto the block above
+    # (Unit 3's own `resolved["status"] == "absent"`-guarded chain can
+    # never be true once `nextStep` is already `"already-benchmarked"` --
+    # none of its conditions read that value at all), so this adds a
+    # branch without touching the position of any existing one (spec
+    # "Introducing The Acid-Test Follow-Up Does Not Reorder Or Shadow Any
+    # Other Ladder State"). Once `reuse_question` is answered -- either
+    # token -- the branch stops matching and `nextStep` falls back to the
+    # plain, terminal `already-benchmarked` it always was: the identical
+    # "reopening code is the absence of a branch" idiom D21's own migration
+    # note states, applied here to a decision that settles rather than
+    # reopens.
+    if next_step == "already-benchmarked" and len(comparison_arms) > 1 and (
+            reuse_question not in answered):
+        next_step = "validate"
+
     # The harness's name is read from the target's own declaration
     # (`resolve_harness_status`), never assumed from a filename: a fixed
     # convention here reported `harness: null` on a target that had followed
@@ -4097,6 +4129,16 @@ def cmd_probe(args) -> dict:
         # read there could disagree with the branch that actually routed
         # here.
         "buildFirstArm": build_first_arm,
+        # D23b: which branch `_validate_publication` reports from, threaded
+        # rather than recomputed -- `state["status"]` was already read once
+        # at the top of this function to decide whether `nextStep` started
+        # as `"already-benchmarked"` in the first place, and a second read
+        # here could disagree with the branch that published it.
+        "resultsStatus": state["status"],
+        # `_validate_publication`'s own down-transition text names the
+        # declared arms; threaded the identical "computed once, reused" way
+        # every other fact in this dict is.
+        "comparisonArms": comparison_arms,
     }
     # The roster decides, never a literal (design D12, replacing the single
     # `wiring: bool` flag this used to be). `wiring_proposal` had exactly one
@@ -4128,6 +4170,14 @@ def cmd_probe(args) -> dict:
     if next_step == "build-first":
         draft_names = (("wiring",) if build_first_arm == "comparison"
                        else ("validation",))
+    # D23b: reached from `already-benchmarked`, `validate` is never an
+    # offer to build a run -- "the same discipline the acid test offer
+    # itself must keep, one rung further down" -- so no draft of how to
+    # wire and run it is published here either. `validation_proposal`'s
+    # own draft stays reserved for the offer-to-run half, the identical
+    # restraint `_validate_publication`'s own branch keeps for its text.
+    if next_step == "validate" and facts.get("resultsStatus") == "current":
+        draft_names = ()
     drafts = {draft: PROBE_DRAFTS[draft](target, name, facts)
              for draft in draft_names}
     publication = next_step_publication(target, name, next_step, facts)
@@ -12675,15 +12725,73 @@ def _validation_offer_question(target: Path, name: str, revision: str,
         f"declining later costs nothing to unwind; " + NEXT_STEP_EXPERIMENT_CHOICE)
 
 
+def _comparison_reuses_acid_test_question(target: Path, name: str,
+                                          arms: dict) -> str:
+    """The down-transition's own question (D23a/D23b/D23c, Unit 6b Part B
+    down) — its own, separate one-spelling construction site, distinct from
+    `_validation_offer_question` above: accepting it never runs anything. A
+    comparison already runs the method on real data, so what the acid test
+    would ask is already measured inside the comparison's own record, and
+    proposing a second run of a measurement already on disk would spend
+    machine time to learn something the repository already knows — this
+    change's own defect class wearing a third mask (D23b).
+
+    Derived from the target, the name and the SORTED declared arm names —
+    `_benchmark_offer_question`'s own stability rule: an arm being declared
+    or undeclared changes what this question is actually asking about,
+    which IS a change of state, so a rival arm's own removal is exactly
+    what retires this bucket rather than leaving it to re-fire on the
+    transition it just completed.
+
+    States the entire down-transition in the question itself (D23c): it
+    undeclares the rival arm from the benchmark declaration's own `arms`
+    block — a hand edit, re-sealed with `materialize --authored` (D10's
+    own precedent; no new CLI verb, the identical restraint the live-target
+    migration procedure already keeps, task 2.20) — and nothing else. It
+    never states that `Results/…`, an executed notebook, a stamp, or a
+    ledger event is touched, because none of them are (D23c's own ruling:
+    ceasing to ask and erasing are different operations, and this
+    capability performs only the first).
+    """
+    named = ", ".join(sorted(arms)) if arms else "its own declared arms"
+    return (
+        f"{name} (target {target})'s own comparison already measures the "
+        f"method alone on real data ({named}), which is exactly what the "
+        f"acid test would ask — no new run answers a question the "
+        f"comparison's own record already answers. Accepting stops asking "
+        f"the comparison's own question about the rival separately: "
+        f"hand-edit the benchmark declaration's `arms` block to remove the "
+        f"rival's own entry, keeping the method's own, then release the "
+        f"seal with `materialize --authored` — never performed by this "
+        f"tool itself. `Results/…`, every executed notebook and its stamp, "
+        f"and every ledger event are untouched either way; "
+        + NEXT_STEP_REPAIR_CHOICE)
+
+
 def _validate_publication(target: Path, name: str, facts: dict) -> dict:
-    """`validate` — the offer to run the acid test. The validation draft
-    rides in `validation` (the roster says so); this is the question that
-    must be open beside it.
+    """`validate` — the offer to run the acid test, or (D23a/D23b, Unit 6b)
+    the down-transition's reporting state when reached from a completed
+    comparison instead. The validation draft rides in `validation` (the
+    roster says so) only for the offer-to-run half; this is the question
+    that must be open beside either half.
+
+    **Branched (D23b), `_declare_first_publication`'s own precedent**: one
+    rung publishing a branching sentence, the fact that decided which one
+    threaded through `facts` rather than recomputed. `facts["resultsStatus"]`
+    is `state["status"]`, read once at the top of `cmd_probe` and reused —
+    `"current"` is exactly the condition that made `nextStep` start as
+    `"already-benchmarked"` before this rung's own reachability branch ran,
+    so a second read here could disagree with the branch that published it.
 
     `revision`/`premises` are threaded through `facts` rather than
     recomputed — `cmd_probe` already reads `resolve_implementation_declaration`
     once at the top of the function, and a second read here could disagree
     with the branch that published it."""
+    if facts.get("resultsStatus") == "current":
+        return _next_step_question_entry(
+            target, name,
+            _comparison_reuses_acid_test_question(
+                target, name, facts.get("comparisonArms") or {}))
     return _next_step_question_entry(
         target, name,
         _validation_offer_question(

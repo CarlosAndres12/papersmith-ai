@@ -6331,6 +6331,348 @@ class ValidationProposalTests(unittest.TestCase):
         self.assertIn("needs", draft)
 
 
+class TransitionTests(unittest.TestCase):
+    """The transitions between test and comparison (Unit 6b, design D22/D23).
+
+    Two directions, deliberately asymmetric (D22/D23):
+
+    - Test -> comparison ADDS a rival arm. D22's own claim is "no new
+      machinery" -- the mechanism is 6a's `discuss --decision yes` token on
+      the comparison bucket and nothing else, reused unedited. This class's
+      own tests for that direction (6b.1/6b.2) are therefore proofs that
+      the EXISTING `build-first` mechanism already composes what this
+      direction needs, not exercises of any new code.
+    - Comparison -> test REMOVES nothing from disk; it undeclares the
+      rival arm from `__benchmark__["arms"]` (D23c), a hand edit re-sealed
+      with `materialize --authored` -- never performed by this engine
+      itself (measured: `_materialize_authored` only re-seals a receipt
+      over bytes already on disk; no code path in this module writes
+      `__benchmark__`'s own content for ANY declaration, this one
+      included). The tests below for this direction (6b.6/6b.8/6b.9/6b.10)
+      therefore simulate the operator's own hand edit directly, the same
+      restraint `DeclinedComparisonTests`'s own D5b/D21 fixtures keep for
+      `materialize --stage harness`.
+    """
+
+    def box(self, suffix, arms=None, results=True):
+        box = FORGE / "implementations" / f"_e2e_transition_{suffix}_{os.getpid()}"
+        self.addCleanup(shutil.rmtree, box, ignore_errors=True)
+        (box / "src/Method").mkdir(parents=True)
+        (box / "src/Prior").mkdir(parents=True)
+        (box / "Method").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(box)], check=True,
+                       capture_output=True)
+        (box / "src/Method/__init__.py").write_text("", encoding="utf-8")
+        (box / "src/Method/called.py").write_text(
+            _module("r01.md", ["3"], ["11"], imports="import torch\n"),
+            encoding="utf-8")
+        (box / "src/Prior/model.py").write_text("import torch\n", encoding="utf-8")
+        if arms is not None:
+            (box / "src/Method_Benchmark").mkdir(parents=True)
+            (box / "src/Method_Benchmark/__init__.py").write_text(
+                "__benchmark__ = {'arms': " + repr(arms) +
+                ", 'search': {}, 'report': {}, 'distribution': {}}\n",
+                encoding="utf-8")
+        if results:
+            out = box / "Method" / "Results"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / impl.PROBE_RESULTS).write_text(json.dumps(
+                {"revision": "r01.md", "reduction": {}, "comparison": []}),
+                encoding="utf-8")
+        return box
+
+    def probe(self, box):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), "probe", "--target", str(box),
+             "--name", "Method", "--revision", "r01.md"],
+            capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout or "{}")
+
+    def discuss(self, box, question, answer, decision=None):
+        args = [sys.executable, str(CLI), "discuss", "--target", str(box),
+               "--name", "Method", "--about", "record",
+               "--question", question, "--answer", answer]
+        if decision is not None:
+            args += ["--decision", decision]
+        proc = subprocess.run(args, capture_output=True, text=True, cwd=FORGE)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout or "{}")
+
+    def comparison_question(self, box, baselines=None):
+        if baselines is None:
+            baselines = impl.previous_implementations(box, "Method")
+        return impl._benchmark_offer_question(box, "Method", baselines)
+
+    def validation_question(self, box):
+        declared = impl.resolve_implementation_declaration(box, "Method")
+        contract = declared["contract"] or {}
+        return impl._validation_offer_question(
+            box, "Method", contract.get("revision") or "",
+            contract.get("premises") or {})
+
+    def reuse_question(self, box, arms):
+        return impl._comparison_reuses_acid_test_question(box, "Method", arms)
+
+    # --- 6b.1/6b.2: test -> comparison, D22 (no new machinery) ---
+
+    def test_reanswering_the_comparison_after_the_acid_test_routes_to_build_first(self):
+        """spec 'Adding A Comparison After An Acid Test...', scenario
+        'Wanting a comparison after a run acid test is discussed, not
+        automatic': re-answering the comparison bucket with `decision:
+        "yes"` on a target whose acid test was already accepted routes to
+        `build-first` -- using only 6a's token and rung (D22), not any
+        code this unit adds. Actually WIRING and RUNNING either offer is
+        out of this unit's own scope, the identical restraint
+        `DeclinedComparisonTests`'s own D5b/D21 fixtures keep."""
+        box = self.box("up", results=False)
+        comparison_question = self.comparison_question(box)
+        self.discuss(box, comparison_question, "not now")
+        validation_question = self.validation_question(box)
+        self.discuss(box, validation_question, "yes, run it", decision="yes")
+        self.assertEqual(self.probe(box)["nextStep"], "build-first")
+
+        self.discuss(box, comparison_question, "actually yes", decision="yes")
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "build-first")
+        self.assertEqual(probe["decisions"]["comparison"]["decision"], "yes")
+        self.assertIsNotNone(probe["wiring"])
+
+    def test_the_acid_tests_own_record_survives_a_subsequent_comparison(self):
+        """spec 'Adding A Comparison After An Acid Test...', scenario 'The
+        acid test's own record survives the addition of a rival': a
+        `__records__`-style acid-test artifact already on disk is
+        untouched by re-answering the comparison bucket."""
+        box = self.box("up-record", results=False)
+        validation_out = box / "Method" / "Results" / "validation.json"
+        validation_out.parent.mkdir(parents=True, exist_ok=True)
+        validation_out.write_text('{"passed": true}', encoding="utf-8")
+        before = validation_out.read_bytes()
+
+        comparison_question = self.comparison_question(box)
+        self.discuss(box, comparison_question, "not now")
+        validation_question = self.validation_question(box)
+        self.discuss(box, validation_question, "yes", decision="yes")
+        self.discuss(box, comparison_question, "yes", decision="yes")
+        self.probe(box)
+
+        self.assertEqual(validation_out.read_bytes(), before,
+                         "the acid test's own record must not move or change")
+
+    # --- 6b.3: measurement, recorded as a test rather than left as prose ---
+
+    def test_already_benchmarked_is_structurally_isolated_from_the_absent_status_chain(self):
+        """Task 6b.3's own measurement, held to a test rather than left as
+        prose: EVERY override between `declare-first` and the three-way
+        `benchmark`/`validate`/`declined` branch is a clause of one single
+        `if`/`elif` chain, gated on `next_step in ("benchmark", "piloted")`
+        or `next_step == "benchmark"` -- never on `"already-benchmarked"`.
+        Once `next_step` is `"already-benchmarked"` (`state["status"] ==
+        "current"`, a complete record matching the declared revision),
+        none of those clauses can match, so `validate`'s own reachability
+        from that state needed a NEW, separate branch (this unit's own
+        6b.4) -- confirming, not assuming, design's own narrower D23a
+        reading ("a current, complete record"): a `"piloted"` or `"stale"`
+        result never reaches `"already-benchmarked"` in the first place
+        (`probe_state`'s own three-way split), so the narrower reading is
+        the only one this structure can express without inventing a
+        second, unrelated reachability path for those two states."""
+        source = inspect.getsource(impl.cmd_probe)
+        # Every override clause between `declare-first` and the three-way
+        # branch reads `resolved["status"]` gated on `next_step in
+        # ("benchmark", "piloted")`; `already-benchmarked` never appears
+        # in that guard anywhere -- read directly from the source, not
+        # assumed.
+        collapsed = " ".join(source.split())
+        self.assertNotIn(
+            'next_step == "already-benchmarked" and resolved["status"]',
+            collapsed)
+        self.assertEqual(
+            source.count('next_step == "already-benchmarked"'), 1,
+            "exactly one reachability branch (6b.4) -- the draft "
+            "suppression reads `facts[\"resultsStatus\"]` instead, so it "
+            "never re-tests `next_step` against this literal a second time")
+
+    # --- 6b.6: the down-transition answers from the record, no new run ---
+
+    def test_the_acid_test_question_is_answered_from_the_existing_comparison_record(self):
+        """spec 'Treating An Existing Comparison As Also Answering The Acid
+        Test...', scenario 'The acid-test question is answered from the
+        existing comparison record': `already-benchmarked` with a rival
+        arm still declared reaches `validate`, published as a REPORTING
+        state (D23b) rather than an offer to run -- no `validation` draft
+        rides beside it, unlike the up-direction offer."""
+        box = self.box("down", arms={
+            "baseline": {"sections": ["3"]}, "proposed": {"sections": ["3"]}})
+        probe = self.probe(box)
+        self.assertEqual(probe["nextStep"], "validate")
+        self.assertIsNotNone(probe["resolve"])
+        self.assertEqual(probe["resolve"]["kind"], "question")
+        self.assertIsNone(probe["wiring"])
+        self.assertIsNone(probe["validation"],
+                          "the down-transition must never publish a draft "
+                          "of how to wire and run a fresh acid test")
+        question = self.reuse_question(
+            box, {"baseline": {"sections": ["3"]},
+                 "proposed": {"sections": ["3"]}})
+        self.assertEqual(probe["resolve"]["question"], question)
+        self.assertNotIn("no rival arm", question,
+                         "the down-transition's own text must not read as "
+                         "the up-direction's offer to run")
+
+    def test_answering_the_down_transition_settles_back_to_already_benchmarked(self):
+        box = self.box("down-settle", arms={
+            "baseline": {"sections": ["3"]}, "proposed": {"sections": ["3"]}})
+        question = self.reuse_question(
+            box, {"baseline": {"sections": ["3"]},
+                 "proposed": {"sections": ["3"]}})
+        self.discuss(box, question, "yes", decision="yes")
+        self.assertEqual(self.probe(box)["nextStep"], "already-benchmarked")
+
+    def test_a_single_arm_never_offers_the_down_transition(self):
+        """There is no rival to treat as also answering anything with only
+        the method's own arm declared -- `undeclared_arms_note`'s own
+        "which comparison it runs is not the forge's to decide" restraint,
+        applied to this question too."""
+        box = self.box("down-single", arms={"proposed": {"sections": ["3"]}})
+        self.assertEqual(self.probe(box)["nextStep"], "already-benchmarked")
+
+    def test_already_benchmarked_with_no_declaration_fires_exactly_as_before(self):
+        """Regression: `test_already_benchmarked_still_fires_alone_with_a_
+        current_result` in `DeclinedComparisonTests` covers the identical
+        fixture; this is the same assertion held here, beside this unit's
+        own new branch, so the two files agree on the same claim rather
+        than only one of them proving it."""
+        box = self.box("down-no-declaration", arms=None)
+        self.assertEqual(self.probe(box)["nextStep"], "already-benchmarked")
+
+    # --- 6b.8/6b.9: undeclared-not-deleted, and never in either direction ---
+
+    def test_undeclaring_the_rival_makes_it_invisible_while_disk_output_stays(self):
+        """spec 'The rival's arm is not removed by the transition' (read as
+        the disk output, per D23c's own ruling -- see this unit's report
+        for the full account) and 'A Completed Run's Evidence Is Never
+        Deleted...': simulates the operator's own hand edit (D23c: this
+        engine performs no such edit itself, `_materialize_authored` only
+        re-seals bytes already on disk), then confirms `resolve_benchmark_
+        declaration` -- the one canonical reader every arms-based consumer
+        in this engine routes through (D2) -- no longer sees the rival,
+        while the rival's own recorded output remains byte-identical on
+        disk."""
+        arms = {"baseline": {"sections": ["3"]},
+                "proposed": {"sections": ["3"]}}
+        box = self.box("undeclare", arms=arms)
+        rival_output = box / "Method" / "Results" / "baseline_summary.json"
+        rival_output.write_text('{"accuracy": 0.5}', encoding="utf-8")
+        before_output = rival_output.read_bytes()
+        before_results = (box / "Method" / "Results" /
+                          impl.PROBE_RESULTS).read_bytes()
+
+        # The discussion, per D23c: never automatic without it.
+        question = self.reuse_question(box, arms)
+        self.discuss(box, question, "yes", decision="yes")
+
+        # The operator's own hand edit -- the transition itself.
+        declaration_path = box / "src" / "Method_Benchmark" / "__init__.py"
+        declaration_path.write_text(
+            "__benchmark__ = {'arms': {'proposed': {'sections': ['3']}}, "
+            "'search': {}, 'report': {}, 'distribution': {}}\n",
+            encoding="utf-8")
+
+        resolved = impl.resolve_benchmark_declaration(box, "Method")
+        self.assertEqual(resolved["status"], "declared")
+        self.assertNotIn("baseline", resolved["contract"]["arms"],
+                         "the undeclared arm must be invisible going forward")
+        self.assertIn("proposed", resolved["contract"]["arms"],
+                      "the method's own arm must remain declared")
+        self.assertEqual(rival_output.read_bytes(), before_output,
+                         "the rival's own recorded output must be untouched")
+        self.assertEqual(
+            (box / "Method" / "Results" / impl.PROBE_RESULTS).read_bytes(),
+            before_results, "the comparison's own results record must be "
+            "untouched by the transition")
+
+    def test_the_down_transition_never_deletes_the_rival_arm_in_the_up_direction_either(self):
+        """spec 'A Completed Run's Evidence Is Never Deleted...', scenario
+        'An acid test's record is never erased by a later comparison':
+        the up-direction (D22) touches no benchmark-package output at all
+        when it runs -- `_stage_harness`, the only code path that writes
+        under `src/<Package>_Benchmark/`, never deletes anything it did
+        not itself just write (proved structurally, task 6b.10 below)."""
+        source = inspect.getsource(impl._stage_harness)
+        for call in ("shutil.rmtree", ".unlink(", "os.remove"):
+            self.assertNotIn(call, source)
+
+    # --- 6b.10: no destructive act on the strength of an unmeasured
+    # assumption about recoverability ---
+
+    def test_no_engine_code_path_deletes_moves_or_overwrites_for_the_transitions(self):
+        """D23c's second reason, held to a source scan rather than left as
+        a ruling nobody can check: no function this unit touches --
+        `_comparison_reuses_acid_test_question`, `_validate_publication`,
+        `cmd_probe`'s own new branch, `cmd_discuss` -- calls a delete,
+        move, or overwrite primitive anywhere in its own body. Measured
+        directly: this engine has no code path that writes `__benchmark__`
+        at all (`_materialize_authored` only re-seals a receipt over bytes
+        already on disk), so this is a structural guarantee, not a
+        behavioural one this test merely samples."""
+        destructive = ("shutil.rmtree", "shutil.move", ".unlink(",
+                       "os.remove", "os.rename")
+        for fn in (impl._comparison_reuses_acid_test_question,
+                  impl._validate_publication, impl.cmd_discuss):
+            source = inspect.getsource(fn)
+            for call in destructive:
+                self.assertNotIn(call, source,
+                                 f"{fn.__name__} must never call {call}")
+
+    def test_mtimes_of_untouched_files_are_unchanged_by_probing_and_discussing(self):
+        arms = {"baseline": {"sections": ["3"]},
+                "proposed": {"sections": ["3"]}}
+        box = self.box("mtimes", arms=arms)
+        rival_output = box / "Method" / "Results" / "baseline_summary.json"
+        rival_output.write_text('{"accuracy": 0.5}', encoding="utf-8")
+        declaration_path = box / "src" / "Method_Benchmark" / "__init__.py"
+        before_stat = declaration_path.stat()
+        before_output_stat = rival_output.stat()
+        before_results_stat = (box / "Method" / "Results" /
+                               impl.PROBE_RESULTS).stat()
+
+        question = self.reuse_question(box, arms)
+        self.discuss(box, question, "no")
+        self.probe(box)
+
+        self.assertEqual(declaration_path.stat().st_mtime_ns,
+                         before_stat.st_mtime_ns)
+        self.assertEqual(rival_output.stat().st_mtime_ns,
+                         before_output_stat.st_mtime_ns)
+        self.assertEqual(
+            (box / "Method" / "Results" / impl.PROBE_RESULTS
+             ).stat().st_mtime_ns, before_results_stat.st_mtime_ns)
+
+    # --- 6b.11: both transitions are discussed, never automatic ---
+
+    def test_probing_alone_never_performs_the_up_transition(self):
+        box = self.box("no-auto-up", results=False)
+        for _ in range(3):
+            self.assertNotEqual(self.probe(box)["nextStep"], "build-first")
+
+    def test_probing_alone_never_performs_the_down_transition(self):
+        """Repeated, undiscussed probing of a target eligible for the
+        down-transition offer never mutates the declaration file on disk
+        -- `probe` is read-only (its own `"kind": "read-only"` payload
+        member) and no other command runs here at all."""
+        arms = {"baseline": {"sections": ["3"]},
+                "proposed": {"sections": ["3"]}}
+        box = self.box("no-auto-down", arms=arms)
+        declaration_path = box / "src" / "Method_Benchmark" / "__init__.py"
+        before = declaration_path.read_bytes()
+        for _ in range(3):
+            probe = self.probe(box)
+            self.assertEqual(probe["nextStep"], "validate")
+            self.assertEqual(probe["kind"], "read-only")
+        self.assertEqual(declaration_path.read_bytes(), before)
+
+
 class AcidTestKitGuidanceTests(unittest.TestCase):
     """D15a's first naming-leak site (task 4b.18): the kit's own `__steps__`
     example, shown to every person wiring ANY step -- including an acid
