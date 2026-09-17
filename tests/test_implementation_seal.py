@@ -39,11 +39,10 @@ CLI = FORGE / "skills/proposal-implementation/scripts/implementation_cli.py"
 #: the launcher, which exposes none of the engine's attributes (design.md
 #: D1).
 ENGINE = FORGE / "skills/_core/implementation/engine/implementation_engine.py"
-os.environ.setdefault(
-    "IMPLEMENTATION_DOMAIN_PROFILE",
-    str(FORGE / "skills/proposal-implementation/impl_profile.py"))
 sys.path.insert(0, str(ENGINE.parent))
-import implementation_engine as impl  # noqa: E402  (path set above)
+from domain_profile import seeded_profile  # noqa: E402  (path set above)
+with seeded_profile(FORGE / "skills/proposal-implementation/impl_profile.py"):
+    import implementation_engine as impl  # noqa: E402  (path set above)
 
 TESTS_DIR = Path(__file__).resolve().parent
 SEAL_DIR = TESTS_DIR / "seal"

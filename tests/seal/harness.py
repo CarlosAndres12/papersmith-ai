@@ -32,13 +32,14 @@ _FORGE = Path(__file__).resolve().parents[2]
 #: `impl.CLI_INVOCATION`, unedited.
 _ENGINE_DIR = (_FORGE / "skills" / "_core" / "implementation"
               / "engine")
-os.environ.setdefault(
-    "IMPLEMENTATION_DOMAIN_PROFILE",
-    str(_FORGE / "skills" / "proposal-implementation"
-       / "impl_profile.py"))
 if str(_ENGINE_DIR) not in sys.path:
     sys.path.insert(0, str(_ENGINE_DIR))
-import implementation_engine as impl  # noqa: E402  (path set above)
+
+from domain_profile import seeded_profile  # noqa: E402  (tests/ on path)
+
+with seeded_profile(_FORGE / "skills" / "proposal-implementation"
+                    / "impl_profile.py"):
+    import implementation_engine as impl  # noqa: E402  (path set above)
 
 from . import corpus as seal_corpus
 from . import normalize as seal_normalize

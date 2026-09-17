@@ -51,12 +51,14 @@ ENGINE_DIR = FORGE / "skills/_core/implementation/engine"
 REAL_PROFILE = FORGE / "skills/proposal-implementation/impl_profile.py"
 CASES_PATH = FORGE / "tests/seal/cases.json"
 
-os.environ.setdefault("IMPLEMENTATION_DOMAIN_PROFILE", str(REAL_PROFILE))
-
 import sys  # noqa: E402
 if str(ENGINE_DIR) not in sys.path:
     sys.path.insert(0, str(ENGINE_DIR))
-import implementation_engine as impl  # noqa: E402
+
+from domain_profile import seeded_profile  # noqa: E402  (tests/ on path)
+
+with seeded_profile(REAL_PROFILE):
+    import implementation_engine as impl  # noqa: E402
 
 _TESTS_DIR = Path(__file__).resolve().parent
 if str(_TESTS_DIR) not in sys.path:

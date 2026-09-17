@@ -12,7 +12,6 @@ from __future__ import annotations
 import ast
 import hashlib
 import importlib.util
-import os
 import re
 import shutil
 import subprocess
@@ -24,6 +23,8 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 CORE = REPOSITORY_ROOT / "skills/_core/implementation"
 sys.path.insert(0, str(CORE))
+
+from domain_profile import seeded_profile  # noqa: E402  (tests/ on path)
 
 import impl_availability  # noqa: E402
 import impl_execution_strategy  # noqa: E402
@@ -367,14 +368,12 @@ class CoreNamesNoDomainTests(unittest.TestCase):
 
     @staticmethod
     def _cli_module():
-        os.environ.setdefault(
-            "IMPLEMENTATION_DOMAIN_PROFILE",
-            str(REPOSITORY_ROOT
-               / "skills/proposal-implementation/impl_profile.py"))
         spec = importlib.util.spec_from_file_location("impl_cli_for_lock", ENGINE_SCRIPT)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        with seeded_profile(REPOSITORY_ROOT
+                            / "skills/proposal-implementation/impl_profile.py"):
+            spec.loader.exec_module(module)
         return module
 
     def test_no_core_file_names_a_product_directory_or_source_root(self):

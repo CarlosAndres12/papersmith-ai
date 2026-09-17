@@ -27,22 +27,24 @@ SKILLS_DIR = FORGE / "skills"
 ENGINE_DIR = SKILLS_DIR / "_core" / "implementation" / "engine"
 ENGINE_FILE = ENGINE_DIR / "implementation_engine.py"
 
+from domain_profile import seeded_profile  # noqa: E402  (tests/ on path)
+
 
 def _import_engine_module():
     """A fresh, uncached load of the engine itself -- for the ONE test
     (L3) that needs a live attribute off it rather than its source text.
-    Sets `IMPLEMENTATION_DOMAIN_PROFILE` to this skill's own profile first
-    (mirroring `tests/seal/harness.py`'s `os.environ.setdefault`), since the
-    engine fails closed at import without one."""
-    os.environ.setdefault(
-        "IMPLEMENTATION_DOMAIN_PROFILE",
-        str(SKILLS_DIR / "proposal-implementation" / "impl_profile.py"))
+    Seeds `IMPLEMENTATION_DOMAIN_PROFILE` to this skill's own profile for
+    the load only (the same `domain_profile.seeded_profile` discipline
+    `tests/seal/harness.py` uses), since the engine fails closed at import
+    without one -- and an un-restored override would leak into every later
+    subprocess in this test process."""
     if str(ENGINE_DIR) not in sys.path:
         sys.path.insert(0, str(ENGINE_DIR))
     spec = importlib.util.spec_from_file_location(
         "impl_domain_lock_engine_probe", ENGINE_FILE)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with seeded_profile(SKILLS_DIR / "proposal-implementation" / "impl_profile.py"):
+        spec.loader.exec_module(module)
     return module
 
 

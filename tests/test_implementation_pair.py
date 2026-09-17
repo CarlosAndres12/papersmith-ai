@@ -43,13 +43,12 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-os.environ.setdefault(
-    "IMPLEMENTATION_DOMAIN_PROFILE",
-    str(FORGE / "skills/proposal-implementation/impl_profile.py"))
+from domain_profile import seeded_profile  # noqa: E402  (path set above)
 
-from seal import harness as seal_harness  # noqa: E402  (path set above)
-from pair import corpus as pair_corpus  # noqa: E402  (path set above)
-import impl_position  # noqa: E402  (path set by seal_harness's own import)
+with seeded_profile(FORGE / "skills/proposal-implementation/impl_profile.py"):
+    from seal import harness as seal_harness  # noqa: E402  (path set above)
+    from pair import corpus as pair_corpus  # noqa: E402  (path set above)
+    import impl_position  # noqa: E402  (path set by seal_harness's own import)
 
 #: Cut 3 corrective apply (verify FAIL, CRITICAL finding): the real CLI
 #: entry point, the same one every subprocess case in this suite already
