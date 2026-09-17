@@ -3057,4 +3057,4 @@ la primera ingesta.
 
 ## Licencia
 
-Apache-2.0
+Apache-2.0 — el texto completo está en [`LICENSE`](LICENSE).
