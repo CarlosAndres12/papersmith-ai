@@ -12643,7 +12643,9 @@ class MaterializeScriptStaysTestOnlyTests(unittest.TestCase):
     """
 
     SCRIPTS = SKILL_ROOT / "scripts"
-    README = FORGE / "README.es.md"
+    #: The diagrams live in the single manual. README.es.md was retired into
+    #: README.md (2026-09-17), so this guard follows the manual.
+    README = FORGE / "README.md"
 
     MERMAID_RE = re.compile(r"^```mermaid\n(.*?)^```", re.DOTALL | re.MULTILINE)
     RUN_RE = re.compile(r"Run `([^` ]+)")
