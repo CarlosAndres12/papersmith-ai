@@ -398,7 +398,7 @@ PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "03-results-and-discussion.md": "93d756c9b2f426eebdbf1825b565514d9ee07861dad844c47dd65501860bb823"[:64],
     "04-limitations.md": "5eee4ea815aff06aed5dcb9ab960fb215cc2ff991a3e66c5f1c5aa955ff72b51"[:64],
     "05-related-work.md": "705ca636cd2c8b63c84ccc0149c65928efd3df5a4a1019804f406c16f9d14aea"[:64],
-    "06-introduction.md": "f8379195199651d5e53a0efc8215e0efd7ee5167cdc4a178ff40abc9c6126b10"[:64],
+    "06-introduction.md": "1f923f0c26ee3917c4a3ec192b17db6fc247958532f8deec933558a879edd4f9"[:64],
     "07-conclusions.md": "a584957a8591b0bdd0d538a1427c0061090008a7af170f8e69a367943d055a87"[:64],
     "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
     "09-title-and-keywords.md": "516035b955d942fe8156f25140af6427ca664f63f15b17e35a85a5535f5fa400"[:64],
@@ -1101,28 +1101,70 @@ class InputPartitionTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(len(payload["sections"]), 10)
 
-    def test_introduction_block_4s_composite_glosses_share_one_qualified_id(self) -> None:
-        """Task 1.20: `introduction.block-4`'s multiple glosses (4a, 4b
-        partial, 4b complete) all resolve to the SAME qualified id in the
-        real, shipped `06-introduction.md` prose -- their dependency sets
-        union onto one node (settled decision 5), never one id per gloss."""
+    def test_introduction_block_4_is_two_blocks_not_one_composite(self) -> None:
+        """`introduction.block-4` is TWO blocks, not one node with glosses.
+        The contract's own extent line says so -- "Two physical paragraphs,
+        120-180 words in total" -- and it names them `Paragraph 4a - the
+        prose` and `Paragraph 4b - the list`.
+
+        Collapsing them manufactures a cycle the writing order does not
+        have: block 2 depends on 4b (each contribution read backwards as
+        the deficiency it resolves) while 4a depends on block 2 (the
+        purpose clause mirrors its specific problems). Those parts fall on
+        OPPOSITE sides of block 2, so one node cannot express them --
+        settled decision 5's union rule has no answer here, and the split
+        is at the contract's block inventory, never at the graph."""
         _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
         text = body.decode("utf-8")
 
-        # Every gloss of block-4 (4a, 4b partial, 4b complete) is referenced
-        # in prose next to the SAME literal qualified id -- never a
-        # composite-specific id like `introduction.block-4a`.
-        for gloss in ("4a", "4b partial", "4b complete"):
-            self.assertIn(
-                gloss, text,
-                f"fixture assumption: {gloss!r} is still named in 06-introduction.md's prose",
-            )
-        self.assertIn("`introduction.block-4`", text)
-        self.assertNotIn("introduction.block-4a", text)
-        self.assertNotIn("introduction.block-4b", text)
+        self.assertIn("Two physical paragraphs", text)
+        self.assertIn("Paragraph 4a", text)
+        self.assertIn("Paragraph 4b", text)
 
         corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
-        self.assertIn("introduction.block-4", corpus.blocks)
+        self.assertIn("introduction.block-4a", corpus.blocks)
+        self.assertIn("introduction.block-4b", corpus.blocks)
+        self.assertNotIn(
+            "introduction.block-4", corpus.blocks,
+            "the collapsed id must be gone -- leaving it would let a chain row "
+            "resolve to a node whose parts straddle block 2",
+        )
+
+        # 4a carries only the formulation; the results complete 4b's list,
+        # never 4a's prose. Getting this backwards would hold the whole
+        # presenting paragraph hostage to a measurement it never needed.
+        self.assertEqual(corpus.blocks["introduction.block-4a"].requires_facts, ("formulation",))
+        self.assertEqual(
+            corpus.blocks["introduction.block-4b"].requires_facts, ("formulation", "results"))
+
+    def test_the_internal_chain_of_the_introduction_is_acyclic(self) -> None:
+        """The three normalized chain rows form 4b -> 2 -> 4a (plus 4b -> 4a
+        for the announced count), a DAG. This is the regression for the
+        cycle the collapsed `block-4` produced."""
+        _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
+        text = body.decode("utf-8")
+        chain = text.split("### Internal chain", 1)[1].split("###", 1)[0]
+
+        rows = [line for line in chain.splitlines() if line.startswith("| `introduction.")]
+        self.assertEqual(len(rows), 3, chain)
+
+        def ends(row: str) -> tuple:
+            subject, dependency = row.split("|")[1], row.split("|")[2]
+            return (subject.split("`")[1], dependency.split("`")[1])
+
+        edges = {ends(row) for row in rows}
+        self.assertEqual(
+            edges,
+            {
+                ("introduction.block-2", "introduction.block-4b"),
+                ("introduction.block-4a", "introduction.block-2"),
+                ("introduction.block-4a", "introduction.block-4b"),
+            },
+        )
+        # No pair appears in both directions -- that is what the collapsed
+        # id produced and what this split exists to remove.
+        for subject, dependency in edges:
+            self.assertNotIn((dependency, subject), edges, f"{subject} <-> {dependency}")
 
 
 class OrderTests(unittest.TestCase):
@@ -1161,7 +1203,8 @@ class OrderTests(unittest.TestCase):
         for rw_block in corpus.order_by_section["related-work"]:
             self.assertLess(index["introduction.block-1"], index[rw_block])
             self.assertLess(index["introduction.block-2"], index[rw_block])
-            self.assertLess(index["introduction.block-4"], index[rw_block])
+            self.assertLess(index["introduction.block-4a"], index[rw_block])
+            self.assertLess(index["introduction.block-4b"], index[rw_block])
             self.assertLess(index[rw_block], index["introduction.block-3"])
 
     def test_back_matter_renders_last_while_its_writing_order_place_is_graph_derived_not_fact_derived(self) -> None:

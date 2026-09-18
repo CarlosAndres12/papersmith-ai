@@ -10,7 +10,7 @@ The comparison the repository never made — header half vs prose half — lands
 
 ### D1 — The name→id mapping lives in the row, or nowhere
 
-**Choice.** Normalization rewrites each `## Inputs` table into `### External inputs` (dependency = a fact id) and `### Internal chain` (dependency = another block). Both tables' cells OPEN with the qualified id in backticks; the prose name survives as a gloss after an em dash: `` `introduction.block-4` — 4b partial, what each contribution introduces ``. The reader consumes the leading backticked token and never reads the gloss. `_verify_internal_chain` refuses `CHAIN_ROW_UNRESOLVED` when that token is not a key of `corpus.blocks`, and `CHAIN_ROW_UNBACKED` when the row's dependency block has no `after` edge on the subject block. An unmapped row cannot be dropped silently — that silent drop is the failure this change exists to close.
+**Choice.** Normalization rewrites each `## Inputs` table into `### External inputs` (dependency = a fact id) and `### Internal chain` (dependency = another block). Both tables' cells OPEN with the qualified id in backticks; the prose name survives as a gloss after an em dash: `` `introduction.block-4b` — what each contribution introduces ``. The reader consumes the leading backticked token and never reads the gloss. `_verify_internal_chain` refuses `CHAIN_ROW_UNRESOLVED` when that token is not a key of `corpus.blocks`, and `CHAIN_ROW_UNBACKED` when the row's dependency block has no `after` edge on the subject block. An unmapped row cannot be dropped silently — that silent drop is the failure this change exists to close.
 
 | Option | Tradeoff | Decision |
 |---|---|---|
@@ -19,7 +19,7 @@ The comparison the repository never made — header half vs prose half — lands
 | Fuzzy prose matching of names to ids | Silently drops an edge; unfalsifiable; precisely the failure mode above | Rejected |
 | A separate `sections/_mapping.md` | A third file nothing else reads, tracked by nobody | Rejected |
 
-**Composite parts (settled decision 5).** `4a`, `4b partial`, `4b complete`, `5 partial`, `5 complete` are glosses on `introduction.block-4` / `block-5`. Several rows may carry the same id; their dependency sets UNION, so the node lands in the wave where its last input arrives. A composite sub-name never appears as an id anywhere.
+**Composite parts (settled decision 5).** `5 partial` and `5 complete` are glosses on `introduction.block-5`. **`4a` and `4b` are NOT glosses** — the contract's own extent line ("Two physical paragraphs, 120-180 words in total") makes them two blocks, `introduction.block-4a` and `introduction.block-4b`, because their parts fall on opposite sides of `block-2` and one node manufactures an `ORDER_CYCLE` the writing order does not have. The union rule applies only where every part sits on the same side of every sibling. Several rows may carry the same id; their dependency sets UNION, so the node lands in the wave where its last input arrives. A composite sub-name never appears as an id anywhere.
 
 **Rows whose subject is not a block** ("How many blocks Assessment has", "Whether the acronym appears", "The correct reading of an ambiguous equation") are structural decisions, not blocks. Normalization moves them out of both tables into ordinary prose under a `### Structural decisions` heading; they carry no id and generate no edge. A row left in a table without a resolvable id refuses.
 
@@ -132,7 +132,7 @@ Normalized row shape (parsed by leading backticked token only):
 ### Internal chain
 | Block | Depends on |
 |---|---|
-| `introduction.block-4` — 4b partial | `introduction.block-2` — read backwards as the deficiency it resolves |
+| `introduction.block-4b` | `introduction.block-2` — read backwards as the deficiency it resolves |
 ```
 
 New refusal codes, classified for `REFUSAL_CLASSIFICATION` (bidirectional roster; `reachable_paper_refusal_codes()` moves 96 → **105**):

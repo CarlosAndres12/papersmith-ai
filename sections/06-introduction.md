@@ -44,7 +44,15 @@
       ]
     },
     {
-      "id": "block-4",
+      "id": "block-4a",
+      "requires_facts": [
+        "formulation"
+      ],
+      "requires_declarations": [],
+      "citations": "none"
+    },
+    {
+      "id": "block-4b",
       "requires_facts": [
         "formulation",
         "results"
@@ -126,8 +134,9 @@ the design and completed from the measurement.
 
 | Block | Depends on |
 |---|---|
-| `introduction.block-2` — the general problem and the specific ones | `introduction.block-4` — 4b partial: each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
-| `introduction.block-4` — 4a, the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
+| `introduction.block-2` — the general problem and the specific ones | `introduction.block-4b` — each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
+| `introduction.block-4a` — the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
+| `introduction.block-4a` — the presenting prose | `introduction.block-4b` — the announcement of the count, stated before the list enumerates it |
 
 ### Structural decisions
 
@@ -136,9 +145,16 @@ the design and completed from the measurement.
   written Related Work section** when there is one — the conditional
   cross-section case this block's own `after` edge to `related-work`
   already carries, not a second graph edge.
-- **Composite parts within `introduction.block-4`** (settled decision 5):
+- **`introduction.block-4a` / `block-4b` are two blocks, not one.** The
+  contract's own extent line says so — "Two physical paragraphs, 120-180
+  words in total" — and names them `Paragraph 4a - the prose` and
+  `Paragraph 4b - the list`. They are separate ids because their parts fall
+  on opposite sides of block 2: block 2 depends on 4b, and 4a depends on
+  block 2. Collapsing them into one node manufactures an `ORDER_CYCLE` that
+  the writing order does not have.
+- **Composite parts within `introduction.block-4b`** (settled decision 5):
   4b's complete form — the effect each contribution achieves — is drafted
-  after 4b's partial form, once the results arrive. A drafting-sequence note
+  after its partial form, once the results arrive. A drafting-sequence note
   inside one node, never a dependency on a sibling block.
 - **Composite parts within `introduction.block-5`**: 5's complete form — the
   evidence sentence — is drafted after 5's partial form, once the results
@@ -150,7 +166,7 @@ the design and completed from the measurement.
 - the **presentation and the purpose clause** come from block 2 — the clause mirrors
   its specific problems, in the same order;
 - the **core idea** comes from the mathematical formulation;
-- the **announcement of the count** comes from 4b partial.
+- the **announcement of the count** comes from `introduction.block-4b`, in its partial form.
 
 ### What is writable before measuring
 

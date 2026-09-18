@@ -140,7 +140,7 @@ unmentioned.
 - [x] 1.17 Normalize `sections/09-title-and-keywords.md` — text only; the position-derived edge (`_KEYWORD_BODY_*` constants) needs no code change.
 - [x] 1.18 Normalize `sections/10-back-matter.md`.
 - [x] 1.19 Rewrite `sections/06-introduction.md`'s existing `### Internal chain` rows to lead each cell with a backticked qualified id (e.g. `` `introduction.block-4` — 4b partial ``) — design's migration table marks `06` "already normalized" for the heading partition only; its rows are still bold-prose labels with no id, which would fail `CHAIN_ROW_UNRESOLVED` parsing in unit 4 on the one file assumed done.
-- [x] 1.20 Composite-parts test: `introduction.block-4`'s multiple gloss rows (`4a`, `4b partial`, `4b complete`) all resolve to the same qualified id; their dependency sets union onto one node (settled decision 5).
+- [x] 1.20 **REVISED after unit 1 closed, operator-settled:** `introduction.block-4` is SPLIT into `block-4a` / `block-4b`. The contract already declared it — "Two physical paragraphs, 120-180 words in total", `Paragraph 4a - the prose`, `Paragraph 4b - the list`, and a draftability line naming "1, 2, 3, 4a, 4b in partial form, and 6". Collapsing them produced a real `ORDER_CYCLE`: `block-2` depends on 4b while 4a depends on `block-2`. Decision 5's union rule is unchanged and still governs `block-5`, whose parts depend only on external facts; it simply has no answer when a block's parts straddle a sibling. Tests: `test_introduction_block_4_is_two_blocks_not_one_composite`, `test_the_internal_chain_of_the_introduction_is_acyclic`.
 - [x] 1.21 Corpus-wide content smoke check: `paper_cli.py contract` over all ten files reports zero `INPUT_PARTITION_ABSENT` (chain-row backing itself is unit 4's concern, not this unit's).
 - [x] 1.22 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
 
@@ -162,7 +162,7 @@ unmentioned.
 - [ ] 4.5 RED test — mutation: remove the backing `after` entry, leave the row unchanged; `CHAIN_ROW_UNBACKED` fires (live edge-set read, not row-presence cache).
 - [ ] 4.6 RED test: corpus-wide, nine of ten named dependencies backed, one not — the run refuses on the one gap; no order/readiness/waves output is produced from the incomplete graph.
 - [ ] 4.7 For each of the ten contracts, add the block-level `after` entries backing every Internal-chain row from units 1, each `{target, source:{file, quote}}` with a verified literal quote (`paper_contract.quote_in_body`) — never an invented quote.
-- [ ] 4.8 Confirm `introduction.block-4`'s gloss rows union onto one `after` list — no duplicate edges, no dropped dependency.
+- [ ] 4.8 Confirm the introduction's three chain rows become three `after` edges (`block-2` ← `block-4b`; `block-4a` ← `block-2`; `block-4a` ← `block-4b`) with no cycle, and that `block-5`'s glosses still union onto one node.
 - [ ] 4.9 Transcribe `mm-preamble`'s internal chain into a real edge (proposal Risks: it sits in the same wave as blocks it must name today); assert only edge existence here — placement is unit 5's test.
 - [ ] 4.10 Register `CHAIN_ROW_UNRESOLVED: WORK_STATE`, `CHAIN_ROW_UNBACKED: WORK_STATE`; move the roster assertion from 97 to 99.
 - [ ] 4.11 Confirm `specs/section-contract/spec.md`'s shipped scenarios ("every edge quote-backed", "no row left unmapped") hold against the real corpus: `paper_cli.py contract` reports zero refusals.
