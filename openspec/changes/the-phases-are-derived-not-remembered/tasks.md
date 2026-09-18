@@ -44,7 +44,7 @@ unmentioned.
 | 1b | **Correction to unit 1.** Six of the eight `### Internal chain` "None" assertions unit 1 wrote were false, each contradicted by prose already in the same file — a read-only audit denies a real dependency, worse than the pre-unit-1 defect of merely not transcribing one. Replace the six false "None"s with real, quote-backed rows; rewrite the two genuinely-empty "None"s (`04`, `07`) into a checkable measurement sentence | `sections/01,02,03,04,05,07,09,10.md`, `tests/test_paper_contract.py` | none | ~90 | Low | 1 | [x] |
 | 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [x] |
 | 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [x] |
-| 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [ ] |
+| 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [x] |
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [ ] |
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [ ] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
@@ -421,15 +421,103 @@ genuinely-empty claims checkable, without wiring any `after` edge (unit
 
 ## Phase 3: `optional` semantics — readiness and verify
 
-- [ ] 3.1 `paper_readiness.compute_block_readiness`: add `"optional"`, read verbatim from `BlockRecord.optional`, to every entry.
-- [ ] 3.2 Add the `"not-applicable"` status: optional AND unopened, under declaration-backed (`--paper`) basis only; unchanged under `supposed-only`.
-- [ ] 3.3 RED test: `mm-dataset` reports `optional: true`; a non-optional block reports `optional: false`, over the shipped corpus.
-- [ ] 3.4 RED test: an optional unopened block reports `not-applicable` under `--paper` basis; the same block under flags-only reports `writable`/`blocked`.
-- [ ] 3.5 `paper_verify.py`: add `OPTIONAL_BLOCK_ABSENT` to `UNMEASURED_REASONS`; a check whose derived block set is entirely optional-and-unopened reports `unmeasured` with that reason, never `fail`.
-- [ ] 3.6 RED test: a coupling depending solely on an unopened optional block reports `unmeasured`/`OPTIONAL_BLOCK_ABSENT`.
-- [ ] 3.7 RED test: the same block declared optional but OPENED is checked exactly like a non-optional opened block — never `unmeasured` for being optional alone.
-- [ ] 3.8 Confirm `OPTIONAL_BLOCK_ABSENT` needs no `REFUSAL_CLASSIFICATION` entry and does not move the roster count; add a one-line comment at its definition recording that.
-- [ ] 3.9 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+- [x] 3.1 `paper_readiness.compute_block_readiness`: add `"optional"`, read verbatim from `BlockRecord.optional`, to every entry.
+- [x] 3.2 Add the `"not-applicable"` status: optional AND unopened, under declaration-backed (`--paper`) basis only; unchanged under `supposed-only`. **Basis-independent half only — see Notes below.**
+- [x] 3.3 RED test: `mm-dataset` reports `optional: true`; a non-optional block reports `optional: false`, over the shipped corpus.
+- [x] 3.4 RED test: an optional unopened block reports `not-applicable` under `--paper` basis; the same block under flags-only reports `writable`/`blocked`. **Exercised via direct calls with explicit `opened`/`basis`, never an invented `--paper` flag — see Notes.**
+- [x] 3.5 `paper_verify.py`: add `OPTIONAL_BLOCK_ABSENT` to `UNMEASURED_REASONS`; a check whose derived block set is entirely optional-and-unopened reports `unmeasured` with that reason, never `fail`. **Pure mechanism only — production wiring deferred, see Notes.**
+- [x] 3.6 RED test: a coupling depending solely on an unopened optional block reports `unmeasured`/`OPTIONAL_BLOCK_ABSENT`.
+- [x] 3.7 RED test: the same block declared optional but OPENED is checked exactly like a non-optional opened block — never `unmeasured` for being optional alone.
+- [x] 3.8 Confirm `OPTIONAL_BLOCK_ABSENT` needs no `REFUSAL_CLASSIFICATION` entry and does not move the roster count; add a one-line comment at its definition recording that.
+- [x] 3.9 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+---
+
+## Unit 3 — Notes / Deviations
+
+- **3.2/3.4's own flagged seam, closed exactly as instructed.**
+  `compute_block_readiness`/`compute_readiness` grew two keyword-only
+  parameters, `opened` and `basis` (`opened_blocks` at the `compute_
+  readiness` layer). `not-applicable` fires only when `block.optional`,
+  `basis == "declaration-backed"`, and `opened is False`. Both default to
+  values that make `not-applicable` unreachable (`opened=None`,
+  `basis="supposed-only"`), so `cmd_readiness`'s own existing call — no
+  keyword arguments — is byte-identical in behaviour to before this unit.
+  **Deferred to Work Unit 6:** resolving `basis="declaration-backed"` and
+  real per-block `opened` values from `--paper`'s disk read
+  (`paper_declarations.read_satisfied`, `paper_block.read_status`) and
+  wiring them into `cmd_readiness`. Neither `--paper` nor a basis field was
+  invented on the CLI, per the launch brief.
+
+- **A second, previously-unflagged dependency inversion, found while
+  implementing 3.5-3.8 — reported, not silently worked around.** The
+  literal spec scenario ("verify runs a coupling depending on `mm-dataset`'s
+  content") implies `paper_verify.py`'s checks can tell whether a block is
+  `optional`. They cannot: `Evidence` (`paper_coupling_evidence.py`) has no
+  field carrying `BlockRecord.optional` — `blocks_by_fact` returns bare raw
+  block ids with no optional annotation, and this module's own AST-enforced
+  import allowlist (`_PAPER_VERIFY_ALLOWED_IMPORTS = {"re"}`) forbids it
+  from ever calling `paper_graph.assemble_corpus` itself to find out.
+  Threading `optional` from the corpus into something `paper_verify.py` can
+  read requires editing `paper_coupling_evidence.py` (a new `Evidence`
+  field) and/or `paper_cli.py` (`cmd_verify`, the only place that holds both
+  `sections_dir` and calls `paper_verify.run`) — **neither file is in this
+  unit's allowed edit roots.**
+
+  Resolved the same way the launch brief modeled for 3.2/3.4: implemented
+  the basis-independent half in full. `_optional_block_absence_reason`
+  (new) and a new `optional_block_ids: frozenset = frozenset()`
+  keyword-only parameter, threaded through all seven check functions and
+  `run()`, decide `OPTIONAL_BLOCK_ABSENT` purely from `block_ids` +
+  `optional_block_ids` + `evidence.block_bodies` membership (the last one
+  already-available Evidence data — no new field needed for "opened").
+  Checked ahead of the existing `BLOCK_NOT_DECLARED`/length-mismatch
+  branches in `check_contribution_list`, `check_chain`, `check_gap`,
+  `check_future_work` (and transitively `check_artefacts`, which calls
+  `check_contribution_list`) — a block absent because its optional branch
+  was never taken is a more precise explanation than "not declared", not a
+  competing one. `check_citations`/`check_contract_currency` accept the
+  same parameter, unused, only for `run()`'s uniform dispatch — their
+  required evidence is never derived from `blocks_by_fact`, so no block's
+  `optional` flag is ever relevant to either. The default `frozenset()`
+  makes the branch unreachable for every caller that does not pass real
+  ids, so `run(evidence)` — the only real call today — is behaviourally
+  unchanged (proven directly, `test_run_default_optional_block_ids_never_
+  changes_behavior`).
+
+  Tests 3.6/3.7 build a real, on-disk fixture and pass a real
+  `optional_block_ids` set (computed from a genuine `paper_graph.assemble_
+  corpus` read) directly into `check_contribution_list` — proving the
+  mechanism end to end, never through an invented CLI wiring.
+  **Deferred, outside this unit's scope:** production wiring — `cmd_verify`
+  resolving the corpus's optional block ids and passing them into
+  `paper_verify.run`, which needs either a new `Evidence` field
+  (`paper_coupling_evidence.py`) or a direct corpus read inside `cmd_verify`
+  (`paper_cli.py`). Flagged here for the parent to route to a follow-up
+  task/unit; not half-built in either of those two files.
+
+- **RED-first discipline, verified by mutation on the test suite itself,
+  not merely narrated.** For every RED task (3.3, 3.4, 3.6, 3.7), the
+  implementation was stashed via `git stash` and the new tests were run
+  first to confirm they failed (`TypeError`/`KeyError`, not a vacuous
+  pass), then the stash was restored and the same tests re-run green. No
+  test in `OptionalReadinessTests`/`OptionalVerifyTests` passed before its
+  corresponding production change existed.
+
+- **`test_mutation_8_a_write_in_paper_verify_fails_the_manifest_guard`'s
+  anchor string updated.** This pre-existing mutation test's anchor was the
+  literal source line `"def run(evidence) -> dict:"`; `run()`'s new
+  `optional_block_ids` keyword-only parameter changed that line, so the
+  anchor was updated to match exactly (`_run_against_mutant` asserts the
+  anchor matches exactly once) — the mutation itself, and everything it
+  proves, is unchanged.
+
+- **Roster count, corpus, and waves confirmed undisturbed.** `reachable_
+  paper_refusal_codes()` stays at 101 (`RefusalRosterTests`, unaffected —
+  `OPTIONAL_BLOCK_ABSENT` is an `UNMEASURED_REASONS` member, never a
+  `Refused`). `contract`/`order` both exit 0 over the real 47-block corpus,
+  zero dangling edges. The Kahn frontier decomposition, recomputed
+  directly from `collect_edges`, stays 28/11/5/2/1.
 
 ## Phase 5: `derive_waves`
 
