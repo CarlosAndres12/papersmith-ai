@@ -292,6 +292,7 @@ Nothing here waits for an experiment. But it does wait for the code to exist.
 |---|---|
 | `materials-and-methods.mm-proposal` — stated as a delta on the borrowed machinery, with an explicit reference to the previous equation by number | `materials-and-methods.mm-borrowed-machinery` — the borrowed theory whose declared equations the proposal references |
 | `materials-and-methods.mm-proposal` — always the last subsection, without exception | `materials-and-methods.mm-dataset` — the dataset subsection, when this section owns it |
+| `materials-and-methods.mm-preamble` — it names the subsections that follow and their order | `materials-and-methods.mm-proposal` — the last of the subsections it must name, so the preamble is written once every subsection it announces exists |
 
 ### Structural decisions
 

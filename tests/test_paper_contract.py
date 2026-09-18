@@ -403,8 +403,8 @@ class SchemaTests(unittest.TestCase):
 #: `07` into a checkable measurement statement. `06` and `08` are untouched
 #: by unit 1b and keep their unit-1 digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
-    "01-materials-and-methods.md": "94875c5007520c1908e37512fa87df8540aee270ea6f2cb3dd23654109345f39"[:64],
-    "02-experimental-setup.md": "cb5b89d3edd78454c13fe01c10ff70db486b287e5057c769292797212eb3adaf"[:64],
+    "01-materials-and-methods.md": "960aa095b0ec2cac2c665d5835b50e70a8e030ee926feb025d1408d53139e387"[:64],
+    "02-experimental-setup.md": "c7ffeaa5f7bbfe646090355a30e1b1562ef2b0bfae1bdb20a000e7b04a9e0f51"[:64],
     "03-results-and-discussion.md": "a580e2bd4cb0c5f1515af9bfa6ca2e641c6281a5d5f1009b23c3cab86336477e"[:64],
     "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
     "05-related-work.md": "6c3f1394264bd4b7526057ae8f3a23005515ddb0fc2c75ee0c7cbd839a59c0d1"[:64],

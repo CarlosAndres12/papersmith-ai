@@ -228,7 +228,10 @@ box appearing in both means one of them is wrong.
   dependency on a specific block.
 - **The closing diagram** is the crossing declared by everything Assessment
   already carries, plus the repetition unit — an internal composition rule
-  within `es-assessment` itself, not a dependency on a sibling block.
+  within `es-assessment` itself. Its one dependency that is NOT internal is
+  the data it must show entering, which live in `es-dataset` when the
+  dataset belongs to this section; that one is a chain row above, not a
+  structural decision.
 
 ## Disqualifiers
 
