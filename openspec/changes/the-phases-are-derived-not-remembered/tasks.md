@@ -43,7 +43,7 @@ unmentioned.
 | 1 | Normalize all ten contracts (`External inputs` / `Internal chain`) + shared `_verify_input_partition` checker + `06` backtick row-id gap | all ten `sections/*.md`, `paper_graph.py`, `paper_cli.py`, `design.md`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `INPUT_PARTITION_ABSENT` | ~780 | Low (ceiling 1200) | — | [x] |
 | 1b | **Correction to unit 1.** Six of the eight `### Internal chain` "None" assertions unit 1 wrote were false, each contradicted by prose already in the same file — a read-only audit denies a real dependency, worse than the pre-unit-1 defect of merely not transcribing one. Replace the six false "None"s with real, quote-backed rows; rewrite the two genuinely-empty "None"s (`04`, `07`) into a checkable measurement sentence | `sections/01,02,03,04,05,07,09,10.md`, `tests/test_paper_contract.py` | none | ~90 | Low | 1 | [x] |
 | 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [x] |
-| 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [ ] |
+| 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [x] |
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [ ] |
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [ ] |
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [ ] |
@@ -217,6 +217,100 @@ unmentioned.
 
 ---
 
+## Unit 4 — Notes / Deviations
+
+- **Execution order deviated from this file's own listed order, on
+  purpose.** Tasks 4.8g/4.8h/4.8i are listed in the file BEFORE 4.8b/4.8c/
+  4.8d/4.8e/4.8f, which is backwards from their dependency order (4.8g
+  fixes a residue that 4.8h's own extended check would flag, and 4.8h
+  extends a check 4.8c hasn't been implemented yet at that point in the
+  file). Implemented in dependency order instead:
+  4.1–4.7 → 4.8b → 4.8c → 4.8d → 4.8e → 4.8f → 4.8g → 4.8h → 4.8i → 4.8 →
+  4.9 → 4.10 → 4.11 → 4.12 → 4.13. All twenty-one subtasks are ticked; none
+  were skipped.
+- **The fourteen rows, mapped to holder/dependency/quote.** `01`
+  (3: `mm-proposal`←`mm-borrowed-machinery`, `mm-proposal`←`mm-dataset`,
+  `mm-preamble`←`mm-proposal`), `02` (1: `es-assessment`←`es-dataset`),
+  `03` (2: `rd-contribution-blocks`←`rd-general-task`,
+  `rd-cost`←`rd-contribution-blocks`), `05` (1: `rw-closing`←
+  `rw-problem-blocks`), `06` (3: `block-2`←`block-4b`, `block-4a`←
+  `block-2`, `block-4a`←`block-4b`), `08` (2: `slot-2`←`slot-4`, `slot-3`←
+  `slot-2`), `09` (1: `keywords`←`title`), `10` (1: `bm-acknowledgments`←
+  `bm-funding`). `04` and `07` stay at zero, untouched. Every quote is a
+  literal, hand-traced substring of the named prose body — several wrap
+  across source lines (`mm-preamble`'s own "It names the\nsubsections that
+  follow and their order." is the exact case the launch brief warned
+  about); `quote_in_body`'s whitespace collapse accepts all of them.
+- **08's two rows were not in the launch brief's own count table and were
+  found by re-reading the file in full**, not by trusting the earlier
+  per-file summary. `abstract.slot-3`←`abstract.slot-2` is backed by
+  `08`'s own sentence ("The purpose clause mirrors the deficiencies of
+  slot 2, in the same order."). `abstract.slot-2`←`abstract.slot-4` has NO
+  matching sentence anywhere in `08-abstract.md` itself — the file states
+  its own graph "is the same one that governs the introduction" (line
+  129–130), so this edge's `source.file` points at
+  `sections/06-introduction.md`, reusing the exact quote backing
+  `introduction.block-2`←`introduction.block-4b` ("this block is derived
+  from the contributions, read backwards"). This is the same
+  cross-file-source pattern the pre-existing `abstract`→`conclusions` edge
+  already established (sourced in `07-conclusions.md`, not `08` itself) —
+  never a new pattern, and never an invented quote.
+- **4.8g's fix, and what it actually triggers.** `06`'s `## Block 4 —
+  Proposal and contributions` heading is rewritten to `` ## Block 4 —
+  Proposal and contributions (`block-4a`, `block-4b`) ``, naming both
+  resolved ids explicitly. Measured: under `_verify_block_subunits`'s own
+  loose suffix matching, this heading resolves to TWO ids (`block-4a`,
+  `block-4b`), which is the `UNIT_HEADING_AMBIGUOUS` branch, not
+  `BLOCK_SUBUNIT_UNDECLARED` as 4.8g's own prose loosely describes ("no
+  declared id") — `BLOCK_SUBUNIT_UNDECLARED` fires only when a numbered
+  heading matches ZERO ids under loose matching (a number nothing carries
+  at all), which is a materially different fixture from a composite
+  `Na`/`Nb` split. Both refusal shapes are covered by dedicated fixture
+  tests (`BlockSubunitTests`); the discrepancy is reported here rather
+  than silently reworded into the task text.
+- **4.8i's own stated gate (heading-pattern presence) is refined, measured
+  against the real corpus.** `01`, `02` and `05` all use the
+  `## Slot|Subsection|Block N` HEADING convention 4.8i names, but their
+  declared ids are content-named (`mm-dataset`, `es-assessment`,
+  `rw-closing`, never `slot-1`/`subsection-1`/`block-1`). A gate keyed
+  only on "does this section use numbered headings" would misfire
+  `BLOCK_SUBUNIT_UNDECLARED` on `01`'s own `## Slot 1 — The dataset` (zero
+  ids match "1" numerically). `_section_uses_numbered_ids` gates instead
+  on whether the section's OWN declared ids carry a numeric suffix at
+  all — true for `06`/`07`/`08` only among the six heading-numbered
+  sections, false for `01`/`02`/`05` alongside the four content-named
+  ones. `BlockSubunitTests.test_semantically_named_numbered_headings_
+  never_misfire` asserts this measurement directly. This is a correction
+  to 4.8i's own criterion, not a new capability — the real corpus was
+  never at risk (`_verify_block_subunits` was written with this gate from
+  the start), but the task's own stated gate would have been wrong had it
+  been implemented literally.
+- **Roster count moved 97 → 101 in one step, not the three separate moves
+  (4.8f, then 4.10, then an implied third) the tasks artifact forecast in
+  isolation.** All four new codes (`CHAIN_ROW_UNRESOLVED`,
+  `CHAIN_ROW_UNBACKED`, `BLOCK_SUBUNIT_UNDECLARED`,
+  `UNIT_HEADING_AMBIGUOUS`) live in `paper_graph.py`, already imported by
+  `paper_cli.py` at module level — `reachable_paper_refusal_codes()`'s own
+  whole-module scan makes all four reachable the instant their raise
+  sites exist, regardless of implementation order. 4.8f's own "roster
+  target rises to 106" is not the measured number; 101 is what
+  `test_the_derivation_finds_the_measured_count` actually derives from
+  source once every raise site and every classification entry landed —
+  reported here rather than forcing the assertion to a number the
+  derivation does not produce.
+- **`test_back_matter_renders_last_...`'s own "back matter carries no
+  `after` edge anywhere" assertion is now false** (Unit 4 wires
+  `bm-acknowledgments` after `bm-funding`, intra-section) and was
+  narrowed to "no CROSS-section edge", preserving the test's real intent
+  (back matter's render position is not driven by any transcribed edge)
+  without asserting a now-false absolute.
+- **`06-introduction.md`'s digest moved again** (its third recapture in
+  this change): the `## Block 4` heading rewrite is a genuine prose edit,
+  unlike the fourteen `after` entries, which live entirely in the header
+  and move no body digest.
+
+---
+
 ## Phase 1: Normalize all ten contracts + `_verify_input_partition`
 
 **Merged from 1a/1b/1c under the 1200-line ceiling.** Splitting them left the corpus half-normalized between PRs: `_verify_input_partition` runs inside `assemble_corpus`, so every un-normalized contract would refuse `INPUT_PARTITION_ABSENT` and take `contract`, `order`, `plan`, `readiness`, `verify` and `write` down with it until the last split landed.
@@ -303,27 +397,27 @@ genuinely-empty claims checkable, without wiring any `after` edge (unit
 
 ## Phase 4: Internal-chain → `after` transcription + both refusals
 
-- [ ] 4.1 Add `_verify_internal_chain(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus` right after `_verify_after_transcription` (same `bodies` dict, zero extra disk pass). Raises `CHAIN_ROW_UNRESOLVED` when a row's leading token is not a key of `corpus.blocks`; `CHAIN_ROW_UNBACKED` when it is a key but no `after` edge backs `(holder, dependency)`.
-- [ ] 4.2 RED test: a row naming only a paraphrase refuses `CHAIN_ROW_UNRESOLVED` naming the row's text.
-- [ ] 4.3 RED test — mutation: edit a mapping row to drop its qualified id; `CHAIN_ROW_UNRESOLVED` fires rather than reusing a stale mapping.
-- [ ] 4.4 RED test: a row naming a real block id with no backing edge refuses `CHAIN_ROW_UNBACKED` naming holder + dependency.
-- [ ] 4.5 RED test — mutation: remove the backing `after` entry, leave the row unchanged; `CHAIN_ROW_UNBACKED` fires (live edge-set read, not row-presence cache).
-- [ ] 4.6 RED test: corpus-wide, nine of ten named dependencies backed, one not — the run refuses on the one gap; no order/readiness/waves output is produced from the incomplete graph.
-- [ ] 4.7 For each of the ten contracts, add the block-level `after` entries backing every Internal-chain row from units 1, each `{target, source:{file, quote}}` with a verified literal quote (`paper_contract.quote_in_body`) — never an invented quote.
-- [ ] 4.8g **Residue left by the block-4 split, found by sweeping the class.** `sections/06-introduction.md` still carries `## Block 4 — Proposal and contributions`, a unit heading that now resolves to NO declared id (the two ids are `block-4a`/`block-4b`, named by its `###` children). Decide and apply: either the heading becomes an explicit grouping of the two, or it is rewritten. Prose that outlived its mechanism is the defect this change exists to close — leaving our own instance would be the worst kind.
-- [ ] 4.8h **The inverse guard, and the honest limit on it.** `BLOCK_SUBUNIT_UNDECLARED` catches a heading naming a sub-unit with no id. It does NOT catch a unit heading resolving to ZERO ids (4.8g's residue) or to SEVERAL. The several-case ships today and is correct: `04-limitations.md`'s `## Two sweeps, two kinds of gap` covers both `lim-proposal-items` and `lim-validation-items`. It is correct only because both ids exist — delete one and the heading keeps promising it, silently. Extend the check to "every unit heading resolves to exactly one declared id", refusing `BLOCK_SUBUNIT_UNDECLARED` for zero and a new `UNIT_HEADING_AMBIGUOUS` for several.
-- [ ] 4.8i **Scope the inverse guard to where the convention holds — measured, not assumed.** Only SIX of ten contracts use `## Block|Slot|Subsection N` headings. `03`, `04`, `09` and `10` name their blocks by content (`## Funding`, `## The closing`, `## Keywords`), so a count or resolve rule fires false positives on four of ten. The check must apply per-section, gated on that section actually using the numbered convention, and a test must assert it stays SILENT on all four content-named contracts. Measured 2026-09-18 across the full corpus: no hidden sub-unit remains anywhere; `block-4` was the only one, and `02`'s apparent mismatch was a false positive from a regex that missed `## Preamble` (no unit word).
-- [ ] 4.8b **`BLOCK_SUBUNIT_UNDECLARED` — the guard the block-4 split proved missing.** Every refusal this change ships checks TABLE -> GRAPH (a chain row naming a block). Nothing checks PROSE -> HEADER: the contract announced block 4's split in three places (its `**Extent. Two physical paragraphs**` line, the `### Paragraph 4a` / `### Paragraph 4b` headings, and a draftability line reading "1, 2, 3, 4a, 4b in partial form, and 6") and no guard fired, because none of the three is a chain row. A human reading found it.
-- [ ] 4.8c Add `_verify_block_subunits(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus`: a `###` heading whose text begins with a unit word (`Paragraph`, `Block`, `Slot`, `Subsection`, `Part`) followed by an identifier, sitting under a `## Block|Slot|Subsection N` parent, names a sub-unit the header must declare as its own block id. Refuses `BLOCK_SUBUNIT_UNDECLARED` naming the heading and its parent.
-- [ ] 4.8d MEASURED, zero false positives on today's corpus: six unit-headings carry `###` children, and five of those children are prose notes with no unit word (`What is cited here`, `The summary diagram`, `Two ways to walk a block...`, `Figures are permitted here...`). Only `06`'s two `### Paragraph 4a/4b` match, and both now resolve to declared ids. Assert BOTH directions in the test: the real corpus passes, and a fixture reintroducing a `### Paragraph 5a` under `## Block 5` without a matching id refuses.
-- [ ] 4.8e RED-first mutation: collapse `block-4a`/`block-4b` back to one `block-4` id in a fixture and confirm `BLOCK_SUBUNIT_UNDECLARED` fires — the guard must catch the exact anomaly that shipped unnoticed, not merely pass alongside it.
-- [ ] 4.8f Register `BLOCK_SUBUNIT_UNDECLARED: WORK_STATE` in `paper_cli.REFUSAL_CLASSIFICATION`; roster target rises to 106 (97 landed in unit 1, not the design's 96 baseline).
-- [ ] 4.8 Confirm the introduction's three chain rows become three `after` edges (`block-2` ← `block-4b`; `block-4a` ← `block-2`; `block-4a` ← `block-4b`) with no cycle, and that `block-5`'s glosses still union onto one node.
-- [ ] 4.9 Transcribe `mm-preamble`'s internal chain into a real edge (proposal Risks: it sits in the same wave as blocks it must name today); assert only edge existence here — placement is unit 5's test.
-- [ ] 4.10 Register `CHAIN_ROW_UNRESOLVED: WORK_STATE`, `CHAIN_ROW_UNBACKED: WORK_STATE`; move the roster assertion from 97 to 99.
-- [ ] 4.11 Confirm `specs/section-contract/spec.md`'s shipped scenarios ("every edge quote-backed", "no row left unmapped") hold against the real corpus: `paper_cli.py contract` reports zero refusals.
-- [ ] 4.12 Record the measured `collect_edges` size and a wave-shape estimate in a scratch note for unit 5 — waves must be measured, never assumed (proposal Risk: "only three edges exist today; waves collapse to 35/8/2").
-- [ ] 4.13 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract -v`.
+- [x] 4.1 Add `_verify_internal_chain(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus` right after `_verify_after_transcription` (same `bodies` dict, zero extra disk pass). Raises `CHAIN_ROW_UNRESOLVED` when a row's leading token is not a key of `corpus.blocks`; `CHAIN_ROW_UNBACKED` when it is a key but no `after` edge backs `(holder, dependency)`.
+- [x] 4.2 RED test: a row naming only a paraphrase refuses `CHAIN_ROW_UNRESOLVED` naming the row's text.
+- [x] 4.3 RED test — mutation: edit a mapping row to drop its qualified id; `CHAIN_ROW_UNRESOLVED` fires rather than reusing a stale mapping.
+- [x] 4.4 RED test: a row naming a real block id with no backing edge refuses `CHAIN_ROW_UNBACKED` naming holder + dependency.
+- [x] 4.5 RED test — mutation: remove the backing `after` entry, leave the row unchanged; `CHAIN_ROW_UNBACKED` fires (live edge-set read, not row-presence cache).
+- [x] 4.6 RED test: corpus-wide, nine of ten named dependencies backed, one not — the run refuses on the one gap; no order/readiness/waves output is produced from the incomplete graph.
+- [x] 4.7 For each of the ten contracts, add the block-level `after` entries backing every Internal-chain row from units 1, each `{target, source:{file, quote}}` with a verified literal quote (`paper_contract.quote_in_body`) — never an invented quote.
+- [x] 4.8g **Residue left by the block-4 split, found by sweeping the class.** `sections/06-introduction.md` still carries `## Block 4 — Proposal and contributions`, a unit heading that now resolves to NO declared id (the two ids are `block-4a`/`block-4b`, named by its `###` children). Decide and apply: either the heading becomes an explicit grouping of the two, or it is rewritten. Prose that outlived its mechanism is the defect this change exists to close — leaving our own instance would be the worst kind.
+- [x] 4.8h **The inverse guard, and the honest limit on it.** `BLOCK_SUBUNIT_UNDECLARED` catches a heading naming a sub-unit with no id. It does NOT catch a unit heading resolving to ZERO ids (4.8g's residue) or to SEVERAL. The several-case ships today and is correct: `04-limitations.md`'s `## Two sweeps, two kinds of gap` covers both `lim-proposal-items` and `lim-validation-items`. It is correct only because both ids exist — delete one and the heading keeps promising it, silently. Extend the check to "every unit heading resolves to exactly one declared id", refusing `BLOCK_SUBUNIT_UNDECLARED` for zero and a new `UNIT_HEADING_AMBIGUOUS` for several.
+- [x] 4.8i **Scope the inverse guard to where the convention holds — measured, not assumed.** Only SIX of ten contracts use `## Block|Slot|Subsection N` headings. `03`, `04`, `09` and `10` name their blocks by content (`## Funding`, `## The closing`, `## Keywords`), so a count or resolve rule fires false positives on four of ten. The check must apply per-section, gated on that section actually using the numbered convention, and a test must assert it stays SILENT on all four content-named contracts. Measured 2026-09-18 across the full corpus: no hidden sub-unit remains anywhere; `block-4` was the only one, and `02`'s apparent mismatch was a false positive from a regex that missed `## Preamble` (no unit word).
+- [x] 4.8b **`BLOCK_SUBUNIT_UNDECLARED` — the guard the block-4 split proved missing.** Every refusal this change ships checks TABLE -> GRAPH (a chain row naming a block). Nothing checks PROSE -> HEADER: the contract announced block 4's split in three places (its `**Extent. Two physical paragraphs**` line, the `### Paragraph 4a` / `### Paragraph 4b` headings, and a draftability line reading "1, 2, 3, 4a, 4b in partial form, and 6") and no guard fired, because none of the three is a chain row. A human reading found it.
+- [x] 4.8c Add `_verify_block_subunits(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus`: a `###` heading whose text begins with a unit word (`Paragraph`, `Block`, `Slot`, `Subsection`, `Part`) followed by an identifier, sitting under a `## Block|Slot|Subsection N` parent, names a sub-unit the header must declare as its own block id. Refuses `BLOCK_SUBUNIT_UNDECLARED` naming the heading and its parent.
+- [x] 4.8d MEASURED, zero false positives on today's corpus: six unit-headings carry `###` children, and five of those children are prose notes with no unit word (`What is cited here`, `The summary diagram`, `Two ways to walk a block...`, `Figures are permitted here...`). Only `06`'s two `### Paragraph 4a/4b` match, and both now resolve to declared ids. Assert BOTH directions in the test: the real corpus passes, and a fixture reintroducing a `### Paragraph 5a` under `## Block 5` without a matching id refuses.
+- [x] 4.8e RED-first mutation: collapse `block-4a`/`block-4b` back to one `block-4` id in a fixture and confirm `BLOCK_SUBUNIT_UNDECLARED` fires — the guard must catch the exact anomaly that shipped unnoticed, not merely pass alongside it.
+- [x] 4.8f Register `BLOCK_SUBUNIT_UNDECLARED: WORK_STATE` in `paper_cli.REFUSAL_CLASSIFICATION`; roster target rises to 106 (97 landed in unit 1, not the design's 96 baseline).
+- [x] 4.8 Confirm the introduction's three chain rows become three `after` edges (`block-2` ← `block-4b`; `block-4a` ← `block-2`; `block-4a` ← `block-4b`) with no cycle, and that `block-5`'s glosses still union onto one node.
+- [x] 4.9 Transcribe `mm-preamble`'s internal chain into a real edge (proposal Risks: it sits in the same wave as blocks it must name today); assert only edge existence here — placement is unit 5's test.
+- [x] 4.10 Register `CHAIN_ROW_UNRESOLVED: WORK_STATE`, `CHAIN_ROW_UNBACKED: WORK_STATE`; move the roster assertion from 97 to 99.
+- [x] 4.11 Confirm `specs/section-contract/spec.md`'s shipped scenarios ("every edge quote-backed", "no row left unmapped") hold against the real corpus: `paper_cli.py contract` reports zero refusals.
+- [x] 4.12 Record the measured `collect_edges` size and a wave-shape estimate in a scratch note for unit 5 — waves must be measured, never assumed (proposal Risk: "only three edges exist today; waves collapse to 35/8/2").
+- [x] 4.13 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract -v`.
 
 ## Phase 3: `optional` semantics — readiness and verify
 
