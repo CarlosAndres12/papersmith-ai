@@ -858,7 +858,8 @@ class ReopenInvalidatesProvenanceEndToEndTests(unittest.TestCase):
         })
         self.contract_path = self.sections_dir / "reopen-e2e.md"
         self.contract_path.write_text(
-            f"---\n{header}\n---\n\nProse body, never read for meaning.\n",
+            f"---\n{header}\n---\n\nProse body, never read for meaning.\n\n"
+            "### External inputs\n\n### Internal chain\n",
             encoding="utf-8",
         )
 
