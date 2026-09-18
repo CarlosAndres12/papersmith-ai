@@ -126,12 +126,24 @@ the design and completed from the measurement.
 
 | Block | Depends on |
 |---|---|
-| **4b partial** — what each contribution introduces and what function it performs | the mathematical formulation |
-| **2** — the general problem and the specific ones | 4b partial: each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
-| **3** — state of the art and gap | the problem statement when there is no Related Work section; the problem statement **and the written Related Work section** when there is one |
-| **4a** — the presenting prose | three distinct sources, one per movement |
-| **4b complete** — the effect each contribution achieves | 4b partial + the results |
-| **5 complete** — the evidence sentence | 5 partial + the results |
+| `introduction.block-2` — the general problem and the specific ones | `introduction.block-4` — 4b partial: each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
+| `introduction.block-4` — 4a, the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
+
+### Structural decisions
+
+- **Block 3 — state of the art and gap** depends on the problem statement
+  when there is no Related Work section; the problem statement **and the
+  written Related Work section** when there is one — the conditional
+  cross-section case this block's own `after` edge to `related-work`
+  already carries, not a second graph edge.
+- **Composite parts within `introduction.block-4`** (settled decision 5):
+  4b's complete form — the effect each contribution achieves — is drafted
+  after 4b's partial form, once the results arrive. A drafting-sequence note
+  inside one node, never a dependency on a sibling block.
+- **Composite parts within `introduction.block-5`**: 5's complete form — the
+  evidence sentence — is drafted after 5's partial form, once the results
+  arrive. The same intra-node sequencing as block 4, never a dependency on a
+  sibling block.
 
 **Block 4a draws on three sources, one per sentence:**
 

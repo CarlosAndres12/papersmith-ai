@@ -116,11 +116,22 @@ instructions, along with the permitted keyword count.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The three required slots | the proposal, with its contributions already defined — the title selects among them |
-| Whether the acronym appears | whether it is meant to become the method's public name |
-| Keyword count bounds and the classification line | the target journal's requirements |
+| The **contributions**, already defined — the title selects among them | `title` |
+| The **keyword-bounds** and **classification-line** — the target journal's requirements | `keywords` |
+
+### Internal chain
+
+None — `title` and `keywords` each depend only on the external inputs above.
+
+### Structural decisions
+
+- **Whether the acronym appears** is decided by whether it is meant to
+  become the method's public name — a structural decision, not a dependency
+  on a block.
 
 ## Disqualifiers
 

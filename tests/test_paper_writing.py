@@ -2147,9 +2147,18 @@ _COUPLING_PROVENANCE_BLOCKS = ("methods-contrib", "methods-chain")
 
 
 def _write_coupling_sections(sections_dir: Path) -> None:
+    """`contract-input-partition` spec, `Requirement: Two-Heading
+    Partition`: every assembled contract must carry `### External inputs`
+    and `### Internal chain`, or `paper_graph.assemble_corpus` refuses
+    `INPUT_PARTITION_ABSENT` -- this fixture's own concern
+    (`the-couplings-hold-or-they-do-not`) is unrelated to that partition, so
+    both headings are added empty, never populated with invented content."""
     sections_dir.mkdir(parents=True, exist_ok=True)
     for name, header in _COUPLING_SECTIONS.items():
-        text = "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n"
+        text = (
+            "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
         (sections_dir / name).write_text(text, encoding="utf-8")
 
 
@@ -3610,8 +3619,14 @@ class RefusalRosterTests(unittest.TestCase):
         `paper_verify.UNMEASURED_REASONS` and `paper_coupling_evidence.
         _blocks_by_fact` already carry for "the corpus itself could not be
         read", so the set gains a member without gaining a second name for
-        the same condition."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 96)
+        the same condition. Moved from 96 to 97 in `the-phases-are-derived-
+        not-remembered`, unit 1: `paper_graph.py` gains
+        `_verify_input_partition`, called from `assemble_corpus` (an
+        already-imported module), refusing `INPUT_PARTITION_ABSENT` when a
+        contract's prose body is missing `### External inputs` or
+        `### Internal chain` -- reachable through the whole-module scan the
+        moment the new raise site lands, no new import needed."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 97)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

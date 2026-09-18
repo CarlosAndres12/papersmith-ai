@@ -1,0 +1,261 @@
+# Tasks: The Phases Are Derived, Not Remembered
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ~3,100–3,900 across 9 chained units |
+| 1200-line budget risk | Low — no unit exceeds the ceiling; largest is unit 1 at ~780 |
+| Chained PRs recommended | Yes |
+| Suggested split | PR 1 → PR 2 → PR 4 → PR 3 → PR 5 → PR 6 → PR 7 → PR 8 → PR 9 |
+| Delivery strategy | ask-on-risk |
+| Chain strategy | feature-branch chain — each unit branches off the previous, matching this repository's own precedent (b493151 → 432da9f → 45eae9d → cb965c4 → d1a13b5). Ceiling raised to 1200 by the operator; `size:exception` is not needed |
+
+Decision needed before apply: No — settled
+Chained PRs recommended: Yes
+Chain strategy: feature-branch chain
+1200-line budget risk: Low
+
+## Refusal-Roster Reconciliation Ledger
+
+`sdd-spec` and `sdd-design` ran in parallel and drifted on which refusal codes
+actually exist. Every drift is closed by a task below — none is left
+unmentioned.
+
+| Code | Drift | Closed by |
+|---|---|---|
+| `INPUT_PARTITION_ABSENT` | Required by `contract-input-partition` spec; **absent from design** (no refusal-table row, no File Changes entry) | 1.1 (add to design.md), 1.2–1.5 (implement + test + classify) |
+| `GUIDANCE_MARKDOWN_UNREADABLE` | Named in design D5; **no `redactor-packet` spec requirement** | 8.1 (add spec Requirement + scenario), 8.5 (implement + test) |
+| `READINESS_BASIS_REQUIRED` | Named in design D3; **no `writing-readiness` spec requirement** | 6.1 (add spec Requirement + scenario), 6.4/6.7 (implement + test) |
+| `SKELETON_ALREADY_DECIDED` | Named in design D4; **no `skeleton-startup` spec scenario** | 7.1 (add spec scenario), 7.8/7.11 (implement + test) |
+| `SKELETON_ANSWER_REQUIRED` | Named in design D4; **no `skeleton-startup` spec scenario** | 7.1 (add spec scenario), 7.8/7.12 (implement + test) |
+| `INPUT_PARTITION_ABSENT`'s knock-on | Design's own roster forecast (96 → 104, 8 codes) **omits this 9th code** | 1.1 notes the correction; roster target is **96 → 105**, tracked incrementally at 1.5 / 4.10 / 6.15 / 7.15 / 8.13 / confirmed at 9.5 |
+
+## Open Questions Resolved At Task Time
+
+- **Block-level vs section-level `optional`** (design Open Question 1): DECIDED block-level `optional: true` on every `rw-*` block — no schema change, no `_TOP_LEVEL_ALLOWED` widening. Task 2.2.
+- **Does an `unprovenanced` block hold the `phases` wave gate?** (design Open Question 2): DECIDED an `unprovenanced` block counts as **written** for gating — provenance currency (`drifted`/`unprovenanced`) stays `plan`'s own separately-reported concern; conflating it with wave-gating would block writing on a documentation gap, not a missing dependency. Task 6.2.
+
+## Work Unit Table
+
+| # | Unit | Touches | New refusals | Est. lines | Budget risk | Depends on | Status |
+|---|------|---------|---------------|------------|--------------|------------|--------|
+| 1 | Normalize all ten contracts (`External inputs` / `Internal chain`) + shared `_verify_input_partition` checker + `06` backtick row-id gap | all ten `sections/*.md`, `paper_graph.py`, `paper_cli.py`, `design.md`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `INPUT_PARTITION_ABSENT` | ~780 | Low (ceiling 1200) | — | [x] |
+| 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [ ] |
+| 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [ ] |
+| 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [ ] |
+| 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [ ] |
+| 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [ ] |
+| 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
+| 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
+| 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
+
+## Work-Unit Evidence
+
+| Unit | Focused test command | Runtime harness | Rollback boundary |
+|---|---|---|---|
+| 1 | `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v` | `paper_cli.py contract` over the whole shipped corpus | Revert the ten `sections/*.md` edits + `_verify_input_partition`; text-only plus one pure function, no persisted state |
+| 4 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Chain` | `paper_cli.py contract` (zero refusals on the real corpus) | Revert `_verify_internal_chain` + the ten header `after` additions; `_verify_after_transcription` still guards edges added |
+| 3 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Optional` | `paper_cli.py readiness --paper paper/` and `paper_cli.py verify` | Revert the two consumer diffs independently of unit 4/5 |
+| 5 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Wave` | N/A — pure function, no CLI verb of its own yet (exercised via unit 6's `phases`) | Revert `derive_waves` + `_build_graph` extraction; `derive_order` restored to its pre-extraction body |
+| 6 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Readiness` | `paper_cli.py readiness --paper paper/` then `paper_cli.py phases` against a scaffolded `paper/` | Revert `phases` verb + basis dispatch independently; `readiness`'s flag-only path is preserved as a fallback |
+| 7 | `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions -v -k Skeleton` | `paper_cli.py skeleton --related-work yes --dataset-in experimental-setup` against a fresh scaffolded `paper/` | Revert `skeleton` verb + inference helpers; no writer added beyond `open_block`, so `main.tex` byte-identity is unaffected by rollback |
+| 8 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Packet` | `paper_cli.py packet --section 06-introduction --block block-1` against the shipped `guidance/` tree | Revert `packet` verb + `segment_markdown`; `write`'s pipeline wiring reverts to no packet-assembly step |
+| 9 | `npm test && .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` | full skill walkthrough per `SKILL.md`'s own verb tables | Revert docs/docstrings only — zero behavior change |
+
+---
+
+## Unit 1 — Notes / Deviations
+
+- **Out-of-scope regression, not fixed (scope boundary honored).**
+  `tests/test_paper_decisions.py::ReopenInvalidatesProvenanceEndToEndTests::
+  test_reopen_then_plan_stops_reporting_current` builds a synthetic
+  `reopen-e2e.md` contract whose body is a single sentence with no
+  `### External inputs` / `### Internal chain` partition. Once
+  `_verify_input_partition` is wired into `assemble_corpus`, `plan` on that
+  fixture now refuses `INPUT_PARTITION_ABSENT` (exit 2) instead of
+  succeeding, failing that one test. `tests/test_paper_decisions.py` is
+  outside this unit's allowed edit roots, so it was left untouched rather
+  than silently widened. The fix is a one-line fixture-body addition (the
+  same two empty headings added to every other synthetic fixture in
+  `tests/test_paper_contract.py` and `tests/test_paper_writing.py` this
+  unit); it needs either a scope exception for that one file or a follow-up
+  task. Confirmed as the ONLY failure across `test_paper_decisions`,
+  `test_paper_citation`, `test_paper_evidence`, `test_paper_figure` (203
+  tests, 1 failure).
+- **Rows without a resolvable block id moved to `### Structural decisions`,
+  never force-fitted with an invented id** (D1's own provision, extended
+  from "subject is not a block" to "dependency is not a block"): in
+  `01-materials-and-methods.md` ("the correct reading of an ambiguous
+  equation"), `02-experimental-setup.md` ("how many blocks Assessment has",
+  "the closing diagram"), `03-results-and-discussion.md` ("each artefact",
+  "the third beat", "limitations"), `04-limitations.md` ("each item's
+  citation"), `07-conclusions.md` (block 3's audience choice), and
+  `09-title-and-keywords.md` ("whether the acronym appears").
+- **`06-introduction.md`'s six original Internal Chain rows reduce to two
+  genuine cross-block edges** once each row is checked against its
+  header's own `requires_facts` (block-3/-4/-5 declare `problem-statement`/
+  `formulation`/`results` as FACTS, not block ids) and against composite
+  parts (4a/4b-partial/4b-complete/5-partial/5-complete are glosses on the
+  SAME two qualified ids, so a row naming two glosses of the same block is
+  intra-node sequencing, never a graph edge): `introduction.block-2` ←
+  `introduction.block-4` (unchanged), and a new row making
+  `introduction.block-4` ← `introduction.block-2` explicit (previously
+  buried in the "three distinct sources" prose gloss). The other four
+  rows' content is preserved verbatim under the new `### Structural
+  decisions` heading — no information dropped, only relocated. This
+  surfaces a real tension for unit 4: those two edges name the SAME pair of
+  blocks in both directions, which would be `ORDER_CYCLE` if both became
+  literal `after` edges — flagged here for unit 4's implementer to resolve
+  (likely: only one direction is a real gating edge; the other is drafting
+  guidance), not resolved in this unit, which wires no `after` edges at
+  all.
+
+---
+
+## Phase 1: Normalize all ten contracts + `_verify_input_partition`
+
+**Merged from 1a/1b/1c under the 1200-line ceiling.** Splitting them left the corpus half-normalized between PRs: `_verify_input_partition` runs inside `assemble_corpus`, so every un-normalized contract would refuse `INPUT_PARTITION_ABSENT` and take `contract`, `order`, `plan`, `readiness`, `verify` and `write` down with it until the last split landed.
+
+- [x] 1.1 Edit `design.md`: add `INPUT_PARTITION_ABSENT | work-state` to the New Refusal Codes table, add `_verify_input_partition` to `paper_graph.py`'s File Changes row, and correct the roster forecast comment from "96 → 104" to "96 → 105" (see Reconciliation Ledger).
+- [x] 1.2 Add `_verify_input_partition(corpus, bodies) -> None` to `paper_graph.py`, called from `assemble_corpus` before `_verify_internal_chain`; refuses `INPUT_PARTITION_ABSENT` naming whichever of `### External inputs` / `### Internal chain` is missing from a contract's prose body.
+- [x] 1.3 RED test (write first): a fixture contract with a flat `## Inputs` table and no `### Internal chain` heading refuses `INPUT_PARTITION_ABSENT` naming that heading. `.venv/bin/python -m unittest tests.test_paper_contract -v -k InputPartition`
+- [x] 1.4 RED test — mutation: delete `### Internal chain` from a previously-normalized fixture; confirm the guard fires live, not from a cached parse.
+- [x] 1.5 Register `INPUT_PARTITION_ABSENT: WORK_STATE` in `paper_cli.REFUSAL_CLASSIFICATION`; move the assertion at `tests/test_paper_writing.py:3614` from 96 to 97.
+- [x] 1.6 Normalize `sections/01-materials-and-methods.md`: `## Inputs` → `### External inputs` / `### Internal chain` (present-but-empty where no internal deps); rows lead with backticked `<section>.<block-id>` per design D1; move non-block-subject rows to `### Structural decisions`.
+- [x] 1.7 Normalize `sections/02-experimental-setup.md` the same way.
+- [x] 1.8 Normalize `sections/05-related-work.md` the same way.
+- [x] 1.9 Regression scenario: `contract --file sections/06-introduction.md` still parses with no refusal (already-normalized file unaffected).
+- [x] 1.10 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+
+
+- [x] 1.11 Normalize `sections/03-results-and-discussion.md`.
+- [x] 1.12 Normalize `sections/04-limitations.md`.
+- [x] 1.13 Normalize `sections/07-conclusions.md`, preserving the pre-existing `abstract`-after-`conclusions` quote transcribed in ITS OWN body (per `paper_graph.py`'s docstring — the edge is declared on `08-abstract.md` but sourced here).
+- [x] 1.14 Verify the pre-existing literal edge survives heading normalization: `contract` reports no `SPAN_NOT_IN_SOURCE`.
+- [x] 1.15 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+
+
+- [x] 1.16 Normalize `sections/08-abstract.md`.
+- [x] 1.17 Normalize `sections/09-title-and-keywords.md` — text only; the position-derived edge (`_KEYWORD_BODY_*` constants) needs no code change.
+- [x] 1.18 Normalize `sections/10-back-matter.md`.
+- [x] 1.19 Rewrite `sections/06-introduction.md`'s existing `### Internal chain` rows to lead each cell with a backticked qualified id (e.g. `` `introduction.block-4` — 4b partial ``) — design's migration table marks `06` "already normalized" for the heading partition only; its rows are still bold-prose labels with no id, which would fail `CHAIN_ROW_UNRESOLVED` parsing in unit 4 on the one file assumed done.
+- [x] 1.20 Composite-parts test: `introduction.block-4`'s multiple gloss rows (`4a`, `4b partial`, `4b complete`) all resolve to the same qualified id; their dependency sets union onto one node (settled decision 5).
+- [x] 1.21 Corpus-wide content smoke check: `paper_cli.py contract` over all ten files reports zero `INPUT_PARTITION_ABSENT` (chain-row backing itself is unit 4's concern, not this unit's).
+- [x] 1.22 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+
+## Phase 2: `es-dataset` + `rw-*` optional + `mm-proposal` facts
+
+- [ ] 2.1 Add `es-dataset` to `sections/02-experimental-setup.md`'s JSON header (`optional: true`, `requires_facts: ["dataset"]`, mirroring `mm-dataset`) and to its normalized tables.
+- [ ] 2.2 Resolve Open Question 1: set `optional: true` on every `rw-*` block id in `sections/05-related-work.md` (block-level, no schema change); record the decision as a comment referencing `design.md`'s Open Questions.
+- [ ] 2.3 Drop `implementation` from `mm-proposal.requires_facts` in `sections/01-materials-and-methods.md`, leaving `["formulation"]`.
+- [ ] 2.4 Scenario test: `contract --file sections/02-experimental-setup.md` shows `es-dataset` with `optional: true`, `requires_facts: ["dataset"]`.
+- [ ] 2.5 Scenario test: `mm-proposal.requires_facts` contains `formulation`, not `implementation`.
+- [ ] 2.6 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+
+## Phase 4: Internal-chain → `after` transcription + both refusals
+
+- [ ] 4.1 Add `_verify_internal_chain(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus` right after `_verify_after_transcription` (same `bodies` dict, zero extra disk pass). Raises `CHAIN_ROW_UNRESOLVED` when a row's leading token is not a key of `corpus.blocks`; `CHAIN_ROW_UNBACKED` when it is a key but no `after` edge backs `(holder, dependency)`.
+- [ ] 4.2 RED test: a row naming only a paraphrase refuses `CHAIN_ROW_UNRESOLVED` naming the row's text.
+- [ ] 4.3 RED test — mutation: edit a mapping row to drop its qualified id; `CHAIN_ROW_UNRESOLVED` fires rather than reusing a stale mapping.
+- [ ] 4.4 RED test: a row naming a real block id with no backing edge refuses `CHAIN_ROW_UNBACKED` naming holder + dependency.
+- [ ] 4.5 RED test — mutation: remove the backing `after` entry, leave the row unchanged; `CHAIN_ROW_UNBACKED` fires (live edge-set read, not row-presence cache).
+- [ ] 4.6 RED test: corpus-wide, nine of ten named dependencies backed, one not — the run refuses on the one gap; no order/readiness/waves output is produced from the incomplete graph.
+- [ ] 4.7 For each of the ten contracts, add the block-level `after` entries backing every Internal-chain row from units 1, each `{target, source:{file, quote}}` with a verified literal quote (`paper_contract.quote_in_body`) — never an invented quote.
+- [ ] 4.8 Confirm `introduction.block-4`'s gloss rows union onto one `after` list — no duplicate edges, no dropped dependency.
+- [ ] 4.9 Transcribe `mm-preamble`'s internal chain into a real edge (proposal Risks: it sits in the same wave as blocks it must name today); assert only edge existence here — placement is unit 5's test.
+- [ ] 4.10 Register `CHAIN_ROW_UNRESOLVED: WORK_STATE`, `CHAIN_ROW_UNBACKED: WORK_STATE`; move the roster assertion from 97 to 99.
+- [ ] 4.11 Confirm `specs/section-contract/spec.md`'s shipped scenarios ("every edge quote-backed", "no row left unmapped") hold against the real corpus: `paper_cli.py contract` reports zero refusals.
+- [ ] 4.12 Record the measured `collect_edges` size and a wave-shape estimate in a scratch note for unit 5 — waves must be measured, never assumed (proposal Risk: "only three edges exist today; waves collapse to 35/8/2").
+- [ ] 4.13 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract -v`.
+
+## Phase 3: `optional` semantics — readiness and verify
+
+- [ ] 3.1 `paper_readiness.compute_block_readiness`: add `"optional"`, read verbatim from `BlockRecord.optional`, to every entry.
+- [ ] 3.2 Add the `"not-applicable"` status: optional AND unopened, under declaration-backed (`--paper`) basis only; unchanged under `supposed-only`.
+- [ ] 3.3 RED test: `mm-dataset` reports `optional: true`; a non-optional block reports `optional: false`, over the shipped corpus.
+- [ ] 3.4 RED test: an optional unopened block reports `not-applicable` under `--paper` basis; the same block under flags-only reports `writable`/`blocked`.
+- [ ] 3.5 `paper_verify.py`: add `OPTIONAL_BLOCK_ABSENT` to `UNMEASURED_REASONS`; a check whose derived block set is entirely optional-and-unopened reports `unmeasured` with that reason, never `fail`.
+- [ ] 3.6 RED test: a coupling depending solely on an unopened optional block reports `unmeasured`/`OPTIONAL_BLOCK_ABSENT`.
+- [ ] 3.7 RED test: the same block declared optional but OPENED is checked exactly like a non-optional opened block — never `unmeasured` for being optional alone.
+- [ ] 3.8 Confirm `OPTIONAL_BLOCK_ABSENT` needs no `REFUSAL_CLASSIFICATION` entry and does not move the roster count; add a one-line comment at its definition recording that.
+- [ ] 3.9 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+## Phase 5: `derive_waves`
+
+- [ ] 5.1 Extract `_build_graph(corpus, edge_set) -> (successors, indegree)` from `derive_order`; `derive_order`'s own behavior and tests stay green, unmodified.
+- [ ] 5.2 Add `derive_waves(corpus, edge_set) -> list[list[str]]`, reusing `_build_graph`, `_sort_key`, `_extract_minimal_cycle` + `ORDER_CYCLE` — no second cycle extractor, no new refusal.
+- [ ] 5.3 RED test invariant 1: `set(chain(*waves)) == set(corpus.blocks) == set(derive_order(...))` over the real post-unit-4 corpus.
+- [ ] 5.4 RED test invariant 2: for every edge `(before, after)`, `wave_of(before) < wave_of(after)`.
+- [ ] 5.5 RED test invariant 3: waves sorted by `_sort_key`; membership identical when dict-iteration order is artificially perturbed.
+- [ ] 5.6 RED test invariant 4: a fixture cycle refuses `ORDER_CYCLE` with the identical detail string `derive_order` produces.
+- [ ] 5.7 RED test invariant 5 (negative): flattened waves are NOT asserted equal to `derive_order`'s sequence on a multi-frontier fixture — documents the rejected false lock.
+- [ ] 5.8 Fixture tests: zero-edge corpus → one wave; a pure chain → N waves matching chain length.
+- [ ] 5.9 Measure and record the real wave count/shape against the shipped corpus; compare against 4.12's scratch note — confirms waves are measured, not assumed.
+- [ ] 5.10 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+## Phase 6: `readiness` basis + `phases` verb
+
+- [ ] 6.1 Edit `specs/writing-readiness/spec.md`: add a Requirement + scenario for `readiness` invoked with neither `--paper` nor any `--fact`/`--declaration` refusing `READINESS_BASIS_REQUIRED`.
+- [ ] 6.2 Resolve Open Question 2: an `unprovenanced` block counts as WRITTEN for `phases`' gate; provenance currency stays `plan`'s own separate concern. Record as a code comment in the gating function and in `design.md`.
+- [ ] 6.3 `paper_declarations`: expose a `read_satisfied(paper_dir)` reader reusing `_read_declarations`/`_verify_not_hand_edited`/`_body_or_default` — no second region reader.
+- [ ] 6.4 `cmd_readiness`: `--paper` resolves → merge `read_satisfied`'s sets with any `--fact`/`--declaration` flags (flag-only additions labelled `"source": "supposed"`); flags with no `--paper` → preserve the hypothetical path, `"basis": "supposed-only"`; neither → refuse `READINESS_BASIS_REQUIRED`.
+- [ ] 6.5 RED test: `declarations` region records `formulation` satisfied, no `--fact` flags → blocks whose only gap was `formulation` report `writable`.
+- [ ] 6.6 RED test: `readiness --fact dataset` on the same paper (formulation recorded, dataset not) → a block requiring both reports `writable`.
+- [ ] 6.7 RED test: `readiness` with neither `--paper` nor any flag refuses `READINESS_BASIS_REQUIRED`.
+- [ ] 6.8 Integration test: real `declare` write, then `readiness --paper` re-read shows the changed answer with no flags repeated.
+- [ ] 6.9 Add `phases [--phase N]` to `paper_cli.py`: waves 1..N with per-block readiness, `opened`, provenance state, per-wave `complete|open|gated`; `--phase N` refuses `PHASE_NOT_READY` naming the unwritten wave-(N-1) non-optional block, honoring unit 3's optional-excuses-absence semantics.
+- [ ] 6.10 RED test: wave 1's non-optional block unwritten → `write` on a wave-2 block refuses `PHASE_NOT_READY` naming it.
+- [ ] 6.11 RED test: wave 1 complete → the same wave-2 `write` proceeds with no refusal.
+- [ ] 6.12 RED test: wave 1 holds one written non-optional + one unwritten optional block → wave-2 `write` raises no refusal.
+- [ ] 6.13 Implement the read-only "plan awaiting approval" report shape — the skill must present the full wave plan and not begin writing until it is explicitly approved (unit 9 wires `SKILL.md` prose to this).
+- [ ] 6.14 Read-only proof: before/after content-manifest over `paper_dir` for `phases` and `readiness` — writes nothing under every input, including refusal paths.
+- [ ] 6.15 Register `READINESS_BASIS_REQUIRED: INVOCATION_DEFECT`, `PHASE_NOT_READY: WORK_STATE`; move the roster assertion from 99 to 101.
+- [ ] 6.16 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+## Phase 7: `skeleton` + disk inference + `ingested_papers`
+
+- [ ] 7.1 Edit `specs/skeleton-startup/spec.md`: add scenarios for `skeleton` refusing `SKELETON_ALREADY_DECIDED` (flags contradict disk) and `SKELETON_ANSWER_REQUIRED` (a required flag missing).
+- [ ] 7.2 Pure inference over `paper_block.read_status(paper_dir)["blocks"]` intersected with the corpus: `relatedWork` (any opened id under `related-work`); `datasetPlacement` (`materials-and-methods` / `experimental-setup` / `undecided` / conflict when both `mm-dataset` and `es-dataset` are opened).
+- [ ] 7.3 RED test: `es-dataset` opened alone → placement reports "Experimental Setup" from opened ids alone.
+- [ ] 7.4 RED test: both dataset blocks opened → refuses `DATASET_PLACEMENT_CONFLICT` naming both ids.
+- [ ] 7.5 RED test — mutation: inference reads `read_fact("skeleton")` instead of `read_status`; a fixture where the two disagree goes red.
+- [ ] 7.6 `paper_guidance.ingested_papers(guidance_dir)`: pure `Path.iterdir()` walk (gitignore-blind by construction) over `guidance/<root>/<paper>/<paper>.md`; `plan`/`packet` report `{root: [{folder, markdown}]}`.
+- [ ] 7.7 RED test: a `guidance/` tree matching a `.gitignore` pattern and holding files reports as populated, not empty — assert against the measured baseline (3 roots, 8 `.md`).
+- [ ] 7.8 `skeleton --related-work yes|no --dataset-in materials|experimental-setup`: opens every non-excluded block id via `paper_block.open_block` in `derive_order` order (never a new writer); idempotent; refuses `SKELETON_ALREADY_DECIDED` on contradiction, `SKELETON_ANSWER_REQUIRED` on a missing flag.
+- [ ] 7.9 RED test: fresh `main.tex`, both flags given → both blocking questions asked before the skeleton opens; the chosen dataset block only is opened (the other left unopened).
+- [ ] 7.10 RED test: existing skeleton, fresh process → neither question asked again.
+- [ ] 7.11 RED test: flags contradicting disk state → `SKELETON_ALREADY_DECIDED`.
+- [ ] 7.12 RED test: a missing flag → `SKELETON_ANSWER_REQUIRED`.
+- [ ] 7.13 Threat-matrix RED test (write amplification): mutate `skeleton` to write `main.tex` directly, bypassing `open_block` — the byte-identity mutation harness fails.
+- [ ] 7.14 Threat-matrix RED test (path containment): `skeleton --paper ../x` / `--sections ../y` refuse `PAPER_OUTSIDE_REPOSITORY` / `SECTIONS_OUTSIDE_REPOSITORY` (existing codes, reused verbatim via `paper_scaffold.resolve_paper_dir`/`paper_contract.resolve_sections_dir`, no roster move) and write nothing.
+- [ ] 7.15 Register `SKELETON_ANSWER_REQUIRED: INVOCATION_DEFECT`, `SKELETON_ALREADY_DECIDED: WORK_STATE`, `DATASET_PLACEMENT_CONFLICT: WORK_STATE`; move the roster assertion from 101 to 104.
+- [ ] 7.16 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions -v`.
+
+## Phase 8: `packet` + `segment_markdown`
+
+- [ ] 8.1 Edit `specs/redactor-packet/spec.md`: add a Requirement + scenario for an unreadable `guidance/*.md` refusing `GUIDANCE_MARKDOWN_UNREADABLE` during outline assembly.
+- [ ] 8.2 `segment_markdown(body)`: end a section at the next heading of level ≤ its own (never same-level-only); EOF only when no such heading follows; a headingless paper reports `{"headings": [], "reason": "NO_HEADINGS"}`.
+- [ ] 8.3 RED test (must go red before the fix): a fixture whose last section is a deeper-level appendix is swallowed under the same-level-only rule; confirm the fix keeps it.
+- [ ] 8.4 RED test: `NO_HEADINGS` reported for a headingless guidance `.md`, never a silent empty list.
+- [ ] 8.5 RED test: an unreadable `.md` refuses `GUIDANCE_MARKDOWN_UNREADABLE`.
+- [ ] 8.6 `packet --section <stem> --block <id>` (read-only): emits the block's own contract prose verbatim plus, per `style-reference`-classed entry, a heading OUTLINE (`{title, level, byte_start, byte_end}`) only — never inlined span text.
+- [ ] 8.7 RED test (leak proof): a mutated `packet` that inlines span text instead of offsets — assert "no reference byte in the payload" goes red without the offsets-only fix.
+- [ ] 8.8 RED test: a `noEquivalent` style-reference entry contributes nothing; assembly does not refuse on its account.
+- [ ] 8.9 Wire packet's style extracts through the existing `paper_style.resolve_style_set` call path only — no second resolution path; extracts land in the same recorded `R`.
+- [ ] 8.10 RED test: `R` read back after assembly contains exactly the two extracts a two-reference packet resolved.
+- [ ] 8.11 Leak-tripwire proof: run the existing `STYLE_OVERLAP` tripwire, register-distance and relative-overlap proofs against a packet's own extracts using exactly `R`; confirm no violation attributable to material outside `R`, and confirm material not in `R` is refused before assembly.
+- [ ] 8.12 `writing-orchestration`: wire packet assembly ahead of `write`'s `draft` stage — a draft stage invoked without an assembled packet must not proceed; shuttle through files only (`NoSubprocessScanTests` coverage).
+- [ ] 8.13 Register `GUIDANCE_MARKDOWN_UNREADABLE: WORK_STATE`; move the roster assertion from 104 to 105 (final target — all nine reconciled codes accounted for).
+- [ ] 8.14 Read-only proof: before/after content-manifest for `packet` — writes nothing under every input, including refusal paths.
+- [ ] 8.15 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+## Phase 9: Docs / agent / docstring corrections
+
+- [ ] 9.1 `SKILL.md`: 17 → 20 verbs; add `phases`, `skeleton`, `packet` to the verb tables and Refuses columns; fix the stale `readiness` row to document the `--paper`/basis behavior.
+- [ ] 9.2 `paper_cli.py` module docstring: "thirteen verbs" → "twenty verbs" (also corrects the pre-existing 13-vs-17 drift, not only the three new verbs).
+- [ ] 9.3 Fix `.claude/agents/insumos-observer.md`'s write-tool/shuttle mismatch; confirm its declared tool list matches the shuttle-file contract `observe` actually reads.
+- [ ] 9.4 Confirm `.claude/agents/style-sampler.md`'s frontmatter/tool list matches consuming the packet's outline (offsets), not inline reference text.
+- [ ] 9.5 Confirm the final `reachable_paper_refusal_codes()` count is exactly **105** (96 baseline + `INPUT_PARTITION_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`, `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY`, `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT`, `GUIDANCE_MARKDOWN_UNREADABLE`) — not design's own 104 forecast, which omitted `INPUT_PARTITION_ABSENT`.
+- [ ] 9.6 Full-suite run: `npm test && .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` green.
+- [ ] 9.7 Walk `proposal.md`'s Success Criteria checklist and tick every box against what actually shipped; note any item that did not close and why.

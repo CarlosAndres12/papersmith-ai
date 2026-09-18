@@ -11,6 +11,7 @@ only so a run is reproducible; the name itself never enters any sort key.
 from __future__ import annotations
 
 import heapq
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,12 @@ from impl_refusals import Refused  # noqa: E402
 _KEYWORD_BODY_HOLDER_SECTION = "title-and-keywords"
 _KEYWORD_BODY_LOWER_ANCHOR = "abstract"
 _KEYWORD_BODY_UPPER_ANCHOR = "back-matter"
+
+#: `contract-input-partition` spec, `Requirement: Two-Heading Partition`.
+#: Exact heading lines every contract's prose body must carry — checked by
+#: `_verify_input_partition` below, never by a filename or a header field.
+_EXTERNAL_INPUTS_HEADING = "### External inputs"
+_INTERNAL_CHAIN_HEADING = "### Internal chain"
 
 
 @dataclass(frozen=True)
@@ -116,8 +123,34 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
             order_by_section[section_id].append(qualified_id)
 
     corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
+    _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
     return corpus
+
+
+def _verify_input_partition(corpus: Corpus, bodies: dict) -> None:
+    """`contract-input-partition` spec, `Requirement: Two-Heading
+    Partition`. Refuses `INPUT_PARTITION_ABSENT` (work-state) naming
+    whichever of `### External inputs` / `### Internal chain` is missing
+    from a contract's own prose body — reads the SAME `bodies` dict
+    `_verify_after_transcription` already holds, so this costs zero extra
+    disk passes. `corpus` is accepted for the same signature shape as its
+    sibling `_verify_internal_chain` (design.md, Interfaces / Contracts);
+    the check itself is purely a body-text scan, no corpus data needed.
+
+    `### Internal chain` is checked first: when a flat, unpartitioned
+    contract carries neither heading, naming the internal-chain gap is the
+    more actionable report, since that is the half this change exists to
+    make explicit and machine-addressable (`specs/contract-input-
+    partition/spec.md`'s own "flat, unpartitioned contract" scenario)."""
+    for file_key, body in bodies.items():
+        text = body.decode("utf-8")
+        for heading in (_INTERNAL_CHAIN_HEADING, _EXTERNAL_INPUTS_HEADING):
+            if not re.search(rf"(?m)^{re.escape(heading)}\s*$", text):
+                raise Refused(
+                    "INPUT_PARTITION_ABSENT",
+                    f"{file_key}: missing {heading!r} heading in the contract's prose body",
+                )
 
 
 def _verify_after_transcription(corpus: Corpus, bodies: dict) -> None:

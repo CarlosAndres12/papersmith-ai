@@ -141,12 +141,24 @@ attribution discipline as a quoted figure: state what the claim belongs to.
 Everything except the abstract must exist. The abstract is written after this
 section, because it compresses it.
 
-| Block | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| 1 | the contributions as defined — same count, order, and names as the introduction and the methods section |
-| 2 | the results, and the number of experimental scenarios, which decides one paragraph or two |
-| 3 | whose problem it is — the implementer's or the domain's |
-| 4 | the limitations, which it is the relevant subset of, and one reference per direction |
+| The **contributions**, as defined — same count, order, and names as the introduction and the methods section | `concl-block-1` |
+| The **results**, and the number of experimental scenarios, which decides one paragraph or two | `concl-block-2` |
+| The **limitations**, which it is the relevant subset of, and one reference per direction | `concl-block-4` |
+
+### Internal chain
+
+None — every functional block here depends on an external fact, never on a
+sibling block's own prose.
+
+### Structural decisions
+
+- **Block 3 — the consequence beyond the method** is chosen by whose problem
+  it is: the implementer's or the domain's — an authorial decision, not a
+  fact fetched from data or a dependency on a sibling block.
 
 ## Disqualifiers
 

@@ -383,19 +383,26 @@ class SchemaTests(unittest.TestCase):
 #: `mode.source.quote` unambiguous to a human reader, repointing `mode`
 #: away from the pre-existing "whole argument at one-fiftieth scale"
 #: sentence, which stays in the body as ordinary prose) -- its digest below
-#: was re-captured after that edit too. The other six are untouched since
-#: the original migration and keep their original digest.
+#: was re-captured after that edit too.
+#:
+#: All ten digests below were re-captured again for `the-phases-are-derived-
+#: not-remembered`, unit 1: every contract's flat `## Inputs` table was
+#: restructured into `### External inputs` / `### Internal chain` /
+#: `### Structural decisions` (`contract-input-partition` spec) -- a
+#: legitimate, intentional prose restructuring, never a meaning change. No
+#: sentence any `after`/`mode` quote depends on was touched; `GraphTests`
+#: and `ModeTranscriptionTests` above hold that lock independently.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
-    "01-materials-and-methods.md": "ca424309f46389e79155d58d36245e4160db77aaf837b48a2b585d1e0e628a89"[:64],
-    "02-experimental-setup.md": "c4465b7f1a371e1b8ee2315e4032cff0a6e8bf76ac4c0a8903a90635c8f7888f"[:64],
-    "03-results-and-discussion.md": "e48277cdcc415b5641a72d7a473bc7900dc1bd882a84afc1f7b6c89e1b5b39f0"[:64],
-    "04-limitations.md": "1e78bf579fcc41399b7bf47981197afe419ce2c657f5d0a3fdad79ac1404931b"[:64],
-    "05-related-work.md": "d4d10c2da38e6c576c6305bd0c37879c81bfb5806670f3c2dc9bc851a19483b4"[:64],
-    "06-introduction.md": "0f6c3b6bfe13206470ed22d88a953f96e86b81bd56445b0c2e40d1ee1354cbff"[:64],
-    "07-conclusions.md": "a855ee2a68b66328562317274049d9f78108457644089b3125ea6b51a76ae84b"[:64],
-    "08-abstract.md": "2e5ef7501bccafc785be3aa7fa640dbcf62add3e7e5bc345fa1be21f34a20b66"[:64],
-    "09-title-and-keywords.md": "7f44428e530a0209152366e83a7c7e23c52cfc41efe1bc9689eb813c3c44b297"[:64],
-    "10-back-matter.md": "8965bd1e429556163077e4350c1a57d4d4d06f3852fa7b6b117236bdc61be2ff"[:64],
+    "01-materials-and-methods.md": "48fa21539c618d5a45fd7e843c6a4a429158779720f8f89259242bf8fb6e6f39"[:64],
+    "02-experimental-setup.md": "f26f9f30a9bc6db45cbfb67d35d6b517958738f99987be7b874cc29b30fba82f"[:64],
+    "03-results-and-discussion.md": "93d756c9b2f426eebdbf1825b565514d9ee07861dad844c47dd65501860bb823"[:64],
+    "04-limitations.md": "5eee4ea815aff06aed5dcb9ab960fb215cc2ff991a3e66c5f1c5aa955ff72b51"[:64],
+    "05-related-work.md": "705ca636cd2c8b63c84ccc0149c65928efd3df5a4a1019804f406c16f9d14aea"[:64],
+    "06-introduction.md": "f8379195199651d5e53a0efc8215e0efd7ee5167cdc4a178ff40abc9c6126b10"[:64],
+    "07-conclusions.md": "a584957a8591b0bdd0d538a1427c0061090008a7af170f8e69a367943d055a87"[:64],
+    "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
+    "09-title-and-keywords.md": "516035b955d942fe8156f25140af6427ca664f63f15b17e35a85a5535f5fa400"[:64],
+    "10-back-matter.md": "7d9c5e62135697ab4f048405a822bfcec2b0ea7ae8a502986150f031d9829f79"[:64],
 }
 
 
@@ -426,7 +433,21 @@ class ShippedHeaderDigestTests(unittest.TestCase):
             self.assertEqual(header.section, name[3:-3])
 
 
-def _write_section(directory: Path, filename: str, header: dict, body: bytes = b"Prose.\n") -> None:
+#: `contract-input-partition` spec, `Requirement: Two-Heading Partition`:
+#: EVERY assembled contract, including a synthetic fixture, must carry both
+#: headings or `paper_graph.assemble_corpus` refuses `INPUT_PARTITION_ABSENT`
+#: -- this is the shared default body every `_write_section` caller below
+#: gets unless it passes its own `body=`, so a fixture built only to
+#: exercise an unrelated concern (id collisions, `after` resolution, order,
+#: readiness) does not also have to spell out an empty partition by hand.
+_DEFAULT_PARTITIONED_BODY = (
+    b"Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+)
+
+
+def _write_section(
+    directory: Path, filename: str, header: dict, body: bytes = _DEFAULT_PARTITIONED_BODY,
+) -> None:
     (directory / filename).write_bytes(_header_bytes(header) + body)
 
 
@@ -821,11 +842,14 @@ class ModeTranscriptionTests(unittest.TestCase):
                     "citations": "none",
                 }],
             }
+            partition = b"\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
             (sections_dir / "with-mode.md").write_bytes(
-                b"---\n" + json.dumps(declared_header).encode("utf-8") + b"\n---\nThis section argues.\n"
+                b"---\n" + json.dumps(declared_header).encode("utf-8")
+                + b"\n---\nThis section argues." + partition
             )
             (sections_dir / "without-mode.md").write_bytes(
-                b"---\n" + json.dumps(undeclared_header).encode("utf-8") + b"\n---\nNo mode sentence here.\n"
+                b"---\n" + json.dumps(undeclared_header).encode("utf-8")
+                + b"\n---\nNo mode sentence here." + partition
             )
 
             corpus = paper_graph.assemble_corpus(sections_dir)
@@ -947,6 +971,158 @@ class EmphasisStripTests(unittest.TestCase):
         into the comparison, correctly breaking the match."""
         body = b"This sentence carries func*tions inside it.\n"
         self.assertFalse(paper_contract.quote_in_body(body, "functions"))
+
+
+class InputPartitionTests(unittest.TestCase):
+    """`contract-input-partition` spec, `Requirement: Two-Heading
+    Partition`: every contract's prose MUST carry `### External inputs` and
+    `### Internal chain`, or `_verify_input_partition` (called from
+    `paper_graph.assemble_corpus`) refuses `INPUT_PARTITION_ABSENT` naming
+    whichever is missing."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    _PARTITIONED_BODY = (
+        b"# Example\n\n"
+        b"### External inputs\n\n"
+        b"| Input | Unblocks |\n|---|---|\n"
+        b"| The **dataset** | `example.only` |\n\n"
+        b"### Internal chain\n\n"
+        b"None -- `example.only` depends only on external facts.\n"
+    )
+
+    def test_a_partitioned_contract_parses_with_no_refusal(self) -> None:
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=self._PARTITIONED_BODY,
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+
+        self.assertIn("example.only", corpus.blocks)
+
+    def test_a_flat_unpartitioned_contract_refuses_naming_internal_chain(self) -> None:
+        """`contract-input-partition` spec's own scenario: a flat `## Inputs`
+        table missing BOTH headings refuses naming `### Internal chain`
+        specifically -- the more actionable half, since that is the
+        dependency data this change exists to make explicit."""
+        body = (
+            b"# Example\n\n"
+            b"## Inputs\n\n"
+            b"| What | Depends on |\n|---|---|\n| Everything | the dataset |\n"
+        )
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_missing_only_internal_chain_refuses_naming_it(self) -> None:
+        body = (
+            b"### External inputs\n\n"
+            b"| Input | Unblocks |\n|---|---|\n| The **dataset** | `example.only` |\n"
+        )
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_missing_only_external_inputs_refuses_naming_it(self) -> None:
+        body = b"### Internal chain\n\nNone -- `example.only` depends only on external facts.\n"
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### External inputs", ctx.exception.detail)
+
+    def test_the_real_corpus_partitions_cleanly(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertEqual(len(corpus.sections), 10)
+
+    def test_mutation_deleting_internal_chain_from_a_normalized_fixture_fires_live(self) -> None:
+        """Task 1.4: the guard must fire against a LIVE re-parse of the
+        mutated file, never a cached result from the first, passing parse --
+        proven by re-parsing the SAME directory twice, the second time after
+        the heading has been deleted underneath it."""
+        header = {"section": "example", "position": 1, "blocks": [_block("only")]}
+        _write_section(self.sections_dir, "01-example.md", header, body=self._PARTITIONED_BODY)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        mutated_body = (
+            b"### External inputs\n\n"
+            b"| Input | Unblocks |\n|---|---|\n| The **dataset** | `example.only` |\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=mutated_body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_corpus_wide_content_smoke_check_via_the_cli(self) -> None:
+        """Task 1.21: `paper_cli.py contract` over the whole shipped corpus
+        reports zero `INPUT_PARTITION_ABSENT` refusals now that all ten
+        contracts carry the two-heading partition -- chain-row backing
+        itself (`CHAIN_ROW_UNRESOLVED`/`CHAIN_ROW_UNBACKED`) is unit 4's own
+        concern, not this unit's."""
+        proc = subprocess.run(
+            [sys.executable, str(SKILL_SCRIPTS / "paper_cli.py"), "contract"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(len(payload["sections"]), 10)
+
+    def test_introduction_block_4s_composite_glosses_share_one_qualified_id(self) -> None:
+        """Task 1.20: `introduction.block-4`'s multiple glosses (4a, 4b
+        partial, 4b complete) all resolve to the SAME qualified id in the
+        real, shipped `06-introduction.md` prose -- their dependency sets
+        union onto one node (settled decision 5), never one id per gloss."""
+        _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
+        text = body.decode("utf-8")
+
+        # Every gloss of block-4 (4a, 4b partial, 4b complete) is referenced
+        # in prose next to the SAME literal qualified id -- never a
+        # composite-specific id like `introduction.block-4a`.
+        for gloss in ("4a", "4b partial", "4b complete"):
+            self.assertIn(
+                gloss, text,
+                f"fixture assumption: {gloss!r} is still named in 06-introduction.md's prose",
+            )
+        self.assertIn("`introduction.block-4`", text)
+        self.assertNotIn("introduction.block-4a", text)
+        self.assertNotIn("introduction.block-4b", text)
+
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        self.assertIn("introduction.block-4", corpus.blocks)
 
 
 class OrderTests(unittest.TestCase):
@@ -1231,7 +1407,10 @@ class MutationTests(unittest.TestCase):
         for path in SECTIONS_DIR.glob("*.md"):
             (temp_sections / path.name).write_bytes(path.read_bytes())
 
-        eleventh_body = b"This appendix is written after the title is fixed, because its examples quote it.\n"
+        eleventh_body = (
+            b"This appendix is written after the title is fixed, because its examples quote it.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
         _write_section(
             temp_sections, "11-supplementary-notes.md",
             {

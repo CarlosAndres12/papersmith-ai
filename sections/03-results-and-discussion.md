@@ -198,14 +198,29 @@ to read the data, or a **behaviour already established** that the result agrees 
 
 ## Inputs
 
-| Block | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The general task | the main runs, against the baselines |
-| Each contribution block | the property that contribution promised, and the instrument the setup named for it |
-| Each artefact | the runs — and the setup's closing diagram must be able to locate it |
-| The third beat | the mechanism: the formulation, or a property of the data |
-| The cost block | the most demanding configuration, and the hardware declared in the setup |
-| Limitations | its own contract |
+| The **results** — the main runs, against the baselines | `rd-general-task` |
+| The **property** a contribution promised, and the **instrument** the setup named for it | `rd-contribution-blocks` |
+| The **implementation** — the most demanding configuration, and the hardware declared in the setup | `rd-cost` |
+
+### Internal chain
+
+None — `rd-general-task`, `rd-contribution-blocks`, and `rd-cost` depend only
+on the external inputs above.
+
+### Structural decisions
+
+- **Each artefact** depends on the runs, and the experimental setup's closing
+  diagram must be able to locate it — a rule cutting across every block here,
+  not a dependency on one specific block.
+- **The third beat** (the mechanistic explanation) draws on the formulation,
+  or on a property of the data — again cutting across every block, not
+  naming one.
+- **Limitations** lives in its own section, under its own contract — it is
+  not a block of this section and carries no dependency on it.
 
 ## Disqualifiers
 

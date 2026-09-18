@@ -240,13 +240,20 @@ single experiment runs. Every block traces back to the problem statement, which 
 from the contributions, which come from the mathematical formulation — the root of
 this section is the formulation.
 
-| Block | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| 1 Preamble | the list of specific problems, to announce the blocks and their order |
-| 2 Panorama | the general problem of the problem statement |
-| 3 Blocks | the specific problems, one block each |
-| 4 Closing | the gap, which is also stated in the introduction and must agree |
-| 5 Artefact | the properties the proposal declares |
+| The list of **specific problems** — to announce the blocks and their order | `rw-preamble` |
+| The **general problem** of the problem statement | `rw-panorama` |
+| The **specific problems**, one block each | `rw-problem-blocks` |
+| The **gap**, which is also stated in the introduction and must agree | `rw-closing` |
+| The **properties** (contributions) the proposal declares | `rw-synthesis-artefact` |
+
+### Internal chain
+
+None — every block traces to an external fact, never to a sibling block's own
+prose.
 
 **Cross-obligation.** The gap is stated in two places — the closing of this section
 and the closing of the introduction's state-of-the-art block — and they must say the

@@ -137,14 +137,21 @@ Whether the paper has appendices at all is decided per paper.
 Every block here is an external fact, not a decision. None of it is derived from the
 paper.
 
-| Block | Input |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| Author Contributions | the author list, and each author's confirmed roles |
-| Funding | the funding project's registered title, funder, and code |
-| Data Availability | the project repository URL, and the date it was checked |
-| Conflicts of Interest | any author affiliation with an interested organization |
-| Acknowledgments | the project or institution to thank |
-| Appendices | whichever body sections need one |
+| The **author-roles** — the author list, and each author's confirmed roles | `bm-author-contributions` |
+| The **grant-title** and **grant-code** — the funding project's registered title, funder, and code | `bm-funding` |
+| The **repository-url** — the project repository URL, and the date it was checked | `bm-data-availability` |
+| Any author affiliation with an interested organization | `bm-conflicts-of-interest` |
+| The project or institution to thank | `bm-acknowledgments` |
+| Whichever body sections need one | `bm-appendices` |
+
+### Internal chain
+
+None — every block here is an external fact, never a dependency on a sibling
+block's own prose.
 
 ## Disqualifiers
 

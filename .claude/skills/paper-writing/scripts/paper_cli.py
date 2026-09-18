@@ -136,6 +136,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- corpus assembly and order (paper_graph.py) -----------------------
     "ID_COLLISION": WORK_STATE,
     "ORDER_CYCLE": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 1: the two-heading
+    # partition every contract's prose must carry (paper_graph.py,
+    # `_verify_input_partition`, called from `assemble_corpus`) ------------
+    "INPUT_PARTITION_ABSENT": WORK_STATE,
     # --- region grammar (paper_region.py) -- twins of Phase 1's marker
     # codes, reachable ahead of their own verb wiring because paper_cli.py
     # imports paper_region.py at module level (Slice A, `the-paper-carries-

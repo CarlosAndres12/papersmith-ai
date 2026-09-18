@@ -129,15 +129,21 @@ The abstract carries the same argument as the introduction, minus two of its blo
 There is no order among the slots — there is a graph, the same one that governs the
 introduction. Four of the seven are draftable before anything is measured.
 
-| Slot | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| 1 Context | the dataset — the condition, population, or process it contains |
-| 2 Problem | slot 4: each component read backwards as the deficiency it resolves |
-| 3 Proposal | the mathematical formulation, plus slot 2 for the purpose clause |
-| 4 Components | the mathematical formulation; the achieved-effect clause waits for the results |
-| 5 Validation | the experimental design |
-| 6 Result | the results |
-| 7 Verdict | the results |
+| The **dataset** — the condition, population, or process it contains | `slot-1` |
+| The **mathematical formulation** | `slot-3`, `slot-4` |
+| The **experimental design** | `slot-5` |
+| The **results** | `slot-4` (the achieved-effect clause), `slot-6`, `slot-7` |
+
+### Internal chain
+
+| Block | Depends on |
+|---|---|
+| `abstract.slot-2` — Problem | `abstract.slot-4` — each component read backwards as the deficiency it resolves |
+| `abstract.slot-3` — Proposal | `abstract.slot-2` — for the purpose clause |
 
 The abstract is more blocked by measurement than the introduction: slots 6 and 7 need
 the results in full, slot 4 needs them for half of each item, and there is no

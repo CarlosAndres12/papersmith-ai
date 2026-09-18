@@ -280,11 +280,25 @@ explaining why the problem matters is repeated material.
 
 Nothing here waits for an experiment. But it does wait for the code to exist.
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The machinery and the proposal | the mathematical formulation |
-| The correct reading of an ambiguous equation | the implementation — what the code computes, not what the equation says |
-| The dataset subsection, when this section owns it | the dataset |
+| The **mathematical formulation** of the proposal | `mm-borrowed-machinery`, `mm-proposal` |
+| The **dataset** — when this section owns it | `mm-dataset` |
+
+### Internal chain
+
+None — `mm-preamble`, `mm-borrowed-machinery`, and `mm-proposal` depend only
+on the external formulation above; nothing here is derived from a sibling
+block's own prose.
+
+### Structural decisions
+
+- **The correct reading of an ambiguous equation** is decided by the
+  implementation — what the code computes, not what the equation says. This
+  is a decision recorded in the affected component's own paragraph, not a
+  dependency on any other block.
 
 ## Disqualifiers
 

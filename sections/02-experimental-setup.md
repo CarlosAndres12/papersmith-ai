@@ -195,15 +195,29 @@ box appearing in both means one of them is wrong.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| How many blocks Assessment has | the dataset placement decided in the methods section |
-| The metrics | which property each contribution claims — if it was promised, this is where its instrument is named |
-| The competing methods | the baseline list settled in the state of the art |
-| The axes | what the comparison is swept over |
-| The purpose-built corpus | that no standard reference measures what is claimed |
-| The closing diagram | the crossing declared by the blocks above, plus the repetition unit |
-| **Training Details** | **only the implementation of the experiments and its configuration — what actually ran** |
+| Which **property** each contribution claims — if it was promised, this is where its instrument is named | `es-assessment` |
+| The **competing methods** — the baseline list settled in the state of the art | `es-assessment` |
+| The **axes** — what the comparison is swept over | `es-assessment` |
+| The **purpose-built corpus** — that no standard reference measures what is claimed | `es-assessment` |
+| The **implementation** of the experiments and its configuration — what actually ran | `es-training-details` |
+
+### Internal chain
+
+None — `es-preamble`, `es-assessment`, and `es-training-details` depend only
+on the external inputs above.
+
+### Structural decisions
+
+- **How many blocks Assessment has** is decided by the dataset placement
+  already decided in the methods section — a structural decision, not a
+  dependency on a specific block.
+- **The closing diagram** is the crossing declared by everything Assessment
+  already carries, plus the repetition unit — an internal composition rule
+  within `es-assessment` itself, not a dependency on a sibling block.
 
 ## Disqualifiers
 

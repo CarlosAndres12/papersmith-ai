@@ -171,13 +171,25 @@ corresponding future-work direction carries.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The proposal items | the mathematical section — its design decisions, one by one |
-| The validation items | the experimental design — what was fixed instead of searched, what was tested at a single point |
-| The quantitative failure mode | the results: the worst reported cell, and the baseline's performance there |
-| The opening concession | the concrete achievement the results do support |
-| Each item's citation | the alternative that would fix it, or the literature that already knows the problem |
+| The **mathematical section** — its design decisions, one by one | `lim-proposal-items` |
+| The **experimental design** — what was fixed instead of searched, what was tested at a single point | `lim-validation-items` |
+| The **results** — the worst reported cell, and the baseline's performance there | `lim-failure-mode` |
+| The **results** — the concrete achievement they do support | `lim-opening-concession` |
+
+### Internal chain
+
+None — every item here depends on an external fact, never on a sibling
+block's own prose.
+
+### Structural decisions
+
+- **Each item's citation** lands on the alternative that would fix it, or on
+  the literature that already knows the problem — a rule governing every
+  item's citation placement, not a dependency naming one block.
 
 ## Disqualifiers
 
