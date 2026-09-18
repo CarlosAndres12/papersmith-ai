@@ -29,7 +29,7 @@ unmentioned.
 | `READINESS_BASIS_REQUIRED` | Named in design D3; **no `writing-readiness` spec requirement** | 6.1 (add spec Requirement + scenario), 6.4/6.7 (implement + test) |
 | `SKELETON_ALREADY_DECIDED` | Named in design D4; **no `skeleton-startup` spec scenario** | 7.1 (add spec scenario), 7.8/7.11 (implement + test) |
 | `SKELETON_ANSWER_REQUIRED` | Named in design D4; **no `skeleton-startup` spec scenario** | 7.1 (add spec scenario), 7.8/7.12 (implement + test) |
-| `INPUT_PARTITION_ABSENT`'s knock-on | Design's own roster forecast (96 → 104, 8 codes) **omits this 9th code** | 1.1 notes the correction; roster target is **96 → 105**, tracked incrementally at 1.5 / 4.10 / 6.15 / 7.15 / 8.13 / confirmed at 9.5 |
+| `INPUT_PARTITION_ABSENT`'s knock-on | Design's own roster forecast (96 → 104, 8 codes) **omits this 9th code** | 1.1 notes the correction; roster target is **96 → 106** (`BLOCK_SUBUNIT_UNDECLARED` added at task 4.8f), tracked incrementally at 1.5 / 4.10 / 6.15 / 7.15 / 8.13 / confirmed at 9.5 |
 
 ## Open Questions Resolved At Task Time
 
@@ -162,6 +162,11 @@ unmentioned.
 - [ ] 4.5 RED test — mutation: remove the backing `after` entry, leave the row unchanged; `CHAIN_ROW_UNBACKED` fires (live edge-set read, not row-presence cache).
 - [ ] 4.6 RED test: corpus-wide, nine of ten named dependencies backed, one not — the run refuses on the one gap; no order/readiness/waves output is produced from the incomplete graph.
 - [ ] 4.7 For each of the ten contracts, add the block-level `after` entries backing every Internal-chain row from units 1, each `{target, source:{file, quote}}` with a verified literal quote (`paper_contract.quote_in_body`) — never an invented quote.
+- [ ] 4.8b **`BLOCK_SUBUNIT_UNDECLARED` — the guard the block-4 split proved missing.** Every refusal this change ships checks TABLE -> GRAPH (a chain row naming a block). Nothing checks PROSE -> HEADER: the contract announced block 4's split in three places (its `**Extent. Two physical paragraphs**` line, the `### Paragraph 4a` / `### Paragraph 4b` headings, and a draftability line reading "1, 2, 3, 4a, 4b in partial form, and 6") and no guard fired, because none of the three is a chain row. A human reading found it.
+- [ ] 4.8c Add `_verify_block_subunits(corpus, bodies)` to `paper_graph.py`, called from `assemble_corpus`: a `###` heading whose text begins with a unit word (`Paragraph`, `Block`, `Slot`, `Subsection`, `Part`) followed by an identifier, sitting under a `## Block|Slot|Subsection N` parent, names a sub-unit the header must declare as its own block id. Refuses `BLOCK_SUBUNIT_UNDECLARED` naming the heading and its parent.
+- [ ] 4.8d MEASURED, zero false positives on today's corpus: six unit-headings carry `###` children, and five of those children are prose notes with no unit word (`What is cited here`, `The summary diagram`, `Two ways to walk a block...`, `Figures are permitted here...`). Only `06`'s two `### Paragraph 4a/4b` match, and both now resolve to declared ids. Assert BOTH directions in the test: the real corpus passes, and a fixture reintroducing a `### Paragraph 5a` under `## Block 5` without a matching id refuses.
+- [ ] 4.8e RED-first mutation: collapse `block-4a`/`block-4b` back to one `block-4` id in a fixture and confirm `BLOCK_SUBUNIT_UNDECLARED` fires — the guard must catch the exact anomaly that shipped unnoticed, not merely pass alongside it.
+- [ ] 4.8f Register `BLOCK_SUBUNIT_UNDECLARED: WORK_STATE` in `paper_cli.REFUSAL_CLASSIFICATION`; roster target rises to 106 (97 landed in unit 1, not the design's 96 baseline).
 - [ ] 4.8 Confirm the introduction's three chain rows become three `after` edges (`block-2` ← `block-4b`; `block-4a` ← `block-2`; `block-4a` ← `block-4b`) with no cycle, and that `block-5`'s glosses still union onto one node.
 - [ ] 4.9 Transcribe `mm-preamble`'s internal chain into a real edge (proposal Risks: it sits in the same wave as blocks it must name today); assert only edge existence here — placement is unit 5's test.
 - [ ] 4.10 Register `CHAIN_ROW_UNRESOLVED: WORK_STATE`, `CHAIN_ROW_UNBACKED: WORK_STATE`; move the roster assertion from 97 to 99.
