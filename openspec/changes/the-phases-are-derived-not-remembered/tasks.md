@@ -588,6 +588,20 @@ genuinely-empty claims checkable, without wiring any `after` edge (unit
 - [ ] 8.14 Read-only proof: before/after content-manifest for `packet` — writes nothing under every input, including refusal paths.
 - [ ] 8.15 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
 
+## Phase 9b: wire `optional` into the real `verify` call
+
+Unit 3 built the mechanism and proved it end to end, but could not wire it: `paper_verify.py`
+carries an AST-enforced import allowlist of exactly `{"re"}` (`tests/test_paper_writing.py`,
+`_PAPER_VERIFY_ALLOWED_IMPORTS`), so it can never read the corpus to learn which blocks are
+`optional`. That lock is correct and stays — the module is pure and diskless by construction.
+The resolution belongs one level up, in the caller.
+
+- [ ] 9b.1 `cmd_verify` (`paper_cli.py`) resolves the optional-block id set from the corpus it already assembles, and passes it to `paper_verify.run` via the `optional_block_ids` keyword unit 3 threaded through all seven checks.
+- [ ] 9b.2 Scenario test over the SHIPPED corpus, not a fixture: a coupling whose derived block set is entirely optional-and-unopened reports `unmeasured` / `OPTIONAL_BLOCK_ABSENT` through the real `verify` verb, not only through a direct call to the check function.
+- [ ] 9b.3 RED-first mutation: pass an empty `optional_block_ids` from `cmd_verify` and confirm the same coupling reports something other than `unmeasured` — the wiring must be observably load-bearing, not merely present. Unit 3's own tests pass the set in directly, so they cannot see this wire at all.
+- [ ] 9b.4 Confirm `paper_verify.py`'s import allowlist is UNCHANGED and its AST lock still green; the fix must not widen it.
+- [ ] 9b.5 Confirm `verify` still writes nothing, under every input including every refusal path — the before/after content manifest and the AST write-lock both stay green.
+
 ## Phase 9: Docs / agent / docstring corrections
 
 - [ ] 9.1 `SKILL.md`: 17 → 20 verbs; add `phases`, `skeleton`, `packet` to the verb tables and Refuses columns; fix the stale `readiness` row to document the `--paper`/basis behavior.
