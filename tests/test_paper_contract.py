@@ -392,17 +392,27 @@ class SchemaTests(unittest.TestCase):
 #: legitimate, intentional prose restructuring, never a meaning change. No
 #: sentence any `after`/`mode` quote depends on was touched; `GraphTests`
 #: and `ModeTranscriptionTests` above hold that lock independently.
+#:
+#: Eight of the ten digests below were re-captured a second time for unit
+#: 1b: unit 1 wrote a positive "None -- nothing here is derived from a
+#: sibling block's own prose" assertion into every `### Internal chain`
+#: heading, and six of those eight assertions were false, each contradicted
+#: by prose already sitting in the same file. Unit 1b replaces the false
+#: "None" with real, quote-backed rows in `01`, `02`, `03`, `05`, `09`,
+#: `10`, and rewrites the two genuinely-empty "None" assertions in `04` and
+#: `07` into a checkable measurement statement. `06` and `08` are untouched
+#: by unit 1b and keep their unit-1 digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
-    "01-materials-and-methods.md": "48fa21539c618d5a45fd7e843c6a4a429158779720f8f89259242bf8fb6e6f39"[:64],
-    "02-experimental-setup.md": "3851984f0134c3289274bae100b5e7a39777d761d9934ef9e752a016e78d7054"[:64],
-    "03-results-and-discussion.md": "93d756c9b2f426eebdbf1825b565514d9ee07861dad844c47dd65501860bb823"[:64],
-    "04-limitations.md": "5eee4ea815aff06aed5dcb9ab960fb215cc2ff991a3e66c5f1c5aa955ff72b51"[:64],
-    "05-related-work.md": "79805e018f8e7189e419588c963b22b0ae32e08ced16880547d85909e5932d65"[:64],
+    "01-materials-and-methods.md": "94875c5007520c1908e37512fa87df8540aee270ea6f2cb3dd23654109345f39"[:64],
+    "02-experimental-setup.md": "cb5b89d3edd78454c13fe01c10ff70db486b287e5057c769292797212eb3adaf"[:64],
+    "03-results-and-discussion.md": "a580e2bd4cb0c5f1515af9bfa6ca2e641c6281a5d5f1009b23c3cab86336477e"[:64],
+    "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
+    "05-related-work.md": "6c3f1394264bd4b7526057ae8f3a23005515ddb0fc2c75ee0c7cbd839a59c0d1"[:64],
     "06-introduction.md": "1f923f0c26ee3917c4a3ec192b17db6fc247958532f8deec933558a879edd4f9"[:64],
-    "07-conclusions.md": "a584957a8591b0bdd0d538a1427c0061090008a7af170f8e69a367943d055a87"[:64],
+    "07-conclusions.md": "1c2a19e968de470cedd616edde05209625801ca30f7ebf11f68aa1c4640e44fe"[:64],
     "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
-    "09-title-and-keywords.md": "516035b955d942fe8156f25140af6427ca664f63f15b17e35a85a5535f5fa400"[:64],
-    "10-back-matter.md": "7d9c5e62135697ab4f048405a822bfcec2b0ea7ae8a502986150f031d9829f79"[:64],
+    "09-title-and-keywords.md": "5ff3fa0257b4f6b37aacb6685dbc7d9af6fb87ea45f4616ab654f85d31f30b6a"[:64],
+    "10-back-matter.md": "b1cd44fe7c00d8eca92d979be5780a97a6cd815faba9ab3890442f2286316cbb"[:64],
 }
 
 

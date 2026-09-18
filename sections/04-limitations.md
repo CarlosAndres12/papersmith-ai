@@ -182,8 +182,12 @@ corresponding future-work direction carries.
 
 ### Internal chain
 
-None — every item here depends on an external fact, never on a sibling
-block's own prose.
+None — checked every block's `requires_facts` (`results`, `formulation`,
+`experimental-design`) and this file's own prose body for a reference to a
+sibling block's own text: each of the five ids (`lim-opening-concession`,
+`lim-proposal-items`, `lim-validation-items`, `lim-failure-mode`,
+`lim-closing`) draws only on the external facts named above; no sibling-block
+prose reference was found.
 
 ### Structural decisions
 

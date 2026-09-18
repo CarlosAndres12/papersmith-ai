@@ -41,6 +41,7 @@ unmentioned.
 | # | Unit | Touches | New refusals | Est. lines | Budget risk | Depends on | Status |
 |---|------|---------|---------------|------------|--------------|------------|--------|
 | 1 | Normalize all ten contracts (`External inputs` / `Internal chain`) + shared `_verify_input_partition` checker + `06` backtick row-id gap | all ten `sections/*.md`, `paper_graph.py`, `paper_cli.py`, `design.md`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `INPUT_PARTITION_ABSENT` | ~780 | Low (ceiling 1200) | — | [x] |
+| 1b | **Correction to unit 1.** Six of the eight `### Internal chain` "None" assertions unit 1 wrote were false, each contradicted by prose already in the same file — a read-only audit denies a real dependency, worse than the pre-unit-1 defect of merely not transcribing one. Replace the six false "None"s with real, quote-backed rows; rewrite the two genuinely-empty "None"s (`04`, `07`) into a checkable measurement sentence | `sections/01,02,03,04,05,07,09,10.md`, `tests/test_paper_contract.py` | none | ~90 | Low | 1 | [x] |
 | 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [x] |
 | 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [ ] |
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [ ] |
@@ -55,6 +56,7 @@ unmentioned.
 | Unit | Focused test command | Runtime harness | Rollback boundary |
 |---|---|---|---|
 | 1 | `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v` | `paper_cli.py contract` over the whole shipped corpus | Revert the ten `sections/*.md` edits + `_verify_input_partition`; text-only plus one pure function, no persisted state |
+| 1b | `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v` | `paper_cli.py contract` and `paper_cli.py order` over the whole shipped corpus | Revert the eight `### Internal chain` prose edits + the eight recaptured `PRE_MIGRATION_BODY_DIGESTS` entries; text-only, no persisted state, no `after` edges wired |
 | 4 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Chain` | `paper_cli.py contract` (zero refusals on the real corpus) | Revert `_verify_internal_chain` + the ten header `after` additions; `_verify_after_transcription` still guards edges added |
 | 3 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Optional` | `paper_cli.py readiness --paper paper/` and `paper_cli.py verify` | Revert the two consumer diffs independently of unit 4/5 |
 | 5 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Wave` | N/A — pure function, no CLI verb of its own yet (exercised via unit 6's `phases`) | Revert `derive_waves` + `_build_graph` extraction; `derive_order` restored to its pre-extraction body |
@@ -113,6 +115,83 @@ unmentioned.
 
 ---
 
+## Unit 1b — Notes / Deviations
+
+- **The defect this unit closes.** Unit 1 wrote a positive assertion of
+  absence — "None — `x`, `y` and `z` depend only on the external inputs
+  above; nothing here is derived from a sibling block's own prose" — into
+  eight of the ten contracts' `### Internal chain` headings. Six of those
+  eight were false, each contradicted by prose sitting in the same file.
+  This is strictly worse than the pre-unit-1 defect (an untranscribed
+  dependency): the contract now actively denies a dependency exists, and
+  `assemble_corpus` validates the file as complete. A read-only audit
+  established the six false files and the sentence deciding each verdict;
+  this unit acts on that audit without re-deriving it.
+- **`01-materials-and-methods.md`** — two rows: `mm-proposal` after
+  `mm-borrowed-machinery` ("state the proposal as a delta on the borrowed
+  machinery, with an explicit reference to the previous equation by
+  number") and `mm-proposal` after `mm-dataset` ("The proposal is always
+  the last subsection. Without exception."). `mm-preamble`'s own "It names
+  the subsections that follow and their order" is not a third row: it
+  needs to know which subsections exist, which is the dataset-placement
+  structural decision already recorded in "Subsection order", never a
+  dependency on a sibling block's own written prose.
+- **`02-experimental-setup.md`** — one row: `es-assessment` after
+  `es-dataset` (the closing diagram's "which data enter" panel needs
+  `es-dataset`'s identity once that block exists as its own id).
+- **`03-results-and-discussion.md`** — two rows chaining
+  `rd-general-task` → `rd-contribution-blocks` → `rd-cost`, both backed by
+  the same sentence: "It chains between blocks. A mechanism block opens by
+  naming the previous block's result as the question it comes to answer."
+- **`05-related-work.md`** — one row: `rw-closing` after
+  `rw-problem-blocks` ("Name the fronts left open — as many as there are
+  blocks. Two blocks, two fronts."). **Flagged, not force-fitted:** the
+  file's own "Each block opens by naming its problem... and starts from
+  the close of the previous block... The blocks are a chain, not parallel
+  islands" describes the repeated specific-problem sub-blocks that all
+  share the single id `rw-problem-blocks` (the schema has no `-1`/`-2`
+  split the way `introduction.block-4a`/`4b` does). A row naming
+  `rw-problem-blocks` as depending on itself would be a self-loop —
+  `ORDER_CYCLE` in unit 4 — so this is intra-node sequencing under design
+  D1's composite-parts / union rule, not a second cross-id row. Reported
+  here rather than invented.
+- **`09-title-and-keywords.md`** — one row: `keywords` after `title`
+  ("The title carries the adjective; the keyword carries the noun.").
+- **`10-back-matter.md`** — one row: `bm-acknowledgments` after
+  `bm-funding` ("Present only when there is a project or institution to
+  thank that is not already named under funding.").
+- **`04-limitations.md` and `07-conclusions.md` (verdict TRUE, left as
+  "None").** Both rewritten from a bare claim into a checkable measurement:
+  naming exactly which block ids and which `requires_facts` were checked
+  against the file's own prose body, and that no sibling-block prose
+  reference was found. `07`'s block 3 placement option ("its own paragraph
+  or the closing sentences of block 2") is called out explicitly as a
+  placement choice, not a content derivation from block 2's own prose.
+- **No `after` edges wired.** This unit only corrects the `### Internal
+  chain` prose tables; transcribing them into quote-anchored `after`
+  entries in the JSON header is unit 4's job (task 4.7 already covers all
+  ten contracts). Every new row here was hand-traced against the others in
+  its own file for cycles before landing — all are linear, acyclic,
+  same-section chains.
+- **`sections/02-experimental-setup.md`'s pre-existing `### Structural
+  decisions` bullet** ("The closing diagram is... an internal composition
+  rule within `es-assessment` itself, not a dependency on a sibling
+  block") was left untouched per the no-rewording rule, even though it
+  reads in tension with the new `es-assessment` ← `es-dataset` row: that
+  bullet is about the diagram's compositional shape (what the "crossing"
+  is made of), the new row is about one specific panel's content (`which
+  data enter`) needing `es-dataset`'s identity. Left for a future
+  operator/spec decision if that tension needs closing further; not
+  invented or reworded here.
+- **Digests recaptured, never deleted.** All eight touched contracts'
+  `PRE_MIGRATION_BODY_DIGESTS` entries in `tests/test_paper_contract.py`
+  were recomputed via `paper_contract.parse` over the edited files and
+  replaced; `06-introduction.md` and `08-abstract.md` are untouched by
+  this unit and their digests are unchanged (confirmed by recomputing
+  both — identical to unit 1's captured value).
+
+---
+
 ## Unit 2 — Notes / Deviations
 
 - **Digest recapture.** `02-experimental-setup.md` and `05-related-work.md`
@@ -168,6 +247,50 @@ unmentioned.
 - [x] 1.20 **REVISED after unit 1 closed, operator-settled:** `introduction.block-4` is SPLIT into `block-4a` / `block-4b`. The contract already declared it — "Two physical paragraphs, 120-180 words in total", `Paragraph 4a - the prose`, `Paragraph 4b - the list`, and a draftability line naming "1, 2, 3, 4a, 4b in partial form, and 6". Collapsing them produced a real `ORDER_CYCLE`: `block-2` depends on 4b while 4a depends on `block-2`. Decision 5's union rule is unchanged and still governs `block-5`, whose parts depend only on external facts; it simply has no answer when a block's parts straddle a sibling. Tests: `test_introduction_block_4_is_two_blocks_not_one_composite`, `test_the_internal_chain_of_the_introduction_is_acyclic`.
 - [x] 1.21 Corpus-wide content smoke check: `paper_cli.py contract` over all ten files reports zero `INPUT_PARTITION_ABSENT` (chain-row backing itself is unit 4's concern, not this unit's).
 - [x] 1.22 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+
+## Phase 1b: Correction — the false "None" internal-chain assertions
+
+**A correction to unit 1, not a new capability.** Unit 1 wrote a positive
+assertion of absence into every contract's `### Internal chain` heading; a
+read-only audit found six of the eight non-`06`/`08` files' assertions
+false, each contradicted by prose already in that same file. This phase
+replaces the false claims with real, quote-backed rows and makes the two
+genuinely-empty claims checkable, without wiring any `after` edge (unit
+4's job) and without reformulating any existing sentence.
+
+- [x] 1b.1 Read the audit table (parent-supplied); confirm each cited
+  quote is still present, verbatim, in its file before acting on it.
+- [x] 1b.2 `sections/01-materials-and-methods.md`: replace the "None" under
+  `### Internal chain` with two rows — `mm-proposal` after
+  `mm-borrowed-machinery`, and `mm-proposal` after `mm-dataset`.
+- [x] 1b.3 `sections/02-experimental-setup.md`: replace "None" with one
+  row — `es-assessment` after `es-dataset`.
+- [x] 1b.4 `sections/03-results-and-discussion.md`: replace "None" with two
+  rows chaining `rd-general-task` → `rd-contribution-blocks` → `rd-cost`.
+- [x] 1b.5 `sections/05-related-work.md`: replace "None" with one row —
+  `rw-closing` after `rw-problem-blocks`. Confirm the repeated
+  specific-problem sub-blocks' own "chain, not parallel islands" language
+  stays intra-node (same id, design D1's union rule) rather than being
+  force-fitted into a self-referential row (would be `ORDER_CYCLE`).
+- [x] 1b.6 `sections/09-title-and-keywords.md`: replace "None" with one
+  row — `keywords` after `title`.
+- [x] 1b.7 `sections/10-back-matter.md`: replace "None" with one row —
+  `bm-acknowledgments` after `bm-funding`.
+- [x] 1b.8 `sections/04-limitations.md` and `sections/07-conclusions.md`
+  (verdict TRUE): rewrite the bare "None" claim into a checkable
+  measurement sentence naming which block ids and which `requires_facts`
+  were checked against the file's own prose body, and that no
+  sibling-block prose reference was found — the assertion stays "None"
+  but stops being a bare, unfalsifiable claim.
+- [x] 1b.9 Hand-trace every new row against the others in its own file for
+  cycles; confirm each file's chain is linear and acyclic (no `after`
+  edges are wired yet, so this is a manual check, not a run of
+  `derive_order`).
+- [x] 1b.10 Recompute the eight affected `PRE_MIGRATION_BODY_DIGESTS`
+  entries in `tests/test_paper_contract.py` via `paper_contract.parse`
+  over the edited files; confirm `06-introduction.md` and
+  `08-abstract.md` recompute to their unchanged, already-recorded digest.
+- [x] 1b.11 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v` (265 tests, green), `paper_cli.py contract` and `paper_cli.py order` (exit 0, 46 blocks in `order`), and `.venv/bin/python -m unittest tests.test_paper_decisions tests.test_paper_citation tests.test_paper_evidence tests.test_paper_figure -q` (203 tests, green).
 
 ## Phase 2: `es-dataset` + `rw-*` optional + `mm-proposal` facts
 

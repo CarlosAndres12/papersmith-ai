@@ -208,8 +208,10 @@ to read the data, or a **behaviour already established** that the result agrees 
 
 ### Internal chain
 
-None — `rd-general-task`, `rd-contribution-blocks`, and `rd-cost` depend only
-on the external inputs above.
+| Block | Depends on |
+|---|---|
+| `results-and-discussion.rd-contribution-blocks` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-general-task` — the general task's evidence, the block immediately before it |
+| `results-and-discussion.rd-cost` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-contribution-blocks` — the per-contribution validation, the block immediately before cost |
 
 ### Structural decisions
 

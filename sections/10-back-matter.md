@@ -150,8 +150,9 @@ paper.
 
 ### Internal chain
 
-None — every block here is an external fact, never a dependency on a sibling
-block's own prose.
+| Block | Depends on |
+|---|---|
+| `back-matter.bm-acknowledgments` — present only when there is a project or institution to thank that is not already named under funding | `back-matter.bm-funding` — the funding entries already naming any project or institution credited there |
 
 ## Disqualifiers
 

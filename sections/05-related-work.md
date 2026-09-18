@@ -263,8 +263,9 @@ this section is the formulation.
 
 ### Internal chain
 
-None — every block traces to an external fact, never to a sibling block's own
-prose.
+| Block | Depends on |
+|---|---|
+| `related-work.rw-closing` — names the fronts left open, as many as there are blocks | `related-work.rw-problem-blocks` — the specific-problem blocks whose unresolved limitation each becomes a named front |
 
 **Cross-obligation.** The gap is stated in two places — the closing of this section
 and the closing of the introduction's state-of-the-art block — and they must say the

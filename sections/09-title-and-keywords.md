@@ -125,7 +125,9 @@ instructions, along with the permitted keyword count.
 
 ### Internal chain
 
-None — `title` and `keywords` each depend only on the external inputs above.
+| Block | Depends on |
+|---|---|
+| `title-and-keywords.keywords` — the property in its searchable form, the noun form of what the title carries as an adjective | `title-and-keywords.title` — the property adjective the title opens on |
 
 ### Structural decisions
 

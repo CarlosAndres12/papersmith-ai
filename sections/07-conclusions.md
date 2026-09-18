@@ -151,8 +151,12 @@ section, because it compresses it.
 
 ### Internal chain
 
-None — every functional block here depends on an external fact, never on a
-sibling block's own prose.
+None — checked each of the four ids (`concl-block-1`, `concl-block-2`,
+`concl-block-3`, `concl-block-4`) against its own `requires_facts` and this
+file's own prose body for a reference to a sibling block's own text: every
+block draws only on the external facts named above; block 3's placement as
+its own paragraph or the close of block 2 is a placement option (see
+Structural decisions), not a content derivation from block 2's own prose.
 
 ### Structural decisions
 

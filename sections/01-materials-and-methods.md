@@ -288,9 +288,10 @@ Nothing here waits for an experiment. But it does wait for the code to exist.
 
 ### Internal chain
 
-None — `mm-preamble`, `mm-borrowed-machinery`, and `mm-proposal` depend only
-on the external formulation above; nothing here is derived from a sibling
-block's own prose.
+| Block | Depends on |
+|---|---|
+| `materials-and-methods.mm-proposal` — stated as a delta on the borrowed machinery, with an explicit reference to the previous equation by number | `materials-and-methods.mm-borrowed-machinery` — the borrowed theory whose declared equations the proposal references |
+| `materials-and-methods.mm-proposal` — always the last subsection, without exception | `materials-and-methods.mm-dataset` — the dataset subsection, when this section owns it |
 
 ### Structural decisions
 

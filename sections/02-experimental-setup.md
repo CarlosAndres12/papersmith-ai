@@ -217,8 +217,9 @@ box appearing in both means one of them is wrong.
 
 ### Internal chain
 
-None — `es-preamble`, `es-assessment`, and `es-training-details` depend only
-on the external inputs above.
+| Block | Depends on |
+|---|---|
+| `experimental-setup.es-assessment` — the closing diagram's "which data enter" panel | `experimental-setup.es-dataset` — the dataset block, when this section owns it |
 
 ### Structural decisions
 
