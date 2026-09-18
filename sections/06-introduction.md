@@ -24,7 +24,16 @@
         "contributions"
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "after": [
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
+      ]
     },
     {
       "id": "block-3",
@@ -49,7 +58,23 @@
         "formulation"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the presentation and the purpose clause come from block 2 — the clause mirrors its specific problems, in the same order"
+          }
+        },
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the announcement of the count comes from `introduction.block-4b`, in its partial form."
+          }
+        }
+      ]
     },
     {
       "id": "block-4b",
@@ -317,7 +342,7 @@ agree.
 when the problem cannot be stated without first presenting the enabling technology.
 In that case the order is: enabler → problem → families.
 
-## Block 4 — Proposal and contributions
+## Block 4 — Proposal and contributions (`block-4a`, `block-4b`)
 
 **Function.** Present the method by name and purpose, the core idea articulating its
 components, and enumerate the contributions.

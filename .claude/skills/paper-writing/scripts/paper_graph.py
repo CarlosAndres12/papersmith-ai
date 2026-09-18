@@ -43,6 +43,41 @@ _KEYWORD_BODY_UPPER_ANCHOR = "back-matter"
 _EXTERNAL_INPUTS_HEADING = "### External inputs"
 _INTERNAL_CHAIN_HEADING = "### Internal chain"
 
+#: `internal-chain-edges` spec / `contract-input-partition` spec,
+#: `Requirement: Internal-Chain Rows Name Qualified Block Ids`. A normalized
+#: row's own cell OPENS with a backticked qualified id (design.md, D1: "The
+#: reader consumes the leading backticked token and never reads the
+#: gloss") — this is the only thing `_chain_row_id` below reads.
+_CHAIN_ROW_ANCHOR_RE = re.compile(r"`([^`]+)`")
+_CHAIN_ROW_SEPARATOR_RE = re.compile(r"^[-:\s]+$")
+
+#: tasks.md 4.8b-4.8i: the PROSE -> HEADER direction no other check covers.
+#: `_UNIT_PARENT_RE` matches the numbered-block heading convention six of
+#: ten contracts use (`01`, `02`, `05`, `06`, `07`, `08`); the other four
+#: name blocks by content (`## Funding`, `## The closing`, `## Keywords`)
+#: and never match this pattern at all — the per-section gate tasks.md
+#: 4.8i asks for falls out of the pattern itself, never a second flag.
+#: `_UNIT_CHILD_RE` matches a `###` sub-heading naming a sub-unit
+#: (`Paragraph 4a`, never `### What is cited here`, which carries no unit
+#: word and is correctly ignored).
+_UNIT_PARENT_RE = re.compile(r"^#{2}\s+(?:Block|Slot|Subsection)\s+(\d+)\b")
+_UNIT_CHILD_RE = re.compile(r"^#{3}\s+(?:Paragraph|Block|Slot|Subsection|Part)\s+(\d+[A-Za-z]*)\b")
+_ANY_TOP_HEADING_RE = re.compile(r"^#{1,2}\s")
+
+#: A section's own ids carry the heading's number only when the ids
+#: THEMSELVES are numbered (`block-1`, `slot-1`, `block-4a`) rather than
+#: named by content (`mm-dataset`, `es-assessment`, `rw-closing`).
+#: Measured: `01`, `02` and `05` all use the `## Slot|Subsection|Block N`
+#: HEADING convention with content-named ids — a numbered heading there is
+#: a human ordinal label, not a claim about a specific id, and the
+#: parent-heading correspondence `_verify_block_subunits` checks only means
+#: something where the ids themselves carry the number (`06`, `07`, `08`).
+#: This is the precise gate 4.8i's own heading-pattern criterion widens
+#: into once measured against the real corpus — a heading-pattern gate
+#: alone would misfire `BLOCK_SUBUNIT_UNDECLARED` on `01`'s own
+#: `## Slot 1 — The dataset` (id `mm-dataset`, no numeric suffix at all).
+_NUMERIC_ID_SUFFIX_RE = re.compile(r"-\d+[A-Za-z]*$")
+
 
 @dataclass(frozen=True)
 class BlockRecord:
@@ -87,14 +122,23 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     edge is sourced in `sections/07-conclusions.md`, not its own
     `08-abstract.md`). Every file this function reads is already read
     exactly once, in the loop below — this adds no second disk pass.
+
+    Also verifies every `### Internal chain` row transcribes to a real,
+    backed `after` edge (`_verify_internal_chain`) and that no prose
+    heading announces a sub-unit the header never declared
+    (`_verify_block_subunits`) — `section_bodies` (section id -> its own
+    body) is built in the SAME loop as `bodies`, from the same read,
+    keyed by `header.section` rather than a filename.
     """
     sections: dict = {}
     bodies: dict = {}
+    section_bodies: dict = {}
     for path in sorted(sections_dir.glob("*.md")):
         data = path.read_bytes()
         header, body = paper_contract.parse(data)
         sections[header.section] = header
         bodies[f"{sections_dir.name}/{path.name}"] = body
+        section_bodies[header.section] = body
 
     section_ids = set(sections)
     blocks: dict = {}
@@ -125,6 +169,8 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
     _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
+    _verify_internal_chain(corpus, bodies)
+    _verify_block_subunits(corpus, section_bodies)
     return corpus
 
 
@@ -188,6 +234,175 @@ def _verify_after_transcription(corpus: Corpus, bodies: dict) -> None:
                     f"(whitespace-collapsed, markdown-emphasis-stripped) in "
                     f"{source['file']}'s prose body",
                 )
+
+
+def _internal_chain_rows(text: str) -> list:
+    """Every data row of a contract's own `### Internal chain` markdown
+    table, as `(holder_cell, dependency_cell)` raw text pairs — bounded by
+    the next `##`/`###` heading, or EOF when none follows. A contract
+    reporting no internal dependencies (`04`/`07`'s own checkable "None —
+    ..." prose, no table at all) yields an empty list: nothing for
+    `_verify_internal_chain` to check for that file, matching the
+    genuinely-empty case `contract-input-partition` already accepts."""
+    match = re.search(rf"(?m)^{re.escape(_INTERNAL_CHAIN_HEADING)}\s*$", text)
+    if match is None:
+        return []
+    section_text = text[match.end():]
+    next_heading = re.search(r"(?m)^#{2,3}\s", section_text)
+    if next_heading is not None:
+        section_text = section_text[:next_heading.start()]
+
+    rows = []
+    for line in section_text.splitlines():
+        line = line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 2:
+            continue
+        holder_cell, dependency_cell = cells
+        if holder_cell == "Block" and dependency_cell == "Depends on":
+            continue  # the table's own header row
+        if _CHAIN_ROW_SEPARATOR_RE.match(holder_cell):
+            continue  # the `|---|---|` separator row
+        rows.append((holder_cell, dependency_cell))
+    return rows
+
+
+def _chain_row_id(cell: str) -> str | None:
+    """A row cell's own LEADING backticked token — `_resolve_target`'s
+    exact input shape — or `None` when the cell opens on prose instead
+    (design.md, D1: "The reader consumes the leading backticked token and
+    never reads the gloss")."""
+    match = _CHAIN_ROW_ANCHOR_RE.match(cell)
+    return match.group(1) if match else None
+
+
+def _verify_internal_chain(corpus: Corpus, bodies: dict) -> None:
+    """`internal-chain-edges` spec, both Requirements; `contract-input-
+    partition` spec, `Requirement: Internal-Chain Rows Name Qualified Block
+    Ids`. Reads the SAME `bodies` dict `_verify_after_transcription`
+    already holds — zero extra disk passes (design.md, Data Flow).
+
+    For every `### Internal chain` row: refuses `CHAIN_ROW_UNRESOLVED`
+    (naming the row's own text) when either cell's leading backticked
+    token is missing or is not a key of `corpus.blocks`; refuses
+    `CHAIN_ROW_UNBACKED` (naming the holder and the dependency) when both
+    resolve but no `after` edge backs `(dependency, holder)` in the block
+    graph. Reuses `collect_edges` for the live edge set — never a second,
+    independent edge derivation that could disagree with the one `order`/
+    `readiness`/`derive_waves` actually consume.
+    """
+    edge_pairs = {(before, after) for before, after, _source in collect_edges(corpus).edges}
+    for file_key, body in bodies.items():
+        text = body.decode("utf-8")
+        for holder_cell, dependency_cell in _internal_chain_rows(text):
+            row_text = f"{holder_cell} | {dependency_cell}"
+            holder_id = _chain_row_id(holder_cell)
+            dependency_id = _chain_row_id(dependency_cell)
+            if holder_id is None or holder_id not in corpus.blocks:
+                raise Refused(
+                    "CHAIN_ROW_UNRESOLVED",
+                    f"{file_key}: {row_text!r} names no qualified block id for its subject",
+                )
+            if dependency_id is None or dependency_id not in corpus.blocks:
+                raise Refused(
+                    "CHAIN_ROW_UNRESOLVED",
+                    f"{file_key}: {row_text!r} names no qualified block id for its dependency",
+                )
+            if (dependency_id, holder_id) not in edge_pairs:
+                raise Refused(
+                    "CHAIN_ROW_UNBACKED",
+                    f"{file_key}: {holder_id} depends on {dependency_id}, but no "
+                    f"'after' edge backs that pair",
+                )
+
+
+def _numbered_block_ids(corpus: Corpus, section_id: str, number: str) -> list:
+    """Every declared id in `section_id` whose own local suffix — after the
+    last `-` — starts with `number` (`block-4a` and `block-4b` both match
+    `number='4'`; `block-1` matches `number='1'` and nothing else does).
+    The correspondence a numbered `##`/`###` heading makes with the
+    header's OWN declared ids — read from `corpus`, never assumed from the
+    heading text alone."""
+    matches = []
+    for qualified_id in corpus.order_by_section[section_id]:
+        suffix = qualified_id.rsplit("-", 1)[-1]
+        if re.match(rf"^{re.escape(number)}[A-Za-z]*$", suffix):
+            matches.append(qualified_id)
+    return matches
+
+
+def _section_uses_numbered_ids(corpus: Corpus, section_id: str) -> bool:
+    """Whether `section_id`'s own declared ids are themselves numbered
+    (see `_NUMERIC_ID_SUFFIX_RE`'s own comment for the measured reason
+    `01`, `02` and `05` are excluded here even though all three use the
+    `## Slot|Subsection|Block N` HEADING convention)."""
+    return any(_NUMERIC_ID_SUFFIX_RE.search(qid) for qid in corpus.order_by_section[section_id])
+
+
+def _verify_block_subunits(corpus: Corpus, section_bodies: dict) -> None:
+    """tasks.md, 4.8b-4.8i: the PROSE -> HEADER direction no other check
+    covers. Every other refusal this change ships checks TABLE -> GRAPH (a
+    chain row naming a block); this is the sibling direction — a heading
+    announcing a sub-unit, or claiming a single numbered unit, that the
+    front matter does not back with exactly the declared id(s) it implies.
+
+    Scoped BY CONSTRUCTION to sections whose own ids are themselves
+    numbered (`_section_uses_numbered_ids`) — `01`, `02`, `05` (numbered
+    HEADINGS, content-named ids) and `03`, `04`, `09`, `10` (content-named
+    headings too) never enter either branch below; no second per-section
+    flag, the gate is measured directly off the declared ids.
+
+    Refuses `BLOCK_SUBUNIT_UNDECLARED` when a numbered heading (parent or
+    child) resolves to ZERO declared ids under loose suffix matching (a
+    number no id anywhere carries at all), and the new
+    `UNIT_HEADING_AMBIGUOUS` when a PARENT heading resolves to MORE THAN
+    ONE id — the exact residue `06`'s own block-4 split left behind before
+    4.8g's fix, `## Block 4` matching both `block-4a` and `block-4b` under
+    loose suffix matching with no children to disambiguate it — UNLESS its
+    own heading text already names every one of them in backticks: an
+    explicit grouping, not an accident.
+    """
+    for section_id, body in section_bodies.items():
+        if not _section_uses_numbered_ids(corpus, section_id):
+            continue
+        text = body.decode("utf-8")
+        current_parent = None
+        for line in text.splitlines():
+            parent_match = _UNIT_PARENT_RE.match(line)
+            if parent_match:
+                number = parent_match.group(1)
+                matches = _numbered_block_ids(corpus, section_id, number)
+                if not matches:
+                    raise Refused(
+                        "BLOCK_SUBUNIT_UNDECLARED",
+                        f"{section_id}: heading {line.strip()!r} names no declared block id",
+                    )
+                if len(matches) > 1:
+                    local_ids = [qid.split(".", 1)[1] for qid in matches]
+                    if not all(f"`{local_id}`" in line for local_id in local_ids):
+                        raise Refused(
+                            "UNIT_HEADING_AMBIGUOUS",
+                            f"{section_id}: heading {line.strip()!r} resolves to "
+                            f"{sorted(matches)!r} — name every one in the heading "
+                            f"itself to declare it an explicit grouping",
+                        )
+                current_parent = line
+                continue
+            if _ANY_TOP_HEADING_RE.match(line):
+                current_parent = None
+                continue
+            child_match = _UNIT_CHILD_RE.match(line)
+            if child_match and current_parent is not None:
+                identifier = child_match.group(1)
+                matches = _numbered_block_ids(corpus, section_id, identifier)
+                if not matches:
+                    raise Refused(
+                        "BLOCK_SUBUNIT_UNDECLARED",
+                        f"{section_id}: heading {line.strip()!r} (under "
+                        f"{current_parent.strip()!r}) names no declared block id",
+                    )
 
 
 def _resolve_target(corpus: Corpus, target_id: str) -> list | None:

@@ -35,6 +35,15 @@
       ],
       "requires_declarations": [],
       "citations": "resolution",
+      "after": [
+        {
+          "target": "experimental-setup.es-dataset",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Its one dependency that is NOT internal is the data it must show entering, which live in `es-dataset` when the dataset belongs to this section"
+          }
+        }
+      ],
       "figure": {
         "ordered": false,
         "excludes": ["internal component of the proposal"],

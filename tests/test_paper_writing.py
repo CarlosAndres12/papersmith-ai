@@ -3625,8 +3625,19 @@ class RefusalRosterTests(unittest.TestCase):
         already-imported module), refusing `INPUT_PARTITION_ABSENT` when a
         contract's prose body is missing `### External inputs` or
         `### Internal chain` -- reachable through the whole-module scan the
-        moment the new raise site lands, no new import needed."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 97)
+        moment the new raise site lands, no new import needed. Moved from 97
+        to 101 in the same change's unit 4 (`internal-chain-edges`, tasks
+        4.1-4.13 / 4.8b-4.8i): `paper_graph.py` gains `_verify_internal_
+        chain` (`CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` -- every
+        `### Internal chain` row transcribes to a real, backed `after`
+        edge) and `_verify_block_subunits` (`BLOCK_SUBUNIT_UNDECLARED`,
+        `UNIT_HEADING_AMBIGUOUS` -- the PROSE -> HEADER direction no
+        existing check covered, the guard the block-4 split proved
+        missing), both called from `assemble_corpus` -- an already-imported
+        module, so all four land reachable together the moment their raise
+        sites exist, measured as one +4 move rather than the tasks
+        artifact's own three smaller increments forecast in isolation."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 101)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

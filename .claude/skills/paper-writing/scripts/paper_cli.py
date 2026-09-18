@@ -140,6 +140,18 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # partition every contract's prose must carry (paper_graph.py,
     # `_verify_input_partition`, called from `assemble_corpus`) ------------
     "INPUT_PARTITION_ABSENT": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 4: every `### Internal
+    # chain` row transcribes to a real, backed `after` edge
+    # (paper_graph.py, `_verify_internal_chain`) ---------------------------
+    "CHAIN_ROW_UNRESOLVED": WORK_STATE,
+    "CHAIN_ROW_UNBACKED": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 4 (tasks 4.8b-4.8i):
+    # the PROSE -> HEADER direction no other check covers -- a numbered
+    # heading (parent or `###` child) naming a sub-unit the front matter
+    # never declared, or naming several without an explicit grouping
+    # (paper_graph.py, `_verify_block_subunits`) ---------------------------
+    "BLOCK_SUBUNIT_UNDECLARED": WORK_STATE,
+    "UNIT_HEADING_AMBIGUOUS": WORK_STATE,
     # --- region grammar (paper_region.py) -- twins of Phase 1's marker
     # codes, reachable ahead of their own verb wiring because paper_cli.py
     # imports paper_region.py at module level (Slice A, `the-paper-carries-

@@ -44,7 +44,16 @@
       ],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "related-work.rw-problem-blocks",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "Name the fronts left open — as many as there are blocks."
+          }
+        }
+      ]
     },
     {
       "id": "rw-synthesis-artefact",

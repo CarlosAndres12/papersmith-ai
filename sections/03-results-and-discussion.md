@@ -25,7 +25,16 @@
         "results"
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "after": [
+        {
+          "target": "results-and-discussion.rd-general-task",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "A mechanism block opens by naming the previous block's result as the question it comes to answer."
+          }
+        }
+      ]
     },
     {
       "id": "rd-cost",
@@ -35,7 +44,16 @@
       ],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "results-and-discussion.rd-contribution-blocks",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "A mechanism block opens by naming the previous block's result as the question it comes to answer."
+          }
+        }
+      ]
     }
   ]
 }

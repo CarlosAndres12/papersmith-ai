@@ -27,7 +27,16 @@
         "keyword-bounds",
         "classification-line"
       ],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "title-and-keywords.title",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The title carries the adjective; the keyword carries the noun."
+          }
+        }
+      ]
     }
   ]
 }

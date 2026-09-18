@@ -33,7 +33,16 @@
         "contributions"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "abstract.slot-4",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
+      ]
     },
     {
       "id": "slot-3",
@@ -41,7 +50,16 @@
         "formulation"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "abstract.slot-2",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The purpose clause mirrors the deficiencies of slot 2, in the same order."
+          }
+        }
+      ]
     },
     {
       "id": "slot-4",

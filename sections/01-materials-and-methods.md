@@ -14,7 +14,16 @@
       "id": "mm-preamble",
       "requires_facts": [],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "It names the subsections that follow and their order."
+          }
+        }
+      ]
     },
     {
       "id": "mm-dataset",
@@ -40,6 +49,22 @@
       ],
       "requires_declarations": [],
       "citations": "resolution",
+      "after": [
+        {
+          "target": "materials-and-methods.mm-borrowed-machinery",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "state the proposal as a delta on the borrowed machinery, with an explicit reference to the previous equation by number"
+          }
+        },
+        {
+          "target": "materials-and-methods.mm-dataset",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "The proposal is always the last subsection. Without exception."
+          }
+        }
+      ],
       "figure": {
         "components_from": "contributions",
         "ordered": true,

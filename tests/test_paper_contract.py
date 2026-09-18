@@ -402,13 +402,24 @@ class SchemaTests(unittest.TestCase):
 #: `10`, and rewrites the two genuinely-empty "None" assertions in `04` and
 #: `07` into a checkable measurement statement. `06` and `08` are untouched
 #: by unit 1b and keep their unit-1 digest.
+#:
+#: `06-introduction.md`'s digest was re-captured a further time for unit 4
+#: (`internal-chain-edges`): task 4.8g rewrites the `## Block 4` heading
+#: itself, from `## Block 4 -- Proposal and contributions` to
+#: `` ## Block 4 -- Proposal and contributions (`block-4a`, `block-4b`) ``,
+#: an explicit-grouping fix for the residue `BLOCK_SUBUNIT_UNDECLARED`'s
+#: own extended check (`_verify_block_subunits`, `UNIT_HEADING_AMBIGUOUS`
+#: branch) would otherwise flag -- a genuine PROSE change, unlike every
+#: other unit-4 edit (all fourteen `after` entries live in the HEADER,
+#: below the closing fence's own JSON, and move no body digest). No other
+#: file's digest moves in unit 4.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "960aa095b0ec2cac2c665d5835b50e70a8e030ee926feb025d1408d53139e387"[:64],
     "02-experimental-setup.md": "c7ffeaa5f7bbfe646090355a30e1b1562ef2b0bfae1bdb20a000e7b04a9e0f51"[:64],
     "03-results-and-discussion.md": "a580e2bd4cb0c5f1515af9bfa6ca2e641c6281a5d5f1009b23c3cab86336477e"[:64],
     "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
     "05-related-work.md": "6c3f1394264bd4b7526057ae8f3a23005515ddb0fc2c75ee0c7cbd839a59c0d1"[:64],
-    "06-introduction.md": "1f923f0c26ee3917c4a3ec192b17db6fc247958532f8deec933558a879edd4f9"[:64],
+    "06-introduction.md": "73b398f6f62c10f41a31cc6e88c319f10ab846dd531686bbf7cb2522edc2f236"[:64],
     "07-conclusions.md": "1c2a19e968de470cedd616edde05209625801ca30f7ebf11f68aa1c4640e44fe"[:64],
     "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
     "09-title-and-keywords.md": "5ff3fa0257b4f6b37aacb6685dbc7d9af6fb87ea45f4616ab654f85d31f30b6a"[:64],
@@ -1177,6 +1188,390 @@ class InputPartitionTests(unittest.TestCase):
             self.assertNotIn((dependency, subject), edges, f"{subject} <-> {dependency}")
 
 
+class InternalChainTests(unittest.TestCase):
+    """`internal-chain-edges` spec, both Requirements; `contract-input-
+    partition` spec, `Requirement: Internal-Chain Rows Name Qualified Block
+    Ids`. `_verify_internal_chain` (called from `paper_graph.assemble_corpus`,
+    right after `_verify_after_transcription`) refuses `CHAIN_ROW_UNRESOLVED`
+    when a row's leading token is not a key of `corpus.blocks`, and
+    `CHAIN_ROW_UNBACKED` when it is a key but no `after` edge backs the
+    pair."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _body(self, chain_table: bytes) -> bytes:
+        return (
+            b"# Example\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            b"### Internal chain\n\n| Block | Depends on |\n|---|---|\n"
+            + chain_table
+        )
+
+    def test_a_row_naming_a_qualified_id_maps_and_a_backed_row_is_accepted(self) -> None:
+        """`internal-chain-edges` spec's own "A backed row is accepted"
+        scenario, and `contract-input-partition`'s "A row naming a
+        qualified id maps"."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [
+                _block("first"),
+                _block("second", after=[
+                    {"target": "example.first",
+                     "source": _quote_source("sections/01-example.md", "Prose.")},
+                ]),
+            ],
+        }
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+
+        self.assertIn("example.second", corpus.blocks)
+
+    def test_a_row_naming_only_a_paraphrase_refuses_chain_row_unresolved(self) -> None:
+        """`contract-input-partition` spec's own scenario: a row naming no
+        qualified block id anywhere refuses `CHAIN_ROW_UNRESOLVED` naming
+        that row's text."""
+        header = {"section": "example", "position": 1, "blocks": [_block("only")]}
+        body = self._body(
+            b"| depends on: the announcement of the count | plain prose, no id |\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNRESOLVED")
+        self.assertIn("the announcement of the count", ctx.exception.detail)
+
+    def test_mutation_editing_a_mapping_row_to_drop_its_qualified_id_refuses_live(self) -> None:
+        """Task 4.3: a previously-mapping row edited to drop its qualified
+        id must refuse on a LIVE re-parse, never reuse a stale mapping."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [
+                _block("first"),
+                _block("second", after=[
+                    {"target": "example.first",
+                     "source": _quote_source("sections/01-example.md", "Prose.")},
+                ]),
+            ],
+        }
+        good_body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=good_body)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        mutated_body = self._body(b"| `example.second` | the first block, dropped id |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=mutated_body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNRESOLVED")
+
+    def test_a_row_naming_a_real_block_with_no_backing_edge_refuses_chain_row_unbacked(self) -> None:
+        """`internal-chain-edges` spec's own "An unbacked row refuses"
+        scenario: both cells resolve to real ids, but the header carries no
+        matching `after` edge -- refuses `CHAIN_ROW_UNBACKED` naming the
+        holder and the missing dependency."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("first"), _block("second")],  # no `after` at all
+        }
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+        self.assertIn("example.second", ctx.exception.detail)
+        self.assertIn("example.first", ctx.exception.detail)
+
+    def test_mutation_deleting_the_backing_after_entry_refuses_live(self) -> None:
+        """`internal-chain-edges` spec's own "Mutation -- deleting a backing
+        edge is caught" scenario: the check reads the LIVE edge set, never
+        a cached result from the row's earlier presence."""
+        first_backed = _block("second", after=[
+            {"target": "example.first",
+             "source": _quote_source("sections/01-example.md", "Prose.")},
+        ])
+        header = {"section": "example", "position": 1, "blocks": [_block("first"), first_backed]}
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        unbacked_header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("first"), _block("second")],  # `after` entry removed
+        }
+        _write_section(self.sections_dir, "01-example.md", unbacked_header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+
+    def test_corpus_wide_one_missing_edge_among_many_stops_the_run(self) -> None:
+        """`internal-chain-edges` spec's own "One missing edge among many
+        stops the run" scenario: nine of ten named dependencies backed,
+        one not -- the run refuses on the one gap, and no order/readiness
+        report is produced from the incomplete graph."""
+        blocks = [_block("root")]
+        for index in range(1, 10):
+            backed = index != 9  # the 9th dependency (index 9) is left unbacked
+            after = None
+            if backed:
+                after = [{
+                    "target": f"example.b{index - 1}" if index > 1 else "example.root",
+                    "source": _quote_source("sections/01-example.md", "Prose."),
+                }]
+            blocks.append(_block(f"b{index}", after=after))
+        header = {"section": "example", "position": 1, "blocks": blocks}
+
+        rows = []
+        for index in range(1, 10):
+            dependency = f"example.b{index - 1}" if index > 1 else "example.root"
+            rows.append(f"| `example.b{index}` | `{dependency}` |\n".encode("utf-8"))
+        body = self._body(b"".join(rows))
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+        self.assertIn("example.b9", ctx.exception.detail)
+
+    def test_the_real_corpus_transcribes_every_internal_chain_row_with_no_refusal(self) -> None:
+        """Task 4.11: `specs/section-contract/spec.md`'s shipped scenarios
+        ("every edge quote-backed", "no row left unmapped") hold against
+        the real corpus."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertEqual(len(corpus.sections), 10)
+
+    def test_the_introductions_three_chain_rows_become_three_after_edges(self) -> None:
+        """The acid test: `06`'s three rows produce exactly `block-2` <-
+        `block-4b`, `block-4a` <- `block-2`, `block-4a` <- `block-4b`, and
+        must not cycle."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(("introduction.block-4b", "introduction.block-2"), pairs)
+        self.assertIn(("introduction.block-2", "introduction.block-4a"), pairs)
+        self.assertIn(("introduction.block-4b", "introduction.block-4a"), pairs)
+
+        order = paper_graph.derive_order(corpus, edge_set)  # must not raise ORDER_CYCLE
+        index = {qid: i for i, qid in enumerate(order)}
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-2"])
+        self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
+
+    def test_related_works_closing_depends_on_problem_blocks_intra_node(self) -> None:
+        """The acid test: `05`'s single row is `rw-closing` after
+        `rw-problem-blocks` -- never a self-edge on the shared
+        `rw-problem-blocks` id, which would be an `ORDER_CYCLE`."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(("related-work.rw-problem-blocks", "related-work.rw-closing"), pairs)
+        self.assertNotIn(
+            ("related-work.rw-problem-blocks", "related-work.rw-problem-blocks"), pairs,
+        )
+
+    def test_mm_preambles_internal_chain_becomes_a_real_edge(self) -> None:
+        """Task 4.9: `mm-preamble`'s internal chain becomes a real edge --
+        only edge existence is asserted here, never placement (unit 5's
+        own concern)."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(
+            ("materials-and-methods.mm-proposal", "materials-and-methods.mm-preamble"), pairs,
+        )
+
+
+class BlockSubunitTests(unittest.TestCase):
+    """tasks.md 4.8b-4.8i: `_verify_block_subunits` (called from
+    `paper_graph.assemble_corpus`) is the PROSE -> HEADER direction no
+    existing check covers -- a numbered heading naming a sub-unit the
+    front matter never declared."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def test_the_real_corpus_reports_zero_false_positives(self) -> None:
+        """Task 4.8d, measured direction 1: the real corpus -- six
+        unit-headings carry `###` children, five of them prose notes with
+        no unit word, and only `06`'s `### Paragraph 4a`/`4b` match, both
+        resolving to declared ids -- assembles with no refusal."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertIn("introduction.block-4a", corpus.blocks)
+        self.assertIn("introduction.block-4b", corpus.blocks)
+
+    def test_a_reintroduced_unit_word_child_with_no_matching_id_refuses(self) -> None:
+        """Task 4.8d, measured direction 2: a fixture reintroducing
+        `### Paragraph 5a` under `## Block 5` with no matching id refuses
+        `BLOCK_SUBUNIT_UNDECLARED`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-5")],
+        }
+        body = (
+            b"# Example\n\n## Block 5 -- Evaluation\n\n"
+            b"### Paragraph 5a -- the setup.\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+        self.assertIn("Paragraph 5a", ctx.exception.detail)
+
+    def test_mutation_collapsing_block_4a_4b_back_to_block_4_fires_the_guard(self) -> None:
+        """Task 4.8e: RED-first mutation -- collapse `block-4a`/`block-4b`
+        back to one `block-4` id in a fixture reproducing the real corpus's
+        own heading shape, and confirm `BLOCK_SUBUNIT_UNDECLARED` fires --
+        the guard must catch the EXACT anomaly that shipped unnoticed, not
+        merely pass alongside it."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4")],  # collapsed: 4a/4b's split undone
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions\n\n"
+            b"### Paragraph 4a -- the prose.\n\nProse.\n\n"
+            b"### Paragraph 4b -- the list.\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+
+    def test_a_parent_heading_resolving_to_zero_ids_refuses(self) -> None:
+        """A `## Block N` PARENT heading naming a number no declared id
+        carries at all (not even a composite `Na`/`Nb` split -- that shape
+        is `test_a_parent_heading_resolving_to_several_ids_...` below)
+        refuses `BLOCK_SUBUNIT_UNDECLARED`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-1")],  # no id anywhere numbered "7"
+        }
+        body = (
+            b"# Example\n\n## Block 7 -- Nothing declares this\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+
+    def test_a_parent_heading_resolving_to_a_composite_split_with_no_children_refuses(self) -> None:
+        """Task 4.8g's own residue, reproduced directly: `## Block 4` with
+        NO `###` children maps, under loose suffix matching, to BOTH
+        `block-4a` and `block-4b` -- two ids, no explicit grouping in the
+        heading text -- which this guard classifies `UNIT_HEADING_
+        AMBIGUOUS`, the exact shape `06` carried before task 4.8g's fix
+        named both ids in the heading itself."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "UNIT_HEADING_AMBIGUOUS")
+
+    def test_the_fixed_block_4_heading_names_both_ids_and_refuses_nothing(self) -> None:
+        """Task 4.8g's own fix, reproduced directly: naming BOTH resolved
+        ids in the parent heading itself is an explicit grouping, not
+        ambiguous -- the real `06-introduction.md` heading shape today."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions "
+            b"(`block-4a`, `block-4b`)\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+        self.assertIn("example.block-4a", corpus.blocks)
+
+    def test_a_parent_heading_resolving_to_several_ids_with_no_grouping_refuses_ambiguous(self) -> None:
+        """Task 4.8h: a `##` PARENT heading resolving to more than one
+        declared id, without naming every one of them in the heading text
+        itself, refuses the new `UNIT_HEADING_AMBIGUOUS`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions, split in two\n\n"
+            b"Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "UNIT_HEADING_AMBIGUOUS")
+
+    def test_content_named_contracts_never_enter_either_branch(self) -> None:
+        """Task 4.8i, measured direction: the check stays SILENT on the four
+        content-named contracts (`03`, `04`, `09`, `10`) -- asserted
+        against the real corpus, not merely a fixture, since those files'
+        own numbered-LOOKING content (none, in fact) must never misfire."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        for section_id in ("results-and-discussion", "limitations",
+                            "title-and-keywords", "back-matter"):
+            self.assertFalse(
+                paper_graph._section_uses_numbered_ids(corpus, section_id),
+                f"{section_id}: expected content-named ids, no numbered convention",
+            )
+
+    def test_semantically_named_numbered_headings_never_misfire(self) -> None:
+        """Correction to 4.8i's own stated gate (heading-pattern-based): `01`
+        and `02` (and `05`) use `## Slot|Subsection|Block N` HEADINGS with
+        semantically-named ids (`mm-dataset`, `es-assessment`) that carry no
+        numeric suffix at all -- a naive heading-pattern gate would misfire
+        `BLOCK_SUBUNIT_UNDECLARED` on `01`'s own `## Slot 1 -- The dataset`.
+        Measured directly: the real corpus assembles cleanly, and `01`,
+        `02`, `05` are confirmed NOT to use the numbered-id convention this
+        check actually requires."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        for section_id in ("materials-and-methods", "experimental-setup", "related-work"):
+            self.assertFalse(
+                paper_graph._section_uses_numbered_ids(corpus, section_id),
+                f"{section_id}: uses numbered HEADINGS but content-named ids",
+            )
+
+
 class OrderTests(unittest.TestCase):
     """`writing-readiness` spec: the derived writing order, and its
     distinctness from both filename order and rendering (`position`)
@@ -1230,8 +1625,14 @@ class OrderTests(unittest.TestCase):
         (rendering order), and the derived order does not place a
         zero-missing-facts block ahead of fact-blocked ones (writing order is
         graph-derived, not readiness-derived) -- back matter carries no
-        `after` edge of its own, transcribed or position-derived, so nothing
-        in the graph names it either."""
+        CROSS-SECTION `after` edge, transcribed or position-derived, so
+        nothing in another section's graph names it either. Unit 4
+        (`internal-chain-edges`) transcribes back matter's own INTRA-section
+        row (`bm-acknowledgments` after `bm-funding`), which constrains only
+        the write order WITHIN back matter, never its render position
+        relative to any other section -- measured below rather than
+        re-asserting the pre-unit-4 "no edge at all" claim, which this row
+        makes false."""
         corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
 
         # Rendering order: back matter's own `position` is the maximum among
@@ -1242,15 +1643,23 @@ class OrderTests(unittest.TestCase):
             max(header.position for header in corpus.sections.values()),
         )
 
-        # Back matter carries no `after` edge anywhere -- section-level or
-        # block-level -- so nothing transcribed constrains its place, and it
-        # is not `title-and-keywords` (the one section that receives a
-        # position-derived edge). Its place in the writing order is decided
-        # only by the (absent) `after` edges naming it, never by `position`.
+        # Back matter carries no CROSS-SECTION `after` edge anywhere --
+        # section-level or block-level -- so nothing transcribed constrains
+        # its place relative to another section, and it is not
+        # `title-and-keywords` (the one section that receives a
+        # position-derived edge). Its OWN intra-section row
+        # (`bm-acknowledgments` after `bm-funding`) is permitted: it
+        # reorders nothing across section boundaries.
         bm_header = corpus.sections["back-matter"]
         self.assertEqual(bm_header.after, [])
         for raw_block in bm_header.blocks:
-            self.assertEqual(raw_block["after"], [])
+            for entry in raw_block["after"]:
+                self.assertTrue(
+                    entry["target"].startswith("back-matter."),
+                    f"{raw_block['id']}: after-edge target {entry['target']!r} "
+                    "crosses out of back-matter -- only an intra-section edge "
+                    "is expected here",
+                )
 
         # Readiness: every back-matter block requires zero facts, so a
         # (wrong) fact-only ordering signal would rank every one of them

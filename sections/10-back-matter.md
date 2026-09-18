@@ -46,7 +46,16 @@
       "requires_facts": [],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "back-matter.bm-funding",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "Present only when there is a project or institution to thank that is not already named under funding."
+          }
+        }
+      ]
     },
     {
       "id": "bm-appendices",
