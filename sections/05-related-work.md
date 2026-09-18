@@ -16,7 +16,8 @@
         "problem-statement"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "optional": true
     },
     {
       "id": "rw-panorama",
@@ -24,7 +25,8 @@
         "problem-statement"
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "optional": true
     },
     {
       "id": "rw-problem-blocks",
@@ -32,7 +34,8 @@
         "problem-statement"
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "optional": true
     },
     {
       "id": "rw-closing",
@@ -40,7 +43,8 @@
         "gap"
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "optional": true
     },
     {
       "id": "rw-synthesis-artefact",
@@ -49,6 +53,7 @@
       ],
       "requires_declarations": [],
       "citations": "none",
+      "optional": true,
       "figure": {
         "components_from": "contributions",
         "ordered": false,
@@ -70,6 +75,12 @@
 Every claim here belongs to someone else's work, and the section argues what those works together leave unsolved.
 
 ## Whether the section exists
+
+<!-- Open Question 1 (design.md, `the-phases-are-derived-not-remembered`):
+resolved block-level — every `rw-*` block carries `optional: true` in the
+front matter. No schema change, no `_TOP_LEVEL_ALLOWED` widening. This is
+what "the whole section is conditional" means at the block granularity the
+contract already speaks. -->
 
 This is one decision with two criteria, and either one is enough to create the
 section:

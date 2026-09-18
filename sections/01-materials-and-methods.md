@@ -36,8 +36,7 @@
     {
       "id": "mm-proposal",
       "requires_facts": [
-        "formulation",
-        "implementation"
+        "formulation"
       ],
       "requires_declarations": [],
       "citations": "resolution",

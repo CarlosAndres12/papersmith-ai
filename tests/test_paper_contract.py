@@ -394,10 +394,10 @@ class SchemaTests(unittest.TestCase):
 #: and `ModeTranscriptionTests` above hold that lock independently.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "48fa21539c618d5a45fd7e843c6a4a429158779720f8f89259242bf8fb6e6f39"[:64],
-    "02-experimental-setup.md": "f26f9f30a9bc6db45cbfb67d35d6b517958738f99987be7b874cc29b30fba82f"[:64],
+    "02-experimental-setup.md": "3851984f0134c3289274bae100b5e7a39777d761d9934ef9e752a016e78d7054"[:64],
     "03-results-and-discussion.md": "93d756c9b2f426eebdbf1825b565514d9ee07861dad844c47dd65501860bb823"[:64],
     "04-limitations.md": "5eee4ea815aff06aed5dcb9ab960fb215cc2ff991a3e66c5f1c5aa955ff72b51"[:64],
-    "05-related-work.md": "705ca636cd2c8b63c84ccc0149c65928efd3df5a4a1019804f406c16f9d14aea"[:64],
+    "05-related-work.md": "79805e018f8e7189e419588c963b22b0ae32e08ced16880547d85909e5932d65"[:64],
     "06-introduction.md": "1f923f0c26ee3917c4a3ec192b17db6fc247958532f8deec933558a879edd4f9"[:64],
     "07-conclusions.md": "a584957a8591b0bdd0d538a1427c0061090008a7af170f8e69a367943d055a87"[:64],
     "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
@@ -1532,6 +1532,38 @@ class VocabularyLeakTests(unittest.TestCase):
                 leaking[str(document.relative_to(FORGE_ROOT))] = hits
 
         self.assertEqual(leaking, {})
+
+
+class DatasetForkAndProposalFactsTests(unittest.TestCase):
+    """`the-phases-are-derived-not-remembered`, Phase 2: `es-dataset` is the
+    missing branch of the dataset-placement fork (mirroring `mm-dataset`),
+    every `rw-*` block is `optional: true` (Open Question 1, block-level,
+    no schema change), and `mm-proposal` depends only on `formulation` --
+    `implementation` was an over-demand `01-materials-and-methods.md`'s own
+    Inputs table never made (it names `implementation` only for the narrow
+    "correct reading of an ambiguous equation" role)."""
+
+    def test_es_dataset_mirrors_mm_dataset(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        es_dataset = corpus.blocks["experimental-setup.es-dataset"]
+        mm_dataset = corpus.blocks["materials-and-methods.mm-dataset"]
+        self.assertTrue(es_dataset.optional)
+        self.assertEqual(es_dataset.requires_facts, ("dataset",))
+        self.assertEqual(es_dataset.optional, mm_dataset.optional)
+        self.assertEqual(es_dataset.requires_facts, mm_dataset.requires_facts)
+
+    def test_every_related_work_block_is_optional(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        rw_blocks = corpus.order_by_section["related-work"]
+        self.assertEqual(len(rw_blocks), 5)
+        for qualified_id in rw_blocks:
+            self.assertTrue(corpus.blocks[qualified_id].optional, qualified_id)
+
+    def test_mm_proposal_depends_only_on_the_formulation(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        mm_proposal = corpus.blocks["materials-and-methods.mm-proposal"]
+        self.assertEqual(mm_proposal.requires_facts, ("formulation",))
+        self.assertNotIn("implementation", mm_proposal.requires_facts)
 
 
 if __name__ == "__main__":

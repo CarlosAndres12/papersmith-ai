@@ -17,6 +17,15 @@
       "citations": "none"
     },
     {
+      "id": "es-dataset",
+      "requires_facts": [
+        "dataset"
+      ],
+      "requires_declarations": [],
+      "citations": "resolution",
+      "optional": true
+    },
+    {
       "id": "es-assessment",
       "requires_facts": [
         "dataset",
@@ -199,6 +208,7 @@ box appearing in both means one of them is wrong.
 
 | Input | Unblocks |
 |---|---|
+| The **dataset** — when this section owns it | `es-dataset` |
 | Which **property** each contribution claims — if it was promised, this is where its instrument is named | `es-assessment` |
 | The **competing methods** — the baseline list settled in the state of the art | `es-assessment` |
 | The **axes** — what the comparison is swept over | `es-assessment` |

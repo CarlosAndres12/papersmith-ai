@@ -41,7 +41,7 @@ unmentioned.
 | # | Unit | Touches | New refusals | Est. lines | Budget risk | Depends on | Status |
 |---|------|---------|---------------|------------|--------------|------------|--------|
 | 1 | Normalize all ten contracts (`External inputs` / `Internal chain`) + shared `_verify_input_partition` checker + `06` backtick row-id gap | all ten `sections/*.md`, `paper_graph.py`, `paper_cli.py`, `design.md`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `INPUT_PARTITION_ABSENT` | ~780 | Low (ceiling 1200) | — | [x] |
-| 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [ ] |
+| 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [x] |
 | 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [ ] |
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [ ] |
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [ ] |
@@ -113,6 +113,31 @@ unmentioned.
 
 ---
 
+## Unit 2 — Notes / Deviations
+
+- **Digest recapture.** `02-experimental-setup.md` and `05-related-work.md`
+  both gained a prose-body row/comment (the new `es-dataset` External-inputs
+  row; the Open Question 1 HTML comment), so their `PRE_MIGRATION_BODY_DIGESTS`
+  entries in `tests/test_paper_contract.py` were recomputed and replaced.
+  `01-materials-and-methods.md` only lost a JSON array entry
+  (`mm-proposal.requires_facts`), which sits inside the header, never the
+  body — its digest is unchanged, confirmed by recomputing it too.
+- **`es-assessment`'s own `requires_facts` left untouched.** It still lists
+  `"dataset"` directly, unconditionally, alongside the three facts
+  `es-dataset` and `es-assessment` both partly answer to. Task 2.1 asked
+  only to add the new `es-dataset` block and its table row, mirroring
+  `mm-dataset` — not to rewire `es-assessment`'s own dependency list. That
+  rewiring, if wanted, is a separate decision outside this unit's scope.
+- **The "comment referencing design.md's Open Questions" lives in the
+  prose body, not the JSON header.** The front-matter schema is closed
+  (`_BLOCK_ALLOWED`/`_TOP_LEVEL_ALLOWED` reject unknown keys), so an
+  arbitrary `_comment` key would refuse `MALFORMED_HEADER`. The decision
+  is recorded as an HTML comment (`<!-- -->`, invisible in rendered
+  markdown) directly above `05-related-work.md`'s "Whether the section
+  exists" heading.
+
+---
+
 ## Phase 1: Normalize all ten contracts + `_verify_input_partition`
 
 **Merged from 1a/1b/1c under the 1200-line ceiling.** Splitting them left the corpus half-normalized between PRs: `_verify_input_partition` runs inside `assemble_corpus`, so every un-normalized contract would refuse `INPUT_PARTITION_ABSENT` and take `contract`, `order`, `plan`, `readiness`, `verify` and `write` down with it until the last split landed.
@@ -146,12 +171,12 @@ unmentioned.
 
 ## Phase 2: `es-dataset` + `rw-*` optional + `mm-proposal` facts
 
-- [ ] 2.1 Add `es-dataset` to `sections/02-experimental-setup.md`'s JSON header (`optional: true`, `requires_facts: ["dataset"]`, mirroring `mm-dataset`) and to its normalized tables.
-- [ ] 2.2 Resolve Open Question 1: set `optional: true` on every `rw-*` block id in `sections/05-related-work.md` (block-level, no schema change); record the decision as a comment referencing `design.md`'s Open Questions.
-- [ ] 2.3 Drop `implementation` from `mm-proposal.requires_facts` in `sections/01-materials-and-methods.md`, leaving `["formulation"]`.
-- [ ] 2.4 Scenario test: `contract --file sections/02-experimental-setup.md` shows `es-dataset` with `optional: true`, `requires_facts: ["dataset"]`.
-- [ ] 2.5 Scenario test: `mm-proposal.requires_facts` contains `formulation`, not `implementation`.
-- [ ] 2.6 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
+- [x] 2.1 Add `es-dataset` to `sections/02-experimental-setup.md`'s JSON header (`optional: true`, `requires_facts: ["dataset"]`, mirroring `mm-dataset`) and to its normalized tables.
+- [x] 2.2 Resolve Open Question 1: set `optional: true` on every `rw-*` block id in `sections/05-related-work.md` (block-level, no schema change); record the decision as a comment referencing `design.md`'s Open Questions.
+- [x] 2.3 Drop `implementation` from `mm-proposal.requires_facts` in `sections/01-materials-and-methods.md`, leaving `["formulation"]`.
+- [x] 2.4 Scenario test: `contract --file sections/02-experimental-setup.md` shows `es-dataset` with `optional: true`, `requires_facts: ["dataset"]`.
+- [x] 2.5 Scenario test: `mm-proposal.requires_facts` contains `formulation`, not `implementation`.
+- [x] 2.6 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing -v`.
 
 ## Phase 4: Internal-chain → `after` transcription + both refusals
 
