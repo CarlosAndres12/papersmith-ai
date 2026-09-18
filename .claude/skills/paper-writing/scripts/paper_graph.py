@@ -494,17 +494,28 @@ def _sort_key(corpus: Corpus, qualified_id: str) -> tuple:
     return (record.position, record.block_index, qualified_id)
 
 
+def _build_graph(corpus: Corpus, edge_set: EdgeSet) -> tuple:
+    """`(successors, indegree)` — the adjacency shape both `derive_order`
+    (one flattened total order) and `derive_waves` (the same graph's
+    successive Kahn frontiers, thrown away by `derive_order`'s own min-heap
+    today) sort over. `successors[qid]` lists ids that must be written
+    after `qid`; `indegree[qid]` counts unmet `after` dependencies. Pure —
+    no mutation of `corpus` or `edge_set`, no disk read."""
+    successors: dict = {qid: [] for qid in corpus.blocks}
+    indegree: dict = {qid: 0 for qid in corpus.blocks}
+    for before, after, _source in edge_set.edges:
+        successors[before].append(after)
+        indegree[after] += 1
+    return successors, indegree
+
+
 def derive_order(corpus: Corpus, edge_set: EdgeSet) -> list:
     """Kahn's algorithm over the block graph, min-heap tie-broken by
     `_sort_key`. Refuses `ORDER_CYCLE` (work-state), naming the
     participating blocks, when Kahn terminates with nodes remaining — a
     minimal cycle extracted by DFS over the residual subgraph.
     """
-    successors: dict = {qid: [] for qid in corpus.blocks}
-    indegree: dict = {qid: 0 for qid in corpus.blocks}
-    for before, after, _source in edge_set.edges:
-        successors[before].append(after)
-        indegree[after] += 1
+    successors, indegree = _build_graph(corpus, edge_set)
 
     heap = [(_sort_key(corpus, qid), qid) for qid, degree in indegree.items() if degree == 0]
     heapq.heapify(heap)
@@ -561,3 +572,50 @@ def _extract_minimal_cycle(remaining: set, successors: dict) -> list:
         if found is not None:
             return found
     return sorted(remaining)
+
+
+def derive_waves(corpus: Corpus, edge_set: EdgeSet) -> list:
+    """The same block graph `derive_order` flattens, reported instead as
+    waves 1..N — every wave the full set of blocks whose in-degree in the
+    residual graph reaches zero at that Kahn round, tie-broken WITHIN a
+    wave the same way `derive_order` tie-breaks (`_sort_key`). Reuses
+    `_build_graph` (design.md D2) — no second graph construction, no
+    second sort key. Refuses `ORDER_CYCLE`, the identical detail string
+    `derive_order` raises via the same `_extract_minimal_cycle`, when
+    nodes remain unassigned once the frontier is exhausted.
+
+    `derive_order`'s own min-heap holds ready nodes from SEVERAL frontiers
+    at once (a node from wave 2 can out-rank, by `_sort_key`, a still-
+    unpopped node from wave 1), so its flattened sequence legitimately
+    interleaves waves. Flattening THIS function's waves is therefore never
+    asserted equal to `derive_order`'s sequence — only that both name the
+    same node set, and that every edge crosses a wave boundary
+    (design.md D2, invariants 1/2/5; `specs/writing-phases/spec.md`).
+    """
+    successors, indegree = _build_graph(corpus, edge_set)
+
+    remaining_indegree = dict(indegree)
+    frontier = sorted(
+        (qid for qid, degree in remaining_indegree.items() if degree == 0),
+        key=lambda qid: _sort_key(corpus, qid),
+    )
+
+    waves: list = []
+    written = 0
+    while frontier:
+        waves.append(frontier)
+        written += len(frontier)
+        next_frontier: list = []
+        for qid in frontier:
+            for successor in successors[qid]:
+                remaining_indegree[successor] -= 1
+                if remaining_indegree[successor] == 0:
+                    next_frontier.append(successor)
+        frontier = sorted(next_frontier, key=lambda qid: _sort_key(corpus, qid))
+
+    if written != len(corpus.blocks):
+        remaining = set(corpus.blocks) - {qid for wave in waves for qid in wave}
+        cycle = _extract_minimal_cycle(remaining, successors)
+        raise Refused("ORDER_CYCLE", f"a cycle among blocks: {' -> '.join(cycle)}")
+
+    return waves

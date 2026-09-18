@@ -3883,5 +3883,303 @@ class OptionalReadinessTests(unittest.TestCase):
         self.assertNotEqual(report["status"], "not-applicable")
 
 
+# =====================================================================
+# `derive_waves` -- Work Unit 5
+# =====================================================================
+
+#: `writing-phases` spec / tasks.md Work Unit 5. Every fixture below is
+#: SYNTHETIC -- never the live `sections/` tree, whose shape keeps moving
+#: under later units. Mirrors `test_paper_contract.py`'s own
+#: `_write_section`/`_block`/`_quote_source` shape (`### Internal chain`
+#: stays "None": transcribing a chain PROSE row into a graph edge is unit
+#: 4's concern, already covered there -- this unit only exercises
+#: header-level `after` edges over `_build_graph`/`derive_waves`).
+_WAVE_BODY = "Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+
+
+def _wave_section(section: str, position: int, block_id: str, *, after=None) -> dict:
+    header = {
+        "section": section,
+        "position": position,
+        "blocks": [
+            {"id": block_id, "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ],
+    }
+    if after is not None:
+        header["after"] = after
+    return header
+
+
+def _write_wave_section(sections_dir: Path, filename: str, header: dict) -> None:
+    sections_dir.mkdir(parents=True, exist_ok=True)
+    text = "---\n" + json.dumps(header, indent=2) + "\n---\n\n" + _WAVE_BODY
+    (sections_dir / filename).write_text(text, encoding="utf-8")
+
+
+def _wave_after(target: str, source_file: str) -> dict:
+    return {"target": target, "source": {"file": source_file, "quote": "Prose."}}
+
+
+class WaveTests(unittest.TestCase):
+    """`writing-phases` spec, `Requirement: Wave Grouping Is Frontier-
+    Based` (tasks.md Work Unit 5, 5.1-5.10). `derive_waves` groups
+    `derive_order`'s own graph into Kahn frontiers instead of flattening
+    them -- design.md D2's five invariants, each proved independently."""
+
+    def test_zero_edge_corpus_is_one_wave(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-a.md", _wave_section("a", 1, "only"))
+            _write_wave_section(sections_dir, "02-b.md", _wave_section("b", 2, "only"))
+            _write_wave_section(sections_dir, "03-c.md", _wave_section("c", 3, "only"))
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            waves = paper_graph.derive_waves(corpus, edges)
+
+            self.assertEqual(len(waves), 1)
+            self.assertEqual(set(waves[0]), {"a.only", "b.only", "c.only"})
+
+    def test_a_pure_chain_produces_n_waves_matching_chain_length(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-a.md", _wave_section("a", 1, "only"))
+            _write_wave_section(
+                sections_dir, "02-b.md",
+                _wave_section("b", 2, "only", after=[_wave_after("a", "sections/02-b.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "03-c.md",
+                _wave_section("c", 3, "only", after=[_wave_after("b", "sections/03-c.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "04-d.md",
+                _wave_section("d", 4, "only", after=[_wave_after("c", "sections/04-d.md")]),
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            waves = paper_graph.derive_waves(corpus, edges)
+
+            self.assertEqual(
+                waves,
+                [["a.only"], ["b.only"], ["c.only"], ["d.only"]],
+            )
+
+    def test_invariant_1_waves_partition_the_same_node_set_derive_order_returns(self) -> None:
+        """Diamond fixture: a; b after a; c after a; d after b and c."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-a.md", _wave_section("a", 1, "only"))
+            _write_wave_section(
+                sections_dir, "02-b.md",
+                _wave_section("b", 2, "only", after=[_wave_after("a", "sections/02-b.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "03-c.md",
+                _wave_section("c", 3, "only", after=[_wave_after("a", "sections/03-c.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "04-d.md",
+                _wave_section("d", 4, "only", after=[
+                    _wave_after("b", "sections/04-d.md"), _wave_after("c", "sections/04-d.md"),
+                ]),
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            order = paper_graph.derive_order(corpus, edges)
+            waves = paper_graph.derive_waves(corpus, edges)
+
+            from itertools import chain
+            flattened_set = set(chain.from_iterable(waves))
+            self.assertEqual(flattened_set, set(order))
+            self.assertEqual(flattened_set, set(corpus.blocks))
+            # No block omitted or duplicated across waves.
+            self.assertEqual(sum(len(wave) for wave in waves), len(corpus.blocks))
+            self.assertEqual(
+                waves,
+                [["a.only"], ["b.only", "c.only"], ["d.only"]],
+            )
+
+    def test_invariant_2_every_edge_crosses_a_wave_boundary(self) -> None:
+        """Diamond fixture again, read generically: for every collected
+        edge `(before, after)`, `wave_of(before) < wave_of(after)` --
+        this is the exact test `_run_against_mutant` below targets."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-a.md", _wave_section("a", 1, "only"))
+            _write_wave_section(
+                sections_dir, "02-b.md",
+                _wave_section("b", 2, "only", after=[_wave_after("a", "sections/02-b.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "03-c.md",
+                _wave_section("c", 3, "only", after=[_wave_after("a", "sections/03-c.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "04-d.md",
+                _wave_section("d", 4, "only", after=[
+                    _wave_after("b", "sections/04-d.md"), _wave_after("c", "sections/04-d.md"),
+                ]),
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            waves = paper_graph.derive_waves(corpus, edges)
+
+            wave_of = {qid: index for index, wave in enumerate(waves) for qid in wave}
+            for before, after, _source in edges.edges:
+                self.assertLess(
+                    wave_of[before], wave_of[after],
+                    f"{before} (wave {wave_of[before]}) does not strictly precede "
+                    f"{after} (wave {wave_of[after]})",
+                )
+
+    def test_invariant_3_wave_membership_is_independent_of_dict_iteration_order(self) -> None:
+        """Waves are sorted by `_sort_key`, never by dict/filename
+        iteration -- feed `collect_edges`' own edge list back in reversed
+        order and confirm the waves (as sets, and as sorted lists) are
+        unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-a.md", _wave_section("a", 1, "only"))
+            _write_wave_section(
+                sections_dir, "02-b.md",
+                _wave_section("b", 2, "only", after=[_wave_after("a", "sections/02-b.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "03-c.md",
+                _wave_section("c", 3, "only", after=[_wave_after("a", "sections/03-c.md")]),
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            waves_forward = paper_graph.derive_waves(corpus, edges)
+
+            perturbed = paper_graph.EdgeSet(
+                edges=list(reversed(edges.edges)), dangling=list(edges.dangling),
+            )
+            waves_perturbed = paper_graph.derive_waves(corpus, perturbed)
+
+            self.assertEqual(waves_forward, waves_perturbed)
+
+    def test_invariant_4_a_cycle_refuses_order_cycle_with_derive_orders_own_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(
+                sections_dir, "01-a.md",
+                _wave_section("a", 1, "x", after=[_wave_after("b.y", "sections/01-a.md")]),
+            )
+            _write_wave_section(
+                sections_dir, "02-b.md",
+                _wave_section("b", 2, "y", after=[_wave_after("a.x", "sections/02-b.md")]),
+            )
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+
+            with self.assertRaises(Refused) as order_ctx:
+                paper_graph.derive_order(corpus, edges)
+            with self.assertRaises(Refused) as waves_ctx:
+                paper_graph.derive_waves(corpus, edges)
+
+            self.assertEqual(waves_ctx.exception.code, "ORDER_CYCLE")
+            self.assertEqual(waves_ctx.exception.detail, order_ctx.exception.detail)
+            self.assertIn("a.x", waves_ctx.exception.detail)
+            self.assertIn("b.y", waves_ctx.exception.detail)
+
+    def test_invariant_5_flattened_waves_are_not_asserted_equal_to_derive_orders_sequence(self) -> None:
+        """The rejected false lock, documented as a negative test
+        (design.md D2, invariant 5): `derive_order`'s min-heap can pop a
+        node from a LATER frontier ahead of a still-unpopped node from an
+        EARLIER one, when the later node's `_sort_key` outranks it --
+        legitimate interleaving, not a bug. Fixture: `alpha1` (position 1)
+        and `alpha2` (position 10) are both wave 1 (no dependencies); `beta`
+        (position 2) depends only on `alpha1`. `derive_order`'s heap pops
+        `alpha1`, immediately frees `beta` (position 2), and pops IT before
+        `alpha2` (position 10) -- but wave-grouping keeps `alpha2` in wave 1
+        (it was ready from the start) and `beta` in wave 2 (it only became
+        ready once wave 1 finished), so the two orders diverge."""
+        with tempfile.TemporaryDirectory() as tmp:
+            sections_dir = Path(tmp) / "sections"
+            _write_wave_section(sections_dir, "01-alpha1.md", _wave_section("alpha1", 1, "only"))
+            _write_wave_section(
+                sections_dir, "02-beta.md",
+                _wave_section("beta", 2, "only", after=[_wave_after("alpha1", "sections/02-beta.md")]),
+            )
+            _write_wave_section(sections_dir, "10-alpha2.md", _wave_section("alpha2", 10, "only"))
+
+            corpus = paper_graph.assemble_corpus(sections_dir)
+            edges = paper_graph.collect_edges(corpus)
+            order = paper_graph.derive_order(corpus, edges)
+            waves = paper_graph.derive_waves(corpus, edges)
+
+            from itertools import chain
+            flattened = list(chain.from_iterable(waves))
+
+            # The false lock this test documents as REJECTED:
+            self.assertNotEqual(
+                flattened, order,
+                "flattened waves equalled derive_order's own sequence on a "
+                "genuinely multi-frontier fixture -- this fixture no longer "
+                "demonstrates legitimate interleaving; strengthen it rather "
+                "than assert sequence equality (design.md D2, invariant 5)",
+            )
+            # What IS true instead: same node set, waves respect dependency order.
+            self.assertEqual(set(flattened), set(order))
+            self.assertEqual(waves, [["alpha1.only", "alpha2.only"], ["beta.only"]])
+            self.assertEqual(order, ["alpha1.only", "beta.only", "alpha2.only"])
+
+    def test_the_real_shipped_corpus_decomposes_with_the_preamble_strictly_after_the_proposal(self) -> None:
+        """Regression, not a fixture: `materials-and-methods.mm-proposal`
+        must land strictly earlier than `materials-and-methods.mm-preamble`
+        -- the single clearest evidence this change works (the preamble no
+        longer shares a wave with the block it must name). Wave COUNT and
+        exact per-wave sizes are measured, reported below, and deliberately
+        NOT hard-asserted here: later units still change this corpus."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edges = paper_graph.collect_edges(corpus)
+        order = paper_graph.derive_order(corpus, edges)
+        waves = paper_graph.derive_waves(corpus, edges)
+
+        from itertools import chain
+        flattened_set = set(chain.from_iterable(waves))
+        self.assertEqual(flattened_set, set(order))
+        self.assertEqual(flattened_set, set(corpus.blocks))
+        self.assertEqual(sum(len(wave) for wave in waves), len(corpus.blocks))
+
+        wave_of = {qid: index for index, wave in enumerate(waves) for qid in wave}
+        for before, after, _source in edges.edges:
+            self.assertLess(wave_of[before], wave_of[after])
+
+        self.assertLess(
+            wave_of["materials-and-methods.mm-proposal"],
+            wave_of["materials-and-methods.mm-preamble"],
+        )
+
+
+class WaveMutationProofTests(unittest.TestCase):
+    """tasks.md 5.6 / design.md's own mutation table, item 4: `derive_waves`
+    appending a newly-ready successor to the CURRENT wave instead of the
+    NEXT one must fail `WaveTests.test_invariant_2_every_edge_crosses_a_
+    wave_boundary` -- a passing assertion beside an unexercised guard is
+    not a mutation that ran."""
+
+    def test_mutation_appending_to_the_current_wave_fails_the_boundary_invariant(self) -> None:
+        proc = _run_against_mutant(
+            "                if remaining_indegree[successor] == 0:\n"
+            "                    next_frontier.append(successor)",
+            "                if remaining_indegree[successor] == 0:\n"
+            "                    waves[-1].append(successor)",
+            "tests.test_paper_writing.WaveTests"
+            ".test_invariant_2_every_edge_crosses_a_wave_boundary",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -45,7 +45,7 @@ unmentioned.
 | 2 | `es-dataset` + `rw-*` optional + `mm-proposal` facts | `sections/01,02,05-*.md`, `tests/test_paper_contract.py` | none | ~110 | Low | 1 | [x] |
 | 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [x] |
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [x] |
-| 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [ ] |
+| 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [x] |
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [ ] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
 | 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
@@ -521,16 +521,88 @@ genuinely-empty claims checkable, without wiring any `after` edge (unit
 
 ## Phase 5: `derive_waves`
 
-- [ ] 5.1 Extract `_build_graph(corpus, edge_set) -> (successors, indegree)` from `derive_order`; `derive_order`'s own behavior and tests stay green, unmodified.
-- [ ] 5.2 Add `derive_waves(corpus, edge_set) -> list[list[str]]`, reusing `_build_graph`, `_sort_key`, `_extract_minimal_cycle` + `ORDER_CYCLE` — no second cycle extractor, no new refusal.
-- [ ] 5.3 RED test invariant 1: `set(chain(*waves)) == set(corpus.blocks) == set(derive_order(...))` over the real post-unit-4 corpus.
-- [ ] 5.4 RED test invariant 2: for every edge `(before, after)`, `wave_of(before) < wave_of(after)`.
-- [ ] 5.5 RED test invariant 3: waves sorted by `_sort_key`; membership identical when dict-iteration order is artificially perturbed.
-- [ ] 5.6 RED test invariant 4: a fixture cycle refuses `ORDER_CYCLE` with the identical detail string `derive_order` produces.
-- [ ] 5.7 RED test invariant 5 (negative): flattened waves are NOT asserted equal to `derive_order`'s sequence on a multi-frontier fixture — documents the rejected false lock.
-- [ ] 5.8 Fixture tests: zero-edge corpus → one wave; a pure chain → N waves matching chain length.
-- [ ] 5.9 Measure and record the real wave count/shape against the shipped corpus; compare against 4.12's scratch note — confirms waves are measured, not assumed.
-- [ ] 5.10 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+- [x] 5.1 Extract `_build_graph(corpus, edge_set) -> (successors, indegree)` from `derive_order`; `derive_order`'s own behavior and tests stay green, unmodified.
+- [x] 5.2 Add `derive_waves(corpus, edge_set) -> list[list[str]]`, reusing `_build_graph`, `_sort_key`, `_extract_minimal_cycle` + `ORDER_CYCLE` — no second cycle extractor, no new refusal.
+- [x] 5.3 RED test invariant 1: `set(chain(*waves)) == set(corpus.blocks) == set(derive_order(...))` over the real post-unit-4 corpus.
+- [x] 5.4 RED test invariant 2: for every edge `(before, after)`, `wave_of(before) < wave_of(after)`.
+- [x] 5.5 RED test invariant 3: waves sorted by `_sort_key`; membership identical when dict-iteration order is artificially perturbed.
+- [x] 5.6 RED test invariant 4: a fixture cycle refuses `ORDER_CYCLE` with the identical detail string `derive_order` produces.
+- [x] 5.7 RED test invariant 5 (negative): flattened waves are NOT asserted equal to `derive_order`'s sequence on a multi-frontier fixture — documents the rejected false lock.
+- [x] 5.8 Fixture tests: zero-edge corpus → one wave; a pure chain → N waves matching chain length.
+- [x] 5.9 Measure and record the real wave count/shape against the shipped corpus; compare against 4.12's scratch note — confirms waves are measured, not assumed.
+- [x] 5.10 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+---
+
+## Unit 5 — Notes / Deviations
+
+- **`_build_graph` extraction is byte-identical.** `derive_order`'s two
+  lines building `successors`/`indegree` moved verbatim into
+  `_build_graph(corpus, edge_set) -> (successors, indegree)`, called from
+  both `derive_order` and `derive_waves`. `tests.test_paper_contract`'s
+  full 89-test suite (`derive_order`'s only pre-existing regression
+  coverage) was run both before and after the extraction with no change
+  in outcome.
+- **`derive_waves` processes whole frontiers, `derive_order` keeps its
+  min-heap.** Each round collects every currently zero-indegree id,
+  sorts that ROUND's frontier by `_sort_key`, appends it as one wave,
+  then decrements successors and collects the next round's newly-zero
+  ids the same way. No `heapq` needed for this shape (`derive_order`
+  keeps `heapq` because it interleaves across rounds; `derive_waves`
+  intentionally does not). Cycle handling is the same shared
+  `_extract_minimal_cycle` + `ORDER_CYCLE`, over the same residual
+  `remaining` computation.
+- **The trap avoided, concretely.** No test anywhere asserts
+  `list(chain(*waves)) == derive_order(...)`. A dedicated negative test
+  (`test_invariant_5_flattened_waves_are_not_asserted_equal_to_derive_
+  orders_sequence`) instead CONSTRUCTS a fixture where the two orders
+  provably diverge (`alpha1`/`alpha2` both wave-1, `beta` depends only on
+  `alpha1`) — `derive_order`'s heap pops the now-ready `beta` (position 2)
+  ahead of the still-unpopped `alpha2` (position 10), while wave-grouping
+  keeps `alpha2` in wave 1 (ready from the start) and `beta` in wave 2
+  (ready only once wave 1 finished). `derive_order` returns
+  `[alpha1, beta, alpha2]`; `derive_waves` flattens to
+  `[alpha1, alpha2, beta]` — genuinely different sequences, same node set.
+  This is the rejected false lock made concrete, not merely narrated.
+- **Mutation proof (5.6 / design.md mutation table item 4), real, not
+  narrated.** `_run_against_mutant` replaces
+  `next_frontier.append(successor)` with `waves[-1].append(successor)`
+  (append into the CURRENT wave, whose list object IS `waves[-1]` at that
+  point) against `WaveTests.test_invariant_2_every_edge_crosses_a_wave_
+  boundary` on the diamond fixture — the mutant fails that test (confirmed
+  non-zero exit, `MUTANT_IMPORTED_OK` printed first). Stash-verified RED:
+  every new `Wave*` test was run against the pre-implementation source
+  (`git stash` on `paper_graph.py` only) and failed for a real reason
+  (`AttributeError: module 'paper_graph' has no attribute 'derive_waves'`
+  / the mutation harness's own anchor-count assertion), never vacuously.
+- **All fixtures synthetic, per the launch brief's own trap warning.**
+  Every `Wave*` test other than the one real-corpus regression builds its
+  own `sections_dir` under `tempfile.TemporaryDirectory()`, mirroring
+  `test_paper_contract.py`'s `_write_section`/`_block`/`_quote_source`
+  shape (new local helpers `_wave_section`/`_write_wave_section`/
+  `_wave_after`, scoped to this test class only — no cross-file test
+  import). `### Internal chain` stays `"None"` in every fixture; only
+  header-level `after` entries build the graph, since transcribing a
+  chain-prose row into an edge is unit 4's already-shipped concern.
+- **5.9, measured against 4.12's forecast.** The real shipped corpus (47
+  blocks, post-units 1/1b/2/3/4) decomposes into waves sized
+  **28 / 11 / 5 / 2 / 1** (`sum([28,11,5,2,1]) == 47`, confirmed) —
+  `materials-and-methods.mm-proposal` lands in wave index 1 (the second
+  wave) and `materials-and-methods.mm-preamble` in wave index 2 (the
+  third), so the preamble no longer shares a wave with the proposal it
+  must name. This is a dramatic correction of 4.12's own recorded
+  estimate ("only three edges exist today; waves collapse to 35/8/2") and
+  of `proposal.md`'s identical Risk row: unit 4 wired eleven-plus real
+  `after` edges in the interim, which is exactly why 4.12 flagged the old
+  number as provisional rather than final. No test hard-asserts the
+  literal `28/11/5/2/1` shape (the launch brief's own instruction — later
+  units still change this corpus); the one regression test asserts only
+  the node-set/edge-boundary invariants plus the proposal-before-preamble
+  relationship, which is the part that will keep meaning something.
+- **No CLI verb of its own yet.** `derive_waves` has no `paper_cli.py`
+  wiring in this unit — Work-Unit Evidence's own runtime harness column
+  says `N/A`, correctly: unit 6's `phases` verb is its first caller.
+  Confirmed `paper_cli.py` was not touched.
 
 ## Phase 6: `readiness` basis + `phases` verb
 
