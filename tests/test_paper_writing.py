@@ -43,6 +43,8 @@ import paper_leak  # noqa: E402
 import paper_coupling_evidence  # noqa: E402
 import paper_verify  # noqa: E402
 import paper_objective  # noqa: E402
+import paper_graph  # noqa: E402
+import paper_readiness  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -2508,8 +2510,8 @@ class ReadOnlyTests(unittest.TestCase):
 
     def test_mutation_8_a_write_in_paper_verify_fails_the_manifest_guard(self) -> None:
         proc = _run_against_mutant(
-            "def run(evidence) -> dict:",
-            'def run(evidence) -> dict:\n'
+            "def run(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:",
+            'def run(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:\n'
             '    import pathlib as _pl\n'
             '    _pl.Path(evidence.paper_dir, "main.tex").write_bytes(b"x")',
             "tests.test_paper_writing.ReadOnlyTests.test_content_manifest_unchanged_by_a_real_verify_run",
@@ -3731,6 +3733,154 @@ class ObjectiveNorthTests(unittest.TestCase):
                 f"exist ({when!r}), but paper_cli.py's own parser roster "
                 f"already ships {shipped_for_stage!r} for it -- the north "
                 f"is stale, not the CLI")
+
+
+def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) -> None:
+    """One block, `res-contrib`, requiring the `contributions` fact --
+    minimal enough that `check_contribution_list`'s derived block set for
+    this corpus is exactly this one block, so "entirely optional-and-
+    unopened" is trivially the whole set (`optional-block-semantics` spec,
+    tasks.md Work Unit 3, 3.6/3.7)."""
+    sections_dir.mkdir(parents=True, exist_ok=True)
+    header = {
+        "section": "results", "position": 1,
+        "blocks": [
+            {"id": "res-contrib", "requires_facts": ["contributions"],
+             "requires_declarations": [], "citations": "none", "optional": optional},
+        ],
+    }
+    text = (
+        "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+    (sections_dir / "01-results.md").write_text(text, encoding="utf-8")
+
+
+class OptionalVerifyTests(unittest.TestCase):
+    """`optional-block-semantics` spec, `Requirement: Verify Excuses An
+    Unopened Optional Block` (tasks.md, Work Unit 3, 3.5-3.7). Calls each
+    check function directly with an explicit `optional_block_ids` set built
+    from a real corpus read -- the wiring of that set into `run()`'s only
+    real caller today (`paper_cli.cmd_verify`) is deferred: it needs
+    `paper_graph.assemble_corpus`, and neither `paper_cli.py` nor
+    `paper_coupling_evidence.py` is in this unit's allowed edit roots. See
+    this unit's own notes for exactly why."""
+
+    def _build(self, *, optional: bool, opened: bool):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        paper_dir = Path(tmp.name) / "paper"
+        sections_dir = Path(tmp.name) / "sections"
+        _write_optional_contribution_section(sections_dir, optional=optional)
+        paper_scaffold.scaffold(paper_dir)
+        if opened:
+            paper_block.open_block(paper_dir, "res-contrib", at_end=True)
+        (paper_dir / "couplings.json").write_text(
+            json.dumps({"blocks": {"res-contrib": True}, "facts": {"contributions": []}}),
+            encoding="utf-8",
+        )
+        corpus = paper_graph.assemble_corpus(sections_dir)
+        optional_ids = frozenset(b.block_id for b in corpus.blocks.values() if b.optional)
+        evidence = paper_coupling_evidence.gather(paper_dir, sections_dir)
+        return evidence, optional_ids
+
+    def test_unopened_optional_block_reports_unmeasured_optional_block_absent(self) -> None:
+        evidence, optional_ids = self._build(optional=True, opened=False)
+
+        entry = paper_verify.check_contribution_list(evidence, optional_block_ids=optional_ids)
+
+        self.assertEqual(entry["verdict"], "unmeasured")
+        self.assertEqual(entry["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+
+    def test_unopened_non_optional_block_never_reports_optional_block_absent(self) -> None:
+        evidence, optional_ids = self._build(optional=False, opened=False)
+
+        entry = paper_verify.check_contribution_list(evidence, optional_block_ids=optional_ids)
+
+        self.assertNotEqual(entry["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+
+    def test_opened_optional_block_is_checked_exactly_like_a_non_optional_opened_block(self) -> None:
+        optional_evidence, optional_ids = self._build(optional=True, opened=True)
+        plain_evidence, plain_ids = self._build(optional=False, opened=True)
+
+        optional_entry = paper_verify.check_contribution_list(optional_evidence, optional_block_ids=optional_ids)
+        plain_entry = paper_verify.check_contribution_list(plain_evidence, optional_block_ids=plain_ids)
+
+        self.assertNotEqual(optional_entry["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+        self.assertEqual(optional_entry["verdict"], plain_entry["verdict"])
+        self.assertEqual(optional_entry["unmeasured_reason"], plain_entry["unmeasured_reason"])
+
+    def test_run_default_optional_block_ids_never_changes_behavior(self) -> None:
+        """`run()`'s new keyword-only parameter defaults to an empty
+        `frozenset()` -- calling it exactly as every existing caller does
+        today must report byte-identical results."""
+        evidence, _optional_ids = self._build(optional=True, opened=False)
+
+        report = paper_verify.run(evidence)
+
+        by_check = {entry["check"]: entry for entry in report["checks"]}
+        self.assertNotEqual(by_check["contribution-list"]["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+
+
+class OptionalReadinessTests(unittest.TestCase):
+    """`optional-block-semantics` spec, `Requirement: Readiness Reports The
+    Optional Flag` (tasks.md, Work Unit 3, 3.1/3.3) and the `not-applicable`
+    status half of `Requirement: ...` D6 describes (3.2/3.4) -- the basis
+    dispatch itself (`--paper`, `READINESS_BASIS_REQUIRED`) is Work Unit 6's
+    job; this class proves the pure function `compute_block_readiness`/
+    `compute_readiness` grew, called directly with explicit `opened`/`basis`
+    values, never through an invented CLI flag."""
+
+    def test_optional_flag_is_read_verbatim_over_the_shipped_corpus(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+
+        report = paper_readiness.compute_readiness(corpus, satisfied_facts=set(), satisfied_declarations=set())
+
+        by_block = {entry["block"]: entry for entry in report}
+        self.assertTrue(by_block["materials-and-methods.mm-dataset"]["optional"])
+        self.assertFalse(by_block["experimental-setup.es-assessment"]["optional"])
+
+    def test_optional_unopened_block_is_not_applicable_under_declaration_backed_basis(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        block = corpus.blocks["materials-and-methods.mm-dataset"]
+
+        declaration_backed = paper_readiness.compute_block_readiness(
+            block, satisfied_facts=set(), satisfied_declarations=set(),
+            opened=False, basis="declaration-backed",
+        )
+        flags_only = paper_readiness.compute_block_readiness(
+            block, satisfied_facts=set(), satisfied_declarations=set(),
+        )
+
+        self.assertEqual(declaration_backed["status"], "not-applicable")
+        self.assertIn(flags_only["status"], ("writable", "blocked"))
+        self.assertNotEqual(flags_only["status"], "not-applicable")
+
+    def test_optional_opened_block_is_never_not_applicable(self) -> None:
+        """`not-applicable` gates on ABSENCE, never on the `optional`
+        declaration alone -- the same discriminating principle
+        `optional-block-semantics`'s `paper_verify` requirement states
+        explicitly, proven here on the readiness side too."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        block = corpus.blocks["materials-and-methods.mm-dataset"]
+
+        opened_and_backed = paper_readiness.compute_block_readiness(
+            block, satisfied_facts=set(), satisfied_declarations=set(),
+            opened=True, basis="declaration-backed",
+        )
+
+        self.assertNotEqual(opened_and_backed["status"], "not-applicable")
+
+    def test_a_non_optional_block_is_never_not_applicable_even_when_unopened(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        block = corpus.blocks["experimental-setup.es-assessment"]
+
+        report = paper_readiness.compute_block_readiness(
+            block, satisfied_facts=set(), satisfied_declarations=set(),
+            opened=False, basis="declaration-backed",
+        )
+
+        self.assertNotEqual(report["status"], "not-applicable")
 
 
 if __name__ == "__main__":
