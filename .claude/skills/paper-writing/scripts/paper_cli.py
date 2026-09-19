@@ -1286,6 +1286,9 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
                     "missing_declarations": readiness_by_block[qualified_id]["missing_declarations"],
                     "declined_facts": readiness_by_block[qualified_id].get("declined_facts", []),
                     "stale_declines": readiness_by_block[qualified_id].get("stale_declines", []),
+                    "blocked_on_produced": readiness_by_block[qualified_id].get(
+                        "blocked_on_produced", []
+                    ),
                     "optional": readiness_by_block[qualified_id]["optional"],
                     "opened": qualified_id in opened_blocks,
                     "provenance": provenance_by_block.get(qualified_id),

@@ -66,6 +66,24 @@ all 13 with **five** new `after` edges (`related-work` ← `introduction.block-2
 `results-and-discussion` and `conclusions` from `introduction.block-4b`; `conclusions` ←
 `limitations`). Each carries its quote and one `### Internal chain` row.
 
+**Unit 4 correction (`sdd-verify` FAIL, CRITICAL).** Reachability alone never checked that the
+row EXISTS — `_verify_producer_reachability` proves the producer reaches the consumer somewhere
+in the graph, but a real `after` edge with no `### Internal chain` row naming the producer
+assembled clean: `contract-input-partition/spec.md`'s own added requirement ("every OTHER block
+whose `requires_facts` names that fact MUST carry an `### Internal chain` row resolving to the
+producer's qualified block id") was a promise the code never implemented. Closed by
+`_verify_producer_reachability`'s mirror, `_verify_producer_chain_rows`: for every requiring
+block, its OWN section body's `### Internal chain` table must carry a row whose dependency cell
+resolves to that exact producer id — `_verify_internal_chain`'s pre-existing ROW → edge check
+means this row is always backed by a DIRECT edge, so this closure is intentionally **stricter**
+than Decision C's reachability leniency for the specific case of a produced-fact dependency: the
+FACT graph must be directly documented, even though a generic (non-fact) `after` edge may still
+rely on transitive reachability alone. Measured on the live corpus: exactly one gap —
+`abstract.slot-2` required `contributions` (produced by `introduction.block-4b`) reachable only
+transitively (through `conclusions.concl-block-1` → the abstract's own section-level `after:
+conclusions` edge); closed with one direct `after` edge and one `### Internal chain` row, reusing
+the block's own already-anchored quote. Waves unmoved (`[22, 7, 11, 2, 2, 1, 1, 1]`).
+
 ### D — Totality is relative to consumption
 
 A produced-class fact that **some block requires** must have a producer in that same corpus.
@@ -115,9 +133,14 @@ This settles **decision 2** as amended: `introduction.block-3` takes `produces_f
 requirement (retitled "Every Producer Is Either Sole Or Corroborated"): a fact resolves to more
 than one block producer only when an existing coupling-verification check names that exact pair as
 the two sides it verifies agree — `gap` and Coupling 3, today the only such pair. Every other
-duplicate producer still refuses `FACT_PRODUCER_DUPLICATE`. Corroboration is checked structurally
-(does a coupling-verification check name this exact pair?), never by a hand-listed exception list
-of fact ids.
+duplicate producer still refuses `FACT_PRODUCER_DUPLICATE`. **Corrected in `sdd-verify` Unit 4,
+SUGGESTION:** the implemented check (`_verify_producer_duplication`) is `len(producer_ids) == 2
+and fact_id in paper_verify.CHECKS` — it verifies structurally that SOME coupling-verification
+check exists for that fact id (never a hand-listed exception list of fact ids), not that the check
+names this exact competing PAIR of blocks. Safe by construction today only because both `gap`'s
+producers and `check_gap`'s own pair derivation independently re-read the same corpus
+(`producers_by_fact`), so they can never disagree in practice — but the code does not itself prove
+pair-identity, only fact-id membership in the coupling roster.
 
 A coupling naming a fact nobody produces cannot reach this code: consumption-relative totality
 refuses at assembly, and `_blocks_by_fact` already maps a refusing assembly to the existing

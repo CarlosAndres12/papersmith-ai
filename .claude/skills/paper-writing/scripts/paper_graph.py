@@ -189,6 +189,7 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_self_reference(corpus)
     _verify_fact_totality(corpus, declarations)
     _verify_producer_reachability(corpus, declarations)
+    _verify_producer_chain_rows(corpus, declarations, section_bodies)
     return corpus
 
 
@@ -500,6 +501,61 @@ def _reaches(successors: dict, source: str, target: str) -> bool:
                 visited.add(successor)
                 stack.append(successor)
     return False
+
+
+def _verify_producer_chain_rows(corpus: Corpus, declarations: list, section_bodies: dict) -> None:
+    """`contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row`. `_verify_producer_reachability`
+    above proves the producer reaches the consumer somewhere in the
+    `after`-edge graph, transitively or not (Decision C); this is its
+    mirror in the DOCUMENTATION direction, the same way `_verify_internal_
+    chain` (ROW -> edge) and this function (EDGE -> row) are mirrors of
+    each other rather than one check re-derived twice: a reachable producer
+    is not enough on its own — the consumer's OWN `### Internal chain`
+    table, in its OWN section's prose body, must carry a row whose
+    dependency cell resolves to that exact producer's qualified id. Refuses
+    `PRODUCER_CHAIN_ABSENT` (work-state, the SAME code the reachability
+    check raises — both are two ways the identical guarantee, 'the reader
+    can find in prose why this producer must precede this consumer', can be
+    missing) naming the consumer, the fact, and the producer.
+
+    Reads `section_bodies` (section id -> its own body, the same dict
+    `_verify_block_subunits` already holds from `assemble_corpus`'s single
+    read loop) rather than the file-keyed `bodies` dict `_verify_internal_
+    chain` reads — a row lives in the CONSUMER's own section file, and
+    `record.section` is a semantic section id, not a filename, so this
+    reuses the one dict that is already keyed the way this lookup needs,
+    costing zero extra disk passes.
+    """
+    producers_by_fact = _producers_by_fact(declarations)
+    if not producers_by_fact:
+        return
+    rows_by_section: dict = {}
+    for section_id, body in section_bodies.items():
+        pairs = set()
+        for holder_cell, dependency_cell in _internal_chain_rows(body.decode("utf-8")):
+            holder_id = _chain_row_id(holder_cell)
+            dependency_id = _chain_row_id(dependency_cell)
+            if holder_id is not None and dependency_id is not None:
+                pairs.add((holder_id, dependency_id))
+        rows_by_section[section_id] = pairs
+
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id in record.requires_facts:
+            producer_ids = producers_by_fact.get(fact_id)
+            if not producer_ids:
+                continue
+            for producer_id in producer_ids:
+                if producer_id == qualified_id:
+                    continue  # FACT_SELF_REQUIRED already refuses this shape
+                pairs = rows_by_section.get(record.section, set())
+                if (qualified_id, producer_id) not in pairs:
+                    raise Refused(
+                        "PRODUCER_CHAIN_ABSENT",
+                        f"{qualified_id}: requires {fact_id!r}, produced by "
+                        f"{producer_id!r}, but no '### Internal chain' row in "
+                        f"{record.section!r} names {producer_id!r} as a dependency",
+                    )
 
 
 def _internal_chain_rows(text: str) -> list:

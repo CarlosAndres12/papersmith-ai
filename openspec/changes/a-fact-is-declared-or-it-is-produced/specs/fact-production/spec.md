@@ -112,8 +112,8 @@ check corroborates at all, MUST still refuse.
 
 #### Scenario: Mutation — deleting the only producer is caught
 
-- GIVEN `limitations.lim-closing`'s `produces_facts: [limitations]` entry
-  deleted, with no other block producing `limitations`
+- GIVEN `limitations.lim-proposal-items`'s `produces_facts: [limitations]`
+  entry deleted, with no other block producing `limitations`
 - WHEN the corpus is assembled
 - THEN it refuses `FACT_PRODUCER_ABSENT` naming `limitations`, rather than
   silently treating `limitations` as satisfied or as externally declared
