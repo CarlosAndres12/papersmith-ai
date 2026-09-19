@@ -31,6 +31,20 @@ Once a skeleton exists, the skill MUST NOT ask either question again.
 - WHEN the skill is invoked again in a fresh process
 - THEN neither question is asked
 
+#### Scenario: Flags contradicting the disk state refuse
+
+- GIVEN a `main.tex` already carrying opened block ids for both decisions
+- WHEN the skill is invoked again with a flag naming the opposite answer for
+  either decision
+- THEN it refuses `SKELETON_ALREADY_DECIDED` naming both what disk already
+  records and what the flags requested
+
+#### Scenario: A missing answer refuses
+
+- GIVEN no skeleton exists yet
+- WHEN the skill is invoked without both `--related-work` and `--dataset-in`
+- THEN it refuses `SKELETON_ANSWER_REQUIRED` naming the missing flag
+
 ### Requirement: The Skeleton Is The Answer
 
 Opening the skeleton MUST open, empty, every section and block id implied by

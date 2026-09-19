@@ -10,6 +10,11 @@ fault (`specs/guidance-registry/spec.md`).
 `guidance/` is not a fact source (`design.md`, `A fact the agent may
 observe is a partition, not a guideline`); this registry feeds only the
 style/evidence classification `plan` reports.
+
+`ingested_papers(guidance_dir)` (`the-phases-are-derived-not-remembered`)
+is a second, independent walk -- two levels deep, gitignore-blind by
+`Path.iterdir()`'s own construction -- feeding `plan`/`packet`'s report of
+which papers actually sit under `guidance/`.
 """
 from __future__ import annotations
 
@@ -91,6 +96,43 @@ def _classify(folder: Path) -> str:
             f"{marker_path}: {value!r} is not one of the declared classes {CLASSES}",
         )
     return value
+
+
+def ingested_papers(guidance_dir: Path) -> dict:
+    """`{root: [{"folder": paper_folder_name, "markdown": str(path)}, ...]}`
+    for every `guidance/<root>/<paper>/<paper>.md` two levels under
+    `guidance_dir` (`the-phases-are-derived-not-remembered`, design.md D4).
+
+    `read_registry` above enumerates ONE level (`guidance/<root>`), so the
+    eight ingested papers actually sitting two levels down
+    (`guidance/<root>/<paper>/<paper>.md`) are invisible to it -- and
+    `guidance/*/*` is a `.gitignore` pattern, so `fd`/`rg` report the whole
+    tree empty. `Path.iterdir()` is gitignore-blind BY CONSTRUCTION -- the
+    mechanism, not an instruction (`specs/skeleton-startup/spec.md`,
+    `Requirement: Disk Presence Checks Include Ignored Paths`) -- so this
+    walks with it, never `fd`/`rg`/a shell call.
+
+    A root directory holding no ingested papers reports an empty list, not
+    an absence -- the point is exactly that a populated-but-ignored
+    directory must never be reported as empty; an EMPTY root is a true,
+    honestly reported empty list. A non-existent `guidance_dir` reports an
+    empty registry, matching `read_registry`'s own precedent.
+    """
+    if not guidance_dir.is_dir():
+        return {}
+    registry: dict = {}
+    for root_entry in sorted(guidance_dir.iterdir()):
+        if not root_entry.is_dir():
+            continue
+        papers = []
+        for paper_entry in sorted(root_entry.iterdir()):
+            if not paper_entry.is_dir():
+                continue
+            markdown_path = paper_entry / f"{paper_entry.name}.md"
+            if markdown_path.is_file():
+                papers.append({"folder": paper_entry.name, "markdown": str(markdown_path)})
+        registry[root_entry.name] = papers
+    return registry
 
 
 def read_registry(guidance_dir: Path) -> dict:

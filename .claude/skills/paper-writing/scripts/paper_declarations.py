@@ -27,6 +27,9 @@ Public surface:
     read_satisfied(paper_dir) -> (set[str], set[str])  (read-only; fixed facts, fixed declarations)
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
+    infer_related_work(corpus, opened_ids) -> bool  (pure; skeleton inference)
+    infer_dataset_placement(opened_ids) -> str  (pure; raises DATASET_PLACEMENT_CONFLICT)
+    infer_skeleton_decisions(paper_dir, corpus) -> dict  (read-only; disk, never a stored flag)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
 """
@@ -307,6 +310,69 @@ def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> di
     new_body = {"generation": new_generation, "records": new_records}
     _write_declarations(paper_dir, pre, record, new_body)
     return {"id": id_, "kind": kind, "generation": new_body["generation"]}
+
+
+#: The two literal qualified ids `skeleton`'s dataset-placement inference
+#: reads (`the-phases-are-derived-not-remembered`, design.md D4). Literal,
+#: like the module docstring's own `STRUCTURAL_FACTS` -- these two ids are
+#: the shape the shipped corpus declares, never derived from a section id
+#: lookup that could resolve to something else.
+MM_DATASET_ID = "materials-and-methods.mm-dataset"
+ES_DATASET_ID = "experimental-setup.es-dataset"
+
+
+def infer_related_work(corpus, opened_ids) -> bool:
+    """Pure: Related Work is present iff any of `related-work`'s own block
+    ids (`corpus.order_by_section["related-work"]`) is a member of
+    `opened_ids` (design.md D4; `specs/skeleton-startup/spec.md`,
+    `Requirement: Both Decisions Are Re-Derived From Disk, Never
+    Recalled`). A corpus with no `related-work` section at all reports
+    `False` -- there is nothing to have opened.
+    """
+    related_work_ids = corpus.order_by_section.get("related-work", ())
+    return any(qualified_id in opened_ids for qualified_id in related_work_ids)
+
+
+def infer_dataset_placement(opened_ids) -> str:
+    """Pure: `"materials-and-methods"` if `MM_DATASET_ID` is opened,
+    `"experimental-setup"` if `ES_DATASET_ID` is opened, `"undecided"` if
+    neither. Refuses `DATASET_PLACEMENT_CONFLICT` (work-state), naming both
+    ids, when both are opened at once -- the paper says two things and the
+    skill will not pick one (design.md D4).
+    """
+    mm_open = MM_DATASET_ID in opened_ids
+    es_open = ES_DATASET_ID in opened_ids
+    if mm_open and es_open:
+        raise Refused(
+            "DATASET_PLACEMENT_CONFLICT",
+            f"both {MM_DATASET_ID!r} and {ES_DATASET_ID!r} are opened; the paper "
+            "names two placements and the skill will not pick one",
+        )
+    if mm_open:
+        return "materials-and-methods"
+    if es_open:
+        return "experimental-setup"
+    return "undecided"
+
+
+def infer_skeleton_decisions(paper_dir: Path, corpus) -> dict:
+    """Read-only: both skeleton decisions, re-derived from the block ids
+    currently opened in `main.tex` (`paper_block.read_status`), intersected
+    with the real corpus -- never from a separately stored flag and never
+    from `read_fact(paper_dir, "skeleton")`, which is a DIFFERENT question
+    (the gate `introduction.block-6` requires, "a skeleton exists") that
+    design.md D4 deliberately keeps unused for this (`the-phases-are-
+    derived-not-remembered`, "las decisiones no viven en ti, viven en el
+    disco"). `tasks.md` 7.5's own mutation proof replaces the `read_status`
+    call below with a `read_fact("skeleton")` read, over a fixture where
+    the two disagree, to prove this reads disk and only disk.
+    """
+    status = paper_block.read_status(paper_dir)
+    opened_ids = {block["id"] for block in status["blocks"]} & set(corpus.blocks)
+    return {
+        "relatedWork": infer_related_work(corpus, opened_ids),
+        "datasetPlacement": infer_dataset_placement(opened_ids),
+    }
 
 
 def affected_blocks(corpus, target_id: str) -> set:

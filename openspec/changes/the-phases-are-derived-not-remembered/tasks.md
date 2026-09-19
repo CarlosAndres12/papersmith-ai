@@ -48,7 +48,7 @@ unmentioned.
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [x] |
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [x] |
 | 6b | **Correction to unit 6.** `PHASE_NOT_READY` gated the read-only `phases` verb only; `cmd_write` never consulted `derive_waves`, so nothing stopped a later wave being written before an earlier one existed — the gate reported, it did not gate. Wires the SAME gate computation into `cmd_write`, RED-first through the real `write` verb | `paper_cli.py`, `design.md`, `tasks.md`, `tests/test_paper_writing.py` | none (`PHASE_NOT_READY` already registered; second raise site only) | ~140 | Low | 6 | [x] |
-| 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
+| 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [x] |
 | 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
 | 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
 
@@ -795,22 +795,95 @@ matters reads as protection while protecting nothing.
 
 ## Phase 7: `skeleton` + disk inference + `ingested_papers`
 
-- [ ] 7.1 Edit `specs/skeleton-startup/spec.md`: add scenarios for `skeleton` refusing `SKELETON_ALREADY_DECIDED` (flags contradict disk) and `SKELETON_ANSWER_REQUIRED` (a required flag missing).
-- [ ] 7.2 Pure inference over `paper_block.read_status(paper_dir)["blocks"]` intersected with the corpus: `relatedWork` (any opened id under `related-work`); `datasetPlacement` (`materials-and-methods` / `experimental-setup` / `undecided` / conflict when both `mm-dataset` and `es-dataset` are opened).
-- [ ] 7.3 RED test: `es-dataset` opened alone → placement reports "Experimental Setup" from opened ids alone.
-- [ ] 7.4 RED test: both dataset blocks opened → refuses `DATASET_PLACEMENT_CONFLICT` naming both ids.
-- [ ] 7.5 RED test — mutation: inference reads `read_fact("skeleton")` instead of `read_status`; a fixture where the two disagree goes red.
-- [ ] 7.6 `paper_guidance.ingested_papers(guidance_dir)`: pure `Path.iterdir()` walk (gitignore-blind by construction) over `guidance/<root>/<paper>/<paper>.md`; `plan`/`packet` report `{root: [{folder, markdown}]}`.
-- [ ] 7.7 RED test: a `guidance/` tree matching a `.gitignore` pattern and holding files reports as populated, not empty — assert against the measured baseline (3 roots, 8 `.md`).
-- [ ] 7.8 `skeleton --related-work yes|no --dataset-in materials|experimental-setup`: opens every non-excluded block id via `paper_block.open_block` in `derive_order` order (never a new writer); idempotent; refuses `SKELETON_ALREADY_DECIDED` on contradiction, `SKELETON_ANSWER_REQUIRED` on a missing flag.
-- [ ] 7.9 RED test: fresh `main.tex`, both flags given → both blocking questions asked before the skeleton opens; the chosen dataset block only is opened (the other left unopened).
-- [ ] 7.10 RED test: existing skeleton, fresh process → neither question asked again.
-- [ ] 7.11 RED test: flags contradicting disk state → `SKELETON_ALREADY_DECIDED`.
-- [ ] 7.12 RED test: a missing flag → `SKELETON_ANSWER_REQUIRED`.
-- [ ] 7.13 Threat-matrix RED test (write amplification): mutate `skeleton` to write `main.tex` directly, bypassing `open_block` — the byte-identity mutation harness fails.
-- [ ] 7.14 Threat-matrix RED test (path containment): `skeleton --paper ../x` / `--sections ../y` refuse `PAPER_OUTSIDE_REPOSITORY` / `SECTIONS_OUTSIDE_REPOSITORY` (existing codes, reused verbatim via `paper_scaffold.resolve_paper_dir`/`paper_contract.resolve_sections_dir`, no roster move) and write nothing.
-- [ ] 7.15 Register `SKELETON_ANSWER_REQUIRED: INVOCATION_DEFECT`, `SKELETON_ALREADY_DECIDED: WORK_STATE`, `DATASET_PLACEMENT_CONFLICT: WORK_STATE`; move the roster assertion from 101 to 104.
-- [ ] 7.16 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions -v`.
+- [x] 7.1 Edit `specs/skeleton-startup/spec.md`: add scenarios for `skeleton` refusing `SKELETON_ALREADY_DECIDED` (flags contradict disk) and `SKELETON_ANSWER_REQUIRED` (a required flag missing).
+- [x] 7.2 Pure inference over `paper_block.read_status(paper_dir)["blocks"]` intersected with the corpus: `relatedWork` (any opened id under `related-work`); `datasetPlacement` (`materials-and-methods` / `experimental-setup` / `undecided` / conflict when both `mm-dataset` and `es-dataset` are opened).
+- [x] 7.3 RED test: `es-dataset` opened alone → placement reports "Experimental Setup" from opened ids alone.
+- [x] 7.4 RED test: both dataset blocks opened → refuses `DATASET_PLACEMENT_CONFLICT` naming both ids.
+- [x] 7.5 RED test — mutation: inference reads `read_fact("skeleton")` instead of `read_status`; a fixture where the two disagree goes red.
+- [x] 7.6 `paper_guidance.ingested_papers(guidance_dir)`: pure `Path.iterdir()` walk (gitignore-blind by construction) over `guidance/<root>/<paper>/<paper>.md`; `plan`/`packet` report `{root: [{folder, markdown}]}`.
+- [x] 7.7 RED test: a `guidance/` tree matching a `.gitignore` pattern and holding files reports as populated, not empty — assert against the measured baseline (3 roots, 8 `.md`). **Measured 4 roots, 8 `.md` — see Notes.**
+- [x] 7.8 `skeleton --related-work yes|no --dataset-in materials|experimental-setup`: opens every non-excluded block id via `paper_block.open_block` in `derive_order` order (never a new writer); idempotent; refuses `SKELETON_ALREADY_DECIDED` on contradiction, `SKELETON_ANSWER_REQUIRED` on a missing flag.
+- [x] 7.9 RED test: fresh `main.tex`, both flags given → both blocking questions asked before the skeleton opens; the chosen dataset block only is opened (the other left unopened).
+- [x] 7.10 RED test: existing skeleton, fresh process → neither question asked again.
+- [x] 7.11 RED test: flags contradicting disk state → `SKELETON_ALREADY_DECIDED`.
+- [x] 7.12 RED test: a missing flag → `SKELETON_ANSWER_REQUIRED`.
+- [x] 7.13 Threat-matrix RED test (write amplification): mutate `skeleton` to write `main.tex` directly, bypassing `open_block` — the byte-identity mutation harness fails.
+- [x] 7.14 Threat-matrix RED test (path containment): `skeleton --paper ../x` / `--sections ../y` refuse `PAPER_OUTSIDE_REPOSITORY` / `SECTIONS_OUTSIDE_REPOSITORY` (existing codes, reused verbatim via `paper_scaffold.resolve_paper_dir`/`paper_contract.resolve_sections_dir`, no roster move) and write nothing.
+- [x] 7.15 Register `SKELETON_ANSWER_REQUIRED: INVOCATION_DEFECT`, `SKELETON_ALREADY_DECIDED: WORK_STATE`, `DATASET_PLACEMENT_CONFLICT: WORK_STATE`; move the roster assertion from 101 to 104. **Measured 103 to 106 — see Notes.**
+- [x] 7.16 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions -v`.
+
+---
+
+## Unit 7 — Notes / Deviations
+
+- **Two measured corrections to this unit's own forecast, same drift class
+  the Reconciliation Ledger at the top of this file already tracks.**
+  (1) The roster baseline this unit's own text names (101) predates unit
+  6b, which added no new code but confirmed the real baseline is **103**
+  (measured, `tests.test_paper_writing.RefusalRosterTests.test_the_
+  derivation_finds_the_measured_count`, unchanged since unit 6). This
+  unit's own three new codes (`SKELETON_ANSWER_REQUIRED`,
+  `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT`) move the
+  measured count **103 → 106**, not 101 → 104. (2) `guidance/` genuinely
+  holds **4 tracked root folders** (`data-paper`, `paper-guide`,
+  `reference-papers`, `area-benchmark` — confirmed via `git ls-files
+  guidance/`, all four carry a `.gitkeep`), not the 3 this task's own text
+  names; `area-benchmark` is real and genuinely empty. The launch brief's
+  own count (8 ingested papers across `data-paper`(1)/`paper-guide`(2)/
+  `reference-papers`(5)/`area-benchmark`(0)) is what `paper_guidance.
+  ingested_papers` measures against the real, checked-out tree
+  (`GuidanceIngestedPapersTests.test_against_the_real_shipped_guidance_
+  tree`) — 8 `.md` total, 4 roots, confirmed by direct measurement rather
+  than by trusting either count in isolation.
+- **The `skeleton` fact and the inferred decisions stay two different
+  questions, exactly as design D4 requires.** `paper_declarations.infer_
+  skeleton_decisions` reads only `paper_block.read_status` (opened block
+  ids), intersected with the corpus — never `read_fact(paper_dir,
+  "skeleton")`. `SkeletonInferenceTests.test_a_fresh_process_infers_the_
+  same_decision_from_disk_alone_even_when_the_skeleton_fact_disagrees`
+  builds a fixture where the recorded `skeleton` STRUCTURAL_FACT
+  (`"materials-and-methods.mm-dataset"`) and the actually opened block
+  (`experimental-setup.es-dataset`) disagree; the inference reports the
+  disk answer. `SkeletonInferenceMutationTests` (tasks.md 7.5) replaces the
+  `read_status` call with a `read_fact("skeleton")` read over that exact
+  fixture and confirms the test goes red under the mutation — proven, not
+  narrated.
+- **`build_skeleton`, not a second `cmd_skeleton`-only implementation.**
+  `paper_cli.py` follows the same separation `compute_phases`/`compute_
+  readiness_report`/`compute_plan` already keep from their own `cmd_*`
+  wrappers: `build_skeleton(paper_dir, sections_dir, *, related_work,
+  dataset_in)` takes both directly (so tests can inject an isolated
+  `forge_root` without going through argparse's non-injectable `paper_
+  scaffold.FORGE_ROOT` default), and the real `cmd_skeleton` is a three-line
+  wrapper resolving `--paper`/`--sections` then delegating. `SkeletonTests`
+  and `SkeletonWriteAmplificationTests` call `build_skeleton` directly (the
+  same pattern `PhasesTests` uses for `compute_phases`);
+  `SkeletonPathContainmentTests` calls the real `cmd_skeleton` under the
+  already-gitignored `implementations/` convention (`WriteGateTests`'s own
+  precedent), because path containment is exactly the resolution layer
+  `build_skeleton` skips.
+- **7.13's "byte-identity mutation harness", concretely.** `skeleton`
+  writes only through `paper_block.open_block`, which already carries its
+  own `identity_invariant` — a mutation that bypasses `open_block` entirely
+  (a raw `tex_path.write_bytes(...)` call) never reaches that check at all,
+  so the proof this unit needed is an INDEPENDENT one: `build_skeleton`'s
+  own output is compared byte-for-byte against replaying `open_block`
+  alone, in the identical `derive_order` sequence, against a second,
+  freshly scaffolded `paper_dir`
+  (`SkeletonWriteAmplificationTests.test_skeleton_output_matches_
+  replaying_open_block_alone`). The mutation (appending a raw `%% extra`
+  line directly to `main.tex` before `build_skeleton` returns) diverges
+  from that replay and fails the equality check, confirmed non-zero exit.
+- **`DATASET_PLACEMENT_CONFLICT` naming both ids never "picks a winner".**
+  `build_skeleton` calls `infer_skeleton_decisions` only when at least one
+  corpus block is already opened; a genuine conflict (both `mm-dataset` and
+  `es-dataset` opened) propagates the refusal unchanged rather than being
+  caught and silently resolved one way.
+- **Roster, corpus and waves confirmed undisturbed outside this unit's own
+  three new codes.** `contract`/`order`/`phases` all still exit 0 over the
+  real 47-block corpus; `order` and `phases` were re-run against the
+  shipped corpus as part of this unit's own verification and show no
+  change in shape.
 
 ## Phase 8: `packet` + `segment_markdown`
 

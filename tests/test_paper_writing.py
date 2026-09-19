@@ -3651,8 +3651,18 @@ class RefusalRosterTests(unittest.TestCase):
         needed. This is the measured +2, not the tasks artifact's own
         forecast (99 to 101), which predates unit 4's own measured +4 (97
         to 101, not the three separate +1/+1/+2 moves 4.8f/4.10 forecast in
-        isolation) and was never corrected forward."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 103)
+        isolation) and was never corrected forward. Moved from 103 to 106 in
+        unit 7 (`skeleton` + disk inference + `ingested_papers`, tasks.md
+        7.1-7.16): the new `cmd_skeleton` root raises `SKELETON_ANSWER_
+        REQUIRED` (either flag missing) and `SKELETON_ALREADY_DECIDED` (the
+        given flags contradict what disk already records); `paper_
+        declarations.infer_dataset_placement` (already-imported module)
+        raises `DATASET_PLACEMENT_CONFLICT` -- reachable the instant its
+        raise site exists, no new import needed. This is the measured +3,
+        not the tasks artifact's own forecast (101 to 104), which predates
+        this same drift already flagged for units 4/6 above and was never
+        corrected forward either."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 106)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -4717,6 +4727,290 @@ class ReadinessPhasesReadOnlyTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+def _write_skeleton_corpus(sections_dir: Path) -> None:
+    """`the-phases-are-derived-not-remembered`, unit 7 (tasks.md 7.8-7.14):
+    a real, normalized four-section corpus naming both dataset blocks
+    (`paper_declarations.MM_DATASET_ID`/`ES_DATASET_ID`, literal) and one
+    related-work block, no `after` edges -- `derive_order` over this corpus
+    is therefore pure `(position, block_index, qualified_id)`:
+    `materials-and-methods.mm-preamble`, `materials-and-methods.mm-dataset`,
+    `experimental-setup.es-dataset`, `related-work.rw-a`, `conclusions.c-a`.
+    """
+    (sections_dir / "01-materials-and-methods.md").write_text(
+        "---\n" + json.dumps({
+            "section": "materials-and-methods", "position": 1,
+            "blocks": [
+                {
+                    "id": "mm-preamble", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none",
+                },
+                {
+                    "id": "mm-dataset", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none", "optional": True,
+                },
+            ],
+        })
+        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        encoding="utf-8",
+    )
+    (sections_dir / "02-experimental-setup.md").write_text(
+        "---\n" + json.dumps({
+            "section": "experimental-setup", "position": 2,
+            "blocks": [
+                {
+                    "id": "es-dataset", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none", "optional": True,
+                },
+            ],
+        })
+        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        encoding="utf-8",
+    )
+    (sections_dir / "03-related-work.md").write_text(
+        "---\n" + json.dumps({
+            "section": "related-work", "position": 3,
+            "blocks": [
+                {
+                    "id": "rw-a", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none", "optional": True,
+                },
+            ],
+        })
+        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        encoding="utf-8",
+    )
+    (sections_dir / "04-conclusions.md").write_text(
+        "---\n" + json.dumps({
+            "section": "conclusions", "position": 4,
+            "blocks": [
+                {"id": "c-a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+            ],
+        })
+        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        encoding="utf-8",
+    )
+
+
+class SkeletonTests(unittest.TestCase):
+    """`specs/skeleton-startup/spec.md`; design.md D4 (tasks.md 7.8-7.12)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        _write_skeleton_corpus(self.sections_dir)
+
+    def _build(self, *, related_work=None, dataset_in=None) -> dict:
+        return paper_cli.build_skeleton(
+            self.paper_dir, self.sections_dir, related_work=related_work, dataset_in=dataset_in,
+        )
+
+    def _opened_ids(self) -> set:
+        return {block["id"] for block in paper_block.read_status(self.paper_dir)["blocks"]}
+
+    def test_fresh_paper_opens_the_chosen_dataset_block_and_leaves_the_other_unopened(self) -> None:
+        """tasks.md 7.9; `specs/skeleton-startup/spec.md`, `Scenario: The
+        skeleton opens the chosen dataset block only`."""
+        result = self._build(related_work="yes", dataset_in="experimental-setup")
+
+        opened = self._opened_ids()
+        self.assertIn("experimental-setup.es-dataset", opened)
+        self.assertNotIn("materials-and-methods.mm-dataset", opened)
+        self.assertIn("related-work.rw-a", opened)
+        self.assertIn("materials-and-methods.mm-preamble", opened)
+        self.assertIn("conclusions.c-a", opened)
+        self.assertEqual(result["datasetPlacement"], "experimental-setup")
+        self.assertTrue(result["relatedWork"])
+
+    def test_related_work_no_leaves_every_rw_block_unopened(self) -> None:
+        result = self._build(related_work="no", dataset_in="materials")
+
+        opened = self._opened_ids()
+        self.assertNotIn("related-work.rw-a", opened)
+        self.assertIn("materials-and-methods.mm-dataset", opened)
+        self.assertNotIn("experimental-setup.es-dataset", opened)
+        self.assertFalse(result["relatedWork"])
+        self.assertEqual(result["datasetPlacement"], "materials-and-methods")
+
+    def test_an_existing_skeleton_is_never_re_asked_and_is_idempotent(self) -> None:
+        """tasks.md 7.10: a fresh call with the SAME answers, once the
+        skeleton already exists, opens nothing new."""
+        self._build(related_work="yes", dataset_in="experimental-setup")
+        before = self._opened_ids()
+
+        result = self._build(related_work="yes", dataset_in="experimental-setup")
+
+        self.assertEqual(result["opened"], [])
+        self.assertEqual(self._opened_ids(), before)
+
+    def test_dataset_flag_contradicting_disk_state_refuses_skeleton_already_decided(self) -> None:
+        """tasks.md 7.11."""
+        self._build(related_work="yes", dataset_in="experimental-setup")
+
+        with self.assertRaises(Refused) as ctx:
+            self._build(related_work="yes", dataset_in="materials")
+
+        self.assertEqual(ctx.exception.code, "SKELETON_ALREADY_DECIDED")
+        self.assertIn("experimental-setup", ctx.exception.detail)
+        self.assertIn("materials-and-methods", ctx.exception.detail)
+
+    def test_related_work_flag_contradicting_disk_state_refuses_skeleton_already_decided(self) -> None:
+        """tasks.md 7.11, the other decision."""
+        self._build(related_work="yes", dataset_in="experimental-setup")
+
+        with self.assertRaises(Refused) as ctx:
+            self._build(related_work="no", dataset_in="experimental-setup")
+
+        self.assertEqual(ctx.exception.code, "SKELETON_ALREADY_DECIDED")
+
+    def test_a_missing_dataset_flag_refuses_skeleton_answer_required(self) -> None:
+        """tasks.md 7.12."""
+        with self.assertRaises(Refused) as ctx:
+            self._build(related_work="yes", dataset_in=None)
+
+        self.assertEqual(ctx.exception.code, "SKELETON_ANSWER_REQUIRED")
+        self.assertIn("--dataset-in", ctx.exception.detail)
+        self.assertEqual(self._opened_ids(), set())
+
+    def test_a_missing_related_work_flag_refuses_skeleton_answer_required(self) -> None:
+        """tasks.md 7.12, the other flag."""
+        with self.assertRaises(Refused) as ctx:
+            self._build(related_work=None, dataset_in="materials")
+
+        self.assertEqual(ctx.exception.code, "SKELETON_ANSWER_REQUIRED")
+        self.assertIn("--related-work", ctx.exception.detail)
+
+
+class SkeletonWriteAmplificationTests(unittest.TestCase):
+    """Threat Matrix, `Write amplification into main.tex`: only `skeleton`
+    writes, only through `paper_block.open_block` (design.md; tasks.md
+    7.13). Proven by reproducing `cmd_skeleton`'s own output independently
+    -- replaying `open_block` alone, in the identical `derive_order` order,
+    against a second, freshly scaffolded `paper_dir` -- so a mutation that
+    writes even one byte directly to `main.tex`, bypassing `open_block`,
+    diverges from that independent replay."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        _write_skeleton_corpus(self.sections_dir)
+
+    def _run_skeleton(self, forge_root: Path) -> Path:
+        paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=forge_root)
+        paper_scaffold.scaffold(paper_dir)
+        paper_cli.build_skeleton(
+            paper_dir, self.sections_dir, related_work="yes", dataset_in="experimental-setup",
+        )
+        return paper_dir
+
+    def test_skeleton_output_matches_replaying_open_block_alone(self) -> None:
+        produced_root = Path(self._tmp.name) / "produced"
+        produced_root.mkdir()
+        produced_dir = self._run_skeleton(produced_root)
+        produced_bytes = paper_block.resolve_main_tex(produced_dir).read_bytes()
+
+        replay_root = Path(self._tmp.name) / "replay"
+        replay_root.mkdir()
+        replay_dir = paper_scaffold.resolve_paper_dir(None, forge_root=replay_root)
+        paper_scaffold.scaffold(replay_dir)
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+        edge_set = paper_graph.collect_edges(corpus)
+        order = paper_graph.derive_order(corpus, edge_set)
+        for qualified_id in order:
+            if qualified_id == "materials-and-methods.mm-dataset":
+                continue
+            paper_block.open_block(replay_dir, qualified_id, at_end=True)
+        expected_bytes = paper_block.resolve_main_tex(replay_dir).read_bytes()
+
+        self.assertEqual(produced_bytes, expected_bytes)
+
+    def test_mutation_writing_a_raw_byte_directly_fails_the_replay_check(self) -> None:
+        proc = _run_against_mutant(
+            '    return {\n'
+            '        "relatedWork": related_work_flag,\n'
+            '        "datasetPlacement": requested_placement,\n'
+            '        "opened": opened,\n'
+            '    }',
+            '    tex_path = paper_block.resolve_main_tex(paper_dir)\n'
+            '    tex_path.write_bytes(tex_path.read_bytes() + b"\\n%% extra\\n")\n'
+            '    return {\n'
+            '        "relatedWork": related_work_flag,\n'
+            '        "datasetPlacement": requested_placement,\n'
+            '        "opened": opened,\n'
+            '    }',
+            "tests.test_paper_writing.SkeletonWriteAmplificationTests"
+            ".test_skeleton_output_matches_replaying_open_block_alone",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class SkeletonPathContainmentTests(unittest.TestCase):
+    """Threat Matrix, `Path containment`: `skeleton` reuses `paper_
+    scaffold.resolve_paper_dir` / `paper_contract.resolve_sections_dir`
+    verbatim -- never a new containment check (design.md; tasks.md 7.14).
+    Runs under the real, non-injectable `FORGE_ROOT` default, the same
+    `implementations/` convention `WriteGateTests` uses, because `cmd_
+    skeleton` resolves both `--paper`/`--sections` through it."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-skeleton-containment-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        _write_skeleton_corpus(self.sections_dir)
+
+    def _manifest(self) -> dict:
+        return {
+            str(path.relative_to(self.paper_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(self.paper_dir.rglob("*")) if path.is_file()
+        }
+
+    def test_paper_outside_repository_refuses_and_writes_nothing(self) -> None:
+        before = self._manifest()
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-skeleton-outside-{os.getpid()}"
+        args = argparse.Namespace(
+            paper=str(outside), sections=str(self.sections_dir),
+            related_work="yes", dataset_in="materials",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_skeleton(args)
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+        self.assertFalse(outside.exists())
+        self.assertEqual(self._manifest(), before)
+
+    def test_sections_outside_repository_refuses_and_writes_nothing(self) -> None:
+        before = self._manifest()
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-skeleton-outside-sections-{os.getpid()}"
+        args = argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(outside),
+            related_work="yes", dataset_in="materials",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_skeleton(args)
+
+        self.assertEqual(ctx.exception.code, "SECTIONS_OUTSIDE_REPOSITORY")
+        self.assertFalse(outside.exists())
+        self.assertEqual(self._manifest(), before)
 
 
 if __name__ == "__main__":

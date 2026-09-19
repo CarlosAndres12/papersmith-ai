@@ -335,6 +335,92 @@ class GuidanceRegistryMutationTests(unittest.TestCase):
         _assert_guard_failed_under_mutation(self, proc)
 
 
+class GuidanceIngestedPapersTests(unittest.TestCase):
+    """`the-phases-are-derived-not-remembered`, design.md D4; tasks.md
+    7.6-7.7. `read_registry` only enumerates ONE level under `guidance/`;
+    `ingested_papers` walks the real two-level shape
+    (`guidance/<root>/<paper>/<paper>.md`) with `Path.iterdir()`, which is
+    gitignore-blind BY CONSTRUCTION -- never `fd`/`rg`, which honour
+    `.gitignore` and would report a populated-but-ignored tree empty."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.guidance_dir = self.forge_root / "guidance"
+
+    def _write_paper(self, root: str, folder: str, *, extra_files: tuple = ()) -> None:
+        paper_dir = self.guidance_dir / root / folder
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        (paper_dir / f"{folder}.md").write_text("# Title\n", encoding="utf-8")
+        for name in extra_files:
+            (paper_dir / name).write_bytes(b"")
+
+    def test_a_gitignored_populated_tree_reports_as_populated_not_empty(self) -> None:
+        """tasks.md 7.7: mirrors the real repository's own `.gitignore`
+        shape (`guidance/*/*`) so the fixture is not merely synthetic in
+        spirit -- an actual ignore pattern matching every path this walk
+        must still find. `Path.iterdir()` never consults `.gitignore` at
+        all, so this is true regardless; the point of the fixture is to
+        make that explicit rather than assumed."""
+        self._write_paper("data-paper", "s41597-026-06758-7", extra_files=("_page_0_Picture_2.jpeg",))
+        self._write_paper("paper-guide", "brainsci-16-00363")
+        self._write_paper("paper-guide", "Li_2026_Prog._Biomed._Eng._8_022013")
+        (self.guidance_dir / "area-benchmark").mkdir()
+        (self.guidance_dir / ".gitignore").write_text(
+            "guidance/*/*\n!guidance/*/.gitkeep\n", encoding="utf-8",
+        )
+
+        registry = paper_guidance.ingested_papers(self.guidance_dir)
+
+        self.assertEqual(
+            {folder["folder"] for folder in registry["data-paper"]}, {"s41597-026-06758-7"},
+        )
+        self.assertEqual(
+            {folder["folder"] for folder in registry["paper-guide"]},
+            {"brainsci-16-00363", "Li_2026_Prog._Biomed._Eng._8_022013"},
+        )
+        self.assertEqual(registry["area-benchmark"], [])
+        total_papers = sum(len(papers) for papers in registry.values())
+        self.assertEqual(total_papers, 3)
+
+    def test_a_paper_folder_missing_its_own_named_markdown_is_not_reported(self) -> None:
+        (self.guidance_dir / "reference-papers" / "not-a-paper").mkdir(parents=True)
+
+        registry = paper_guidance.ingested_papers(self.guidance_dir)
+
+        self.assertEqual(registry["reference-papers"], [])
+
+    def test_a_non_existent_guidance_dir_reports_an_empty_registry(self) -> None:
+        registry = paper_guidance.ingested_papers(self.forge_root / "no-such-guidance")
+        self.assertEqual(registry, {})
+
+    def test_against_the_real_shipped_guidance_tree(self) -> None:
+        """The real corpus, measured 2026-09-18 (not the tasks artifact's
+        own stale forecast of 3 roots): 4 tracked root folders
+        (`data-paper`, `paper-guide`, `reference-papers`, `area-benchmark`),
+        8 ingested papers total, `area-benchmark` genuinely empty. `guidance/`
+        contents are `.gitignore`d (`guidance/*/*`); this reads the real,
+        checked-out tree directly, proving the reader is gitignore-blind
+        against real ignored bytes, not only a synthetic mirror of the
+        pattern."""
+        real_guidance_dir = paper_guidance.resolve_guidance_dir(
+            None, forge_root=FORGE_ROOT,
+        )
+        registry = paper_guidance.ingested_papers(real_guidance_dir)
+
+        self.assertEqual(
+            set(registry), {"data-paper", "paper-guide", "reference-papers", "area-benchmark"},
+        )
+        self.assertEqual(registry["area-benchmark"], [])
+        self.assertEqual(len(registry["data-paper"]), 1)
+        self.assertEqual(len(registry["paper-guide"]), 2)
+        self.assertEqual(len(registry["reference-papers"]), 5)
+        total_papers = sum(len(papers) for papers in registry.values())
+        self.assertEqual(total_papers, 8)
+
+
 _FIXED_CLOCK = "2024-01-01T00:00:00+00:00"
 
 
@@ -512,6 +598,94 @@ class DeclarationsMutationTests(unittest.TestCase):
             "paper_vocabulary.validate_fact(declaration_id)",
             "tests.test_paper_decisions.DeclarationsTests"
             ".test_recording_a_fact_as_a_declaration_refuses_unknown_declaration",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class SkeletonInferenceTests(unittest.TestCase):
+    """`the-phases-are-derived-not-remembered`, design.md D4;
+    `specs/skeleton-startup/spec.md`, `Requirement: Both Decisions Are
+    Re-Derived From Disk, Never Recalled` (tasks.md 7.2-7.5)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.corpus = paper_graph.Corpus(
+            sections={},
+            blocks={
+                "related-work.rw-a": _block_record("related-work.rw-a"),
+                "materials-and-methods.mm-dataset": _block_record("materials-and-methods.mm-dataset"),
+                "experimental-setup.es-dataset": _block_record("experimental-setup.es-dataset"),
+            },
+            order_by_section={
+                "related-work": ["related-work.rw-a"],
+                "materials-and-methods": ["materials-and-methods.mm-dataset"],
+                "experimental-setup": ["experimental-setup.es-dataset"],
+            },
+        )
+
+    def test_es_dataset_opened_alone_reports_experimental_setup_from_opened_ids(self) -> None:
+        """tasks.md 7.3."""
+        paper_block.open_block(self.paper_dir, "experimental-setup.es-dataset", at_end=True)
+
+        decisions = paper_declarations.infer_skeleton_decisions(self.paper_dir, self.corpus)
+
+        self.assertEqual(decisions["datasetPlacement"], "experimental-setup")
+        self.assertFalse(decisions["relatedWork"])
+
+    def test_both_dataset_blocks_opened_refuses_dataset_placement_conflict(self) -> None:
+        """tasks.md 7.4."""
+        paper_block.open_block(self.paper_dir, "materials-and-methods.mm-dataset", at_end=True)
+        paper_block.open_block(self.paper_dir, "experimental-setup.es-dataset", at_end=True)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.infer_skeleton_decisions(self.paper_dir, self.corpus)
+
+        self.assertEqual(ctx.exception.code, "DATASET_PLACEMENT_CONFLICT")
+        self.assertIn("materials-and-methods.mm-dataset", ctx.exception.detail)
+        self.assertIn("experimental-setup.es-dataset", ctx.exception.detail)
+
+    def test_related_work_opened_reports_present(self) -> None:
+        paper_block.open_block(self.paper_dir, "related-work.rw-a", at_end=True)
+
+        decisions = paper_declarations.infer_skeleton_decisions(self.paper_dir, self.corpus)
+
+        self.assertTrue(decisions["relatedWork"])
+        self.assertEqual(decisions["datasetPlacement"], "undecided")
+
+    def test_a_fresh_process_infers_the_same_decision_from_disk_alone_even_when_the_skeleton_fact_disagrees(
+        self,
+    ) -> None:
+        """`specs/skeleton-startup/spec.md`, `Scenario: A fresh process
+        infers the same decision from disk alone` -- and tasks.md 7.5's own
+        mutation target: the recorded `skeleton` STRUCTURAL_FACT is set to
+        the OPPOSITE placement of what is actually opened on disk. If the
+        inference ever read `read_fact(paper_dir, "skeleton")` instead of
+        `paper_block.read_status`, it would report the fact's answer
+        (`materials-and-methods`), not disk's (`experimental-setup`)."""
+        paper_declarations.set_fact(self.paper_dir, "skeleton", "materials-and-methods.mm-dataset")
+        paper_block.open_block(self.paper_dir, "experimental-setup.es-dataset", at_end=True)
+
+        decisions = paper_declarations.infer_skeleton_decisions(self.paper_dir, self.corpus)
+
+        self.assertEqual(decisions["datasetPlacement"], "experimental-setup")
+
+
+class SkeletonInferenceMutationTests(unittest.TestCase):
+    """tasks.md 7.5: the inference must read disk, and only disk."""
+
+    def test_mutation_reading_the_skeleton_fact_instead_of_read_status_fails(self) -> None:
+        proc = _run_against_mutant(
+            '    status = paper_block.read_status(paper_dir)\n'
+            '    opened_ids = {block["id"] for block in status["blocks"]} & set(corpus.blocks)',
+            '    opened_ids = {read_fact(paper_dir, "skeleton")} & set(corpus.blocks)',
+            "tests.test_paper_decisions.SkeletonInferenceTests"
+            ".test_a_fresh_process_infers_the_same_decision_from_disk_alone_even_when_the_skeleton_fact_disagrees",
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
         )
         _assert_guard_failed_under_mutation(self, proc)

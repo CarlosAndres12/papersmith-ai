@@ -157,6 +157,13 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # file, `cmd_readiness`/`cmd_phases`) -----------------------------------
     "READINESS_BASIS_REQUIRED": INVOCATION_DEFECT,
     "PHASE_NOT_READY": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 7: `skeleton`'s two
+    # blocking questions, asked exactly once, and the disk-inferred
+    # dataset-placement conflict (design.md D4; this file's `cmd_skeleton`,
+    # `paper_declarations.infer_dataset_placement`) -----------------------
+    "SKELETON_ANSWER_REQUIRED": INVOCATION_DEFECT,
+    "SKELETON_ALREADY_DECIDED": WORK_STATE,
+    "DATASET_PLACEMENT_CONFLICT": WORK_STATE,
     # --- region grammar (paper_region.py) -- twins of Phase 1's marker
     # codes, reachable ahead of their own verb wiring because paper_cli.py
     # imports paper_region.py at module level (Slice A, `the-paper-carries-
@@ -436,6 +443,112 @@ def cmd_order(args: argparse.Namespace) -> dict:
     edge_set = paper_graph.collect_edges(corpus)
     order = paper_graph.derive_order(corpus, edge_set)
     return {"order": order, "danglingEdges": sorted(set(edge_set.dangling))}
+
+
+def _skeleton_excluded_ids(corpus, *, related_work: bool, dataset_in: str) -> set:
+    """The block ids `skeleton` leaves unopened for the given answers
+    (design.md D4; tasks.md 7.8): every `related-work` block when Related
+    Work is "no", and whichever of `mm-dataset` / `es-dataset` was NOT
+    chosen. Every other block id is opened unconditionally.
+    """
+    excluded: set = set()
+    if not related_work:
+        excluded |= set(corpus.order_by_section.get("related-work", ()))
+    excluded.add(
+        paper_declarations.ES_DATASET_ID if dataset_in == "materials"
+        else paper_declarations.MM_DATASET_ID
+    )
+    return excluded
+
+
+def build_skeleton(
+    paper_dir: Path, sections_dir: Path, *, related_work: str | None, dataset_in: str | None,
+) -> dict:
+    """`skeleton`'s own logic, taking `paper_dir`/`sections_dir` directly —
+    the same separation `compute_phases`/`compute_readiness_report` keep
+    from their own `cmd_*` wrappers — so a test can inject both without
+    going through argparse's own resolution (design.md D4;
+    `specs/skeleton-startup/spec.md`).
+
+    Asks nothing itself — the orchestrator asks the two blocking questions
+    exactly once — and opens every non-excluded block id through `paper_
+    block.open_block` alone, in `derive_order` order: never a new writer,
+    so the byte-identity invariant `open_block` already carries is
+    untouched (tasks.md 7.13, Threat Matrix "Write amplification into
+    `main.tex`").
+
+    Refuses `SKELETON_ANSWER_REQUIRED` (invocation-defect) when either
+    `related_work` or `dataset_in` is `None`. Once any corpus block is
+    already opened, both decisions are re-derived straight from disk
+    (`paper_declarations.infer_skeleton_decisions` — never a stored flag,
+    design.md D4) and compared against the given answers: a contradiction
+    refuses `SKELETON_ALREADY_DECIDED` (work-state) naming both what disk
+    already records and what was requested. Already-opened ids are skipped
+    — idempotent, never re-opened, never re-asked.
+    """
+    if related_work is None or dataset_in is None:
+        missing = [
+            flag for flag, value in (
+                ("--related-work", related_work), ("--dataset-in", dataset_in),
+            )
+            if value is None
+        ]
+        raise Refused(
+            "SKELETON_ANSWER_REQUIRED",
+            "skeleton needs both --related-work yes|no and --dataset-in "
+            f"materials|experimental-setup; missing {missing}",
+        )
+
+    corpus = paper_graph.assemble_corpus(sections_dir)
+
+    related_work_flag = related_work == "yes"
+    requested_placement = (
+        "materials-and-methods" if dataset_in == "materials" else "experimental-setup"
+    )
+
+    status = paper_block.read_status(paper_dir)
+    opened_ids = {block["id"] for block in status["blocks"]}
+
+    if opened_ids:
+        decided = paper_declarations.infer_skeleton_decisions(paper_dir, corpus)
+        dataset_mismatch = (
+            decided["datasetPlacement"] != "undecided"
+            and decided["datasetPlacement"] != requested_placement
+        )
+        if decided["relatedWork"] != related_work_flag or dataset_mismatch:
+            raise Refused(
+                "SKELETON_ALREADY_DECIDED",
+                f"disk already records relatedWork={decided['relatedWork']!r}, "
+                f"datasetPlacement={decided['datasetPlacement']!r}; the given flags "
+                f"(relatedWork={related_work_flag!r}, datasetPlacement={requested_placement!r}) "
+                "contradict it",
+            )
+
+    excluded = _skeleton_excluded_ids(corpus, related_work=related_work_flag, dataset_in=dataset_in)
+    edge_set = paper_graph.collect_edges(corpus)
+    order = paper_graph.derive_order(corpus, edge_set)
+
+    opened = []
+    for qualified_id in order:
+        if qualified_id in excluded or qualified_id in opened_ids:
+            continue
+        paper_block.open_block(paper_dir, qualified_id, at_end=True)
+        opened_ids.add(qualified_id)
+        opened.append(qualified_id)
+
+    return {
+        "relatedWork": related_work_flag,
+        "datasetPlacement": requested_placement,
+        "opened": opened,
+    }
+
+
+def cmd_skeleton(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    return build_skeleton(
+        paper_dir, sections_dir, related_work=args.related_work, dataset_in=args.dataset_in,
+    )
 
 
 def cmd_declare(args: argparse.Namespace) -> dict:
@@ -1212,6 +1325,27 @@ def build_parser() -> argparse.ArgumentParser:
         "incomplete. Omitted: report every wave, the full plan awaiting approval",
     )
 
+    p_skeleton = sub.add_parser(
+        "skeleton",
+        help="open every section/block id the two structural answers imply, empty, via open_block only",
+    )
+    p_skeleton.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_skeleton.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_skeleton.add_argument(
+        "--related-work", default=None, choices=("yes", "no"),
+        help="whether the manuscript carries a dedicated Related Work section; asked once",
+    )
+    p_skeleton.add_argument(
+        "--dataset-in", default=None, choices=("materials", "experimental-setup"),
+        help="where the dataset is described; asked once",
+    )
+
     p_order = sub.add_parser("order", help="derive the writing order from the block graph")
     p_order.add_argument(
         "--sections", default=None,
@@ -1423,8 +1557,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = (
-    "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "order", "declare",
-    "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
+    "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
+    "declare", "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1434,6 +1568,7 @@ _COMMANDS = {
     "contract": cmd_contract,
     "readiness": cmd_readiness,
     "phases": cmd_phases,
+    "skeleton": cmd_skeleton,
     "order": cmd_order,
     "declare": cmd_declare,
     "observe": cmd_observe,
