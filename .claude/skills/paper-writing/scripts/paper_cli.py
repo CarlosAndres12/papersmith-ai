@@ -6,7 +6,7 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires twenty verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires twenty-two verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
@@ -14,12 +14,17 @@ without changing what bytes get written); `contract`, `readiness`, `order`
 `declare`, `observe`, `plan` (from `the-paper-carries-its-own-decisions`,
 Slices B and C2 — `observe` validates an `insumos-observer` report against
 the observable-fact schema before a human runs `declare` against it);
-`resolve`, `bib build`, `validate` (from `no-claim-without-a-source-that-
-holds-it`, WU1/WU2/WU3 — `resolve` is the one path that makes this CLI not
-offline end to end, keyless and behind a role `papersmith.yaml` can empty;
-`bib build` rebuilds `refs.bib` whole from cached resolved metadata only;
-`validate` is the single gate deciding verdict, placement and the bounded
-search-round budget before any block reaches disk); `write` (from `the-
+`resolve`, `full_text`, `bib build`, `validate` (from `no-claim-without-a-
+source-that-holds-it`, WU1/WU2/WU3, and `the-pdf-arrives-or-the-operator-
+is-told` for `full_text` — `resolve` is the one path that makes this CLI
+not offline end to end, keyless and behind a role `papersmith.yaml` can
+empty; `full_text` fills the sibling `full-text` role the same way,
+fetching an already-resolved record's own PDF from its cached metadata's
+measured `full_text_url` and placing it loose under `guidance/<section-
+id>/` for `paper-ingestion` to find; `bib build` rebuilds `refs.bib` whole
+from cached resolved metadata only; `validate` is the single gate deciding
+verdict, placement and the bounded search-round budget before any block
+reaches disk); `write` (from `the-
 writer-may-assert-only-what-it-was-given` — a judge, never an invoker: it
 reconciles an already-shuttled redactor draft and contract-auditor account
 against one block's real contract, evidence set and mode, and either
@@ -76,6 +81,7 @@ import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-wh
 import paper_coupling_evidence  # noqa: E402 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module)
 import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`)
 import paper_couplings  # noqa: E402 -- the-skill-stops-trusting-memory, item 4: the producer `paper/couplings.json` never had; `couplings` verb
+import paper_full_text  # noqa: E402 -- the-pdf-arrives-or-the-operator-is-told: fills the full-text role; `full_text` verb
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -260,6 +266,15 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "RESOLVER_ROLE_EMPTY": WORK_STATE,
     "RESOLVER_UNREACHABLE": WORK_STATE,
     "IDENTIFIER_UNRESOLVED": WORK_STATE,
+    # --- the-pdf-arrives-or-the-operator-is-told: fills the full-text role
+    # (paper_full_text.py) -- `RESOLVER_ROLE_EMPTY`/`RESOLVER_UNREACHABLE`/
+    # `IDENTIFIER_UNRESOLVED` above are reused verbatim, never a second code
+    # for the same condition ---------------------------------------------
+    "METADATA_NOT_CACHED": WORK_STATE,
+    "FULL_TEXT_URL_ABSENT": WORK_STATE,
+    "FULL_TEXT_NOT_A_PDF": WORK_STATE,
+    "CITE_KEY_MALFORMED": INVOCATION_DEFECT,
+    "FULL_TEXT_FILE_PRESENT": WORK_STATE,
     # --- the bibliography that cannot be typed (paper_bib.py; WU2) ------
     "ENTRY_UNSOURCED": WORK_STATE,
     "CITE_WITHOUT_ENTRY": WORK_STATE,
@@ -752,6 +767,16 @@ def cmd_resolve(args: argparse.Namespace) -> dict:
     )
     paper_resolve.cache_metadata(paper_dir, result)
     return result
+
+
+def cmd_full_text(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    config = paper_resolve.load_config()
+    return paper_full_text.fetch_full_text(
+        paper_dir, guidance_dir, section_id=args.section, metadata_digest=args.metadata_digest,
+        cite_key=args.cite_key, config=config,
+    )
 
 
 def cmd_bib(args: argparse.Namespace) -> dict:
@@ -1829,6 +1854,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="which papersmith.yaml connector role this call is validated against",
     )
 
+    p_full_text = sub.add_parser(
+        "full_text",
+        help="fetch one already-resolved identifier's own PDF, keyless, from its cached "
+             "metadata's measured full_text_url, and place it loose under guidance/<section>/",
+    )
+    p_full_text.add_argument(
+        "--paper", default=None,
+        help="override paper/ location (where --metadata-digest's cache lives); "
+             "must resolve inside the repository root",
+    )
+    p_full_text.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_full_text.add_argument(
+        "--section", required=True,
+        help="the guidance/<section-id>/ this PDF lands loose inside",
+    )
+    p_full_text.add_argument(
+        "--metadata-digest", required=True,
+        help="the digest of an already-cached `resolve` result to fetch this record's PDF for",
+    )
+    p_full_text.add_argument(
+        "--cite-key", required=True,
+        help="the \\cite{} key this PDF supports; becomes the output filename's stem",
+    )
+
     p_bib = sub.add_parser("bib", help="paper/refs.bib management -- never hand-typed")
     bib_sub = p_bib.add_subparsers(dest="bib_command", required=True)
     p_bib_build = bib_sub.add_parser(
@@ -2027,8 +2079,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "couplings",
-    "verify", "packet",
+    "declare", "observe", "plan", "resolve", "full_text", "bib", "validate", "write", "render", "place",
+    "couplings", "verify", "packet",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2044,6 +2096,7 @@ _COMMANDS = {
     "observe": cmd_observe,
     "plan": cmd_plan,
     "resolve": cmd_resolve,
+    "full_text": cmd_full_text,
     "bib": cmd_bib,
     "validate": cmd_validate,
     "write": cmd_write,

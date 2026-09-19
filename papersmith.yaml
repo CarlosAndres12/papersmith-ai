@@ -39,4 +39,13 @@ paper_writing:
       - openalex
       - crossref
       - arxiv
-    full-text: []
+    # Only the two connectors that can ever name a real, fetchable PDF from
+    # their own resolved metadata (`paper_resolve._parse_openalex`/
+    # `_parse_arxiv`'s own `full_text_url`). Crossref is deliberately never
+    # listed here: a bare Crossref DOI usually leads to a publisher wall,
+    # and this skill never guesses a "probably open" link -- reachability
+    # is measured from the cached metadata alone, never assumed
+    # (`the-pdf-arrives-or-the-operator-is-told`).
+    full-text:
+      - openalex
+      - arxiv

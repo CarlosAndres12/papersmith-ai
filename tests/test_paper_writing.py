@@ -3706,8 +3706,24 @@ class RefusalRosterTests(unittest.TestCase):
         INGESTED` and `CITATION_FOLDER_UNCLASSIFIED` -- three new codes,
         reachable the instant `cmd_write` calls it, no new import needed.
         Measured directly against `reachable_paper_refusal_codes()`, never
-        forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 122)
+        forecast. Moved from 122 to 127 in `the-pdf-arrives-or-the-
+        operator-is-told`, item 1: `paper_cli.py` starts importing
+        `paper_full_text.py`, which fills the `full-text` role
+        `papersmith.yaml` and `paper_resolve.ROLES` both already declared
+        -- `METADATA_NOT_CACHED`, `FULL_TEXT_URL_ABSENT`, `RESOLVER_ROLE_
+        EMPTY` (reused, not counted twice), `CITE_KEY_MALFORMED`, and
+        `FULL_TEXT_NOT_A_PDF`/`FULL_TEXT_FILE_PRESENT` -- five new codes,
+        reachable the instant the new `cmd_full_text` root and its import
+        land; `RESOLVER_UNREACHABLE`/`IDENTIFIER_UNRESOLVED` (via the new
+        `paper_resolve.fetch_bytes`) and `GUIDANCE_OUTSIDE_REPOSITORY` (via
+        `resolve_destination`'s own containment guard) are reused verbatim
+        from WU1/Slice A, adding nothing new to the set. Item 2's own
+        distinct-source-count minimum (`paper_validate.claim_coverage`)
+        adds no new code at all: it changes what `EVIDENCE_EXHAUSTED`'s
+        detail says and what `finalize_block` returns, never what it can
+        raise. Measured directly against `reachable_paper_refusal_codes()`,
+        never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 127)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

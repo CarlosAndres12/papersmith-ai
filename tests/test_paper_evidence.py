@@ -12,6 +12,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -26,6 +28,7 @@ sys.path.insert(0, str(SKILL_SCRIPTS))
 import paper_cli  # noqa: E402
 import paper_bib  # noqa: E402
 import paper_evidence  # noqa: E402
+import paper_full_text  # noqa: E402
 import paper_resolve  # noqa: E402
 import paper_scaffold  # noqa: E402
 
@@ -834,6 +837,220 @@ class ReciprocalCheckTests(unittest.TestCase):
         report = paper_bib.check_reciprocal(main_tex, refs_bib)
         self.assertEqual(report["cited"], ["a-key", "b-key"])
         self.assertEqual(report["entries"], ["a-key", "b-key"])
+
+
+def _full_text_config(connectors=("openalex", "arxiv")) -> dict:
+    return {
+        "paper_writing": {
+            "contact": "",
+            "roles": {
+                "discovery": [], "resolution": ["openalex", "crossref", "arxiv"],
+                "full-text": list(connectors),
+            },
+        }
+    }
+
+
+class FullTextFetchTests(unittest.TestCase):
+    """`the-pdf-arrives-or-the-operator-is-told`: fills the `full-text`
+    role `papersmith.yaml` and `paper_resolve.ROLES` both already declared.
+    Reachability is read off the cached metadata's own `full_text_url`,
+    never re-guessed here -- every fixture below sets it directly rather
+    than exercising `paper_resolve`'s parsers a second time (WU1's own
+    `ResolverOfflineTests` already proves those)."""
+
+    def setUp(self) -> None:
+        self._real_opener = paper_resolve.OPENER
+        self.addCleanup(self._restore_opener)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        self.paper_dir.mkdir()
+        self.guidance_dir = Path(self._tmp.name) / "guidance"
+        self.guidance_dir.mkdir()
+
+    def _restore_opener(self) -> None:
+        paper_resolve.OPENER = self._real_opener
+
+    def _cache(self, *, identifier, resolver, title, full_text_url, digest=None) -> str:
+        digest = digest or hashlib.sha256(identifier.encode()).hexdigest()
+        result = {
+            "identifier": identifier, "resolver": resolver, "metadata_digest": digest,
+            "title": title, "doi": None, "year": None, "full_text_url": full_text_url,
+        }
+        paper_resolve.cache_metadata(self.paper_dir, result)
+        return digest
+
+    def test_a_record_with_no_full_text_url_is_reported_unobtainable_by_name(self) -> None:
+        """The decisive proof for item 1: a record this connector cannot
+        reach is refused BY NAME (identifier and title both appear in the
+        detail), never silently skipped -- and nothing is written."""
+        paper_resolve.OPENER = _RaisingOpener()  # proves zero network reached
+        digest = self._cache(
+            identifier="10.1/paywalled", resolver="crossref",
+            title="A Paywalled Paper", full_text_url=None,
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest=digest, cite_key="paywalled2024", config=_full_text_config(),
+            )
+        self.assertEqual(ctx.exception.code, "FULL_TEXT_URL_ABSENT")
+        self.assertIn("10.1/paywalled", ctx.exception.detail)
+        self.assertIn("A Paywalled Paper", ctx.exception.detail)
+        self.assertFalse((self.guidance_dir / "results").exists())
+
+    def test_m_disabling_the_url_absent_guard_loses_the_named_report(self) -> None:
+        proc = _run_against_mutant(
+            "if not url:",
+            "if False:",
+            "tests.test_paper_evidence.FullTextFetchTests"
+            ".test_a_record_with_no_full_text_url_is_reported_unobtainable_by_name",
+            source_path=SKILL_SCRIPTS / "paper_full_text.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_an_empty_full_text_role_closes_the_path_entirely(self) -> None:
+        digest = self._cache(
+            identifier="10.1000/x", resolver="openalex", title="Some Paper",
+            full_text_url="https://example.org/paper.pdf",
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest=digest, cite_key="somepaper2024", config=_config(),
+            )
+        self.assertEqual(ctx.exception.code, "RESOLVER_ROLE_EMPTY")
+        self.assertFalse((self.guidance_dir / "results").exists())
+
+    def test_a_reachable_pdf_lands_loose_directly_under_the_section_folder(self) -> None:
+        payload = b"%PDF-1.4 fake pdf bytes\n"
+        paper_resolve.OPENER = _AnsweringOpener(payload)
+        digest = self._cache(
+            identifier="2301.00001", resolver="arxiv", title="An Open Paper",
+            full_text_url="https://arxiv.org/pdf/2301.00001",
+        )
+        result = paper_full_text.fetch_full_text(
+            self.paper_dir, self.guidance_dir, section_id="results",
+            metadata_digest=digest, cite_key="open2023", config=_full_text_config(),
+        )
+        destination = Path(result["path"])
+        # `.resolve()` on both sides: on macOS, `/var` is itself a symlink
+        # to `/private/var`, and `resolve_destination` returns the fully
+        # resolved form while `self.guidance_dir` here does not.
+        self.assertEqual(destination, (self.guidance_dir / "results" / "open2023.pdf").resolve())
+        self.assertEqual(destination.read_bytes(), payload)
+        # Loose, not nested: paper-ingestion's own "exactly one level down"
+        # contract requires the file's parent to be the section folder
+        # itself, never a subfolder of it.
+        self.assertEqual(destination.parent, (self.guidance_dir / "results").resolve())
+
+    def test_a_non_pdf_response_refuses_full_text_not_a_pdf(self) -> None:
+        """`open_access.oa_url` sometimes lands on a repository splash page
+        rather than raw PDF bytes -- a 200 response is not proof of a
+        fetched PDF, only the bytes are."""
+        paper_resolve.OPENER = _AnsweringOpener(b"<html>not a pdf</html>")
+        digest = self._cache(
+            identifier="2301.00002", resolver="arxiv", title="Mislabeled OA Link",
+            full_text_url="https://arxiv.org/pdf/2301.00002",
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest=digest, cite_key="mislabeled2023", config=_full_text_config(),
+            )
+        self.assertEqual(ctx.exception.code, "FULL_TEXT_NOT_A_PDF")
+        self.assertFalse((self.guidance_dir / "results" / "mislabeled2023.pdf").exists())
+
+    def test_fetching_twice_never_overwrites_silently(self) -> None:
+        paper_resolve.OPENER = _AnsweringOpener(b"%PDF-1.4 first\n")
+        digest = self._cache(
+            identifier="2301.00003", resolver="arxiv", title="Refetched Paper",
+            full_text_url="https://arxiv.org/pdf/2301.00003",
+        )
+        paper_full_text.fetch_full_text(
+            self.paper_dir, self.guidance_dir, section_id="results",
+            metadata_digest=digest, cite_key="dup2023", config=_full_text_config(),
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest=digest, cite_key="dup2023", config=_full_text_config(),
+            )
+        self.assertEqual(ctx.exception.code, "FULL_TEXT_FILE_PRESENT")
+
+    def test_a_cite_key_containing_a_path_separator_refuses_before_any_fetch(self) -> None:
+        paper_resolve.OPENER = _RaisingOpener()  # proves the guard runs first
+        digest = self._cache(
+            identifier="2301.00004", resolver="arxiv", title="Traversal Attempt",
+            full_text_url="https://arxiv.org/pdf/2301.00004",
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest=digest, cite_key="../escape", config=_full_text_config(),
+            )
+        self.assertEqual(ctx.exception.code, "CITE_KEY_MALFORMED")
+
+    def test_a_digest_with_no_cached_metadata_refuses_metadata_not_cached(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_full_text.fetch_full_text(
+                self.paper_dir, self.guidance_dir, section_id="results",
+                metadata_digest="deadbeef", cite_key="ghost", config=_full_text_config(),
+            )
+        self.assertEqual(ctx.exception.code, "METADATA_NOT_CACHED")
+
+
+class FullTextCLITests(unittest.TestCase):
+    """`full_text` wired into `paper_cli.py` end to end, against the real
+    `papersmith.yaml` this same change fills (`full-text: [openalex,
+    arxiv]`) -- the same `implementations/` real-repo fixture pattern
+    `tests/test_paper_citation.py::ValidateCLITests` already uses."""
+
+    def setUp(self) -> None:
+        self._real_opener = paper_resolve.OPENER
+        self.addCleanup(self._restore_opener)
+        self.root = FORGE_ROOT / "implementations" / f".paper-writing-full-text-cli-test-{os.getpid()}"
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.paper_dir = self.root / "paper"
+        self.paper_dir.mkdir(parents=True)
+        self.guidance_dir = self.root / "guidance"
+        self.guidance_dir.mkdir(parents=True)
+
+    def _restore_opener(self) -> None:
+        paper_resolve.OPENER = self._real_opener
+
+    def test_full_text_cli_fetches_and_places_the_pdf_loose(self) -> None:
+        result = {
+            "identifier": "2301.99999", "resolver": "arxiv", "metadata_digest": "cli-digest",
+            "title": "CLI Paper", "doi": None, "year": None,
+            "full_text_url": "https://arxiv.org/pdf/2301.99999",
+        }
+        paper_resolve.cache_metadata(self.paper_dir, result)
+        paper_resolve.OPENER = _AnsweringOpener(b"%PDF-1.4 cli fetched\n")
+        exit_code = paper_cli.main([
+            "full_text", "--paper", str(self.paper_dir), "--guidance", str(self.guidance_dir),
+            "--section", "results", "--metadata-digest", "cli-digest", "--cite-key", "clipaper2023",
+        ])
+        self.assertEqual(exit_code, 0)
+        destination = self.guidance_dir / "results" / "clipaper2023.pdf"
+        self.assertTrue(destination.is_file())
+        self.assertEqual(destination.read_bytes(), b"%PDF-1.4 cli fetched\n")
+
+    def test_full_text_cli_names_an_unobtainable_record_and_exits_non_zero(self) -> None:
+        result = {
+            "identifier": "10.1/cli-wall", "resolver": "crossref", "metadata_digest": "cli-wall-digest",
+            "title": "CLI Walled Paper", "doi": None, "year": None, "full_text_url": None,
+        }
+        paper_resolve.cache_metadata(self.paper_dir, result)
+        paper_resolve.OPENER = _RaisingOpener()
+        exit_code = paper_cli.main([
+            "full_text", "--paper", str(self.paper_dir), "--guidance", str(self.guidance_dir),
+            "--section", "results", "--metadata-digest", "cli-wall-digest", "--cite-key", "clidenied",
+        ])
+        self.assertEqual(exit_code, 2)
 
 
 if __name__ == "__main__":

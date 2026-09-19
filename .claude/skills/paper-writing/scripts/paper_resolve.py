@@ -18,6 +18,7 @@ Public surface:
     connectors_for_role(config, role)         -> list[str]
     require_role_connectors(config, role)     -> list[str]  (raises RESOLVER_ROLE_EMPTY / DISCOVERY_UNAVAILABLE)
     resolve_identifier(identifier, *, resolver, role, config) -> dict
+    fetch_bytes(url, *, config)                -> bytes
     cache_metadata(paper_dir, result)         -> dict
     read_cached_metadata(paper_dir, digest)   -> dict | None
 """
@@ -245,14 +246,36 @@ def _arxiv_url(arxiv_id: str) -> str:
 
 def _parse_openalex(raw: bytes) -> dict:
     obj = json.loads(raw)
-    return {"title": obj.get("title"), "doi": obj.get("doi"), "year": obj.get("publication_year")}
+    # `full_text_url`: OpenAlex's own measured signal that a real open
+    # version exists (`open_access.is_oa`) plus the URL it names
+    # (`open_access.oa_url`) -- never inferred from the DOI or title alone.
+    # A record with `is_oa: false`, or with no `open_access` object at all,
+    # reports `None` here, same as a paywalled Crossref record
+    # (`full-text-fetch`, "Reachability is measured, never assumed").
+    open_access = obj.get("open_access") or {}
+    full_text_url = open_access.get("oa_url") if open_access.get("is_oa") else None
+    return {
+        "title": obj.get("title"), "doi": obj.get("doi"), "year": obj.get("publication_year"),
+        "full_text_url": full_text_url,
+    }
 
 
 def _parse_crossref(raw: bytes) -> dict:
     obj = json.loads(raw)
     message = obj.get("message", {})
     titles = message.get("title") or []
-    return {"title": titles[0] if titles else None, "doi": message.get("DOI"), "year": None}
+    # `full_text_url`: deliberately always `None`. A Crossref `link` entry
+    # names a URL and a `content-type`, but neither field says the link is
+    # actually open to a keyless fetch -- most point at a publisher wall
+    # (`full-text-fetch`, "a bare Crossref DOI usually leads to a publisher
+    # wall"). Guessing "probably open" from an unverified content-type would
+    # be exactly the assumption this module's whole design refuses to make;
+    # a paper resolved through Crossref is always reported unobtainable by
+    # this connector, never a coin flip on a link's own unverified label.
+    return {
+        "title": titles[0] if titles else None, "doi": message.get("DOI"), "year": None,
+        "full_text_url": None,
+    }
 
 
 def _parse_arxiv(raw: bytes) -> dict:
@@ -263,7 +286,17 @@ def _parse_arxiv(raw: bytes) -> dict:
         raise _NoSuchWork("arXiv feed carried no <entry>")
     title_el = entry.find("atom:title", namespace)
     title = title_el.text.strip() if title_el is not None and title_el.text else None
-    return {"title": title, "doi": None, "year": None}
+    # `full_text_url`: read directly off the entry's own `<link type=
+    # "application/pdf">` -- arXiv's Atom feed reports this for every real
+    # entry, so this is measured from the response actually received, never
+    # constructed from the identifier alone (that would be assuming, not
+    # measuring, even though arXiv is definitionally open access).
+    full_text_url = None
+    for link in entry.findall("atom:link", namespace):
+        if link.get("type") == "application/pdf":
+            full_text_url = link.get("href")
+            break
+    return {"title": title, "doi": None, "year": None, "full_text_url": full_text_url}
 
 
 _ENDPOINT_BUILDERS = {
@@ -305,6 +338,31 @@ def resolve_identifier(identifier: str, *, resolver: str, role: str, config: dic
         "metadata_digest": digest,
         **metadata,
     }
+
+
+def fetch_bytes(url: str, *, config: dict) -> bytes:
+    """Fetches raw bytes from `url` through the exact same client
+    `resolve_identifier` uses -- the module-level `OPENER` seam, its retry
+    policy (one retry, fixed 1s, only transport error / 429 / 5xx), and its
+    `contact` courtesy `User-Agent` -- never a second HTTP path
+    (`full-text-fetch`, "Do not write a second HTTP path"). The one real
+    caller is `paper_full_text.fetch_full_text`, fetching the PDF bytes a
+    cached record's own `full_text_url` names.
+
+    Raises `RESOLVER_UNREACHABLE` (exit 2) when the transport never answers
+    after one retry, and `IDENTIFIER_UNRESOLVED` when the endpoint answers
+    with a 404 or other non-retryable status -- the same two codes
+    `resolve_identifier` already raises for its own `_get` call (worded
+    distinctly here only so each call site's own mutation proof keeps a
+    uniquely-anchored literal to target; both funnel through the SAME
+    `_get`, never a second HTTP path).
+    """
+    try:
+        return _get(url, config=config)
+    except _Unreachable as exc:
+        raise Refused("RESOLVER_UNREACHABLE", f"full-text fetch: {exc}")
+    except _NoSuchWork as exc:
+        raise Refused("IDENTIFIER_UNRESOLVED", f"full-text fetch: {exc}")
 
 
 def _metadata_path(paper_dir: Path, metadata_digest: str) -> Path:
