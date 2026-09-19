@@ -19,19 +19,32 @@ section ids), an optional `mode` (the section-level default drafting mode),
 and a mandatory `blocks` list in order. Each block MUST declare `id`,
 `requires_facts`, `requires_declarations`, and `citations`; each block MAY
 declare `optional`, its own `after`, its own `mode` (overriding the
-section-level default when present), and a `figure` object. A `figure`
-object, when present, MUST declare `ordered`, `excludes`,
-`caption_enumerates`, `caption_decodes`, and `mandatory`; it MAY additionally
-declare `components_from`, naming the one fact whose value IS the diagram's
-full expected component list — declared only when that equality genuinely
-holds (the diagram is that one fact's own list by contract), and omitted (or
-explicit `null`) for a block whose diagram is a composite crossing over
-several categories of content that no single fact's value can equal. A
-header missing any mandatory field, carrying a key outside this widened
-schema, or a `figure` object missing any of its five required subkeys, MUST
-refuse `MALFORMED_HEADER` (or `MALFORMED_FIGURE_OBLIGATION` for the `figure`
-case) naming the missing or unknown key. Everything below the header MUST be
-passed through unread.
+section-level default when present), and a `figure` object. Each
+`requires_facts` / `requires_declarations` entry MUST be a rich `{value,
+source: {file, quote}}` object mirroring `after`'s list-of-objects shape,
+where `value` is the fact or declaration id; a bare id string no longer
+parses, and an entry missing `value` or `source`, carrying a `null`
+`source`, or carrying an unknown key, MUST refuse `MALFORMED_HEADER` naming
+the missing or unknown key. A `figure` object, when present, MUST declare
+`ordered`, `excludes`, `caption_enumerates`, `caption_decodes`, and
+`mandatory`; it MAY additionally declare `components_from`, naming the one
+fact whose value IS the diagram's full expected component list — declared
+only when that equality genuinely holds (the diagram is that one fact's own
+list by contract), and omitted (or explicit `null`) for a block whose
+diagram is a composite crossing over several categories of content that no
+single fact's value can equal. A header missing any mandatory field,
+carrying a key outside this widened schema, or a `figure` object missing any
+of its five required subkeys, MUST refuse `MALFORMED_HEADER` (or
+`MALFORMED_FIGURE_OBLIGATION` for the `figure` case) naming the missing or
+unknown key. Everything below the header MUST be passed through unread.
+
+(Previously: `requires_facts` / `requires_declarations` entries were bare id
+strings only, with no provenance shape. An intermediate state, U1–U2,
+widened this to accept EITHER a bare id string, normalizing to `{value,
+source: None}`, OR a rich object — the corpus-wide quote gate stayed inert
+throughout. U3 removes bare-string acceptance entirely and requires a
+non-null `source` on every entry, making that intermediate, half-migrated
+state structurally unrepresentable rather than merely detected.)
 
 #### Scenario: Valid header parses
 
@@ -81,6 +94,27 @@ passed through unread.
 - WHEN the reader parses it
 - THEN it accepts the block with no refusal, and `components_from` resolves to `None`
 
+#### Scenario: A bare-id requirement entry now refuses
+
+- GIVEN a block declaring `requires_facts: [results]` (bare id, no `source`)
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER`; U3 (design.md D3) removed bare-string
+  acceptance, so this is a schema-layer refusal, never something left for
+  `requirement-transcription`'s corpus-wide gate to decide
+
+#### Scenario: A rich requirement entry parses
+
+- GIVEN a block declaring `requires_facts: [{value: results, source: {file:
+  "results-and-discussion.md", quote: "<verbatim sentence>"}}]`
+- WHEN the reader parses it
+- THEN it accepts `results` with no refusal
+
+#### Scenario: A malformed rich requirement entry refuses
+
+- GIVEN a block declaring a `requires_facts` entry that is an object missing
+  `source`
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `source`
 ### Requirement: Closed Fact Vocabulary
 
 `requires_facts` entries MUST be drawn only from the ten ids: `formulation`,
