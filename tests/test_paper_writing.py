@@ -1016,17 +1016,15 @@ class ModeWideningTests(unittest.TestCase):
 
 
 class RequirementEntryShapeTests(unittest.TestCase):
-    """`the-requirement-names-the-sentence-that-demands-it` — Work Unit U1.
-    `section-contract` spec delta, `Requirement: Front Matter Schema`
-    (widened `requires_facts` / `requires_declarations` entry shape);
-    `requirement-transcription` spec, `Requirement: Transcribed
-    Requirement Entries Only`. U1 leaves the corpus-wide quote gate
-    (`requirement-transcription`'s own `assemble_corpus` wiring, U3)
-    INERT — every test here proves the SHAPE layer alone: a bare id
-    string still parses, and a rich `{value, source}` object either
-    parses or refuses on its own shape, with no quote ever checked
-    against a body at this layer (design.md D2: "`paper_contract`
-    validates shape only")."""
+    """`the-requirement-names-the-sentence-that-demands-it` — Work Units U1
+    and U3. `section-contract` spec delta, `Requirement: Front Matter
+    Schema`; `requirement-transcription` spec, `Requirement: Transcribed
+    Requirement Entries Only`. U3 (design.md D3) removes bare-string
+    acceptance and makes a non-null `source` unconditional — every test
+    here proves the SHAPE layer alone, with no quote ever checked against
+    a body at this layer (design.md D2: "`paper_contract` validates shape
+    only"); the corpus-wide quote gate is `RequirementTranscriptionGateTests`,
+    below."""
 
     def _header(self, *, fact=None, declaration=None) -> dict:
         block = {
@@ -1040,35 +1038,33 @@ class RequirementEntryShapeTests(unittest.TestCase):
     def _rich(self, value: str, *, file: str = "demo.md", quote: str = "some prose") -> dict:
         return {"value": value, "source": {"file": file, "quote": quote}}
 
-    def test_a_bare_fact_string_still_parses_and_normalizes_to_a_null_sourced_entry(self) -> None:
-        header = paper_contract.parse_header(self._header(fact="contributions"))
-        self.assertEqual(
-            header.blocks[0]["requires_facts"],
-            [{"value": "contributions", "source": None}],
-        )
+    def test_a_bare_fact_string_now_refuses_malformed_header(self) -> None:
+        """U3 (design.md D3): bare-string acceptance is removed. This is
+        the decisive proof the half-migrated state is structurally
+        UNREPRESENTABLE, not merely detected — a fixture (or a shipped
+        contract) rebuilt with a bare string now refuses at parse, before
+        the corpus-wide quote gate (`paper_graph.assemble_corpus`) ever
+        gets a chance to run."""
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact="contributions"))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
 
-    def test_a_bare_declaration_string_still_parses_and_normalizes_to_a_null_sourced_entry(
-        self,
-    ) -> None:
-        header = paper_contract.parse_header(self._header(declaration="author-roles"))
-        self.assertEqual(
-            header.blocks[0]["requires_declarations"],
-            [{"value": "author-roles", "source": None}],
-        )
+    def test_a_bare_declaration_string_now_refuses_malformed_header(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(declaration="author-roles"))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
 
-    def test_reparsing_a_bare_entrys_own_normalized_output_is_a_fixed_point(self) -> None:
-        """The same `raw.get(...) is not None` round-trip convention
-        `mode` and `figure` already use (design.md D3, "Round-trip holds
-        throughout"): this parser's own `{"value": ..., "source": None}`
-        output, fed back in as the raw entry, MUST normalize to the
-        identical shape — never refuse on its own null `source`, since
-        `header.blocks` re-serializes verbatim through
-        `paper_graph.assemble_corpus` and this suite's own fixtures."""
-        once = paper_contract.parse_header(self._header(fact="contributions"))
+    def test_reparsing_a_rich_entrys_own_output_is_a_fixed_point(self) -> None:
+        """U3's parser output always carries a dict with a populated,
+        validated `source` (design.md, "Round-trip holds throughout"):
+        feeding that output back in as the raw entry MUST normalize to
+        the identical shape."""
+        once = paper_contract.parse_header(
+            self._header(fact=self._rich("contributions", file="06-introduction.md", quote="Prose."))
+        )
         normalized_entry = once.blocks[0]["requires_facts"][0]
         twice = paper_contract.parse_header(self._header(fact=normalized_entry))
         self.assertEqual(twice.blocks[0]["requires_facts"], once.blocks[0]["requires_facts"])
-        self.assertEqual(twice.blocks[0]["requires_facts"], [{"value": "contributions", "source": None}])
 
     def test_a_rich_fact_entry_parses_and_carries_its_source(self) -> None:
         header = paper_contract.parse_header(
@@ -1079,18 +1075,15 @@ class RequirementEntryShapeTests(unittest.TestCase):
             [{"value": "contributions", "source": {"file": "06-introduction.md", "quote": "Prose."}}],
         )
 
-    def test_a_rich_entry_with_an_explicit_null_source_also_round_trips(self) -> None:
-        """A dict entry MAY declare `source: null` directly (not only as
-        this function's own transient output) — the same key-present,
-        value-null convention `mode`/`figure` already use, held here as
-        `None` rather than validated."""
-        header = paper_contract.parse_header(
-            self._header(fact={"value": "contributions", "source": None})
-        )
-        self.assertEqual(
-            header.blocks[0]["requires_facts"],
-            [{"value": "contributions", "source": None}],
-        )
+    def test_a_rich_entry_with_an_explicit_null_source_now_refuses(self) -> None:
+        """U1/U2's `source: null` round-trip convention was how an
+        untranscribed bare entry re-serialized. U3 (design.md D3) makes a
+        non-null `source` unconditional, so an explicit `null` now refuses
+        exactly like an absent key — never a silently-accepted value."""
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact={"value": "contributions", "source": None}))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
 
     def test_a_rich_entry_missing_source_refuses_malformed_header_naming_source(self) -> None:
         with self.assertRaises(Refused) as ctx:
@@ -1118,22 +1111,27 @@ class RequirementEntryShapeTests(unittest.TestCase):
             paper_contract.parse_header(self._header(fact=broken))
         self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
 
-    def test_an_unknown_bare_fact_still_refuses_unknown_fact(self) -> None:
+    def test_a_bare_unknown_fact_string_refuses_malformed_header_not_unknown_fact(self) -> None:
+        """U3: the shape check (entry must be an object) runs before
+        vocabulary validation, so a bare string — known or unknown fact —
+        always refuses `MALFORMED_HEADER` first."""
         with self.assertRaises(Refused) as ctx:
             paper_contract.parse_header(self._header(fact="not-a-real-fact"))
-        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
 
     def test_an_unknown_rich_facts_value_still_refuses_unknown_fact(self) -> None:
         """Task 1.11: `UNKNOWN_FACT` keeps firing, now reading
-        `entry["value"]` rather than the bare string itself."""
+        `entry["value"]` rather than a bare string."""
         with self.assertRaises(Refused) as ctx:
             paper_contract.parse_header(self._header(fact=self._rich("not-a-real-fact")))
         self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
 
-    def test_an_unknown_bare_declaration_still_refuses_unknown_declaration(self) -> None:
+    def test_a_bare_unknown_declaration_string_refuses_malformed_header_not_unknown_declaration(
+        self,
+    ) -> None:
         with self.assertRaises(Refused) as ctx:
             paper_contract.parse_header(self._header(declaration="not-a-real-declaration"))
-        self.assertEqual(ctx.exception.code, "UNKNOWN_DECLARATION")
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
 
     def test_an_unknown_rich_declarations_value_still_refuses_unknown_declaration(self) -> None:
         with self.assertRaises(Refused) as ctx:
@@ -1144,7 +1142,7 @@ class RequirementEntryShapeTests(unittest.TestCase):
 
     def test_requirement_values_derives_the_plain_tuple_in_declaration_order(self) -> None:
         entries = [
-            {"value": "contributions", "source": None},
+            self._rich("contributions", file="demo.md", quote="Prose."),
             self._rich("dataset", file="06-introduction.md", quote="Prose."),
         ]
         self.assertEqual(paper_contract.requirement_values(entries), ("contributions", "dataset"))
@@ -1154,8 +1152,8 @@ class RequirementEntryShapeTests(unittest.TestCase):
         Tuple For Downstream Consumers`: `BlockRecord.requires_facts` /
         `.requires_declarations` stay plain tuples of ids over the real
         corpus, with no rich shape leaking through — proven against
-        `sections/*.md` as shipped today (every entry still a bare
-        string; U2 is what starts transcribing some of them)."""
+        `sections/*.md` as shipped today, every entry now fully
+        transcribed (U3's operator ruling applied)."""
         corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
         for record in corpus.blocks.values():
             for value in record.requires_facts:
@@ -1270,6 +1268,252 @@ class RequirementSubscriptSingleDerivationTests(unittest.TestCase):
         self.assertNotIn("paper_contract.py", violations)
 
 
+class RequirementTranscriptionGateTests(unittest.TestCase):
+    """`the-requirement-names-the-sentence-that-demands-it` — Work Unit U3.
+    `requirement-transcription` spec, `Requirement: Transcribed
+    Requirement Entries Only`: `paper_graph._verify_requirement_
+    transcription`, wired unconditionally into `assemble_corpus`. Mirrors
+    `_verify_after_transcription`'s own self-file / cross-file / refusal
+    tests (design.md, Testing Strategy)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_an_unbacked_quote_refuses_span_not_in_source(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "dataset",
+                        "source": {"file": "sections/01-a.md", "quote": "Never written anywhere."},
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose that never mentions the dataset at all.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_a_cross_file_quote_verifies(self) -> None:
+        """Mirrors the shipped `abstract.slot-2` / `06-introduction.md`
+        precedent: `source.file` names a DIFFERENT contract than the one
+        declaring the entry, and the quote is checked against THAT file's
+        own body, not the declaring block's."""
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "dataset",
+                        "source": {
+                            "file": "sections/02-b.md",
+                            "quote": "The dataset lives over here instead.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose that never mentions the dataset.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        self._write(
+            "02-b.md",
+            {"section": "b", "position": 2, "blocks": [
+                {"id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+            ]},
+            "The dataset lives over here instead.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_a_typod_cross_file_quote_refuses(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "dataset",
+                        "source": {
+                            "file": "sections/02-b.md",
+                            "quote": "The dataset lives ovar here instead.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose that never mentions the dataset.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        self._write(
+            "02-b.md",
+            {"section": "b", "position": 2, "blocks": [
+                {"id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+            ]},
+            "The dataset lives over here instead.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+
+
+class RequirementTranscriptionMutationTests(unittest.TestCase):
+    """Mutation proof the gate is load-bearing (design.md, Testing
+    Strategy, 'Mutation — unconditional': 'the `assemble_corpus` call line
+    removed... the unbacked test goes green → red') and the static proof
+    the wiring is unconditional — a direct statement inside
+    `assemble_corpus`, never behind `if`/`try`."""
+
+    def test_removing_the_verifier_call_flips_the_gate_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_requirement_transcription(corpus, bodies)\n",
+            "",
+            "tests.test_paper_writing.RequirementTranscriptionGateTests"
+            ".test_an_unbacked_quote_refuses_span_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_the_call_is_a_direct_statement_never_guarded(self) -> None:
+        source = (SKILL_SCRIPTS / "paper_graph.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        assemble = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "assemble_corpus"
+        )
+        direct_call_names = {
+            stmt.value.func.id
+            for stmt in assemble.body
+            if isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Name)
+        }
+        self.assertIn(
+            "_verify_requirement_transcription", direct_call_names,
+            "the verifier call must be a direct statement of assemble_corpus's own "
+            "body, never nested inside an 'if' or 'try'",
+        )
+
+
+class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
+    """`design.md`, Testing Strategy, 'Corpus — equality': `{qid:
+    record.requires_facts}` / `.requires_declarations` over the shipped
+    corpus, snapshotted as a frozen golden literal — U3's operator ruling
+    (`unanchored-requirements.md`) appears here as an explicit, itemized
+    diff against the pre-ruling (post-U2) derived value set, and nowhere
+    else."""
+
+    #: `experimental-setup.es-assessment`'s pre-ruling `requires_facts`
+    #: value set, and `title-and-keywords.keywords`'s — the exact two
+    #: blocks the ruling touched (`unanchored-requirements.md`, rows 3
+    #: and 4: both ruled "A — spurious").
+    _PRE_RULING_FACTS = {
+        "experimental-setup.es-assessment": (
+            "dataset", "contributions", "experimental-design", "gap",
+        ),
+        "title-and-keywords.keywords": ("contributions",),
+    }
+
+    #: The full post-U3 snapshot, `{qualified_id: requires_facts}`,
+    #: measured directly against the shipped corpus once U3's code and
+    #: ruling both landed — the golden this test compares against.
+    _GOLDEN_FACTS = {
+        "abstract.slot-1": ("dataset",),
+        "abstract.slot-2": ("contributions",),
+        "abstract.slot-3": ("formulation",),
+        "abstract.slot-4": ("formulation", "results"),
+        "abstract.slot-5": ("experimental-design",),
+        "abstract.slot-6": ("results",),
+        "abstract.slot-7": ("results",),
+        "back-matter.bm-acknowledgments": (),
+        "back-matter.bm-appendices": (),
+        "back-matter.bm-author-contributions": (),
+        "back-matter.bm-conflicts-of-interest": (),
+        "back-matter.bm-data-availability": (),
+        "back-matter.bm-funding": (),
+        "conclusions.concl-block-1": ("contributions",),
+        "conclusions.concl-block-2": ("results",),
+        "conclusions.concl-block-3": (),
+        "conclusions.concl-block-4": ("limitations",),
+        "experimental-setup.es-assessment": ("contributions", "experimental-design", "gap"),
+        "experimental-setup.es-dataset": ("dataset",),
+        "experimental-setup.es-preamble": (),
+        "experimental-setup.es-training-details": ("implementation",),
+        "introduction.block-1": ("dataset",),
+        "introduction.block-2": ("contributions",),
+        "introduction.block-3": ("problem-statement",),
+        "introduction.block-4a": ("formulation",),
+        "introduction.block-4b": ("formulation", "results"),
+        "introduction.block-5": ("experimental-design", "results"),
+        "introduction.block-6": ("skeleton",),
+        "limitations.lim-closing": (),
+        "limitations.lim-failure-mode": ("results",),
+        "limitations.lim-opening-concession": ("results",),
+        "limitations.lim-proposal-items": ("formulation",),
+        "limitations.lim-validation-items": ("experimental-design",),
+        "materials-and-methods.mm-borrowed-machinery": ("formulation",),
+        "materials-and-methods.mm-dataset": ("dataset",),
+        "materials-and-methods.mm-preamble": (),
+        "materials-and-methods.mm-proposal": ("formulation",),
+        "related-work.rw-closing": ("gap",),
+        "related-work.rw-panorama": ("problem-statement",),
+        "related-work.rw-preamble": ("problem-statement",),
+        "related-work.rw-problem-blocks": ("problem-statement",),
+        "related-work.rw-synthesis-artefact": ("contributions",),
+        "results-and-discussion.rd-contribution-blocks": ("contributions", "results"),
+        "results-and-discussion.rd-cost": ("results", "implementation"),
+        "results-and-discussion.rd-general-task": ("results",),
+        "title-and-keywords.keywords": (),
+        "title-and-keywords.title": ("contributions",),
+    }
+
+    def test_the_shipped_corpus_matches_the_golden_modulo_the_dp_ruling(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        current_facts = {qid: record.requires_facts for qid, record in corpus.blocks.items()}
+
+        self.assertEqual(
+            current_facts, self._GOLDEN_FACTS,
+            "the shipped corpus's derived requires_facts drifted from the frozen "
+            "golden -- if this is an intentional change, it must be re-measured "
+            "and re-recorded, never hand-patched to make the assertion pass",
+        )
+
+        for qid, pre_ruling in self._PRE_RULING_FACTS.items():
+            self.assertNotEqual(
+                current_facts[qid], pre_ruling,
+                f"{qid}: the operator ruling was supposed to change this block's "
+                "requires_facts and the golden shows it unchanged",
+            )
+
+
 class ContractHeaderTests(unittest.TestCase):
     """`a-diagram-that-compiles-or-says-why`, `section-contract` spec
     delta: `figure` joins `_BLOCK_OPTIONAL`, five subkeys required and
@@ -1285,7 +1529,14 @@ class ContractHeaderTests(unittest.TestCase):
 
     def _header(self, figure=None) -> dict:
         block = {
-            "id": "b1", "requires_facts": ["contributions"], "requires_declarations": [],
+            "id": "b1",
+            "requires_facts": [
+                {
+                    "value": "contributions",
+                    "source": {"file": "sections/00-demo.md", "quote": "The contributions."},
+                }
+            ],
+            "requires_declarations": [],
             "citations": "none",
         }
         if figure is not None:
@@ -2310,48 +2561,79 @@ _COUPLING_CONTRIBUTIONS = ["Adaptive Caching", "Async Prefetch", "Bounded Retry"
 #: (`contributions`, `problem-statement`, `gap`, `limitations`). No
 #: `figure:` obligation anywhere: this fixture is deliberately independent
 #: of `a-diagram-that-compiles-or-says-why`.
+def _coupling_requirement(fact: str, filename: str) -> dict:
+    """One rich `requires_facts` entry for the coupling fixture, sourced at
+    the same file declaring it — `_write_coupling_sections` appends this
+    exact sentence to that file's own prose body, so `quote_in_body`
+    verifies it for real rather than needing a fabricated anchor."""
+    return {
+        "value": fact,
+        "source": {
+            "file": f"sections/{filename}",
+            "quote": f"This block requires the {fact}.",
+        },
+    }
+
+
 _COUPLING_SECTIONS = {
     "01-introduction.md": {
         "section": "introduction", "position": 1,
         "blocks": [
-            {"id": "intro-contrib", "requires_facts": ["contributions"],
+            {"id": "intro-contrib",
+             "requires_facts": [_coupling_requirement("contributions", "01-introduction.md")],
              "requires_declarations": [], "citations": "none"},
-            {"id": "intro-gap", "requires_facts": ["gap"],
+            {"id": "intro-gap",
+             "requires_facts": [_coupling_requirement("gap", "01-introduction.md")],
              "requires_declarations": [], "citations": "none"},
         ],
     },
     "02-methods.md": {
         "section": "methods", "position": 2,
         "blocks": [
-            {"id": "methods-contrib", "requires_facts": ["contributions"],
+            {"id": "methods-contrib",
+             "requires_facts": [_coupling_requirement("contributions", "02-methods.md")],
              "requires_declarations": [], "citations": "none"},
-            {"id": "methods-chain", "requires_facts": ["problem-statement"],
+            {"id": "methods-chain",
+             "requires_facts": [_coupling_requirement("problem-statement", "02-methods.md")],
              "requires_declarations": [], "citations": "none"},
         ],
     },
     "03-related-work.md": {
         "section": "related-work", "position": 3,
         "blocks": [
-            {"id": "related-work-gap", "requires_facts": ["gap"],
+            {"id": "related-work-gap",
+             "requires_facts": [_coupling_requirement("gap", "03-related-work.md")],
              "requires_declarations": [], "citations": "none"},
         ],
     },
     "04-abstract.md": {
         "section": "abstract", "position": 4,
         "blocks": [
-            {"id": "abstract-contrib", "requires_facts": ["contributions"],
+            {"id": "abstract-contrib",
+             "requires_facts": [_coupling_requirement("contributions", "04-abstract.md")],
              "requires_declarations": [], "citations": "none"},
         ],
     },
     "05-conclusions.md": {
         "section": "conclusions", "position": 5,
         "blocks": [
-            {"id": "conclusions-contrib", "requires_facts": ["contributions"],
+            {"id": "conclusions-contrib",
+             "requires_facts": [_coupling_requirement("contributions", "05-conclusions.md")],
              "requires_declarations": [], "citations": "none"},
-            {"id": "conclusions-future", "requires_facts": ["limitations"],
+            {"id": "conclusions-future",
+             "requires_facts": [_coupling_requirement("limitations", "05-conclusions.md")],
              "requires_declarations": [], "citations": "discovery"},
         ],
     },
+}
+
+#: Every fact this fixture's blocks require, in file declaration order —
+#: `_write_coupling_sections` appends one `This block requires the
+#: <fact>.` sentence per fact to that file's own prose, matching
+#: `_coupling_requirement`'s quote exactly.
+_COUPLING_FACTS_BY_FILE = {
+    name: [entry["requires_facts"][0]["value"] for entry in header["blocks"]]
+    for name, header in _COUPLING_SECTIONS.items()
 }
 
 #: Every block's body bytes in the fully-declared green fixture -- literal
@@ -2415,8 +2697,11 @@ def _write_coupling_sections(sections_dir: Path) -> None:
     both headings are added empty, never populated with invented content."""
     sections_dir.mkdir(parents=True, exist_ok=True)
     for name, header in _COUPLING_SECTIONS.items():
+        anchors = "".join(
+            f" This block requires the {fact}." for fact in _COUPLING_FACTS_BY_FILE[name]
+        )
         text = (
-            "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n\n"
+            "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse." + anchors + "\n\n"
             "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
         )
         (sections_dir / name).write_text(text, encoding="utf-8")
@@ -4084,13 +4369,24 @@ def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) 
     header = {
         "section": "results", "position": 1,
         "blocks": [
-            {"id": "res-contrib", "requires_facts": ["contributions"],
-             "requires_declarations": [], "citations": "none", "optional": optional},
+            {
+                "id": "res-contrib",
+                "requires_facts": [
+                    {
+                        "value": "contributions",
+                        "source": {
+                            "file": "sections/01-results.md",
+                            "quote": "This block requires the contributions.",
+                        },
+                    }
+                ],
+                "requires_declarations": [], "citations": "none", "optional": optional,
+            },
         ],
     }
     text = (
-        "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse.\n\n"
-        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse. This block requires the "
+        "contributions.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
     )
     (sections_dir / "01-results.md").write_text(text, encoding="utf-8")
 
@@ -4675,22 +4971,33 @@ class ReadinessBasisTests(unittest.TestCase):
         paper_scaffold.scaffold(self.paper_dir)
         self.sections_dir = Path(self._tmp.name) / "sections"
         self.sections_dir.mkdir()
+        def _req(fact: str) -> dict:
+            return {
+                "value": fact,
+                "source": {
+                    "file": "sections/01-readiness-basis.md",
+                    "quote": f"This block requires the {fact}.",
+                },
+            }
+
         header = json.dumps({
             "section": "readiness-basis",
             "position": 1,
             "blocks": [
                 {
-                    "id": "needs-formulation", "requires_facts": ["formulation"],
+                    "id": "needs-formulation", "requires_facts": [_req("formulation")],
                     "requires_declarations": [], "citations": "none",
                 },
                 {
-                    "id": "needs-both", "requires_facts": ["formulation", "dataset"],
+                    "id": "needs-both",
+                    "requires_facts": [_req("formulation"), _req("dataset")],
                     "requires_declarations": [], "citations": "none",
                 },
             ],
         })
         (self.sections_dir / "01-readiness-basis.md").write_text(
-            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            f"---\n{header}\n---\n\nProse. This block requires the formulation. "
+            "This block requires the dataset.\n\n### External inputs\n\nNone.\n\n"
             "### Internal chain\n\nNone.\n",
             encoding="utf-8",
         )
@@ -4756,13 +5063,23 @@ class ReadinessBasisTests(unittest.TestCase):
             "position": 2,
             "blocks": [
                 {
-                    "id": "maybe", "requires_facts": ["dataset"],
+                    "id": "maybe",
+                    "requires_facts": [
+                        {
+                            "value": "dataset",
+                            "source": {
+                                "file": "sections/02-optional-basis.md",
+                                "quote": "This block requires the dataset.",
+                            },
+                        }
+                    ],
                     "requires_declarations": [], "optional": True, "citations": "none",
                 },
             ],
         })
         (self.sections_dir / "02-optional-basis.md").write_text(
-            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            f"---\n{header}\n---\n\nProse. This block requires the dataset."
+            "\n\n### External inputs\n\nNone.\n\n"
             "### Internal chain\n\nNone.\n",
             encoding="utf-8",
         )
@@ -4800,13 +5117,23 @@ class ReadinessPhasesEndToEndTests(unittest.TestCase):
             "position": 1,
             "blocks": [
                 {
-                    "id": "needs-formulation", "requires_facts": ["formulation"],
+                    "id": "needs-formulation",
+                    "requires_facts": [
+                        {
+                            "value": "formulation",
+                            "source": {
+                                "file": "sections/01-e2e.md",
+                                "quote": "This block requires the formulation.",
+                            },
+                        }
+                    ],
                     "requires_declarations": [], "citations": "none",
                 },
             ],
         })
         (self.sections_dir / "01-e2e.md").write_text(
-            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            f"---\n{header}\n---\n\nProse. This block requires the formulation."
+            "\n\n### External inputs\n\nNone.\n\n"
             "### Internal chain\n\nNone.\n",
             encoding="utf-8",
         )
@@ -5124,13 +5451,23 @@ class ReadinessPhasesReadOnlyTests(unittest.TestCase):
             "section": "ro", "position": 1,
             "blocks": [
                 {
-                    "id": "a", "requires_facts": ["formulation"],
+                    "id": "a",
+                    "requires_facts": [
+                        {
+                            "value": "formulation",
+                            "source": {
+                                "file": "sections/01-ro.md",
+                                "quote": "This block requires the formulation.",
+                            },
+                        }
+                    ],
                     "requires_declarations": [], "citations": "none",
                 },
             ],
         })
         (self.sections_dir / "01-ro.md").write_text(
-            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            f"---\n{header}\n---\n\nProse. This block requires the formulation."
+            "\n\n### External inputs\n\nNone.\n\n"
             "### Internal chain\n\nNone.\n",
             encoding="utf-8",
         )
@@ -5199,12 +5536,21 @@ def _write_skeleton_corpus(sections_dir: Path) -> None:
                     "citations": "none",
                 },
                 {
-                    "id": "mm-dataset", "requires_facts": ["dataset"], "requires_declarations": [],
+                    "id": "mm-dataset", "requires_facts": [
+                        {
+                            "value": "dataset",
+                            "source": {
+                                "file": "sections/01-materials-and-methods.md",
+                                "quote": "The dataset enters through this block.",
+                            },
+                        },
+                    ], "requires_declarations": [],
                     "citations": "none", "optional": True,
                 },
             ],
         })
-        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        + "\n---\n\nProse. The dataset enters through this block."
+        "\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
         encoding="utf-8",
     )
     (sections_dir / "02-experimental-setup.md").write_text(
@@ -5212,12 +5558,21 @@ def _write_skeleton_corpus(sections_dir: Path) -> None:
             "section": "experimental-setup", "position": 2,
             "blocks": [
                 {
-                    "id": "es-dataset", "requires_facts": ["dataset"], "requires_declarations": [],
+                    "id": "es-dataset", "requires_facts": [
+                        {
+                            "value": "dataset",
+                            "source": {
+                                "file": "sections/02-experimental-setup.md",
+                                "quote": "The dataset enters through this block.",
+                            },
+                        },
+                    ], "requires_declarations": [],
                     "citations": "none", "optional": True,
                 },
             ],
         })
-        + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        + "\n---\n\nProse. The dataset enters through this block."
+        "\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
         encoding="utf-8",
     )
     (sections_dir / "03-related-work.md").write_text(

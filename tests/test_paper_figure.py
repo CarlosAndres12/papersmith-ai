@@ -758,7 +758,17 @@ class CLIWiringTests(unittest.TestCase):
             b"---\n" + json.dumps({
                 "section": "demo", "position": 1,
                 "blocks": [{
-                    "id": "b1", "requires_facts": ["contributions", "dataset"],
+                    "id": "b1",
+                    "requires_facts": [
+                        {
+                            "value": "contributions",
+                            "source": {"file": "sections/demo.md", "quote": "Demo prose."},
+                        },
+                        {
+                            "value": "dataset",
+                            "source": {"file": "sections/demo.md", "quote": "Demo prose."},
+                        },
+                    ],
                     "requires_declarations": [], "citations": "none",
                     "figure": figure,
                 }],

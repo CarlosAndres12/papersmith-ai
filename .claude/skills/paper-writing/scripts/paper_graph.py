@@ -171,6 +171,7 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
     _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
+    _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
     return corpus
@@ -236,6 +237,38 @@ def _verify_after_transcription(corpus: Corpus, bodies: dict) -> None:
                     f"(whitespace-collapsed, markdown-emphasis-stripped) in "
                     f"{source['file']}'s prose body",
                 )
+
+
+def _verify_requirement_transcription(corpus: Corpus, bodies: dict) -> None:
+    """Enforces, for every `requires_facts` / `requires_declarations`
+    entry, the same transcription discipline `_verify_after_transcription`
+    enforces for `after` edges: the entry's `source.quote` must be a
+    literal (whitespace-collapsed, markdown-emphasis-stripped) substring of
+    `source.file`'s own prose body — `paper_contract.quote_in_body`, the
+    one shared check, never a second copy of it (`requirement-transcription`
+    spec, `Requirement: Transcribed Requirement Entries Only`).
+
+    U3 (design.md D3) makes `source` unconditionally required at the shape
+    layer (`paper_contract._normalize_requirement_entry`), so every entry
+    reaching this function always carries one — unlike `after`'s own
+    dangling-target case, there is no legitimate reason to skip an entry
+    here. Reads the SAME `bodies` dict its siblings already hold — zero
+    extra disk passes.
+    """
+    for section_id, header in corpus.sections.items():
+        for raw_block in header.blocks:
+            block_id = raw_block["id"]
+            for field in ("requires_facts", "requires_declarations"):
+                for entry in raw_block[field]:
+                    source = entry["source"]
+                    body = bodies.get(source["file"])
+                    if body is None or not paper_contract.quote_in_body(body, source["quote"]):
+                        raise Refused(
+                            "SPAN_NOT_IN_SOURCE",
+                            f"{section_id}.{block_id}: {field} quote {source['quote']!r} for "
+                            f"{entry['value']!r} not found verbatim (whitespace-collapsed, "
+                            f"markdown-emphasis-stripped) in {source['file']}'s prose body",
+                        )
 
 
 def _internal_chain_rows(text: str) -> list:

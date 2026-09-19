@@ -34,7 +34,6 @@
     {
       "id": "es-assessment",
       "requires_facts": [
-        "dataset",
         {
           "value": "contributions",
           "source": {
@@ -42,8 +41,20 @@
             "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
           }
         },
-        "experimental-design",
-        "gap"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The experimental design — the competing methods, the axes, and the purpose-built corpus criteria settled as one comparison protocol"
+          }
+        },
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",
@@ -240,6 +251,8 @@ box appearing in both means one of them is wrong.
 | The **competing methods** — the baseline list settled in the state of the art | `es-assessment` |
 | The **axes** — what the comparison is swept over | `es-assessment` |
 | The **purpose-built corpus** — that no standard reference measures what is claimed | `es-assessment` |
+| The **experimental design** — the competing methods, the axes, and the purpose-built corpus criteria settled as one comparison protocol | `es-assessment` |
+| The **gap** — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `es-assessment` |
 | The **implementation** of the experiments and its configuration — what actually ran | `es-training-details` |
 
 ### Internal chain

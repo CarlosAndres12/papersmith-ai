@@ -7,7 +7,7 @@
 | U1 | Schema + validators + derived accessor — gate INERT | `paper_contract.py`, `paper_graph.py` (`BlockRecord` ctor), `paper_cli.py:1455`, `tests/test_paper_writing.py` | None (`MALFORMED_HEADER` gains a new failure surface, no new code) | ~190 | Low | — | [x] |
 | U2 | Transcribe the anchorable, report the rest — gate still INERT | `sections/*.md` (10, headers only), `openspec/changes/the-requirement-names-the-sentence-that-demands-it/unanchored-requirements.md` | None | ~330 | Low | U1 | [x] |
 | DP | Operator ruling — **blocking** | `unanchored-requirements.md` (operator writes the ruling into it) | N/A | 0 | N/A (no code) | U2 | [ ] |
-| U3 | Apply ruling; gate LIVE unconditional; fixtures; roster re-derive — atomic | `paper_contract.py`, `paper_graph.py`, `sections/*.md` (per ruling), `tests/test_paper_contract.py`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_figure.py`, `specs/section-contract/spec.md`, `SKILL.md` | None (`SPAN_NOT_IN_SOURCE` reachable on this field; `MALFORMED_HEADER` on bare string) | ~700 | Medium–High | DP | [ ] |
+| U3 | Apply ruling; gate LIVE unconditional; fixtures; roster re-derive — atomic | `paper_contract.py`, `paper_graph.py`, `sections/*.md` (per ruling), `tests/test_paper_contract.py`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_figure.py`, `specs/section-contract/spec.md`, `SKILL.md` | None (`SPAN_NOT_IN_SOURCE` reachable on this field; `MALFORMED_HEADER` on bare string) | ~700 | Medium–High | DP | [x] |
 
 **DP's three known inputs** (verbatim from proposal/design, do not re-derive):
 1. `experimental-setup.es-assessment` → `experimental-design`, `gap` — zero anchor anywhere in the file (confirmed).
@@ -67,18 +67,18 @@ Chain strategy: pending
 
 ## U3 — Gate Unconditional + Fixtures (Atomic)
 
-- [ ] 3.1 Apply the DP ruling to the affected headers in `sections/*.md`: remove "spurious" entries; for "contract omission" entries, author the sentence into that contract's prose and transcribe `{value, source}` normally — exactly as ruled, no executor judgment.
-- [ ] 3.2 In `paper_contract.py`, narrow `_normalize_requirement_entry`: remove bare-string acceptance; require `source` on every entry (`MALFORMED_HEADER` naming `source` if absent).
-- [ ] 3.3 Add `paper_graph._verify_requirement_transcription(bodies, blocks)` mirroring `_verify_after_transcription`: resolve `source.file` against the `bodies` dict, call `quote_in_body`; refuse `SPAN_NOT_IN_SOURCE` naming block + fact/declaration id on failure.
-- [ ] 3.4 Wire the call as a direct statement inside `paper_graph.assemble_corpus` (not inside `if`/`try`), beside the other three transcription verifiers.
-- [ ] 3.5 RED test in `tests/test_paper_writing.py`: unbacked quote in a tmp corpus copy → `SPAN_NOT_IN_SOURCE`. `.venv/bin/python -m unittest tests.test_paper_writing -v`
-- [ ] 3.6 RED test: cross-file quote (mirrors `abstract.slot-2`/`06-introduction.md`) verifies; typo'd cross-file quote refuses.
-- [ ] 3.7 Mutation test: remove the `assemble_corpus` call to `_verify_requirement_transcription` on a tmp copy, assert the 3.5 test goes green→red confirms the assertion count, then restore; AST-assert the call is a direct statement, not inside `if`/`try`.
-- [ ] 3.8 Add a corpus-equality golden test in `tests/test_paper_writing.py`: snapshot `{qid: record.requires_facts}` / `.requires_declarations` pre-U3, assert equality post-U3 modulo the explicit DP-ruling diff.
-- [ ] 3.9 Update the 26 non-empty raw-header occurrences across `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_contract.py`, `tests/test_paper_figure.py` to the rich `{value, source}` shape. Empty-list fixtures and `BlockRecord`-constructing fixtures (e.g. `tests/test_paper_decisions.py:773`) are unaffected — do not touch.
-- [ ] 3.10 RED test: a fixture rebuilt with a bare string now refuses `MALFORMED_HEADER` at parse (proves the half-migrated state is structurally unrepresentable, not merely detected).
-- [ ] 3.11 Update `specs/section-contract/spec.md`: replace the "A bare-id requirement entry still parses" scenario with the narrowed post-U3 behavior (bare string refuses `MALFORMED_HEADER`), per design D3.
-- [ ] 3.12 Update `.claude/skills/paper-writing/SKILL.md` documenting the transcription obligation for `requires_facts`/`requires_declarations`.
-- [ ] 3.13 Measure `reachable_paper_refusal_codes()` bidirectionally after all code lands; record the observed count — do not forecast it.
-- [ ] 3.14 Grep `scripts/` (read-only) for any id of this paper (forge-vocabulary guard) — must return empty.
-- [ ] 3.15 Full suite green, all seven paper suites: `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+- [x] 3.1 Apply the DP ruling to the affected headers in `sections/*.md`: remove "spurious" entries; for "contract omission" entries, author the sentence into that contract's prose and transcribe `{value, source}` normally — exactly as ruled, no executor judgment.
+- [x] 3.2 In `paper_contract.py`, narrow `_normalize_requirement_entry`: remove bare-string acceptance; require `source` on every entry (`MALFORMED_HEADER` naming `source` if absent).
+- [x] 3.3 Add `paper_graph._verify_requirement_transcription(bodies, blocks)` mirroring `_verify_after_transcription`: resolve `source.file` against the `bodies` dict, call `quote_in_body`; refuse `SPAN_NOT_IN_SOURCE` naming block + fact/declaration id on failure. Landed as `_verify_requirement_transcription(corpus, bodies)` — the same `(corpus, bodies)` parameter order every sibling verifier already uses (`_verify_after_transcription`, `_verify_internal_chain`); it reads `corpus.sections[...].header.blocks` for the raw entries, since `requirement_values()` discards `source` and this verifier needs it.
+- [x] 3.4 Wire the call as a direct statement inside `paper_graph.assemble_corpus` (not inside `if`/`try`), beside the other three transcription verifiers.
+- [x] 3.5 RED test in `tests/test_paper_writing.py`: unbacked quote in a tmp corpus copy → `SPAN_NOT_IN_SOURCE`. `.venv/bin/python -m unittest tests.test_paper_writing -v`
+- [x] 3.6 RED test: cross-file quote (mirrors `abstract.slot-2`/`06-introduction.md`) verifies; typo'd cross-file quote refuses.
+- [x] 3.7 Mutation test: remove the `assemble_corpus` call to `_verify_requirement_transcription` on a tmp copy, assert the 3.5 test goes green→red confirms the assertion count, then restore; AST-assert the call is a direct statement, not inside `if`/`try`.
+- [x] 3.8 Add a corpus-equality golden test in `tests/test_paper_writing.py`: snapshot `{qid: record.requires_facts}` / `.requires_declarations` pre-U3, assert equality post-U3 modulo the explicit DP-ruling diff.
+- [x] 3.9 Update the 26 non-empty raw-header occurrences across `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_contract.py`, `tests/test_paper_figure.py` to the rich `{value, source}` shape. Empty-list fixtures and `BlockRecord`-constructing fixtures (e.g. `tests/test_paper_decisions.py:773`) are unaffected — do not touch. Also updated `RequirementEntryShapeTests` (U1-era class documenting bare-string/null-source acceptance) to assert U3's narrowed refusals instead, and re-captured `PRE_MIGRATION_BODY_DIGESTS["02-experimental-setup.md"]` in `tests/test_paper_contract.py` after 3.1's authorized prose addition.
+- [x] 3.10 RED test: a fixture rebuilt with a bare string now refuses `MALFORMED_HEADER` at parse (proves the half-migrated state is structurally unrepresentable, not merely detected).
+- [x] 3.11 Update `specs/section-contract/spec.md`: replace the "A bare-id requirement entry still parses" scenario with the narrowed post-U3 behavior (bare string refuses `MALFORMED_HEADER`), per design D3.
+- [x] 3.12 Update `.claude/skills/paper-writing/SKILL.md` documenting the transcription obligation for `requires_facts`/`requires_declarations`.
+- [x] 3.13 Measure `reachable_paper_refusal_codes()` bidirectionally after all code lands; record the observed count — do not forecast it. Measured: **127** (unchanged from baseline — no new refusal code was added).
+- [x] 3.14 Grep `scripts/` (read-only) for any id of this paper (forge-vocabulary guard) — must return empty. Measured: empty.
+- [x] 3.15 Full suite green, all seven paper suites: `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`. 749 tests OK.

@@ -1821,14 +1821,23 @@ class ReopenInvalidatesProvenanceEndToEndTests(unittest.TestCase):
                 {
                     "id": "needs-repo-url",
                     "requires_facts": [],
-                    "requires_declarations": ["repository-url"],
+                    "requires_declarations": [
+                        {
+                            "value": "repository-url",
+                            "source": {
+                                "file": "sections/reopen-e2e.md",
+                                "quote": "This block requires the repository-url.",
+                            },
+                        }
+                    ],
                     "citations": "none",
                 }
             ],
         })
         self.contract_path = self.sections_dir / "reopen-e2e.md"
         self.contract_path.write_text(
-            f"---\n{header}\n---\n\nProse body, never read for meaning.\n\n"
+            f"---\n{header}\n---\n\nProse body, never read for meaning. "
+            "This block requires the repository-url.\n\n"
             "### External inputs\n\n### Internal chain\n",
             encoding="utf-8",
         )
@@ -1933,28 +1942,48 @@ class ReadinessDeclinedFactsTests(unittest.TestCase):
         paper_scaffold.scaffold(self.paper_dir)
         self.sections_dir = Path(self._tmp.name) / "sections"
         self.sections_dir.mkdir()
+        def _req(fact: str) -> dict:
+            return {
+                "value": fact,
+                "source": {
+                    "file": "sections/01-declined-readiness.md",
+                    "quote": f"This block requires the {fact}.",
+                },
+            }
+
+        def _decl(name: str) -> dict:
+            return {
+                "value": name,
+                "source": {
+                    "file": "sections/01-declined-readiness.md",
+                    "quote": f"This block requires the {name}.",
+                },
+            }
+
         header = json.dumps({
             "section": "declined-readiness",
             "position": 1,
             "blocks": [
                 {
-                    "id": "declined-only", "requires_facts": ["experimental-design"],
+                    "id": "declined-only", "requires_facts": [_req("experimental-design")],
                     "requires_declarations": [], "citations": "none",
                 },
                 {
                     "id": "declined-plus-live",
-                    "requires_facts": ["experimental-design", "dataset"],
+                    "requires_facts": [_req("experimental-design"), _req("dataset")],
                     "requires_declarations": [], "citations": "none",
                 },
                 {
                     "id": "declined-plus-declaration",
-                    "requires_facts": ["experimental-design"],
-                    "requires_declarations": ["repository-url"], "citations": "none",
+                    "requires_facts": [_req("experimental-design")],
+                    "requires_declarations": [_decl("repository-url")], "citations": "none",
                 },
             ],
         })
         (self.sections_dir / "01-declined-readiness.md").write_text(
-            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            f"---\n{header}\n---\n\nProse. This block requires the experimental-design. "
+            "This block requires the dataset. This block requires the repository-url."
+            "\n\n### External inputs\n\nNone.\n\n"
             "### Internal chain\n\nNone.\n",
             encoding="utf-8",
         )

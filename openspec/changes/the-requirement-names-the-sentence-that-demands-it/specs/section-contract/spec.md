@@ -11,10 +11,10 @@ and a mandatory `blocks` list in order. Each block MUST declare `id`,
 `requires_facts`, `requires_declarations`, and `citations`; each block MAY
 declare `optional`, its own `after`, its own `mode` (overriding the
 section-level default when present), and a `figure` object. Each
-`requires_facts` / `requires_declarations` entry MAY be either a bare id
-string (schema-legal, transcription-unverified) or a rich `{value, source:
-{file, quote}}` object mirroring `after`'s list-of-objects shape, where
-`value` is the fact or declaration id; a rich entry missing `value` or
+`requires_facts` / `requires_declarations` entry MUST be a rich `{value,
+source: {file, quote}}` object mirroring `after`'s list-of-objects shape,
+where `value` is the fact or declaration id; a bare id string no longer
+parses, and an entry missing `value` or `source`, carrying a `null`
 `source`, or carrying an unknown key, MUST refuse `MALFORMED_HEADER` naming
 the missing or unknown key. A `figure` object, when present, MUST declare
 `ordered`, `excludes`, `caption_enumerates`, `caption_decodes`, and
@@ -30,7 +30,12 @@ of its five required subkeys, MUST refuse `MALFORMED_HEADER` (or
 unknown key. Everything below the header MUST be passed through unread.
 
 (Previously: `requires_facts` / `requires_declarations` entries were bare id
-strings only, with no provenance shape.)
+strings only, with no provenance shape. An intermediate state, U1–U2,
+widened this to accept EITHER a bare id string, normalizing to `{value,
+source: None}`, OR a rich object — the corpus-wide quote gate stayed inert
+throughout. U3 removes bare-string acceptance entirely and requires a
+non-null `source` on every entry, making that intermediate, half-migrated
+state structurally unrepresentable rather than merely detected.)
 
 #### Scenario: Valid header parses
 
@@ -80,13 +85,13 @@ strings only, with no provenance shape.)
 - WHEN the reader parses it
 - THEN it accepts the block with no refusal, and `components_from` resolves to `None`
 
-#### Scenario: A bare-id requirement entry still parses
+#### Scenario: A bare-id requirement entry now refuses
 
 - GIVEN a block declaring `requires_facts: [results]` (bare id, no `source`)
 - WHEN the reader parses it
-- THEN it accepts the block with no refusal; `requirement-transcription`'s
-  corpus-wide gate, not this schema check, decides whether the shipped
-  corpus may carry it untranscribed
+- THEN it refuses `MALFORMED_HEADER`; U3 (design.md D3) removed bare-string
+  acceptance, so this is a schema-layer refusal, never something left for
+  `requirement-transcription`'s corpus-wide gate to decide
 
 #### Scenario: A rich requirement entry parses
 

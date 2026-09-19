@@ -26,9 +26,7 @@
     },
     {
       "id": "keywords",
-      "requires_facts": [
-        "contributions"
-      ],
+      "requires_facts": [],
       "requires_declarations": [
         {
           "value": "keyword-bounds",

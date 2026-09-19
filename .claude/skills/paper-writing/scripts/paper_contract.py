@@ -95,9 +95,9 @@ _MODE_REQUIRED = ("value", "source")
 #: `requires_facts` / `requires_declarations` entry shape
 #: (`requirement-transcription` spec, `Requirement: Transcribed Requirement
 #: Entries Only`; `section-contract` spec, `Requirement: Front Matter
-#: Schema`). U1: a bare string still parses (normalizes to
-#: `{"value": raw, "source": None}`); a dict entry MUST carry both keys.
-#: U3 removes bare-string acceptance — see `_normalize_requirement_entry`.
+#: Schema`). U3 (design.md D3): bare-string acceptance is removed; every
+#: entry MUST be an object carrying both keys, with a non-null `source` —
+#: see `_normalize_requirement_entry`.
 _REQUIREMENT_REQUIRED = ("value", "source")
 
 #: The transcription lock's own emphasis strip — a closed, enumerated pair
@@ -260,30 +260,22 @@ def _normalize_requirement_entry(raw, validate, owner: str) -> dict:
     plain id list is never stored, only derived at read time through one
     accessor"). `validate` is the caller's own closed-vocabulary check
     (`paper_vocabulary.validate_fact` or `validate_declaration`), applied to
-    the id either way so a bare string and a rich `value` are held to the
-    same vocabulary.
+    `value`.
 
-    U1/U2: a bare string still parses, normalizing to
-    `{"value": raw, "source": None}`. A dict entry MUST carry exactly the
-    two keys `value` (a string, validated) and `source` — the KEY must be
-    present (an entirely absent `source` refuses `MALFORMED_HEADER` naming
-    it), but the same `raw.get(...) is not None` round-trip convention
-    `mode` and `figure` already use applies to its VALUE: an explicit
-    `source: null` is held as `None` rather than validated, so this
-    function's own bare-string output (`{"value": ..., "source": None}`)
-    re-parses to the identical shape — the fixed point design.md's
-    "Round-trip holds throughout" requires. A non-null `source` goes
-    through `_validate_source`, the same `{file, quote}` shape enforced for
-    `after` and `mode`. An unknown key or a non-string `value` refuses
-    `MALFORMED_HEADER` naming it, mirroring `_validate_mode_object`. U3
-    removes the bare-string branch entirely (design.md D3), making a
-    non-null `source` unconditionally required.
+    U3 (design.md D3): bare-string acceptance is removed. An entry MUST be
+    an object carrying exactly the two keys `value` (a string, validated
+    against the closed vocabulary) and a non-null `source` — an absent
+    `source` key or an explicit `source: null` both refuse `MALFORMED_HEADER`
+    naming `source`, exactly as an `after` entry's own `source` is required.
+    A non-null `source` goes through `_validate_source`, the same
+    `{file, quote}` shape enforced for `after` and `mode`. An unknown key or
+    a non-string `value` refuses `MALFORMED_HEADER` naming it, mirroring
+    `_validate_mode_object`. This makes the half-migrated bare-string state
+    structurally unrepresentable rather than merely detected: a fixture or a
+    contract rebuilt with a bare string now refuses at parse.
     """
-    if isinstance(raw, str):
-        validate(raw)
-        return {"value": raw, "source": None}
     if not isinstance(raw, dict):
-        raise Refused("MALFORMED_HEADER", f"{owner}: entry must be a string or an object")
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry must be an object")
     missing = [key for key in _REQUIREMENT_REQUIRED if key not in raw]
     if missing:
         raise Refused("MALFORMED_HEADER", f"{owner}: entry missing {missing[0]!r}")
@@ -295,8 +287,9 @@ def _normalize_requirement_entry(raw, validate, owner: str) -> dict:
         raise Refused("MALFORMED_HEADER", f"{owner}: entry 'value' must be a string")
     validate(value)
     source = raw["source"]
-    if source is not None:
-        source = dict(_validate_source(source, owner))
+    if source is None:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry missing 'source'")
+    source = dict(_validate_source(source, owner))
     return {"value": value, "source": source}
 
 

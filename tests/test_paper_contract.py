@@ -130,11 +130,15 @@ class SchemaTests(unittest.TestCase):
     and the `--sections` repository boundary."""
 
     def test_valid_header_parses_with_no_refusal(self) -> None:
+        rich_entry = {
+            "value": "results",
+            "source": {"file": "results.md", "quote": "The results themselves."},
+        }
         header = _minimal_header(
             blocks=[
                 {
                     "id": "results-block",
-                    "requires_facts": ["results"],
+                    "requires_facts": [rich_entry],
                     "requires_declarations": [],
                     "citations": "discovery",
                 }
@@ -148,9 +152,10 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(parsed.blocks[0]["id"], "results-block")
         self.assertEqual(
             parsed.blocks[0]["requires_facts"],
-            [{"value": "results", "source": None}],
-            "U1 widened the parsed shape: a bare id normalizes to an entry whose "
-            "source is None until U2 transcribes it and U3 stops accepting the bare form",
+            [rich_entry],
+            "U3: bare-string acceptance is gone; a rich entry parses to its own "
+            "shape unchanged -- this is a shape-only check, the corpus-wide quote "
+            "gate lives in paper_graph.assemble_corpus",
         )
         self.assertEqual(body, b"Prose.\n")
 
@@ -228,7 +233,12 @@ class SchemaTests(unittest.TestCase):
             blocks=[
                 {
                     "id": "b",
-                    "requires_facts": ["discussion"],
+                    "requires_facts": [
+                        {
+                            "value": "discussion",
+                            "source": {"file": "b.md", "quote": "The discussion."},
+                        }
+                    ],
                     "requires_declarations": [],
                     "citations": "none",
                 }
@@ -247,7 +257,12 @@ class SchemaTests(unittest.TestCase):
                 {
                     "id": "b",
                     "requires_facts": [],
-                    "requires_declarations": ["reviewer-name"],
+                    "requires_declarations": [
+                        {
+                            "value": "reviewer-name",
+                            "source": {"file": "b.md", "quote": "The reviewer name."},
+                        }
+                    ],
                     "citations": "none",
                 }
             ]
@@ -418,9 +433,19 @@ class SchemaTests(unittest.TestCase):
 #: other unit-4 edit (all fourteen `after` entries live in the HEADER,
 #: below the closing fence's own JSON, and move no body digest). No other
 #: file's digest moves in unit 4.
+#:
+#: `02-experimental-setup.md`'s digest was re-captured a further time for
+#: `the-requirement-names-the-sentence-that-demands-it`, Work Unit U3: the
+#: operator's ruling on `es-assessment`'s `experimental-design` and `gap`
+#: requirements was "B — the contract never wrote it down" for both
+#: (`unanchored-requirements.md`), and U3's own launch prompt explicitly
+#: authorizes adding two `### External inputs` rows naming those facts so
+#: the requirement entries have something real to anchor to — a genuine,
+#: ruling-sanctioned PROSE change, the only one this file has had since
+#: header insertion.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "960aa095b0ec2cac2c665d5835b50e70a8e030ee926feb025d1408d53139e387"[:64],
-    "02-experimental-setup.md": "c7ffeaa5f7bbfe646090355a30e1b1562ef2b0bfae1bdb20a000e7b04a9e0f51"[:64],
+    "02-experimental-setup.md": "ef85cb81ec686bdd0cab857afcb66a9d223eab2690da5bf57403ef705d094f1c"[:64],
     "03-results-and-discussion.md": "a580e2bd4cb0c5f1515af9bfa6ca2e641c6281a5d5f1009b23c3cab86336477e"[:64],
     "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
     "05-related-work.md": "6c3f1394264bd4b7526057ae8f3a23005515ddb0fc2c75ee0c7cbd839a59c0d1"[:64],
@@ -491,6 +516,18 @@ def _block(block_id: str, *, facts=(), declarations=(), citations="none", after=
 
 def _quote_source(file: str, quote: str) -> dict:
     return {"file": file, "quote": quote}
+
+
+def _fact_entry(value: str, file: str, *, quote: str | None = None) -> dict:
+    """A rich `requires_facts`/`requires_declarations` entry, self-sourced
+    at `file` by default with the same `This block requires the <value>.`
+    sentence `_write_section`'s caller is expected to append to that file's
+    own body -- U3 (design.md D3) removed bare-string acceptance, so every
+    `_block(facts=[...])` caller below now builds this shape instead."""
+    return {
+        "value": value,
+        "source": _quote_source(file, quote or f"This block requires the {value}."),
+    }
 
 
 def _quote_in_body(file_path: Path, quote: str) -> bool:
@@ -1760,8 +1797,9 @@ class ReadinessTests(unittest.TestCase):
     def test_a_block_with_every_requirement_satisfied_is_writable(self) -> None:
         _write_section(self.sections_dir, "01-a.md", {
             "section": "a", "position": 1,
-            "blocks": [_block("only", facts=["dataset"])],
-        })
+            "blocks": [_block("only", facts=[_fact_entry("dataset", "sections/01-a.md")])],
+        }, body=b"Prose. This block requires the dataset.\n\n"
+                b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n")
         corpus = paper_graph.assemble_corpus(self.sections_dir)
 
         report = paper_readiness.compute_readiness(corpus, satisfied_facts={"dataset"}, satisfied_declarations=set())
@@ -1774,8 +1812,14 @@ class ReadinessTests(unittest.TestCase):
     def test_a_block_blocked_only_by_a_declaration_is_not_writable(self) -> None:
         _write_section(self.sections_dir, "01-a.md", {
             "section": "a", "position": 1,
-            "blocks": [_block("only", facts=["dataset"], declarations=["repository-url"])],
-        })
+            "blocks": [_block(
+                "only",
+                facts=[_fact_entry("dataset", "sections/01-a.md")],
+                declarations=[_fact_entry("repository-url", "sections/01-a.md")],
+            )],
+        }, body=b"Prose. This block requires the dataset. "
+                b"This block requires the repository-url.\n\n"
+                b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n")
         corpus = paper_graph.assemble_corpus(self.sections_dir)
 
         report = paper_readiness.compute_readiness(
@@ -1875,7 +1919,8 @@ class MutationTests(unittest.TestCase):
             (temp_sections / path.name).write_bytes(path.read_bytes())
 
         eleventh_body = (
-            b"This appendix is written after the title is fixed, because its examples quote it.\n\n"
+            b"This appendix is written after the title is fixed, because its examples quote it. "
+            b"This block requires the skeleton. This block requires the gap.\n\n"
             b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
         )
         _write_section(
@@ -1883,7 +1928,10 @@ class MutationTests(unittest.TestCase):
             {
                 "section": "supplementary-notes", "position": 11,
                 "blocks": [_block(
-                    "only", facts=["skeleton", "gap"],
+                    "only", facts=[
+                        _fact_entry("skeleton", "sections/11-supplementary-notes.md"),
+                        _fact_entry("gap", "sections/11-supplementary-notes.md"),
+                    ],
                     after=[{
                         "target": "title-and-keywords",
                         "source": {
@@ -1917,7 +1965,7 @@ class MutationTests(unittest.TestCase):
         sections_dir.mkdir(parents=True)
         _write_section(sections_dir, "01-bad.md", {
             "section": "bad", "position": 1,
-            "blocks": [_block("only", facts=["discussion"])],
+            "blocks": [_block("only", facts=[{"value": "discussion", "source": None}])],
         })
 
         proc = subprocess.run(

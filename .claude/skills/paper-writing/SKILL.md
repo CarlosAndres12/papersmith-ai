@@ -753,6 +753,36 @@ additionally admits `discovery`-class evidence — a block making a claim
 about the field. Binding a `discovery`-class record under `transposition`
 refuses `MODE_VIOLATION`.
 
+### `requires_facts` / `requires_declarations`: the requirement must name its own sentence
+
+Every `requires_facts` / `requires_declarations` entry is now a rich
+`{value, source: {file, quote}}` object — the same shape `after` and
+`mode` already carry — never a bare id string. `paper_contract.parse`
+enforces the shape (`value` a string in the closed vocabulary, `source` a
+non-null `{file, quote}` object); `paper_graph.assemble_corpus` then
+verifies `source.quote` is a literal, whitespace-collapsed, markdown-
+emphasis-stripped substring of `source.file`'s own prose body (self-file
+or cross-file, exactly like an `after` edge), unconditionally, on every
+command that assembles the corpus. An entry whose quote cannot be found
+refuses `SPAN_NOT_IN_SOURCE` naming the block and the fact or declaration
+id; a bare string now refuses `MALFORMED_HEADER` at parse, before the
+corpus-wide gate ever runs — the half-migrated, untranscribed state is
+structurally unrepresentable, not merely detected.
+
+`BlockRecord.requires_facts` / `.requires_declarations` stay plain tuples
+of ids downstream — `paper_contract.requirement_values()` is the single
+accessor deriving them, so nothing but `paper_contract.py` itself ever
+subscripts a parsed block's `["requires_facts"]` / `["requires_declarations"]`
+directly.
+
+Two requirements the operator ruled spurious were removed rather than
+transcribed, never merely left bare: `experimental-setup.es-assessment`'s
+`dataset` (already carried by its own `after` edge to `es-dataset`) and
+`title-and-keywords.keywords`'s `contributions` (already reached
+transitively through the seven `introduction.*` blocks). The full
+evidence and ruling live in `openspec/changes/the-requirement-names-the-
+sentence-that-demands-it/unanchored-requirements.md`.
+
 ### The style-leak proof: register rises, overlap does not
 
 Style must not carry content. Proven, not asserted, by drafting one block
