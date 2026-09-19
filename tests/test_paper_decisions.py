@@ -2570,6 +2570,87 @@ class CouplingsCliTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
 
 
+class PlaceCliFrontDoorTests(unittest.TestCase):
+    """`place`: `paper_cli.cmd_place`, the CLI front door -- `paper_figure.
+    place_figure` itself carries three tests in `tests/test_paper_figure.py`
+    (`PlacementVerbTests`), every one calling `place_figure` directly with
+    positional arguments the test builds itself. None of them exercises
+    `cmd_place`'s OWN wiring: `args.paper` -> `resolve_paper_dir`, then
+    `args.figure_id`/`args.pdf`/`args.provenance` threaded into `place_
+    figure`'s four positional parameters, in that order. The same
+    thin-reference shape `order` shipped with before `OrderCliFrontDoorTests`
+    (`tests/test_paper_contract.py`) -- the FUNCTION was covered, the VERB
+    was not."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-place-cli-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _sources(self) -> tuple[Path, Path]:
+        tmp_dir = Path(self._tmp.name)
+        pdf_source = tmp_dir / "measured.pdf"
+        pdf_source.write_bytes(b"%PDF-1.4 cli-front-door\n")
+        provenance_source = tmp_dir / "provenance.json"
+        provenance_source.write_text(json.dumps({"run": "campaign-cli-1"}), encoding="utf-8")
+        return pdf_source, provenance_source
+
+    def test_cmd_place_writes_the_pdf_and_returns_the_json_envelope(self) -> None:
+        pdf_source, provenance_source = self._sources()
+        args = argparse.Namespace(
+            paper=str(self.paper_dir), figure_id="cli-fig",
+            pdf=str(pdf_source), provenance=str(provenance_source),
+        )
+
+        result = paper_cli.cmd_place(args)
+
+        self.assertEqual(result["figureId"], "cli-fig")
+        self.assertEqual(Path(result["pdf"]).read_bytes(), b"%PDF-1.4 cli-front-door\n")
+        self.assertEqual(
+            json.loads(Path(result["provenance"]).read_text(encoding="utf-8"))["run"],
+            "campaign-cli-1",
+        )
+
+    def test_cmd_place_propagates_diagram_source_absent_for_a_missing_pdf(self) -> None:
+        _pdf_source, provenance_source = self._sources()
+        args = argparse.Namespace(
+            paper=str(self.paper_dir), figure_id="cli-fig",
+            pdf=str(Path(self._tmp.name) / "does-not-exist.pdf"), provenance=str(provenance_source),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_place(args)
+
+        self.assertEqual(ctx.exception.code, "DIAGRAM_SOURCE_ABSENT")
+
+    def test_mutation_swapping_cmd_places_own_attribute_name_fails_its_front_door_test(
+        self,
+    ) -> None:
+        """RED-first, deliberate mutation: `place_figure`'s three existing
+        tests (`test_paper_figure.PlacementVerbTests`) call it directly
+        with positional arguments they build themselves -- none of them
+        would ever notice `cmd_place` reading the wrong argparse attribute
+        off `args`, because none of them go through `cmd_place` at all.
+        Mutating `args.figure_id` to `args.figureId` inside `cmd_place`
+        itself proves THIS test's own `Namespace(figure_id=...)` call is
+        what catches it: `AttributeError`, surfaced through `_run_against_
+        mutant` as a failing dotted test, never a clean run."""
+        proc = _run_against_mutant(
+            "paper_dir, args.figure_id, Path(args.pdf), Path(args.provenance),",
+            "paper_dir, args.figureId, Path(args.pdf), Path(args.provenance),",
+            "tests.test_paper_decisions.PlaceCliFrontDoorTests"
+            ".test_cmd_place_writes_the_pdf_and_returns_the_json_envelope",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
 class CouplingsMutationTests(unittest.TestCase):
     """Proves the write-before-validate ordering and the malformed-shape
     guard are both load-bearing."""
@@ -2604,6 +2685,177 @@ class CouplingsMutationTests(unittest.TestCase):
             source_path=SKILL_SCRIPTS / "paper_couplings.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
+
+
+#: Item 2 (`every-verb-has-a-door-test`): the naming convention measured
+#: over `paper_cli.REFUSAL_CLASSIFICATION`'s own live 127-code roster is
+#: SUBJECT-FIRST -- the domain noun leads, the condition word trails
+#: (`ANCHOR_ABSENT`, `CONTRACT_HEADER_ABSENT`, `BLOCK_HAND_EDITED`). This
+#: is the pinned, dated, MEASURED minority that does not: every one of
+#: these 18 codes was read off the live roster on 2026-09-19 (`paper_cli.
+#: REFUSAL_CLASSIFICATION` held exactly 127 keys at the time), never
+#: guessed from the code's name alone -- the same discipline `REFUSAL_
+#: CLASSIFICATION` itself holds every reachable code to.
+#:
+#: - `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE`: an opposite-direction PAIR
+#:   naming the same relational condition (a `\\cite{}` key with no bib
+#:   entry, and a bib entry with no `\\cite{}` key). Whichever side is
+#:   read as "the subject", the other necessarily inverts -- there is no
+#:   subject-first choice that holds for BOTH members of a `WITHOUT` pair
+#:   at once, which is exactly why a mechanical rule cannot resolve this
+#:   pair on its own (see the class docstring below).
+#: - `EXCLUDED_COMPONENT`: the predicate `EXCLUDED` leads; `COMPONENT` (the
+#:   subject) trails.
+#: - `SHARED_COMPONENT`: the predicate `SHARED` leads; `COMPONENT` trails.
+#: - `MALFORMED_FIGURE_OBLIGATION`, `MALFORMED_GUIDANCE_MARKER`,
+#:   `MALFORMED_HEADER`: the predicate `MALFORMED` leads. Contrast the six
+#:   OTHER shipped codes where `MALFORMED` correctly TRAILS a leading
+#:   subject and need no pin: `MARKER_MALFORMED`, `REGION_MALFORMED`,
+#:   `CONDITION_MALFORMED`, `COUPLINGS_RECORD_MALFORMED`, `CITE_KEY_
+#:   MALFORMED`, `BLOCK_ID_MALFORMED` -- the same WORD is subject-first in
+#:   six codes and predicate-first in these three, which is exactly why
+#:   this guard pins CODE NAMES, never a word-anywhere-in-the-code rule.
+#: - `NOT_AN_OBSERVABLE_FACT`: the negation `NOT` leads with no subject
+#:   noun ahead of it at all (contrast the many codes where `NOT` trails
+#:   the subject correctly, e.g. `ENTRY_NOT_INGESTED`, `PHASE_NOT_READY`).
+#: - `NOTHING_TO_ADOPT`: the quantifier `NOTHING` leads an infinitive
+#:   ("nothing to adopt"), naming no domain noun as its subject at all --
+#:   the only shipped code shaped this way.
+#: - `UNBOUND_SENTENCE`: the predicate `UNBOUND` leads; `SENTENCE` (the
+#:   subject) trails.
+#: - `UNKNOWN_CITATIONS_REGIME`, `UNKNOWN_CONDITION_TYPE`, `UNKNOWN_
+#:   DECLARATION`, `UNKNOWN_FACT`, `UNKNOWN_GUIDANCE_CLASS`, `UNKNOWN_
+#:   MODE`, `UNKNOWN_ROLE`, `UNKNOWN_VERDICT`: the predicate `UNKNOWN`
+#:   leads in all eight -- NOT part of the task brief's own seed list, a
+#:   gap this item's own re-measurement of the live roster found. Contrast
+#:   `VERDICT_BULLET_UNKNOWN`, where `UNKNOWN` correctly TRAILS and needs
+#:   no pin -- the same word, subject-first there, predicate-first here.
+_SUBJECT_FIRST_EXCEPTIONS = frozenset({
+    "CITE_WITHOUT_ENTRY", "ENTRY_WITHOUT_CITE",
+    "EXCLUDED_COMPONENT", "SHARED_COMPONENT",
+    "MALFORMED_FIGURE_OBLIGATION", "MALFORMED_GUIDANCE_MARKER", "MALFORMED_HEADER",
+    "NOT_AN_OBSERVABLE_FACT", "NOTHING_TO_ADOPT", "UNBOUND_SENTENCE",
+    "UNKNOWN_CITATIONS_REGIME", "UNKNOWN_CONDITION_TYPE", "UNKNOWN_DECLARATION",
+    "UNKNOWN_FACT", "UNKNOWN_GUIDANCE_CLASS", "UNKNOWN_MODE", "UNKNOWN_ROLE",
+    "UNKNOWN_VERDICT",
+})
+
+
+def _leading_token(code: str) -> str:
+    return code.split("_", 1)[0]
+
+
+#: Derived from `_SUBJECT_FIRST_EXCEPTIONS` itself -- never a second,
+#: independently hand-kept vocabulary -- by taking each pinned exception's
+#: own leading token. `CITE`/`ENTRY` are dropped: both also lead perfectly
+#: good subject-first codes elsewhere (`CITE_KEY_MALFORMED`, `ENTRY_NOT_
+#: INGESTED`, `ENTRY_UNSOURCED`), so "first token is CITE/ENTRY" is not a
+#: predicate signal at all -- only the specific `..._WITHOUT_..` PAIR is,
+#: and a pair is not detectable from one token in isolation. This is the
+#: mechanism `test_a_new_code_reusing_an_attested_leading_marker_is_caught_
+#: unpinned` below proves fires.
+_LEADING_PREDICATE_MARKERS = frozenset(
+    _leading_token(code) for code in _SUBJECT_FIRST_EXCEPTIONS
+) - {"CITE", "ENTRY"}
+
+
+class RefusalCodeNamingConventionTests(unittest.TestCase):
+    """Item 2 (`every-verb-has-a-door-test`): `sdd-spec` and `sdd-design`
+    invented COMPETING names for the same five conditions when they ran in
+    parallel (`CHAIN_ROW_UNRESOLVED` vs `UNMAPPED_CHAIN_ROW`, `PHASE_NOT_
+    READY` vs `PHASE_GATED`, three more), reconciled by hand against the
+    live roster's own measured convention: SUBJECT-FIRST, the domain noun
+    leads and the condition word trails.
+
+    BE HONEST about what this class can and cannot mechanically decide.
+    Telling a subject from a predicate is a judgment about ENGLISH
+    MEANING, not a syntactic property of an identifier -- no rule over the
+    bare string `"UNKNOWN_MODE"` can derive that `UNKNOWN` is a predicate
+    and `MODE` is its subject; that reading was made by a person (here,
+    the agent doing this measurement) and then PINNED, exactly the way
+    `paper_cli.REFUSAL_CLASSIFICATION` pins every code's invocation-defect/
+    work-state reading rather than inferring it from the code's spelling.
+
+    What IS mechanically checkable, and what this class actually checks:
+    a code's LEADING token, compared against `_LEADING_PREDICATE_MARKERS`
+    -- the leading tokens of every ALREADY-PINNED exception (`UNKNOWN`,
+    `MALFORMED`, `NOT`, `EXCLUDED`, `SHARED`, `NOTHING`, `UNBOUND`). A code
+    outside `_SUBJECT_FIRST_EXCEPTIONS` whose leading token reuses one of
+    these markers is a NEW instance of an ALREADY-SEEN violating shape
+    (e.g. a hypothetical `UNKNOWN_RESOLVER_ID` reusing the same `UNKNOWN`-
+    leads pattern eight existing codes already use) -- that much a rule
+    genuinely catches, proven by
+    `test_a_new_code_reusing_an_attested_leading_marker_is_caught_unpinned`
+    below by injecting exactly such a name and confirming it is reported.
+
+    What this class CANNOT catch, and does not pretend to: a genuinely
+    NOVEL leading word this roster has never used as a predicate before
+    (nothing here would flag a hypothetical `ORPHANED_BLOCK` on its first
+    appearance, since `ORPHANED` matches no attested marker yet -- only a
+    human reading `REFUSAL_CLASSIFICATION`'s diff can catch that, the same
+    way only a human decided `UNKNOWN_MODE` belongs on this pinned list in
+    the first place). Nor can it resolve an opposite-direction PAIR like
+    `CITE_WITHOUT_ENTRY`/`ENTRY_WITHOUT_CITE`, where neither member's
+    leading token is inherently a predicate -- both are pinned by name,
+    not caught by the marker rule at all. This class is a drift guard over
+    an ALREADY-SEEN violating shape, never a general subject/predicate
+    parser -- exactly the boundary the task brief asked to be honest
+    about."""
+
+    def test_the_pinned_exceptions_still_exist_in_the_live_roster(self) -> None:
+        stray = sorted(_SUBJECT_FIRST_EXCEPTIONS - set(paper_cli.REFUSAL_CLASSIFICATION))
+        self.assertEqual(
+            stray, [],
+            f"{stray} are pinned as naming exceptions but paper_cli.py's own "
+            "REFUSAL_CLASSIFICATION no longer ships them -- a removed code's pin "
+            "must be removed with it")
+
+    def test_no_live_code_outside_the_pinned_exceptions_reuses_an_attested_leading_marker(
+        self,
+    ) -> None:
+        codes = set(paper_cli.REFUSAL_CLASSIFICATION)
+        violators = sorted(
+            code for code in codes - _SUBJECT_FIRST_EXCEPTIONS
+            if _leading_token(code) in _LEADING_PREDICATE_MARKERS
+        )
+        self.assertEqual(
+            violators, [],
+            f"{violators} lead with an already-attested predicate marker "
+            f"({sorted(_LEADING_PREDICATE_MARKERS)}) and are not in "
+            "_SUBJECT_FIRST_EXCEPTIONS -- either rename to subject-first, or pin "
+            "the exception deliberately with a dated, measured reason, the way "
+            "every existing entry there is pinned")
+
+    def test_a_new_code_reusing_an_attested_leading_marker_is_caught_unpinned(self) -> None:
+        """RED-first, synthetic injection: `paper_cli.REFUSAL_CLASSIFICATION`
+        is never mutated for this (it is real production state another
+        agent owns) -- instead, this reproduces
+        `test_no_live_code_outside_the_pinned_exceptions_reuses_an_
+        attested_leading_marker`'s own check against the live roster PLUS
+        one synthetic, deliberately unpinned, `UNKNOWN`-leading code, and
+        confirms that ONE code -- and only that one -- is reported."""
+        codes = set(paper_cli.REFUSAL_CLASSIFICATION) | {"UNKNOWN_RESOLVER_ID_TEST_ONLY"}
+        violators = sorted(
+            code for code in codes - _SUBJECT_FIRST_EXCEPTIONS
+            if _leading_token(code) in _LEADING_PREDICATE_MARKERS
+        )
+        self.assertEqual(violators, ["UNKNOWN_RESOLVER_ID_TEST_ONLY"])
+
+    def test_the_marker_set_excludes_cite_and_entry_so_their_own_dominant_codes_pass(
+        self,
+    ) -> None:
+        """Proof the `CITE`/`ENTRY` carve-out in `_LEADING_PREDICATE_
+        MARKERS` is load-bearing: without it, `CITE_KEY_MALFORMED`, `ENTRY_
+        NOT_INGESTED` and `ENTRY_UNSOURCED` -- three real, correctly
+        subject-first shipped codes -- would be reported as violators
+        purely for sharing a first word with the `..._WITHOUT_...` pair,
+        which is exactly the false positive this carve-out exists to
+        prevent."""
+        self.assertNotIn("CITE", _LEADING_PREDICATE_MARKERS)
+        self.assertNotIn("ENTRY", _LEADING_PREDICATE_MARKERS)
+        for dominant_code in ("CITE_KEY_MALFORMED", "ENTRY_NOT_INGESTED", "ENTRY_UNSOURCED"):
+            self.assertIn(dominant_code, paper_cli.REFUSAL_CLASSIFICATION)
+            self.assertNotIn(_leading_token(dominant_code), _LEADING_PREDICATE_MARKERS)
 
 
 if __name__ == "__main__":
