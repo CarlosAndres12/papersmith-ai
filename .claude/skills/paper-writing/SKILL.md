@@ -668,7 +668,7 @@ anything itself.**
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute` | `PHASE_NOT_READY`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP` |
+| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then refuses if this block's own section citation folder is not fully ready, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute` | `PHASE_NOT_READY`, `CITATION_FOLDER_ABSENT`, `CITATION_NOT_INGESTED`, `CITATION_FOLDER_UNCLASSIFIED`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP` |
 
 **The phase gate stops the write path, it does not merely report it.**
 Unit 6 wired `PHASE_NOT_READY` onto the read-only `phases` verb alone;
@@ -678,11 +678,27 @@ block's own wave via the SAME gate `phases` uses and refuses
 `PHASE_NOT_READY` before `--draft`/`--audit` are even read off disk and
 before `write_block`'s own attempt ledger is touched — a block never burns
 a judge-cycle attempt on a refusal that has nothing to do with its draft.
-Immediately after that gate, still before `--draft`/`--audit` are read,
-`write` runs `assemble_packet` for this exact block (`packet`'s own
-assembly, above) as a gate in its own right: a `style-reference` root whose
-ingested markdown cannot be read refuses `GUIDANCE_MARKDOWN_UNREADABLE`
-here, before the draft/audit stage is ever reached.
+
+**Citations must be ready before a block is drafted**
+(`no-citation-before-its-paper-is-ingested`, item 3). Immediately after the
+phase gate, still before `--draft`/`--audit` are read, `write` reads this
+block's own `citations` regime off its real contract and, for anything
+other than `none`, checks its section's own citation folder
+(`guidance/<section-id>/`, item 1 above): the folder must exist
+(`CITATION_FOLDER_ABSENT`, naming the section id and telling the operator
+to download the cited PDFs there); every PDF already placed there must be
+ingested — a loose PDF still sitting directly in the folder refuses
+`CITATION_NOT_INGESTED`, naming it by filename and pointing at the
+`paper-ingestion` skill; and the folder itself must carry a real
+classification, not `unclassified` (`CITATION_FOLDER_UNCLASSIFIED`). A
+`none`-regime block cites nothing and is never gated by any of this, no
+matter what `guidance/<section-id>/` looks like — a guard that blocks
+every block regardless of its own contract would be as wrong as one that
+blocks none. Only then does `write` run `assemble_packet` for this exact
+block (`packet`'s own assembly, above) as a gate in its own right: a
+`style-reference` root whose ingested markdown cannot be read refuses
+`GUIDANCE_MARKDOWN_UNREADABLE` here, before the draft/audit stage is ever
+reached.
 
 ### The shuttle procedure — this CLI never invokes an agent
 

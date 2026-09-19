@@ -3700,9 +3700,14 @@ class RefusalRosterTests(unittest.TestCase):
         (already-imported) gains `_require_ingested`, raising
         `ENTRY_NOT_INGESTED` when a resolved citation was never ingested --
         one new code, reachable the instant that raise site exists, no new
-        import needed. Measured directly against
-        `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 119)
+        import needed. Moved from 119 to 122 in that same change's item 3:
+        this file's own new `_guard_section_citations_ready`, called from
+        `cmd_write`, raises `CITATION_FOLDER_ABSENT`, `CITATION_NOT_
+        INGESTED` and `CITATION_FOLDER_UNCLASSIFIED` -- three new codes,
+        reachable the instant `cmd_write` calls it, no new import needed.
+        Measured directly against `reachable_paper_refusal_codes()`, never
+        forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 122)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -5606,6 +5611,142 @@ class PacketWriteGateMutationProofTests(unittest.TestCase):
             "",
             "tests.test_paper_writing.PacketWriteGateTests"
             ".test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class CitationReadinessGateTests(unittest.TestCase):
+    """`no-citation-before-its-paper-is-ingested`, item 3: `write` refuses
+    while a citing block's own section citation folder
+    (`guidance/<section-id>/`) is not fully ready -- PDFs downloaded,
+    ingested, and the folder classified. Runs under the real,
+    non-injectable `FORGE_ROOT` default, the same `implementations/`
+    convention `WriteGateTests`/`PacketWriteGateTests` use.
+
+    RED-first: before `_guard_section_citations_ready` existed, every
+    refusal test below instead failed on `draft.json`
+    (`FileNotFoundError`) -- proof the guard was never consulted on the
+    real `cmd_write` path."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-citation-gate-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [
+            {"id": "cited", "requires_facts": [], "requires_declarations": [], "citations": "resolution"},
+            {"id": "uncited", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "cited-section", "position": 1, "blocks": blocks})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.guidance_dir = self.test_root / "guidance"
+
+        self.args = argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="01-a", block="cited",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+        )
+
+    def test_no_guidance_folder_at_all_refuses_citation_folder_absent(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self.args)
+        self.assertEqual(ctx.exception.code, "CITATION_FOLDER_ABSENT")
+        self.assertIn("cited-section", ctx.exception.detail)
+        self.assertFalse((self.test_root / "draft.json").exists())
+        self.assertFalse((self.test_root / "audit.json").exists())
+
+    def test_an_un_ingested_loose_pdf_refuses_citation_not_ingested_naming_it(self) -> None:
+        """The decisive proof for item 3: a section folder holding a loose,
+        un-ingested PDF refuses `write` by name, before `draft.json` is
+        ever opened."""
+        section_dir = self.guidance_dir / "cited-section"
+        section_dir.mkdir(parents=True)
+        (section_dir / "smith2024.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self.args)
+        self.assertEqual(ctx.exception.code, "CITATION_NOT_INGESTED")
+        self.assertIn("smith2024.pdf", ctx.exception.detail)
+        self.assertFalse((self.test_root / "draft.json").exists())
+
+    def test_an_ingested_but_unclassified_folder_refuses_citation_folder_unclassified(self) -> None:
+        paper_dir = self.guidance_dir / "cited-section" / "smith2024"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "smith2024.md").write_text("# Smith 2024\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self.args)
+        self.assertEqual(ctx.exception.code, "CITATION_FOLDER_UNCLASSIFIED")
+
+    def test_a_fully_ready_section_proceeds_past_the_citation_gate(self) -> None:
+        """A ready citation folder is not itself the failure -- `cmd_write`
+        proceeds past this gate and fails on the very next real stage
+        instead, the draft file this test deliberately never creates,
+        never `Refused` from the citation gate."""
+        paper_dir = self.guidance_dir / "cited-section" / "smith2024"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "smith2024.md").write_text("# Smith 2024\n", encoding="utf-8")
+        (self.guidance_dir / "cited-section" / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+
+        with self.assertRaises(FileNotFoundError):
+            paper_cli.cmd_write(self.args)
+
+    def test_a_none_regime_block_is_never_gated_even_with_no_guidance_folder_at_all(self) -> None:
+        """A guard that blocks everything is as wrong as one that blocks
+        nothing: the `uncited` block's own contract declares `"citations":
+        "none"`, so it is written with no citations to gate at all, even
+        though `guidance/cited-section/` still does not exist."""
+        args = argparse.Namespace(**{**vars(self.args), "block": "uncited"})
+        with self.assertRaises(FileNotFoundError):
+            paper_cli.cmd_write(args)
+
+
+class CitationReadinessGateMutationProofTests(unittest.TestCase):
+    """The decisive mutation proof for item 3: removing `cmd_write`'s own
+    call to `_guard_section_citations_ready` must fail
+    `CitationReadinessGateTests.test_an_un_ingested_loose_pdf_refuses_
+    citation_not_ingested_naming_it` -- a passing test beside an
+    unexercised guard is not a mutation that ran."""
+
+    def test_mutation_removing_the_citation_gate_call_fails_the_refusal(self) -> None:
+        proc = _run_against_mutant(
+            "    _guard_section_citations_ready(guidance_dir, header.section, block[\"citations\"])\n",
+            "",
+            "tests.test_paper_writing.CitationReadinessGateTests"
+            ".test_an_un_ingested_loose_pdf_refuses_citation_not_ingested_naming_it",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_a_none_regime_gate_that_never_returns_early_fails_the_uncited_proof(self) -> None:
+        """The other half of the same decisive proof: a gate that forgot
+        `none`-regime blocks entirely (checked EVERY regime) must fail
+        `CitationReadinessGateTests.test_a_none_regime_block_is_never_
+        gated_even_with_no_guidance_folder_at_all` -- a guard that blocks
+        everything is as wrong as one that blocks nothing, and this proves
+        the negative test actually exercises the early return."""
+        proc = _run_against_mutant(
+            '    if regime == "none":\n        return\n',
+            "",
+            "tests.test_paper_writing.CitationReadinessGateTests"
+            ".test_a_none_regime_block_is_never_gated_even_with_no_guidance_folder_at_all",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
         )
         output = proc.stdout + proc.stderr

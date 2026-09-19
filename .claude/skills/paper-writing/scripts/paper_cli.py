@@ -267,6 +267,11 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- no-citation-before-its-paper-is-ingested, item 2: resolved is not
     # ingested (paper_bib._require_ingested) -------------------------------
     "ENTRY_NOT_INGESTED": WORK_STATE,
+    # --- no-citation-before-its-paper-is-ingested, item 3: `write`'s own
+    # citation-readiness gate (this file, `_guard_section_citations_ready`) -
+    "CITATION_FOLDER_ABSENT": WORK_STATE,
+    "CITATION_NOT_INGESTED": WORK_STATE,
+    "CITATION_FOLDER_UNCLASSIFIED": WORK_STATE,
     # --- the validator and the bounded loop (paper_validate.py; WU3) -----
     "EVIDENCE_EXHAUSTED": WORK_STATE,
     "CITATION_MULTI_CLAIM_SENTENCE": WORK_STATE,
@@ -1275,6 +1280,49 @@ def cmd_packet(args: argparse.Namespace) -> dict:
     return assemble_packet(sections_dir, guidance_dir, args.section, args.block)
 
 
+def _guard_section_citations_ready(guidance_dir: Path, section_id: str, regime: str) -> None:
+    """`no-citation-before-its-paper-is-ingested`, item 3: `write` refuses
+    while a citing block's own section citation folder
+    (`guidance/<section-id>/`) is not fully ready -- downloaded, ingested,
+    and classified (`paper_guidance.section_citation_status`). A `none`-
+    regime block cites nothing and is never gated here
+    (`paper_vocabulary.CITATIONS_REGIMES`; a `none`-regime block has no
+    citations to gate no matter what `guidance/<section-id>/` looks like).
+
+    Checked in this fixed order, one refusal per call -- the same shape
+    `_guard_source_md_classification` already uses for `validate
+    --source-md`: the folder must exist at all (`CITATION_FOLDER_ABSENT`);
+    every PDF already placed in it must be ingested
+    (`CITATION_NOT_INGESTED`, naming every pending PDF by name); and the
+    folder itself must carry a real classification
+    (`CITATION_FOLDER_UNCLASSIFIED`) -- `plan`'s own `guidance`/
+    `sectionGuidance` registries enforced here as a real gate on `write`'s
+    own citing path for the first time, rather than a label nothing
+    consequences until `validate --source-md` sees one real quote.
+    """
+    if regime == "none":
+        return
+    status = paper_guidance.section_citation_status(guidance_dir, section_id)
+    if not status["exists"]:
+        raise Refused(
+            "CITATION_FOLDER_ABSENT",
+            f"guidance/{section_id}/ does not exist yet; download this section's cited PDFs there "
+            f"so the paper-ingestion skill can turn them into evidence before {section_id} is drafted",
+        )
+    if status["pending_pdfs"]:
+        raise Refused(
+            "CITATION_NOT_INGESTED",
+            f"guidance/{section_id}/ still holds un-ingested PDF(s) {status['pending_pdfs']}; "
+            "run the paper-ingestion skill over this folder before writing a citing block",
+        )
+    if status["classification"] == "unclassified":
+        raise Refused(
+            "CITATION_FOLDER_UNCLASSIFIED",
+            f"guidance/{section_id}/ carries no .paper-writing.json marker; classify it "
+            '(e.g. {"class": "evidence"}) before writing a citing block',
+        )
+
+
 def cmd_write(args: argparse.Namespace) -> dict:
     """`write`: reconciles an already-shuttled redactor draft and
     contract-auditor account against one block's real contract, evidence
@@ -1302,7 +1350,13 @@ def cmd_write(args: argparse.Namespace) -> dict:
     burns a judge-cycle attempt on a refusal unrelated to its draft.
 
     Immediately after that gate -- still before `--draft`/`--audit` are
-    read -- `assemble_packet` runs for this exact block (`writing-
+    read, and before `assemble_packet` even runs -- `_guard_section_
+    citations_ready` refuses when this block's own section citation folder
+    (`guidance/<section-id>/`) is not fully ready: downloaded, ingested,
+    classified (`no-citation-before-its-paper-is-ingested`, item 3). A
+    `none`-regime block cites nothing and is never gated by this.
+
+    Then `assemble_packet` runs for this exact block (`writing-
     orchestration` spec, `Requirement: Packet Assembly Precedes Draft`).
     Its own return value is not otherwise consumed here (the redactor's
     draft and the style-sampler's account both already reached `write`
@@ -1317,6 +1371,13 @@ def cmd_write(args: argparse.Namespace) -> dict:
     _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")
 
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+
+    section_path = sections_dir / f"{args.section}.md"
+    header, body = paper_contract.parse(section_path.read_bytes())
+    block = next(b for b in header.blocks if b["id"] == args.block)
+
+    _guard_section_citations_ready(guidance_dir, header.section, block["citations"])
+
     assemble_packet(sections_dir, guidance_dir, args.section, args.block)
 
     draft_path = _resolve_repo_path(args.draft)
@@ -1327,9 +1388,6 @@ def cmd_write(args: argparse.Namespace) -> dict:
     draft = json.loads(draft_path.read_text(encoding="utf-8"))
     audit_account = json.loads(audit_path.read_text(encoding="utf-8"))
 
-    section_path = sections_dir / f"{args.section}.md"
-    header, body = paper_contract.parse(section_path.read_bytes())
-    block = next(b for b in header.blocks if b["id"] == args.block)
     mode_obj = paper_contract.resolve_mode(header, block)
     mode = mode_obj["value"] if mode_obj is not None else None
 
