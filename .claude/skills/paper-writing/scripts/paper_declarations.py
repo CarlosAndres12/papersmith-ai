@@ -23,7 +23,11 @@ Public surface:
         partition, not a guideline`)
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=...)    -> dict
+    decline_fact(paper_dir, id, reason, condition, *, clock=...) -> dict
     read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
+    read_declined(paper_dir) -> dict[str, dict]  (read-only;
+        {fact_id: {"reason", "condition", "holds", "detail"}}, condition
+        re-evaluated fresh from disk on every call)
     read_satisfied(paper_dir) -> (set[str], set[str])  (read-only; fixed facts, fixed declarations)
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
@@ -158,12 +162,19 @@ def _write_declarations(paper_dir: Path, pre: bytes, record: dict | None, new_bo
 
 def _set_record(
     paper_dir: Path, *, kind: str, id_: str, value_field: str, value: str, clock,
+    extra: dict | None = None,
 ) -> dict:
     tex_path, pre, record = _read_declarations(paper_dir)
     _verify_not_hand_edited(record)
     body = _body_or_default(record)
     existing = _find_record(body, kind, id_)
     if existing is not None and existing.get("fixed"):
+        if existing.get("declined"):
+            raise Refused(
+                "DECLARATION_FIXED",
+                f"{id_!r} is declined (reason={existing.get('reason')!r}); "
+                "use --reopen to clear it before resolving",
+            )
         raise Refused(
             "DECLARATION_FIXED",
             f"{id_!r} is already fixed at {value_field}={existing.get(value_field)!r}; "
@@ -177,11 +188,15 @@ def _set_record(
         {
             "kind": kind, "id": id_, value_field: value, "fixed": True, "recorded": clock(),
             "generation": new_generation,
+            **(extra or {}),
         }
     )
     new_body = {"generation": new_generation, "records": new_records}
     _write_declarations(paper_dir, pre, record, new_body)
-    return {"id": id_, "kind": kind, value_field: value, "generation": new_body["generation"]}
+    return {
+        "id": id_, "kind": kind, value_field: value, "generation": new_body["generation"],
+        **(extra or {}),
+    }
 
 
 def set_declaration(
@@ -219,6 +234,123 @@ def set_fact(
     )
 
 
+def _validate_condition_shape(condition, root: Path) -> None:
+    """Write-time structural validation only -- never evaluates whether the
+    condition currently HOLDS (that is `_evaluate_condition`'s job, called
+    only from `read_declined`, never from here)."""
+    if not isinstance(condition, dict):
+        raise Refused("CONDITION_MALFORMED", f"condition must be a JSON object, got {condition!r}")
+    paper_vocabulary.validate_condition_type(condition.get("type"))
+    if condition["type"] == "directory-empty-except":
+        path = condition.get("path")
+        if not isinstance(path, str) or not path:
+            raise Refused(
+                "CONDITION_MALFORMED",
+                "'directory-empty-except' requires a non-empty string 'path'",
+            )
+        ignore = condition.get("ignore", [])
+        if not isinstance(ignore, list) or not all(isinstance(x, str) for x in ignore):
+            raise Refused("CONDITION_MALFORMED", "'ignore' must be a JSON array of strings")
+        resolved = (root / path).resolve()
+        try:
+            resolved.relative_to(root.resolve())
+        except ValueError:
+            raise Refused(
+                "CONDITION_MALFORMED", f"condition path {path!r} resolves outside {root}"
+            )
+
+
+def _evaluate_condition(root: Path, condition: dict) -> tuple:
+    """Read-time truth check, fresh from disk every call -- never cached.
+    Returns (holds, detail); `holds=False` is what `read_declined` reports
+    as a lapsed (`stale`) decline."""
+    paper_vocabulary.validate_condition_type(condition.get("type"))
+    if condition["type"] == "directory-empty-except":
+        path = root / condition["path"]
+        ignore = set(condition.get("ignore", []))
+        if not path.exists():
+            return True, f"{condition['path']} does not exist"
+        if not path.is_dir():
+            return False, f"{condition['path']} exists and is not a directory"
+        extra = sorted({p.name for p in path.iterdir()} - ignore)
+        if extra:
+            return False, f"{condition['path']} contains unexpected entries: {extra}"
+        return True, f"{condition['path']} contains nothing beyond {sorted(ignore)}"
+    raise AssertionError("unreachable: validate_condition_type already closed this")
+
+
+def decline_fact(
+    paper_dir: Path, fact_id: str, reason: str, condition: dict | None,
+    *, clock=paper_region.default_clock,
+) -> dict:
+    """Records `fact_id` as DECLINED — the operator has decided this fact does
+    not enter the paper for now (e.g. no measurement protocol exists yet),
+    as distinct from "not yet measured". A decline is a first-class record
+    kind stored through the exact same `declarations` region and the exact
+    same private readers/writers `set_fact`/`reopen` already use — never a
+    second store. `readiness`/`phases` report a block whose only missing
+    facts are declined ones as `declined`, not `blocked`, naming the fact
+    and this reason.
+
+    Refuses `UNKNOWN_FACT` when `fact_id` is not one of the ten declared
+    facts (same code `set_fact` already raises — reused, not duplicated).
+    Refuses `DECLARATION_FIXED` when the fact is already resolved OR already
+    declined — `--reopen` clears either state identically before it can be
+    re-declared or re-declined.
+    Refuses `DECLINE_REASON_REQUIRED` (new; INVOCATION_DEFECT) when `reason`
+    is empty or all whitespace: a decline with no reason is indistinguishable
+    from an omission six months later, which is the defect this state exists
+    to remove. Enforced here, in the module itself, not only at the CLI
+    layer, so any caller — not just `declare --decline` — is held to it.
+
+    `condition` is MANDATORY and is what makes a decline expire rather than
+    stand forever on a human's memory. It is a JSON object of the shape
+    `paper_vocabulary.CONDITION_TYPES` closes over, stored verbatim in the
+    record and re-evaluated fresh from disk by `read_declined` on every
+    call — never cached as a boolean, never evaluated here at write time
+    (whether the condition currently holds is a `read_declined`/readiness
+    concern, not a decline-time gate: you can decline for a condition that
+    happens to already be false, and the very next `readiness`/`phases`
+    call will correctly report it `stale` rather than `declined`).
+
+    Refuses `CONDITION_REQUIRED` (invocation-defect) when `condition` is
+    `None`. Refuses `CONDITION_MALFORMED` (work-state — same classification
+    family as this skill's other MALFORMED_* codes) when it is not a JSON
+    object, is missing a type-required field, or names a `path` that
+    resolves outside `paper_dir`'s own parent directory. Refuses
+    `UNKNOWN_CONDITION_TYPE` (work-state) when `condition["type"]` is
+    outside the closed vocabulary.
+
+    No new `forge_root` parameter anywhere — `condition["path"]` is
+    resolved relative to `paper_dir.parent`, which is the repository root
+    under this skill's own default layout (`<repo>/paper`) and under every
+    existing test fixture's own convention (`self.paper_dir = self.forge_root
+    / "paper"`) — a deliberate, stated scope decision, not a hidden
+    assumption: a fixture that wants an `experiments/` directory just
+    creates `self.forge_root / "experiments"` and it is picked up with zero
+    extra plumbing.
+    """
+    paper_vocabulary.validate_fact(fact_id)
+    if not reason or not reason.strip():
+        raise Refused(
+            "DECLINE_REASON_REQUIRED",
+            "declining a fact requires a non-empty --reason; an undocumented "
+            "decline is indistinguishable from an omission later",
+        )
+    if condition is None:
+        raise Refused(
+            "CONDITION_REQUIRED",
+            "declining a fact requires a --condition JSON object the skill can "
+            "re-evaluate from disk on every later read; a decline with no "
+            "re-checkable condition never expires",
+        )
+    _validate_condition_shape(condition, paper_dir.parent)
+    return _set_record(
+        paper_dir, kind="fact", id_=fact_id, value_field="reason", value=reason,
+        clock=clock, extra={"declined": True, "condition": condition},
+    )
+
+
 def read_fact(paper_dir: Path, fact_id: str) -> str | None:
     """Read-only: the currently FIXED resolution string for `fact_id`, or
     `None` when it was never declared, or was reopened and not yet
@@ -241,9 +373,42 @@ def read_fact(paper_dir: Path, fact_id: str) -> str | None:
     _verify_not_hand_edited(record)
     body = _body_or_default(record)
     entry = _find_record(body, "fact", fact_id)
-    if entry is None or not entry.get("fixed"):
+    if entry is None or not entry.get("fixed") or entry.get("declined"):
         return None
     return entry["resolution"]
+
+
+def read_declined(paper_dir: Path) -> dict:
+    """Read-only: every currently-declined fact id mapped to
+    `{"reason": str, "condition": dict, "holds": bool, "detail": str}` --
+    `condition` is re-evaluated fresh from disk on EVERY call via
+    `_evaluate_condition`, never cached in the record itself and never
+    memoized. `holds=True` means the decline's own justifying condition
+    still holds (the readiness layer reports this fact `declined`);
+    `holds=False` means it has LAPSED (the readiness layer reports this
+    fact's block `stale`+`blocked`, never auto-satisfied and never
+    silently ignored -- the operator decides what happens next, not this
+    skill). A fact that was declined and then `reopen`ed is absent from
+    this mapping entirely, matching `read_fact`/`read_satisfied`.
+
+    The condition's own `path` is resolved relative to `paper_dir.parent`
+    (the repository root under this skill's default layout) -- reused
+    verbatim from what `decline_fact`/`_validate_condition_shape` already
+    validated, never a second root.
+    """
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    root = paper_dir.parent
+    result = {}
+    for entry in body["records"]:
+        if entry["kind"] == "fact" and entry.get("fixed") and entry.get("declined"):
+            holds, detail = _evaluate_condition(root, entry["condition"])
+            result[entry["id"]] = {
+                "reason": entry["reason"], "condition": entry["condition"],
+                "holds": holds, "detail": detail,
+            }
+    return result
 
 
 def read_satisfied(paper_dir: Path) -> tuple[set, set]:
@@ -269,7 +434,7 @@ def read_satisfied(paper_dir: Path) -> tuple[set, set]:
     body = _body_or_default(record)
     satisfied_facts = {
         entry["id"] for entry in body["records"]
-        if entry["kind"] == "fact" and entry.get("fixed")
+        if entry["kind"] == "fact" and entry.get("fixed") and not entry.get("declined")
     }
     satisfied_declarations = {
         entry["id"] for entry in body["records"]

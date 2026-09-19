@@ -3672,8 +3672,31 @@ class RefusalRosterTests(unittest.TestCase):
         artifact's own forecast (104 to 105) in shape though not in the
         absolute numbers either endpoint names, since both predate unit
         7's own measured +3 (103 to 106, not the tasks artifact's stale
-        101-to-104) that was never corrected forward."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 107)
+        101-to-104) that was never corrected forward. Moved from 107 to 108 in
+        `a-declined-fact-has-somewhere-to-live`: `paper_declarations.py` (an
+        already-imported module) gains `decline_fact`, which raises
+        `DECLINE_REASON_REQUIRED` when `--reason` is empty or all whitespace
+        -- reachable the instant that raise site exists, no new import
+        needed; `DECLARATION_FIXED` is reused verbatim for both a decline-
+        over-resolved and a resolve-over-declined conflict, adding no second
+        code for either condition. Moved from 108 to 111 in that same
+        change's `condition-that-expires` extension (a decline must carry a
+        disk condition the skill re-evaluates on every read, so it can go
+        stale rather than stand forever on a human's memory): `paper_
+        vocabulary.py` (already-imported) gains `validate_condition_type`,
+        raising `UNKNOWN_CONDITION_TYPE` for a `condition["type"]` outside
+        the one-member closed vocabulary `("directory-empty-except",)`;
+        `paper_declarations.decline_fact`'s own new `_validate_condition_
+        shape` helper raises `CONDITION_REQUIRED` (`--condition` omitted)
+        and `CONDITION_MALFORMED` (not a JSON object, a missing/wrong-typed
+        required field, or a `path` resolving outside `paper_dir.parent`) --
+        three new codes, reachable the instant their raise sites exist, no
+        new import needed since `paper_vocabulary.py` and `paper_
+        declarations.py` were already scanned. Measured directly against
+        `reachable_paper_refusal_codes()` rather than forecast, per this
+        file's own repeated warning that the forecast arithmetic has
+        drifted stale before."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 111)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

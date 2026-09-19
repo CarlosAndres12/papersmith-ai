@@ -565,6 +565,212 @@ class DeclarationsTests(unittest.TestCase):
         self.assertEqual(tex_path.read_bytes(), corrupted, "a refused write must leave disk untouched")
 
 
+class DeclinedFactTests(unittest.TestCase):
+    """`a-declined-fact-has-somewhere-to-live`: a fact the operator has
+    DECLINED — decided it does not enter the paper for now — is distinct
+    from a fact simply not yet measured. Stored through the exact same
+    `declarations` region, `set_fact`/`reopen`'s exact same private
+    readers/writers, never a second store.
+
+    A decline's `condition` is mandatory (`condition-that-expires`
+    extension): a JSON object the skill re-evaluates fresh from disk on
+    every `read_declined` call, resolved relative to `paper_dir.parent`
+    (the fixture's own `forge_root`). `self.CONDITION` names
+    `self.forge_root / "experiments"`, a path that does not exist under
+    this fixture by default — `_evaluate_condition` reports a non-existent
+    path as holding, matching `decline_fact`'s own docstring ("does not
+    exist" is a holding case for `directory-empty-except`)."""
+
+    CONDITION = {"type": "directory-empty-except", "path": "experiments", "ignore": [".gitkeep"]}
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_declining_an_unknown_id_refuses_unknown_fact(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "repository-url", "not a fact", self.CONDITION, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertIn("repository-url", ctx.exception.detail)
+
+    def test_declining_with_none_reason_refuses_decline_reason_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", None, self.CONDITION, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLINE_REASON_REQUIRED")
+
+    def test_declining_with_empty_reason_refuses_decline_reason_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "", self.CONDITION, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLINE_REASON_REQUIRED")
+
+    def test_declining_with_whitespace_only_reason_refuses_decline_reason_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "   ", self.CONDITION, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLINE_REASON_REQUIRED")
+
+    def test_declining_with_no_condition_refuses_condition_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet", None,
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "CONDITION_REQUIRED")
+
+    def test_declining_with_a_non_object_condition_refuses_condition_malformed(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet", "not an object",
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "CONDITION_MALFORMED")
+
+    def test_declining_with_a_condition_missing_type_refuses_unknown_condition_type(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet",
+                {"path": "experiments"}, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_CONDITION_TYPE")
+
+    def test_declining_with_an_unknown_condition_type_refuses_unknown_condition_type(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet",
+                {"type": "file-exists", "path": "x"}, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_CONDITION_TYPE")
+
+    def test_declining_with_a_condition_missing_path_refuses_condition_malformed(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet",
+                {"type": "directory-empty-except"}, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "CONDITION_MALFORMED")
+
+    def test_declining_with_a_non_list_ignore_refuses_condition_malformed(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet",
+                {"type": "directory-empty-except", "path": "experiments", "ignore": "x"},
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "CONDITION_MALFORMED")
+
+    def test_declining_with_a_path_outside_the_root_refuses_condition_malformed(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "no protocol exists yet",
+                {"type": "directory-empty-except", "path": "../outside"}, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "CONDITION_MALFORMED")
+
+    def test_declining_a_fact_is_reflected_in_read_declined(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+
+        declined = paper_declarations.read_declined(self.paper_dir)
+
+        self.assertEqual(set(declined), {"experimental-design"})
+        entry = declined["experimental-design"]
+        self.assertEqual(entry["reason"], "no protocol exists yet")
+        self.assertEqual(entry["condition"], self.CONDITION)
+        self.assertTrue(entry["holds"])
+
+    def test_a_declined_fact_is_not_in_read_satisfied(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+
+        satisfied_facts, _satisfied_declarations = paper_declarations.read_satisfied(self.paper_dir)
+
+        self.assertNotIn("experimental-design", satisfied_facts)
+
+    def test_declining_an_already_resolved_fact_refuses_declaration_fixed(self) -> None:
+        paper_declarations.set_fact(
+            self.paper_dir, "experimental-design", "protocol X", clock=self._clock,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "experimental-design", "changed my mind", self.CONDITION,
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATION_FIXED")
+
+    def test_resolving_an_already_declined_fact_refuses_declaration_fixed(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_fact(
+                self.paper_dir, "experimental-design", "protocol X", clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATION_FIXED")
+
+    def test_reopen_then_resolve_round_trips_a_declined_fact(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+
+        paper_declarations.reopen(self.paper_dir, "experimental-design", clock=self._clock)
+
+        self.assertNotIn(
+            "experimental-design", paper_declarations.read_declined(self.paper_dir),
+        )
+
+        result = paper_declarations.set_fact(
+            self.paper_dir, "experimental-design", "protocol X", clock=self._clock,
+        )
+        self.assertEqual(result["resolution"], "protocol X")
+        satisfied_facts, _ = paper_declarations.read_satisfied(self.paper_dir)
+        self.assertIn("experimental-design", satisfied_facts)
+
+    def test_read_fact_returns_none_for_a_currently_declined_fact(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+
+        self.assertIsNone(paper_declarations.read_fact(self.paper_dir, "experimental-design"))
+
+    def test_a_lapsed_condition_is_reported_as_not_holding(self) -> None:
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", "no protocol exists yet", self.CONDITION,
+            clock=self._clock,
+        )
+        experiments_dir = self.forge_root / "experiments"
+        experiments_dir.mkdir(parents=True, exist_ok=True)
+        (experiments_dir / "protocol.md").write_text("a real protocol\n", encoding="utf-8")
+
+        declined = paper_declarations.read_declined(self.paper_dir)
+
+        entry = declined["experimental-design"]
+        self.assertFalse(entry["holds"])
+        self.assertIn("protocol.md", entry["detail"])
+
+
 class DeclarationsMutationTests(unittest.TestCase):
     """Mutations 2, 5, 6 (design.md)."""
 
@@ -598,6 +804,24 @@ class DeclarationsMutationTests(unittest.TestCase):
             "paper_vocabulary.validate_fact(declaration_id)",
             "tests.test_paper_decisions.DeclarationsTests"
             ".test_recording_a_fact_as_a_declaration_refuses_unknown_declaration",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_8_a_declined_fact_counted_as_satisfied_breaks_the_read_satisfied_guard(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            'satisfied_facts = {\n'
+            '        entry["id"] for entry in body["records"]\n'
+            '        if entry["kind"] == "fact" and entry.get("fixed") and not entry.get("declined")\n'
+            '    }',
+            'satisfied_facts = {\n'
+            '        entry["id"] for entry in body["records"]\n'
+            '        if entry["kind"] == "fact" and entry.get("fixed")\n'
+            '    }',
+            "tests.test_paper_decisions.DeclinedFactTests"
+            ".test_a_declined_fact_is_not_in_read_satisfied",
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
@@ -1100,6 +1324,209 @@ class ReopenInvalidatesProvenanceEndToEndTests(unittest.TestCase):
             "test on that helper alone is not sufficient evidence this "
             "requirement holds.",
         )
+
+
+class ReadinessDeclinedFactsTests(unittest.TestCase):
+    """`a-declined-fact-has-somewhere-to-live` + its `condition-that-expires`
+    extension: the decisive proof that a decline actually changes what
+    `readiness`/`phases` report, not merely what `declarations` stores --
+    and that a LAPSED decline's condition is surfaced, never silently
+    treated as still `declined` and never silently auto-unblocked. Same
+    synthetic-contract fixture shape as `tests/test_paper_writing.py`'s
+    `ReadinessBasisTests`. Three blocks:
+
+    - `declined-only` requires ONLY the declined fact -> `"declined"` while
+      the condition holds, `"blocked"` (with `stale_declines`) once it
+      lapses.
+    - `declined-plus-live` also requires a live (never declared) fact ->
+      a decline must never mask a real gap, so this stays `"blocked"`
+      regardless of the decline's own holds/stale state.
+    - `declined-plus-declaration` also requires a never-declared
+      declaration -> also stays `"blocked"` regardless.
+
+    Driven through BOTH `compute_readiness_report` and `compute_phases`,
+    which both compute from the same `paper_readiness.compute_readiness`
+    call and must therefore agree.
+    """
+
+    REASON = "no experimental protocol exists yet in experiments/"
+    CONDITION = {"type": "directory-empty-except", "path": "experiments", "ignore": [".gitkeep"]}
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        header = json.dumps({
+            "section": "declined-readiness",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "declined-only", "requires_facts": ["experimental-design"],
+                    "requires_declarations": [], "citations": "none",
+                },
+                {
+                    "id": "declined-plus-live",
+                    "requires_facts": ["experimental-design", "dataset"],
+                    "requires_declarations": [], "citations": "none",
+                },
+                {
+                    "id": "declined-plus-declaration",
+                    "requires_facts": ["experimental-design"],
+                    "requires_declarations": ["repository-url"], "citations": "none",
+                },
+            ],
+        })
+        (self.sections_dir / "01-declined-readiness.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        paper_declarations.decline_fact(
+            self.paper_dir, "experimental-design", self.REASON, self.CONDITION,
+        )
+
+    def _lapse_the_condition(self) -> None:
+        """Writes a real file into the condition's own named path, so
+        `_evaluate_condition` reports the decline's condition as no longer
+        holding -- the stale/lapsed state, never touched by `--reopen`."""
+        experiments_dir = self.forge_root / "experiments"
+        experiments_dir.mkdir(parents=True, exist_ok=True)
+        (experiments_dir / "protocol.md").write_text("a real protocol\n", encoding="utf-8")
+
+    def _readiness_block(self, block_id: str) -> dict:
+        report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+        return next(b for b in report["blocks"] if b["block"] == block_id)
+
+    def _phases_block(self, block_id: str) -> dict:
+        phases = paper_cli.compute_phases(self.paper_dir, self.sections_dir)
+        for wave in phases["waves"]:
+            for block in wave["blocks"]:
+                if block["block"] == block_id:
+                    return block
+        raise AssertionError(f"{block_id!r} not found in any wave")
+
+    # --- state 1: the condition holds -----------------------------------
+
+    def test_readiness_reports_declined_only_block_as_declined(self) -> None:
+        block = self._readiness_block("declined-readiness.declined-only")
+        self.assertEqual(block["status"], "declined")
+        self.assertEqual(
+            block["declined_facts"],
+            [{"fact": "experimental-design", "reason": self.REASON}],
+        )
+        self.assertEqual(block.get("stale_declines", []), [])
+
+    def test_phases_agrees_declined_only_block_is_declined(self) -> None:
+        block = self._phases_block("declined-readiness.declined-only")
+        self.assertEqual(block["status"], "declined")
+        self.assertEqual(
+            block["declined_facts"],
+            [{"fact": "experimental-design", "reason": self.REASON}],
+        )
+        self.assertEqual(block["stale_declines"], [])
+
+    # --- state 2: the condition has lapsed (stale) ----------------------
+
+    def test_readiness_reports_a_lapsed_decline_as_blocked_with_stale_declines(self) -> None:
+        self._lapse_the_condition()
+
+        block = self._readiness_block("declined-readiness.declined-only")
+
+        self.assertEqual(
+            block["status"], "blocked",
+            "a lapsed decline must never still read as declined -- and must "
+            "never be silently auto-unblocked into writable either",
+        )
+        self.assertEqual(block.get("declined_facts", []), [])
+        self.assertEqual(len(block["stale_declines"]), 1)
+        stale = block["stale_declines"][0]
+        self.assertEqual(stale["fact"], "experimental-design")
+        self.assertEqual(stale["reason"], self.REASON)
+        self.assertEqual(stale["condition"], self.CONDITION)
+        self.assertIn("protocol.md", stale["detail"])
+
+    def test_phases_agrees_a_lapsed_decline_is_blocked_with_stale_declines(self) -> None:
+        self._lapse_the_condition()
+
+        block = self._phases_block("declined-readiness.declined-only")
+
+        self.assertEqual(block["status"], "blocked")
+        self.assertEqual(block["declined_facts"], [])
+        self.assertEqual(len(block["stale_declines"]), 1)
+        self.assertEqual(block["stale_declines"][0]["fact"], "experimental-design")
+        self.assertIn("protocol.md", block["stale_declines"][0]["detail"])
+
+    # --- state 3: mixed / regression -- a decline never masks a real gap,
+    # re-verified against the v2 three-bucket logic under BOTH the holding
+    # and the lapsed condition, so this cannot regress silently either way
+
+    def test_readiness_reports_declined_plus_live_fact_as_blocked(self) -> None:
+        block = self._readiness_block("declined-readiness.declined-plus-live")
+        self.assertEqual(block["status"], "blocked")
+
+    def test_readiness_reports_declined_plus_missing_declaration_as_blocked(self) -> None:
+        block = self._readiness_block("declined-readiness.declined-plus-declaration")
+        self.assertEqual(block["status"], "blocked")
+
+    def test_phases_agrees_declined_plus_live_fact_is_blocked(self) -> None:
+        block = self._phases_block("declined-readiness.declined-plus-live")
+        self.assertEqual(block["status"], "blocked")
+
+    def test_phases_agrees_declined_plus_missing_declaration_is_blocked(self) -> None:
+        block = self._phases_block("declined-readiness.declined-plus-declaration")
+        self.assertEqual(block["status"], "blocked")
+
+    def test_readiness_reports_declined_plus_live_fact_as_blocked_even_once_lapsed(self) -> None:
+        self._lapse_the_condition()
+        block = self._readiness_block("declined-readiness.declined-plus-live")
+        self.assertEqual(block["status"], "blocked")
+
+    def test_readiness_reports_declined_plus_missing_declaration_as_blocked_even_once_lapsed(
+        self,
+    ) -> None:
+        self._lapse_the_condition()
+        block = self._readiness_block("declined-readiness.declined-plus-declaration")
+        self.assertEqual(block["status"], "blocked")
+
+
+class ReadinessDeclinedFactsMutationTests(unittest.TestCase):
+    """The literal 'a mutation that drops the decline-awareness from the
+    readiness computation must turn it red' requirement: forcing
+    `compute_block_readiness` to always report `"blocked"` for a missing
+    fact, even when every missing fact is declined and holding, must
+    redden the decisive proof above -- and a mutation that stops
+    `read_declined` from re-evaluating the condition at all (treating a
+    decline as permanent) must redden the lapsed-case proof."""
+
+    def test_mutation_9_always_blocked_breaks_the_declined_only_readiness_guard(self) -> None:
+        proc = _run_against_mutant(
+            'status = (\n'
+            '            "declined" if (declined_missing and not stale_missing and not live_missing)\n'
+            '            else "blocked"\n'
+            '        )',
+            'status = "blocked"',
+            "tests.test_paper_decisions.ReadinessDeclinedFactsTests"
+            ".test_readiness_reports_declined_only_block_as_declined",
+            source_path=SKILL_SCRIPTS / "paper_readiness.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_10_never_re_evaluating_the_condition_breaks_the_lapsed_case_guard(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            'holds, detail = _evaluate_condition(root, entry["condition"])',
+            'holds, detail = True, "always holds"',
+            "tests.test_paper_decisions.ReadinessDeclinedFactsTests"
+            ".test_readiness_reports_a_lapsed_decline_as_blocked_with_stale_declines",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
 
 
 if __name__ == "__main__":

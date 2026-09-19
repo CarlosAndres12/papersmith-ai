@@ -32,6 +32,7 @@ def compute_block_readiness(
     *,
     opened: bool | None = None,
     basis: str = "supposed-only",
+    declined_facts: dict | None = None,
 ) -> dict:
     """Given one `BlockRecord`, report `writable`/`blocked`/`not-applicable`
     naming each still-missing fact and declaration separately. A block whose
@@ -59,23 +60,80 @@ def compute_block_readiness(
     behind a `readiness --paper` invocation) is Work Unit 6's job
     (`READINESS_BASIS_REQUIRED`, design.md D3). This function accepts the
     values so that caller can be wired later with no change to this
-    function's shape (tasks.md, Work Unit 3, 3.2)."""
+    function's shape (tasks.md, Work Unit 3, 3.2).
+
+    `declined_facts`, when given, maps a fact id the operator has DECLINED
+    to `paper_declarations.read_declined`'s own per-fact dict --
+    `{"reason": str, "condition": dict, "holds": bool, "detail": str}`,
+    re-evaluated fresh from disk on every `read_declined` call. Three
+    buckets partition `missing_facts`: `declined_missing` (in
+    `declined_facts` and `holds` True -- the decline still stands),
+    `stale_missing` (in `declined_facts` and `holds` False -- the decline's
+    own condition has LAPSED), and `live_missing` (never declined at all).
+    A block reports `"declined"` only when `missing_facts` is non-empty and
+    made up ENTIRELY of currently-holding declines (no stale, no live) and
+    no declaration is missing either; a block missing even one live fact, or
+    one whose decline has lapsed, or any declaration at all, still reports
+    `"blocked"` — a decline must never mask a real gap, and a LAPSED decline
+    is reported, never silently treated as still `"declined"` nor silently
+    auto-unblocked into `"writable"`. The returned dict carries
+    `declined_facts` (currently-holding declines named on this block, as
+    `[{"fact": <id>, "reason": <reason>}, ...]`) whenever any exist, and
+    `stale_declines` (lapsed ones, as
+    `[{"fact": <id>, "reason": <reason>, "condition": <dict>, "detail":
+    <str>}, ...]`) whenever any exist — the two keys are independent and a
+    block can carry either, both, or neither. `declined_facts=None` (the
+    default) behaves exactly as an empty dict: no block can ever report
+    `"declined"` and neither key is ever added, matching every existing
+    caller's behavior unchanged.
+    """
+    declined_facts = declined_facts or {}
     missing_facts = [fact for fact in block.requires_facts if fact not in satisfied_facts]
     missing_declarations = [
         declaration for declaration in block.requires_declarations
         if declaration not in satisfied_declarations
     ]
+    declined_missing = [
+        fact for fact in missing_facts if fact in declined_facts and declined_facts[fact]["holds"]
+    ]
+    stale_missing = [
+        fact for fact in missing_facts
+        if fact in declined_facts and not declined_facts[fact]["holds"]
+    ]
+    live_missing = [fact for fact in missing_facts if fact not in declined_facts]
+
     if block.optional and basis == "declaration-backed" and opened is False:
         status = "not-applicable"
+    elif missing_declarations:
+        status = "blocked"
+    elif missing_facts:
+        status = (
+            "declined" if (declined_missing and not stale_missing and not live_missing)
+            else "blocked"
+        )
     else:
-        status = "writable" if not missing_facts and not missing_declarations else "blocked"
-    return {
+        status = "writable"
+    result = {
         "block": block.qualified_id,
         "status": status,
         "missing_facts": missing_facts,
         "missing_declarations": missing_declarations,
         "optional": block.optional,
     }
+    if declined_missing:
+        result["declined_facts"] = [
+            {"fact": fact, "reason": declined_facts[fact]["reason"]} for fact in declined_missing
+        ]
+    if stale_missing:
+        result["stale_declines"] = [
+            {
+                "fact": fact, "reason": declined_facts[fact]["reason"],
+                "condition": declined_facts[fact]["condition"],
+                "detail": declined_facts[fact]["detail"],
+            }
+            for fact in stale_missing
+        ]
+    return result
 
 
 def compute_readiness(
@@ -85,6 +143,7 @@ def compute_readiness(
     *,
     opened_blocks: set | None = None,
     basis: str = "supposed-only",
+    declined_facts: dict | None = None,
 ) -> list:
     """Every block of every section, in a stable declared order (see
     `_iter_blocks_in_declared_order`).
@@ -99,6 +158,7 @@ def compute_readiness(
             block, satisfied_facts, satisfied_declarations,
             opened=(None if opened_blocks is None else block.qualified_id in opened_blocks),
             basis=basis,
+            declined_facts=declined_facts,
         )
         for block in _iter_blocks_in_declared_order(corpus)
     ]

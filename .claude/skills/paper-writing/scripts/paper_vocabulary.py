@@ -85,6 +85,26 @@ NUMBER_WORDS: tuple[str, ...] = (
 )
 
 
+#: A decline's `condition` — the disk state that justifies it, re-evaluated
+#: on every read. Closed like every other vocabulary here. One type today:
+#: "does the named path (resolved relative to paper_dir's own parent
+#: directory) currently hold nothing beyond an ignorable allowlist" —
+#: general enough for any fact whose decline rests on "no real content
+#: exists yet at path X" (an empty experiments/ tree, an uncloned target
+#: repo, absent run outputs, ...).
+CONDITION_TYPES: tuple[str, ...] = ("directory-empty-except",)
+
+
+def validate_condition_type(value) -> None:
+    """Refuses `UNKNOWN_CONDITION_TYPE` (work-state) when `value` is not
+    one of the declared condition types."""
+    if value not in CONDITION_TYPES:
+        raise Refused(
+            "UNKNOWN_CONDITION_TYPE",
+            f"{value!r} is not one of the declared condition types {CONDITION_TYPES}",
+        )
+
+
 def validate_fact(fact_id: str) -> None:
     """Refuses `UNKNOWN_FACT` (work-state) when `fact_id` is not one of the
     ten declared facts."""

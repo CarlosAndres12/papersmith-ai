@@ -256,6 +256,7 @@ other.
 | `order` refuses `ORDER_CYCLE` | Two or more blocks' `after` edges disagree about who comes first; the refusal names every block in the cycle — fix one of the transcribed sentences, it is never resolved by re-running |
 | `readiness` reports a block `blocked` with an empty `missing_facts` | The block is waiting on a declaration only (an operator-supplied input like `repository-url`), not on any measurement |
 | `readiness` refuses `READINESS_BASIS_REQUIRED` | Give `--paper <dir>` to read the real declarations region, or at least one `--fact`/`--declaration` flag for an explicit hypothetical — a bare call has no basis to answer from |
+| `declare --decline <fact-id> --reason <text> --condition <json>` records a fact as DECLINED | The operator has decided this fact does not enter the paper for now (e.g. no experimental protocol exists yet) — distinct from "not yet measured". The `--condition` is re-evaluated fresh from disk on every `readiness`/`phases` call: while it holds, a block whose only missing facts are declined ones reports `declined`, naming the fact and reason; once it lapses, that block reports `blocked` again with `stale_declines` naming the fact, reason, condition and what changed — the skill never auto-unblocks on a lapse, it only surfaces it. A block missing even one live (non-declined) fact, one whose decline has lapsed, or any declaration at all, still reports `blocked` — a decline never masks a real gap. `--reopen <fact-id>` clears a decline exactly like a resolution, and a decline/resolve conflict on the same id refuses `DECLARATION_FIXED` in both directions (declining an already-resolved fact, or resolving an already-declined one) |
 | A header refuses `UNKNOWN_FACT` / `UNKNOWN_DECLARATION` / `UNKNOWN_CITATIONS_REGIME` | The file declares a value outside the closed vocabulary — fix the header, the vocabularies are not extended by editing the reader |
 | `contract` refuses `INPUT_PARTITION_ABSENT` | The prose body is missing `### External inputs` or `### Internal chain` — add the missing heading, present but empty if the section truly has none |
 | `contract` refuses `CHAIN_ROW_UNRESOLVED` | An `### Internal chain` row does not lead with a resolvable, backticked `<section>.<block-id>` — fix the row's leading token |
@@ -323,9 +324,50 @@ resolution (one of the ten fact ids). Recording either fixes it immediately
     --reopen repository-url
 ```
 
+**A fact can also be DECLINED, not just resolved.** `declare --decline
+<fact-id> --reason <text> --condition <json>` records a fact the operator
+has decided does not enter the paper for now — e.g. no experimental
+protocol exists yet — as distinct from a fact simply not yet measured. All
+three flags are mandatory together: `--reason` empty or missing refuses
+`DECLINE_REASON_REQUIRED`, since an undocumented decline is
+indistinguishable from an omission six months later; `--condition` missing
+refuses `CONDITION_REQUIRED`; a malformed condition (not a JSON object, a
+missing/wrong-typed required field, or a `path` resolving outside the
+repository root) refuses `CONDITION_MALFORMED`; a `condition.type` outside
+the closed vocabulary (today, only `"directory-empty-except"`) refuses
+`UNKNOWN_CONDITION_TYPE`. A decline fixes the fact exactly like a
+resolution does — declining an already-resolved fact, or resolving an
+already-declined one, both refuse `DECLARATION_FIXED` until `--reopen
+<fact-id>` clears it, the same single gate every other fixed record goes
+through.
+
+**The condition is what keeps a decline from going stale on a human's
+memory.** It is re-evaluated fresh from disk on EVERY `readiness`/`phases`
+call, never cached and never evaluated only once at decline time: a block
+whose only missing facts are declines whose condition still holds reports
+`declined`, naming the fact and its reason. Once the named condition no
+longer holds — `"directory-empty-except"` means the path now contains
+something beyond its own `ignore` allowlist, e.g. a real file landed in
+`experiments/` — that same block reports `blocked` again, and the response
+carries `stale_declines` naming the fact, its reason, its condition, and
+what changed (`detail`). The skill never auto-unblocks a block just
+because a lapsed condition suggests progress, and it never keeps quietly
+reporting `declined` once the condition is gone either — it only surfaces
+the lapse; the operator decides what happens next (declare the fact for
+real, or re-decline on new grounds). A block missing even one live
+(non-declined) fact, one whose decline has lapsed, or any declaration at
+all, still reports `blocked` regardless of any other decline's own state —
+a decline never masks a real gap.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py declare \
+    --decline experimental-design --reason "no protocol exists yet in experiments/" \
+    --condition '{"type": "directory-empty-except", "path": "experiments", "ignore": [".gitkeep"]}'
+```
+
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `declare (--declaration <id> \| --fact <id> \| --reopen <id>) [--value <v>]` | Records a declaration or fact resolution, or clears one id's fixed state | `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`, `DECLARE_VALUE_REQUIRED`, `UNKNOWN_DECLARATION`, `UNKNOWN_FACT`, `DECLARATION_FIXED`, `DECLARATIONS_HAND_EDITED` |
+| `declare (--declaration <id> \| --fact <id> \| --reopen <id> \| --decline <fact-id> --reason <text> --condition <json>) [--value <v>]` | Records a declaration or fact resolution, clears one id's fixed state, or declines a fact with a disk condition re-checked on every later read | `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`, `DECLARE_VALUE_REQUIRED`, `DECLINE_REASON_REQUIRED`, `CONDITION_REQUIRED`, `CONDITION_MALFORMED`, `UNKNOWN_CONDITION_TYPE`, `UNKNOWN_DECLARATION`, `UNKNOWN_FACT`, `DECLARATION_FIXED`, `DECLARATIONS_HAND_EDITED` |
 
 `substitute` also accepts an optional `--contract <path>`: it changes no
 byte of what gets written to the block, only records — in the `provenance`

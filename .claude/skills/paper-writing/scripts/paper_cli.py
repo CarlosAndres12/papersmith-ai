@@ -212,6 +212,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "DECLARE_MODE_REQUIRED": INVOCATION_DEFECT,
     "DECLARE_MODE_CONFLICT": INVOCATION_DEFECT,
     "DECLARE_VALUE_REQUIRED": INVOCATION_DEFECT,
+    "DECLINE_REASON_REQUIRED": INVOCATION_DEFECT,
+    "CONDITION_REQUIRED": INVOCATION_DEFECT,
+    "CONDITION_MALFORMED": WORK_STATE,
+    "UNKNOWN_CONDITION_TYPE": WORK_STATE,
     # --- substitute --contract (paper_block.py's own new step; provenance
     # write itself is paper_provenance.py) -------------------------------
     "CONTRACT_UNREADABLE": WORK_STATE,
@@ -415,6 +419,7 @@ def compute_readiness_report(
 
     if paper_dir is not None:
         declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
+        declined_facts = paper_declarations.read_declined(paper_dir)
         opened_blocks = {block["id"] for block in paper_block.read_status(paper_dir)["blocks"]}
         satisfied_facts = declared_facts | flag_facts
         satisfied_declarations = declared_declarations | flag_declarations
@@ -422,6 +427,7 @@ def compute_readiness_report(
     elif flag_facts or flag_declarations:
         declared_facts = set()
         declared_declarations = set()
+        declined_facts = {}
         opened_blocks = None
         satisfied_facts = flag_facts
         satisfied_declarations = flag_declarations
@@ -440,6 +446,7 @@ def compute_readiness_report(
         satisfied_declarations=satisfied_declarations,
         opened_blocks=opened_blocks,
         basis=basis,
+        declined_facts=declined_facts,
     )
     result = {"basis": basis, "blocks": report}
     if basis == "declaration-backed":
@@ -576,11 +583,13 @@ def cmd_skeleton(args: argparse.Namespace) -> dict:
 
 def cmd_declare(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
-    modes_given = [flag for flag in ("declaration", "fact", "reopen") if getattr(args, flag, None)]
+    modes_given = [
+        flag for flag in ("declaration", "fact", "reopen", "decline") if getattr(args, flag, None)
+    ]
     if not modes_given:
         raise Refused(
             "DECLARE_MODE_REQUIRED",
-            "exactly one of --declaration <id>, --fact <id>, --reopen <id> is required.",
+            "exactly one of --declaration <id>, --fact <id>, --reopen <id>, --decline <id> is required.",
         )
     if len(modes_given) > 1:
         raise Refused(
@@ -589,6 +598,14 @@ def cmd_declare(args: argparse.Namespace) -> dict:
         )
     if args.reopen:
         return paper_declarations.reopen(paper_dir, args.reopen)
+    if args.decline:
+        condition = None
+        if args.condition is not None:
+            try:
+                condition = json.loads(args.condition)
+            except json.JSONDecodeError as exc:
+                raise Refused("CONDITION_MALFORMED", f"--condition is not valid JSON: {exc.msg}")
+        return paper_declarations.decline_fact(paper_dir, args.decline, args.reason, condition)
     if args.value is None:
         raise Refused(
             "DECLARE_VALUE_REQUIRED",
@@ -969,9 +986,10 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
     provenance_by_block = {entry["block"]: entry["state"] for entry in provenance_report}
 
     declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
+    declined_facts = paper_declarations.read_declined(paper_dir)
     readiness_report = paper_readiness.compute_readiness(
         corpus, satisfied_facts=declared_facts, satisfied_declarations=declared_declarations,
-        opened_blocks=opened_blocks, basis="declaration-backed",
+        opened_blocks=opened_blocks, basis="declaration-backed", declined_facts=declined_facts,
     )
     readiness_by_block = {entry["block"]: entry for entry in readiness_report}
 
@@ -1001,6 +1019,8 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
                     "status": readiness_by_block[qualified_id]["status"],
                     "missing_facts": readiness_by_block[qualified_id]["missing_facts"],
                     "missing_declarations": readiness_by_block[qualified_id]["missing_declarations"],
+                    "declined_facts": readiness_by_block[qualified_id].get("declined_facts", []),
+                    "stale_declines": readiness_by_block[qualified_id].get("stale_declines", []),
                     "optional": readiness_by_block[qualified_id]["optional"],
                     "opened": qualified_id in opened_blocks,
                     "provenance": provenance_by_block.get(qualified_id),
@@ -1512,6 +1532,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_declare.add_argument(
         "--value", default=None,
         help="the value (--declaration) or resolution (--fact) to record",
+    )
+    p_declare.add_argument(
+        "--decline", default=None,
+        help="a fact id to record as declined -- the operator has decided it does not enter the paper for now",
+    )
+    p_declare.add_argument(
+        "--reason", default=None,
+        help="mandatory with --decline: why this fact is declined",
+    )
+    p_declare.add_argument(
+        "--condition", default=None,
+        help=(
+            "mandatory with --decline: a JSON object naming a disk condition the "
+            "skill re-checks on every later read, e.g. "
+            '\'{"type": "directory-empty-except", "path": "experiments", "ignore": [".gitkeep"]}\''
+        ),
     )
 
     p_observe = sub.add_parser(
