@@ -102,10 +102,12 @@ def test_target_check_is_open_world_despite_being_read_only() -> None:
     assert spec.annotations["openWorldHint"] is True
 
 
-def test_paper_validate_is_not_exposed_as_read_only() -> None:
+def test_paper_validate_is_exposed_but_never_read_only() -> None:
     # C1: `validate` appends evidence and can substitute the block body.
-    assert "papersmith.paper_validate" not in registry.TOOLS_BY_NAME
-    assert registry.PAPER_DISPOSITIONS["validate"] == "deferred"
+    spec = registry.TOOLS_BY_NAME["papersmith.paper_validate"]
+    assert spec.annotations["readOnlyHint"] is False
+    assert spec.annotations["destructiveHint"] is True
+    assert registry.PAPER_DISPOSITIONS["validate"] == "exposed"
 
 
 def test_paper_observe_is_exposed_read_only() -> None:
@@ -114,16 +116,22 @@ def test_paper_observe_is_exposed_read_only() -> None:
     assert registry.PAPER_DISPOSITIONS["observe"] == "exposed"
 
 
-def test_every_deferred_verb_is_named_never_silently_dropped() -> None:
+def test_only_resolve_and_render_remain_deferred() -> None:
     deferred = {
         verb for verb, state in registry.PAPER_DISPOSITIONS.items() if state == "deferred"
-    } | {
+    }
+    # `resolve` reaches the network and caches metadata; `render` shells out to
+    # latexmk. Both are named, never silently dropped.
+    assert deferred == {"resolve", "render"}
+
+
+def test_no_deferred_cli_command_remains() -> None:
+    assert not [
         command
         for command, state in registry.CLI_DISPOSITIONS.items()
         if state == "deferred"
-    }
-    assert {"resolve", "render", "validate", "write", "substitute"} <= deferred
-    assert {"deliberate", "implement", "run", "remote"} <= deferred
+    ]
+    assert registry.CLI_DISPOSITIONS["mcp"] == "out"
 
 
 def test_catalog_tools_match_the_registry_order() -> None:

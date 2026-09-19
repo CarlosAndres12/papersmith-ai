@@ -274,14 +274,6 @@ def _schema(flags: tuple[Flag, ...]) -> dict[str, Any]:
     return schema
 
 
-def _refuse_stdin_body(arguments: dict[str, Any], workspace: Path) -> None:
-    if arguments.get("body") == "-":
-        raise ToolRefusal(
-            "STDIN_NOT_AVAILABLE_OVER_MCP",
-            "the bound body must be a file path; '-' would read the JSON-RPC wire",
-        )
-
-
 def _no_args() -> dict[str, Any]:
     return {"type": "object", "properties": {}, "additionalProperties": False}
 
@@ -561,7 +553,492 @@ _WORKSPACE_TOOLS = (
     ),
 )
 
-TOOLS: tuple[ToolSpec, ...] = (*_WORKSPACE_TOOLS, *_PAPER_READONLY)
+def _cli_child(
+    tokens: tuple[str, ...],
+    flags: tuple[Flag, ...],
+    arguments: dict[str, Any],
+    workspace: Path,
+    *,
+    timeout: float | None = None,
+) -> ChildPlan:
+    argv = list(tokens)
+    for spec in flags:
+        value = arguments.get(spec.name)
+        if value is None:
+            continue
+        if spec.kind == "bool":
+            if value:
+                argv.append(spec.flag)
+            continue
+        if spec.kind == "list":
+            for item in value:
+                argv.extend([spec.flag, str(item)])
+            continue
+        text = str(value)
+        if spec.path:
+            text = str(resolve_under(workspace, text))
+        argv.extend([spec.flag, text])
+    return ChildPlan("cli", tuple(argv), timeout=timeout)
+
+
+def _cli_builder(
+    tokens: tuple[str, ...], flags: tuple[Flag, ...], *, timeout: float | None = None
+) -> Callable[[dict[str, Any], Path], ChildPlan]:
+    def build(arguments: dict[str, Any], workspace: Path) -> ChildPlan:
+        return _cli_child(tokens, flags, arguments, workspace, timeout=timeout)
+
+    return build
+
+
+def _refuse_stdin_body(arguments: dict[str, Any], workspace: Path) -> None:
+    """`--body -` would read the server's own stdin: the JSON-RPC wire."""
+    if arguments.get("body") == "-":
+        raise ToolRefusal(
+            "STDIN_NOT_AVAILABLE_OVER_MCP",
+            "the bound body must be a file path; '-' would read the JSON-RPC wire",
+        )
+
+
+def _refuse_run_without_consent(arguments: dict[str, Any], workspace: Path) -> None:
+    """A real dispatch spends quota; MCP defaults to planning only."""
+    if not arguments.get("dry_run", True) and not arguments.get("consent"):
+        raise ToolRefusal(
+            "CONSENT_REQUIRED",
+            "a non-dry run dispatches real work; pass an explicit consent token",
+        )
+
+
+def _refuse_remote_push_without_consent(arguments: dict[str, Any], workspace: Path) -> None:
+    if arguments.get("operation") == "push" and not arguments.get("consent"):
+        raise ToolRefusal(
+            "CONSENT_REQUIRED",
+            "remote push submits real work; pass an explicit consent token, or use --smoke",
+        )
+
+
+_PERMISSION_FLAGS = (Flag("paper", "--paper", path=True),)
+_SECTIONS_FLAGS = (Flag("sections", "--sections", path=True),)
+_GUIDANCE_FLAG = Flag("guidance", "--guidance", path=True)
+
+_PAPER_MUTATING = (
+    ToolSpec(
+        name="papersmith.paper_scaffold",
+        title="Scaffold the paper",
+        description="Create or re-enter the paper/ tree idempotently.",
+        verb="scaffold",
+        surface="paper",
+        annotations=tool_annotations(
+            "Scaffold the paper", read_only=False, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(_PERMISSION_FLAGS),
+        build=_paper_builder(("scaffold",), _PERMISSION_FLAGS),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_open",
+        title="Open a block",
+        description=(
+            "Insert an empty block pair into the paper. Exactly one of after/at_end is required; "
+            "the child refuses OPEN_POSITION_REQUIRED / OPEN_POSITION_CONFLICT."
+        ),
+        verb="open",
+        surface="paper",
+        annotations=tool_annotations(
+            "Open a block", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("after", "--after"),
+                Flag("at_end", "--at-end", kind="bool"),
+            )
+        ),
+        build=_paper_builder(
+            ("open",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("after", "--after"),
+                Flag("at_end", "--at-end", kind="bool"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_substitute",
+        title="Substitute a block body",
+        description=(
+            "Replace one block's body, or adopt a hand edit. The body is a file path; '-' is refused "
+            "because the child's stdin is closed."
+        ),
+        verb="substitute",
+        surface="paper",
+        annotations=tool_annotations(
+            "Substitute a block body", read_only=False, destructive=True, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("body", "--body", path=True),
+                Flag("adopt", "--adopt", kind="bool"),
+                Flag("contract", "--contract", path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("substitute",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("body", "--body", path=True),
+                Flag("adopt", "--adopt", kind="bool"),
+                Flag("contract", "--contract", path=True),
+            ),
+        ),
+        precondition=_refuse_stdin_body,
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_declare",
+        title="Record a declaration or fact",
+        description="Record a declaration or fact resolution, or reopen a fixed one.",
+        verb="declare",
+        surface="paper",
+        annotations=tool_annotations(
+            "Record a declaration or fact", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("declaration", "--declaration"),
+                Flag("fact", "--fact"),
+                Flag("reopen", "--reopen"),
+                Flag("value", "--value"),
+            )
+        ),
+        build=_paper_builder(
+            ("declare",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("declaration", "--declaration"),
+                Flag("fact", "--fact"),
+                Flag("reopen", "--reopen"),
+                Flag("value", "--value"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_bib_build",
+        title="Rebuild the bibliography",
+        description=(
+            "Rebuild paper/refs.bib whole and sorted, from cached resolved metadata only -- "
+            "never hand-typed."
+        ),
+        verb="bib",
+        surface="paper",
+        annotations=tool_annotations(
+            "Rebuild the bibliography", read_only=False, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(_PERMISSION_FLAGS),
+        build=_paper_builder(("bib", "build"), _PERMISSION_FLAGS),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_write",
+        title="Write a drafted block",
+        description=(
+            "Judge an already-drafted, already-audited block: reconcile the evidence, then "
+            "substitute the block body or report why not. Every operand is a file path."
+        ),
+        verb="write",
+        surface="paper",
+        annotations=tool_annotations(
+            "Write a drafted block", read_only=False, destructive=True, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("section", "--section", required=True),
+                Flag("block", "--block", required=True),
+                Flag("draft", "--draft", required=True, path=True),
+                Flag("audit", "--audit", required=True, path=True),
+                Flag("evidence", "--evidence", path=True),
+                Flag("style", "--style", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("transcript", "--transcript", path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("write",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("section", "--section", required=True),
+                Flag("block", "--block", required=True),
+                Flag("draft", "--draft", required=True, path=True),
+                Flag("audit", "--audit", required=True, path=True),
+                Flag("evidence", "--evidence", path=True),
+                Flag("style", "--style", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("transcript", "--transcript", path=True),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_place",
+        title="Place a measured figure",
+        description=(
+            "Place an already-measured figure's PDF; compiles nothing and needs provenance."
+        ),
+        verb="place",
+        surface="paper",
+        annotations=tool_annotations(
+            "Place a measured figure", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("figure_id", "--figure-id", required=True),
+                Flag("pdf", "--pdf", required=True, path=True),
+                Flag("provenance", "--provenance", required=True, path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("place",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("figure_id", "--figure-id", required=True),
+                Flag("pdf", "--pdf", required=True, path=True),
+                Flag("provenance", "--provenance", required=True, path=True),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_validate",
+        title="Validate a claim for a block",
+        description=(
+            "The single citation gate: submit one judged verdict, check round-bounded satisfaction, "
+            "write on success. NOT read-only -- it appends an evidence record when claim is given "
+            "and, only once every claim is satisfied with a body supplied, substitutes the block."
+        ),
+        verb="validate",
+        surface="paper",
+        annotations=tool_annotations(
+            "Validate a claim for a block", read_only=False, destructive=True, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("claim", "--claim"),
+                Flag("quote", "--quote"),
+                Flag("source_md", "--source-md", path=True),
+                Flag("verdict", "--verdict", kind="enum", choices=("holds", "does-not-hold")),
+                Flag("reason", "--reason"),
+                Flag("cite_key", "--cite-key"),
+                Flag("identifier", "--identifier"),
+                Flag("resolver", "--resolver"),
+                Flag("metadata_digest", "--metadata-digest"),
+                Flag("regime", "--regime"),
+                Flag("section_md", "--section-md", path=True),
+                Flag("round", "--round", kind="int"),
+                Flag("guidance", "--guidance", path=True),
+                Flag("body", "--body", path=True),
+                Flag("sentence", "--sentence", path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("validate",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("block", "--block", required=True),
+                Flag("claim", "--claim"),
+                Flag("quote", "--quote"),
+                Flag("source_md", "--source-md", path=True),
+                Flag("verdict", "--verdict", kind="enum", choices=("holds", "does-not-hold")),
+                Flag("reason", "--reason"),
+                Flag("cite_key", "--cite-key"),
+                Flag("identifier", "--identifier"),
+                Flag("resolver", "--resolver"),
+                Flag("metadata_digest", "--metadata-digest"),
+                Flag("regime", "--regime"),
+                Flag("section_md", "--section-md", path=True),
+                Flag("round", "--round", kind="int"),
+                Flag("guidance", "--guidance", path=True),
+                Flag("body", "--body", path=True),
+                Flag("sentence", "--sentence", path=True),
+            ),
+        ),
+        precondition=_refuse_stdin_body,
+        result_json=True,
+    ),
+)
+
+_DELIBERATE_FLAGS = (
+    Flag("action", "--action", description="real engine operation or supported alias"),
+    Flag("request", "--request", description="raw JSON request object"),
+    Flag("request_file", "--request-file", path=True),
+    Flag("revision", "--revision", description="managed source filename"),
+    Flag("instruction", "--instruction"),
+    Flag("query", "--query", kind="list"),
+    Flag("selected_entry_id", "--selected-entry-id", kind="list"),
+    Flag("decisions", "--decisions", description="JSON array of resolved edit decisions"),
+    Flag("accept", "--accept", kind="bool"),
+    Flag("acceptance_token", "--acceptance-token"),
+    Flag("withdrawal_operation_id", "--withdrawal-operation-id"),
+    Flag("withdrawal_reason", "--withdrawal-reason"),
+    Flag("prior_conclusion", "--prior-conclusion"),
+)
+
+_IMPLEMENT_FLAGS = (
+    Flag("target", "--target"),
+    Flag("name", "--name"),
+    Flag("plan", "--plan"),
+    Flag("finding", "--finding"),
+    Flag("entry_text", "--entry-text"),
+    Flag("python", "--python"),
+    Flag("shards", "--shards"),
+    Flag("revision", "--revision"),
+    Flag("extra", "extra", kind="list", description="additional implementation_cli arguments, verbatim"),
+)
+
+_RUN_FLAGS = (
+    Flag("target", "--target"),
+    Flag("dry_run", "--dry-run", kind="bool", description="plan only; the MCP default"),
+    Flag("shard", "--shard", kind="int"),
+    Flag("consent", "--consent", description="required for a non-dry dispatch"),
+)
+
+_REMOTE_FLAGS = (
+    Flag("target", "--target"),
+    Flag("entrypoint", "--entrypoint"),
+    Flag("backend", "--backend"),
+    Flag("account", "--account"),
+    Flag("job", "--job"),
+    Flag("submission_id", "--submission-id"),
+    Flag("dest", "--dest", path=True),
+    Flag("consent", "--consent", description="required for push"),
+    Flag("smoke", "--smoke", kind="bool"),
+    Flag("unit", "--unit", kind="list"),
+    Flag("force", "--force", kind="bool"),
+    Flag("resolve", "--resolve", kind="bool"),
+    Flag("service", "--service"),
+    Flag("job_name", "--job-name"),
+    Flag("product", "--product"),
+    Flag("commit", "--commit"),
+    Flag("repo_url", "--repo-url"),
+    Flag("repo_ref", "--repo-ref"),
+    Flag("run_module", "--run-module"),
+    Flag("run_function", "--run-function"),
+    Flag("clone_path", "--clone-path", kind="list"),
+    Flag("regenerate", "--regenerate", kind="bool"),
+    Flag("extra", "extra", kind="list", description="additional remote_cli arguments, verbatim"),
+)
+
+_ORCHESTRATION = (
+    ToolSpec(
+        name="papersmith.deliberate",
+        title="Proposal deliberation",
+        description=(
+            "Bridge to the deterministic proposal-deliberation engine: run an action, or pass a raw "
+            "JSON request. Keyless and local; no state operation calls a model."
+        ),
+        verb="deliberate",
+        surface="cli",
+        annotations=tool_annotations(
+            "Proposal deliberation", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(_DELIBERATE_FLAGS),
+        build=_cli_builder(("deliberate",), _DELIBERATE_FLAGS, timeout=900.0),
+    ),
+    ToolSpec(
+        name="papersmith.implement",
+        title="Proposal implementation",
+        description=(
+            "Bridge to the proposal-implementation harness. Action is required; tokens after the "
+            "known flags are forwarded verbatim to implementation_cli."
+        ),
+        verb="implement",
+        surface="cli",
+        annotations=tool_annotations(
+            "Proposal implementation", read_only=False, destructive=True, open_world=False
+        ),
+        input_schema=_schema((Flag("action", "--action", required=True), *_IMPLEMENT_FLAGS)),
+        build=_cli_builder(
+            ("implement",),
+            (Flag("action", "--action", required=True), *_IMPLEMENT_FLAGS),
+            timeout=1800.0,
+        ),
+    ),
+    ToolSpec(
+        name="papersmith.run",
+        title="Run a compute profile",
+        description=(
+            "Run an execution profile. Planning only by default: a real dispatch needs dry_run "
+            "explicitly false AND a consent token, otherwise the call is refused CONSENT_REQUIRED."
+        ),
+        verb="run",
+        surface="cli",
+        annotations=tool_annotations(
+            "Run a compute profile", read_only=False, destructive=False, open_world=True
+        ),
+        input_schema=_schema((Flag("profile", "profile", required=True), *_RUN_FLAGS)),
+        build=_cli_builder(("run",), (Flag("profile", "profile", required=True), *_RUN_FLAGS), timeout=1800.0),
+        precondition=_refuse_run_without_consent,
+    ),
+    ToolSpec(
+        name="papersmith.remote",
+        title="Remote execution",
+        description=(
+            "Direct remote-execution interface. push spends real quota and is refused without a "
+            "consent token; pack/status/pull are the cheap rehearsals."
+        ),
+        verb="remote",
+        surface="cli",
+        annotations=tool_annotations(
+            "Remote execution", read_only=False, destructive=True, open_world=True
+        ),
+        input_schema=_schema(
+            (
+                Flag(
+                    "operation",
+                    "operation",
+                    required=True,
+                    kind="enum",
+                    choices=("pack", "push", "status", "pull", "sync"),
+                ),
+                *_REMOTE_FLAGS,
+            )
+        ),
+        build=_cli_builder(
+            ("remote",),
+            (
+                Flag(
+                    "operation",
+                    "operation",
+                    required=True,
+                    kind="enum",
+                    choices=("pack", "push", "status", "pull", "sync"),
+                ),
+                *_REMOTE_FLAGS,
+            ),
+            timeout=1800.0,
+        ),
+        precondition=_refuse_remote_push_without_consent,
+    ),
+)
+
+TOOLS: tuple[ToolSpec, ...] = (
+    *_WORKSPACE_TOOLS,
+    *_PAPER_READONLY,
+    *_PAPER_MUTATING,
+    *_ORCHESTRATION,
+)
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {spec.name: spec for spec in TOOLS}
 
@@ -574,19 +1051,15 @@ CLI_DISPOSITIONS: dict[str, str] = {
     "ingest": "exposed",
     "audit": "exposed",
     "target": "exposed",
-    "deliberate": "deferred",
-    "implement": "deferred",
-    "run": "deferred",
-    "remote": "deferred",
+    "deliberate": "exposed",
+    "implement": "exposed",
+    "run": "exposed",
+    "remote": "exposed",
     # The server host itself: never a tool it exposes.
     "mcp": "out",
 }
 
 PAPER_DISPOSITIONS: dict[str, str] = {
-    verb: (
-        "exposed"
-        if verb in {"status", "contract", "readiness", "order", "observe", "plan", "verify"}
-        else "deferred"
-    )
+    verb: ("deferred" if verb in {"resolve", "render"} else "exposed")
     for verb in PAPER_VERBS
 }
