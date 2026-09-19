@@ -241,6 +241,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # --- observe's own file/JSON read (this file; same shape
     # CONTRACT_UNREADABLE already establishes for a shuttled file) --------
     "OBSERVATION_REPORT_UNREADABLE": WORK_STATE,
+    # --- the-skill-stops-trusting-memory, item 5: observe reconciles the
+    # agent's own report against a real disk measurement this process takes
+    # itself (paper_declarations.source_available/reconcile_observation_
+    # report), gitignore-blind by construction -- never the agent's word
+    # alone -------------------------------------------------------------
+    "OBSERVATION_DISK_CONFLICT": WORK_STATE,
     # --- verdict vocabulary (paper_vocabulary.py; no-claim-without-a-
     # source-that-holds-it Phase 1) --------------------------------------
     "UNKNOWN_VERDICT": WORK_STATE,
@@ -640,19 +646,34 @@ def cmd_declare(args: argparse.Namespace) -> dict:
     return paper_declarations.set_fact(paper_dir, args.fact, args.value)
 
 
-def cmd_observe(args: argparse.Namespace) -> dict:
-    """`observe`: validates an already-produced `insumos-observer` report
-    against the observable-fact schema and the `implementation`/`results`
-    evidence-conflation guard, read-only — the Schema enforcement layer
-    `design.md`'s "`insumos-observer` cannot decide, by schema and by
-    capability" names, wired to a real caller. `insumos-observer` itself has
-    no `Write`/`Edit`/`Bash` and never runs `declare`; its JSON account is
-    shuttled to a file exactly like the redactor/contract-auditor/
-    style-sampler accounts `write` already consumes, and this verb is what
-    reads it back before a human runs `declare` against it themselves. Never
-    calls `declare`, never writes anything.
+def compute_observation(
+    report_path: Path, *,
+    proposals_dir: Path | None = None, experiments_dir: Path | None = None,
+    implementation_dir: Path | None = None,
+) -> dict:
+    """`observe`'s own logic, taking already-resolved paths directly — the
+    same separation `compute_plan`/`compute_readiness_report`/`build_
+    skeleton` keep from their own `cmd_*` wrappers, so a test can inject
+    every root without going through argparse's own defaulting.
+
+    Validates an already-produced `insumos-observer` report against the
+    observable-fact schema and the `implementation`/`results`
+    evidence-conflation guard, THEN reconciles it against a real disk
+    measurement THIS process takes itself
+    (`paper_declarations.source_available`, gitignore-blind by construction
+    — `the-skill-stops-trusting-memory`, item 5) for every root given.
+    Read-only: never calls `declare`, never writes anything, regardless of
+    outcome.
+
+    Refuses `OBSERVATION_DISK_CONFLICT` (work-state) when the report claims
+    a fact UNSATISFIED with no evidence while that fact's own source root
+    is measurably non-empty right now (`paper_declarations.
+    reconcile_observation_report`) — a disagreement is named, never
+    averaged into a report that simply trusts the agent's word. A root not
+    given here (most commonly `implementation_dir`, which has no fixed
+    default) is never measured and never reconciled against — this refuses
+    only what it can actually prove wrong, never what it merely suspects.
     """
-    report_path = _resolve_repo_path(args.report)
     try:
         raw = report_path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -664,10 +685,55 @@ def cmd_observe(args: argparse.Namespace) -> dict:
     if not isinstance(report, dict):
         raise Refused("OBSERVATION_REPORT_UNREADABLE", f"{report_path}: must be a JSON object")
     paper_declarations.validate_observation_report(report)
+
+    measured = {}
+    for name, root in (
+        ("proposals", proposals_dir), ("experiments", experiments_dir),
+        ("implementation", implementation_dir),
+    ):
+        if root is not None:
+            measured[name] = paper_declarations.source_available(root)
+
+    disagreements = paper_declarations.reconcile_observation_report(report, measured)
+    if disagreements:
+        raise Refused(
+            "OBSERVATION_DISK_CONFLICT",
+            f"the report disagrees with what this process measured on disk: {disagreements}",
+        )
+
     satisfied = sorted(
         fact for fact, entry in report.items() if isinstance(entry, dict) and entry.get("satisfied")
     )
-    return {"validated": True, "facts": sorted(report.keys()), "satisfied": satisfied}
+    return {
+        "validated": True, "facts": sorted(report.keys()), "satisfied": satisfied,
+        "measured": measured,
+    }
+
+
+def cmd_observe(args: argparse.Namespace) -> dict:
+    """`observe`: the CLI front door for `compute_observation` — resolves
+    `--report` (required) and `--proposals`/`--experiments`/
+    `--implementation` (each optional, none defaulted) against the real
+    repository root before delegating.
+
+    None of the three roots defaults to this repository's own top-level
+    folder: `proposals/`/`experiments/` are long-lived, ongoing project
+    directories in this repository's own real layout, routinely non-empty
+    for reasons unrelated to any one paper's current facts, so silently
+    defaulting to them would reconcile against content that says nothing
+    about THIS observation and misfire (measured against this very
+    repository, 2026-09-18: both are non-empty right now). Reconciliation
+    only ever fires for a root the caller explicitly names, matching
+    `--implementation`'s own always-optional treatment.
+    """
+    report_path = _resolve_repo_path(args.report)
+    proposals_dir = _resolve_repo_path(args.proposals) if args.proposals else None
+    experiments_dir = _resolve_repo_path(args.experiments) if args.experiments else None
+    implementation_dir = _resolve_repo_path(args.implementation) if args.implementation else None
+    return compute_observation(
+        report_path, proposals_dir=proposals_dir, experiments_dir=experiments_dir,
+        implementation_dir=implementation_dir,
+    )
 
 
 def cmd_resolve(args: argparse.Namespace) -> dict:
@@ -1648,11 +1714,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_observe = sub.add_parser(
         "observe",
-        help="validate an insumos-observer report against the observable-fact schema, read-only",
+        help="validate an insumos-observer report against the observable-fact schema, then "
+             "reconcile it against a real disk measurement this process takes itself, read-only",
     )
     p_observe.add_argument(
         "--report", required=True,
         help="path to the insumos-observer JSON report to validate; must resolve inside the repository root",
+    )
+    p_observe.add_argument(
+        "--proposals", default=None,
+        help="proposals/ location, for the disk-truth reconciliation; no default -- omit to "
+             "skip reconciling formulation/dataset against disk; must resolve inside the "
+             "repository root",
+    )
+    p_observe.add_argument(
+        "--experiments", default=None,
+        help="experiments/ location, for the disk-truth reconciliation; no default -- omit to "
+             "skip reconciling experimental-design against disk; must resolve inside the "
+             "repository root",
+    )
+    p_observe.add_argument(
+        "--implementation", default=None,
+        help="the target implementation repository's own path, for the disk-truth "
+             "reconciliation; no default -- omit to skip reconciling implementation/results "
+             "against disk; must resolve inside the repository root",
     )
 
     p_resolve = sub.add_parser(

@@ -39,6 +39,10 @@ Public surface:
     infer_skeleton_decisions(paper_dir, corpus) -> dict  (read-only; disk, never a stored flag)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
+    FACT_SOURCE_ROOT -> dict[str, str]  (fact id -> the source root it is read from)
+    source_available(root) -> bool  (pure disk measurement; gitignore-blind, `Path.iterdir()`)
+    reconcile_observation_report(report, measured) -> list[dict]  (pure; every
+        disagreement between the agent's account and a real disk measurement)
 """
 from __future__ import annotations
 
@@ -588,6 +592,74 @@ def affected_blocks(corpus, target_id: str) -> set:
         for qualified_id, block in corpus.blocks.items()
         if target_id in block.requires_facts or target_id in block.requires_declarations
     }
+
+
+#: Which real-disk root each observable fact is read from
+#: (`.claude/agents/insumos-observer.md`: "formulation, dataset (from
+#: `proposals/` -- the managed mathematical proposal), experimental-design
+#: (from `experiments/` -- the managed experiments document), implementation
+#: (from the target implementation repository's own source) and results
+#: (from that same repository's own run outputs)"). Used only to RECONCILE
+#: an agent's report against a measurement this process takes itself
+#: (`reconcile_observation_report` below) -- never to decide a fact's value.
+FACT_SOURCE_ROOT: dict = {
+    "formulation": "proposals",
+    "dataset": "proposals",
+    "experimental-design": "experiments",
+    "implementation": "implementation",
+    "results": "implementation",
+}
+
+
+def source_available(root: Path) -> bool:
+    """Gitignore-blind disk measurement of one source root's real
+    availability, taken by THIS process -- `Path.iterdir()`, the same
+    mechanism `paper_guidance.ingested_papers` already proved correct for
+    `guidance/` (`the-skill-stops-trusting-memory`, item 5: `fd`/`rg` honor
+    `.gitignore` by default and reported that whole tree empty four times
+    in the session that produced this fix; `Path.iterdir()` is gitignore-
+    blind by construction, never by instruction). A non-existent root and
+    an existing-but-empty one both report `False` -- indistinguishable to
+    a fact this root is supposed to ground either way.
+    """
+    return root.is_dir() and any(root.iterdir())
+
+
+def reconcile_observation_report(report: dict, measured: dict) -> list:
+    """Compares the agent's own per-fact `satisfied`/`evidence` account
+    against `measured` (source-root-name -> `source_available` bool, taken
+    by THIS process, never the agent's word) and returns every disagreement
+    found -- never averages, never silently prefers one side.
+
+    A disagreement is: the agent reports a fact UNSATISFIED with NO
+    evidence at all, while the fact's own source root
+    (`FACT_SOURCE_ROOT[fact_id]`) is measurably available RIGHT NOW. That is
+    exactly the failure this exists to catch -- an agent claiming a source
+    is absent/empty when it is not, because it used gitignore-respecting
+    tooling this process never uses.
+
+    `measured` need not name every root: a caller that does not know the
+    implementation repository's path yet (there is no fixed default for
+    it, unlike `proposals/`/`experiments/`) simply omits `"implementation"`
+    and no fact mapped to it is reconciled -- reconciliation only ever
+    fires for a root this call actually measured, never a guess about one
+    it did not.
+    """
+    disagreements = []
+    for fact_id, root_name in FACT_SOURCE_ROOT.items():
+        if root_name not in measured or not measured[root_name]:
+            continue
+        entry = report.get(fact_id) or {}
+        satisfied = bool(entry.get("satisfied"))
+        evidence = entry.get("evidence") or []
+        if not satisfied and not evidence:
+            disagreements.append({
+                "fact": fact_id,
+                "source": root_name,
+                "reported": "unsatisfied, no evidence",
+                "measured": f"{root_name!r} is non-empty on disk right now",
+            })
+    return disagreements
 
 
 def validate_observation_report(report: dict) -> None:

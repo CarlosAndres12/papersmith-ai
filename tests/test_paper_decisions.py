@@ -1921,6 +1921,263 @@ class ReadinessDeclinedFactsMutationTests(unittest.TestCase):
         _assert_guard_failed_under_mutation(self, proc)
 
 
+class SourceAvailableTests(unittest.TestCase):
+    """`the-skill-stops-trusting-memory`, item 5: `paper_declarations.
+    source_available` -- gitignore-blind by construction, unlike `fd`/`rg`
+    (both honor `.gitignore` by default, which is exactly what made an
+    agent's shell exploration report a populated `implementations/<repo>/`
+    and an 8-paper `guidance/` tree both ABSENT/EMPTY in the session that
+    produced this fix)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def test_a_non_existent_root_is_not_available(self) -> None:
+        self.assertFalse(paper_declarations.source_available(self.root / "does-not-exist"))
+
+    def test_an_existing_but_empty_root_is_not_available(self) -> None:
+        target = self.root / "empty"
+        target.mkdir()
+        self.assertFalse(paper_declarations.source_available(target))
+
+    def test_a_populated_root_is_available(self) -> None:
+        target = self.root / "populated"
+        target.mkdir()
+        (target / "file.txt").write_text("x", encoding="utf-8")
+        self.assertTrue(paper_declarations.source_available(target))
+
+    def test_a_root_hidden_from_git_by_gitignore_is_still_measured_available(self) -> None:
+        """The exact defect: a `.gitignore` pattern that empties this tree
+        for `fd`/`rg` must NOT empty it for this function -- it never
+        shells out, by construction, not by discipline."""
+        target = self.root / "gitignored"
+        target.mkdir()
+        (self.root / ".gitignore").write_text(f"{target.name}/*\n", encoding="utf-8")
+        (target / "real-content.py").write_text("print(1)", encoding="utf-8")
+
+        self.assertTrue(paper_declarations.source_available(target))
+
+
+class ReconcileObservationReportTests(unittest.TestCase):
+    """`reconcile_observation_report`: the pure comparison `observe`'s new
+    disk-truth gate is built on."""
+
+    def test_an_unsatisfied_fact_with_no_evidence_while_its_root_is_available_disagrees(
+        self,
+    ) -> None:
+        """`implementation` AND `results` both map to the `implementation`
+        root (`.claude/agents/insumos-observer.md`); `results` is reported
+        satisfied here precisely so only `implementation` disagrees."""
+        report = {
+            "implementation": {"satisfied": False, "evidence": []},
+            "results": {"satisfied": True, "evidence": [["out.log", "q"]]},
+        }
+        measured = {"implementation": True}
+
+        disagreements = paper_declarations.reconcile_observation_report(report, measured)
+
+        self.assertEqual(len(disagreements), 1)
+        self.assertEqual(disagreements[0]["fact"], "implementation")
+        self.assertEqual(disagreements[0]["source"], "implementation")
+
+    def test_an_unsatisfied_fact_agrees_when_its_root_is_measurably_unavailable(self) -> None:
+        report = {
+            "implementation": {"satisfied": False, "evidence": []},
+            "results": {"satisfied": False, "evidence": []},
+        }
+        measured = {"implementation": False}
+
+        self.assertEqual(paper_declarations.reconcile_observation_report(report, measured), [])
+
+    def test_a_satisfied_fact_never_disagrees_regardless_of_measurement(self) -> None:
+        report = {
+            "implementation": {"satisfied": True, "evidence": [["a", "b"]]},
+            "results": {"satisfied": True, "evidence": [["c", "d"]]},
+        }
+        measured = {"implementation": True}
+
+        self.assertEqual(paper_declarations.reconcile_observation_report(report, measured), [])
+
+    def test_an_unmeasured_root_is_never_reconciled_against(self) -> None:
+        """`measured` naming nothing for a fact's own root means that root
+        was never checked -- never treated as "measured unavailable"."""
+        report = {"implementation": {"satisfied": False, "evidence": []}}
+
+        self.assertEqual(paper_declarations.reconcile_observation_report(report, {}), [])
+
+    def test_an_unsatisfied_fact_that_still_carries_evidence_never_disagrees(self) -> None:
+        """`evidence` non-empty but `satisfied` false is a real, honest
+        report shape (a partial finding the agent judged insufficient) --
+        never flagged, since SOME evidence was actually found."""
+        report = {
+            "implementation": {"satisfied": False, "evidence": [["partial.py", "q"]]},
+            "results": {"satisfied": True, "evidence": [["c", "d"]]},
+        }
+        measured = {"implementation": True}
+
+        self.assertEqual(paper_declarations.reconcile_observation_report(report, measured), [])
+
+    def test_every_fact_is_named_independently_never_averaged_into_one_verdict(self) -> None:
+        report = {
+            "formulation": {"satisfied": False, "evidence": []},
+            "dataset": {"satisfied": True, "evidence": [["p", "q"]]},
+        }
+        measured = {"proposals": True}
+
+        disagreements = paper_declarations.reconcile_observation_report(report, measured)
+
+        self.assertEqual([d["fact"] for d in disagreements], ["formulation"])
+
+
+class ReconcileObservationReportMutationTests(unittest.TestCase):
+    def test_mutation_dropping_the_no_evidence_check_over_reports_disagreement(self) -> None:
+        """Without the `not evidence` half, a fact reported SATISFIED (with
+        real evidence) over an available root would also flag as a
+        disagreement -- exactly backwards, since a satisfied report
+        AGREES with an available source."""
+        proc = _run_against_mutant(
+            "if not satisfied and not evidence:",
+            "if not satisfied:",
+            "tests.test_paper_decisions.ReconcileObservationReportTests"
+            ".test_an_unsatisfied_fact_that_still_carries_evidence_never_disagrees",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_treating_an_unmeasured_root_as_available_breaks_the_guard(self) -> None:
+        proc = _run_against_mutant(
+            "if root_name not in measured or not measured[root_name]:",
+            "if not measured.get(root_name, True):",
+            "tests.test_paper_decisions.ReconcileObservationReportTests"
+            ".test_an_unmeasured_root_is_never_reconciled_against",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class ObserveDiskReconciliationTests(unittest.TestCase):
+    """`paper_cli.compute_observation`: `observe`'s own end-to-end
+    disk-truth reconciliation, injected paths (no argparse defaulting)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.report_path = self.root / "report.json"
+
+    def _write_report(self, obj) -> None:
+        self.report_path.write_text(json.dumps(obj), encoding="utf-8")
+
+    def test_the_measured_defect_scenario_now_refuses(self) -> None:
+        """The exact scenario the task names: the orchestrator reported the
+        implementation repository ABSENT when it was actually populated,
+        four times, because `fd`/`rg` honor `.gitignore`."""
+        self._write_report({
+            "implementation": {"satisfied": False, "evidence": []},
+            "results": {"satisfied": False, "evidence": []},
+        })
+        implementation_dir = self.root / "implementations" / "Domain_Adaptation"
+        implementation_dir.mkdir(parents=True)
+        (implementation_dir / "train.py").write_text("print(1)", encoding="utf-8")
+        (self.root / ".gitignore").write_text("implementations/*\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.compute_observation(
+                self.report_path, implementation_dir=implementation_dir,
+            )
+
+        self.assertEqual(ctx.exception.code, "OBSERVATION_DISK_CONFLICT")
+        self.assertIn("implementation", ctx.exception.detail)
+
+    def test_an_honest_absent_report_over_an_empty_root_is_accepted(self) -> None:
+        self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+        implementation_dir = self.root / "implementations" / "empty-repo"
+        implementation_dir.mkdir(parents=True)
+
+        result = paper_cli.compute_observation(self.report_path, implementation_dir=implementation_dir)
+
+        self.assertEqual(result["measured"], {"implementation": False})
+        self.assertEqual(result["satisfied"], [])
+
+    def test_no_roots_given_performs_no_reconciliation_at_all(self) -> None:
+        """Backward compatible: an `observe` call naming no root reconciles
+        against nothing and behaves exactly as before this change."""
+        self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+
+        result = paper_cli.compute_observation(self.report_path)
+
+        self.assertEqual(result["measured"], {})
+
+    def test_writes_nothing_including_on_a_disk_conflict_refusal(self) -> None:
+        self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+        implementation_dir = self.root / "impl"
+        implementation_dir.mkdir()
+        (implementation_dir / "code.py").write_text("x", encoding="utf-8")
+        before = sorted(str(p) for p in self.root.rglob("*"))
+
+        with self.assertRaises(Refused):
+            paper_cli.compute_observation(self.report_path, implementation_dir=implementation_dir)
+
+        after = sorted(str(p) for p in self.root.rglob("*"))
+        self.assertEqual(before, after)
+
+
+class ObserveCliTests(unittest.TestCase):
+    """`paper_cli.cmd_observe`: the CLI front door, real, non-injectable
+    `FORGE_ROOT` defaults for `--proposals`/`--experiments`, path
+    containment for all three flags -- same `implementations/` convention
+    `SkeletonPathContainmentTests` (`tests/test_paper_writing.py`) uses."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-observe-cli-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.test_root.mkdir(parents=True)
+
+    def _args(self, **overrides) -> argparse.Namespace:
+        base = dict(report=None, proposals=None, experiments=None, implementation=None)
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def _write_report(self, obj) -> Path:
+        path = self.test_root / "report.json"
+        path.write_text(json.dumps(obj), encoding="utf-8")
+        return path
+
+    def test_an_implementation_path_outside_the_repository_refuses_containment(self) -> None:
+        report_path = self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-observe-outside-{os.getpid()}"
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_observe(self._args(report=str(report_path), implementation=str(outside)))
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+    def test_an_implementation_path_inside_the_repository_reconciles_against_it(self) -> None:
+        report_path = self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+        implementation_dir = self.test_root / "impl"
+        implementation_dir.mkdir()
+        (implementation_dir / "main.py").write_text("x", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_observe(
+                self._args(report=str(report_path), implementation=str(implementation_dir)),
+            )
+
+        self.assertEqual(ctx.exception.code, "OBSERVATION_DISK_CONFLICT")
+
+    def test_omitting_implementation_skips_that_reconciliation(self) -> None:
+        report_path = self._write_report({"implementation": {"satisfied": False, "evidence": []}})
+
+        result = paper_cli.cmd_observe(self._args(report=str(report_path)))
+
+        self.assertNotIn("implementation", result["measured"])
+
+
 class CouplingsShapeValidationTests(unittest.TestCase):
     """`the-skill-stops-trusting-memory`, item 4: `paper_couplings.
     validate_couplings_shape` -- the floor every real `paper_verify.py`

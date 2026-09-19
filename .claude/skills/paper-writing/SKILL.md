@@ -536,17 +536,37 @@ the redactor's account, never trusting an agent's account unjudged.
 
 ```bash
 .venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py observe \
-    --report insumos-observer-report.json
+    --report insumos-observer-report.json \
+    --proposals proposals --experiments experiments \
+    --implementation implementations/<target-repo>
 ```
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `observe --report <path>` | Read-only: validates an `insumos-observer` report against the ten observable facts and the `implementation`/`results` evidence-conflation guard; writes nothing and never calls `declare` | `OBSERVATION_REPORT_UNREADABLE`, `NOT_AN_OBSERVABLE_FACT`, `EVIDENCE_CONFLATED` |
+| `observe --report <path> [--proposals <dir>] [--experiments <dir>] [--implementation <dir>]` | Read-only: validates an `insumos-observer` report against the ten observable facts and the `implementation`/`results` evidence-conflation guard, THEN reconciles it against a real disk measurement this process takes itself for every root given; writes nothing and never calls `declare` | `OBSERVATION_REPORT_UNREADABLE`, `NOT_AN_OBSERVABLE_FACT`, `EVIDENCE_CONFLATED`, `OBSERVATION_DISK_CONFLICT` |
 
-**Measure this before delegating:** confirm `proposals/`, `experiments/`
-and the target implementation repository are readable; an agent asked to
-observe an unreadable source cannot distinguish "not yet true" from "cannot
-be checked."
+**The skill measures source availability itself — it does not trust an
+agent's word for it, and it does not trust a human's memory either.**
+`--proposals`/`--experiments`/`--implementation` each name a root this
+process measures directly (`Path.iterdir()`, gitignore-blind by
+construction — the same mechanism `ingested_papers` already uses for
+`guidance/`, never a shell call, never `fd`/`rg`, both of which honor
+`.gitignore` by default and can report a genuinely populated directory
+empty). Pass all three you can: when a fact's own source root
+(`formulation`/`dataset` from `proposals/`, `experimental-design` from
+`experiments/`, `implementation`/`results` from the target repository) is
+measurably non-empty right now while the report claims that fact
+UNSATISFIED with no evidence at all, `observe` refuses
+`OBSERVATION_DISK_CONFLICT` naming the exact disagreement — never averaged
+into a report that simply repeats the agent's claim. A root you omit is
+never measured and never reconciled against; omitting `--implementation`
+(no fixed default — its path varies per target) only skips reconciling
+`implementation`/`results`, it never widens what the other two check.
+`--proposals`/`--experiments` also have no default, deliberately: both are
+long-lived, ongoing directories in this repository's own real layout,
+routinely non-empty for reasons unrelated to any one paper's current
+facts, so silently defaulting to them would reconcile against content that
+says nothing about THIS observation.
 
 ## The redactor's own context: `packet`
 
