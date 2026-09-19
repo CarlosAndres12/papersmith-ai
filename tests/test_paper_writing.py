@@ -3696,7 +3696,7 @@ class RefusalRosterTests(unittest.TestCase):
         `reachable_paper_refusal_codes()` rather than forecast, per this
         file's own repeated warning that the forecast arithmetic has
         drifted stale before."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 111)
+        self.assertEqual(len(reachable_paper_refusal_codes()), 118)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -4917,7 +4917,7 @@ def _write_skeleton_corpus(sections_dir: Path) -> None:
                     "citations": "none",
                 },
                 {
-                    "id": "mm-dataset", "requires_facts": [], "requires_declarations": [],
+                    "id": "mm-dataset", "requires_facts": ["dataset"], "requires_declarations": [],
                     "citations": "none", "optional": True,
                 },
             ],
@@ -4930,7 +4930,7 @@ def _write_skeleton_corpus(sections_dir: Path) -> None:
             "section": "experimental-setup", "position": 2,
             "blocks": [
                 {
-                    "id": "es-dataset", "requires_facts": [], "requires_declarations": [],
+                    "id": "es-dataset", "requires_facts": ["dataset"], "requires_declarations": [],
                     "citations": "none", "optional": True,
                 },
             ],
