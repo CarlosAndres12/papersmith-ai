@@ -1382,6 +1382,84 @@ class RequirementTranscriptionGateTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
 
+    def test_a_produces_facts_entry_verifies(self) -> None:
+        """`fact-production` spec, `Requirement: Transcribed produces_facts
+        Entries Only`: the block-level half of the widened tuple
+        (design.md, Decision B: 'adding one member to its own tuple')."""
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                    "produces_facts": [{
+                        "value": "gap",
+                        "source": {"file": "sections/01-a.md", "quote": "The gap itself, written here."},
+                    }],
+                }],
+            },
+            "The gap itself, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("gap",))
+
+    def test_an_unbacked_produces_facts_quote_refuses_span_not_in_source(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                    "produces_facts": [{
+                        "value": "gap",
+                        "source": {"file": "sections/01-a.md", "quote": "Never written anywhere."},
+                    }],
+                }],
+            },
+            "Prose that never mentions the gap at all.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_an_unbacked_section_level_produces_facts_quote_refuses_span_not_in_source(self) -> None:
+        """The section-level half of `produces_facts` (`ContractHeader.
+        produces_facts`, design.md Decision B: 'the section-level list the
+        same way') — walked separately from the block-level tuple, the same
+        shape `_verify_mode_transcription` already walks `header.mode`
+        apart from block `mode` entries."""
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "produces_facts": [{
+                    "value": "limitations",
+                    "source": {"file": "sections/01-a.md", "quote": "Never written anywhere."},
+                }],
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose that never mentions the limits at all.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("a", ctx.exception.detail)
+
 
 class RequirementTranscriptionMutationTests(unittest.TestCase):
     """Mutation proof the gate is load-bearing (design.md, Testing
@@ -1396,6 +1474,42 @@ class RequirementTranscriptionMutationTests(unittest.TestCase):
             "",
             "tests.test_paper_writing.RequirementTranscriptionGateTests"
             ".test_an_unbacked_quote_refuses_span_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_narrowing_the_block_level_tuple_flips_the_produces_facts_test_from_green_to_red(
+        self,
+    ) -> None:
+        """`fact-production` spec, `Requirement: Transcribed produces_facts
+        Entries Only`; design.md Decision B: 'adding one member to its own
+        tuple' — proves that member is load-bearing, not decorative."""
+        proc = _run_against_mutant(
+            '    for field in ("requires_facts", "requires_declarations", "produces_facts"):\n',
+            '    for field in ("requires_facts", "requires_declarations"):\n',
+            "tests.test_paper_writing.RequirementTranscriptionGateTests"
+            ".test_an_unbacked_produces_facts_quote_refuses_span_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_removing_the_section_level_walk_flips_its_own_test_from_green_to_red(self) -> None:
+        """The section-level half (`header.produces_facts`, walked apart
+        from the block-level tuple the same way `_verify_mode_transcription`
+        already walks `header.mode` apart from block `mode` entries) is its
+        own load-bearing statement, not a no-op that happens to pass because
+        the block-level tuple already covers it."""
+        proc = _run_against_mutant(
+            "        for entry in header.produces_facts:\n"
+            "            source = entry[\"source\"]\n",
+            "        for entry in []:\n"
+            "            source = entry[\"source\"]\n",
+            "tests.test_paper_writing.RequirementTranscriptionGateTests"
+            ".test_an_unbacked_section_level_produces_facts_quote_refuses_span_not_in_source",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         output = proc.stdout + proc.stderr
@@ -1421,6 +1535,272 @@ class RequirementTranscriptionMutationTests(unittest.TestCase):
             "the verifier call must be a direct statement of assemble_corpus's own "
             "body, never nested inside an 'if' or 'try'",
         )
+
+
+def _produces_facts_section(
+    section: str, block_id: str, *, requires=(), produces=(), file: str,
+) -> dict:
+    """A minimal, partition-honoring, single-block header naming `file` as
+    the self-source for every rich entry it declares — the shared shape
+    `FactSelfReferenceTests` / `FactRouteExclusivityTests` /
+    `FactProducerDuplicationTests` below all build on, one block per
+    concern under test."""
+    return {
+        "section": section, "position": 1,
+        "blocks": [{
+            "id": block_id,
+            "requires_facts": [
+                {"value": v, "source": {"file": file, "quote": f"This block requires the {v}."}}
+                for v in requires
+            ],
+            "requires_declarations": [], "citations": "none",
+            "produces_facts": [
+                {"value": v, "source": {"file": file, "quote": f"This block produces the {v}."}}
+                for v in produces
+            ],
+        }],
+    }
+
+
+def _produces_facts_body(*, requires=(), produces=()) -> str:
+    sentences = "\n\n".join(
+        [f"This block requires the {v}." for v in requires]
+        + [f"This block produces the {v}." for v in produces]
+    ) or "Prose."
+    return sentences + "\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+
+
+class FactSelfReferenceTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: A Block MUST NOT Require What
+    It Produces`; design.md, File Changes ('self-reference... checks')."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_block_requiring_and_producing_the_same_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "related-work", "rw-closing", requires=["gap"], produces=["gap"],
+            file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["gap"], produces=["gap"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_SELF_REQUIRED")
+        self.assertIn("related-work.rw-closing", ctx.exception.detail)
+        self.assertIn("gap", ctx.exception.detail)
+
+    def test_the_corrected_shape_parses_clean(self) -> None:
+        """`related-work.rw-closing` producing `gap` and no longer
+        requiring it (the corpus-edit unit 2 will make real) is exactly the
+        shape this check must NOT refuse."""
+        header = _produces_facts_section(
+            "related-work", "rw-closing", requires=[], produces=["gap"],
+            file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["gap"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["related-work.rw-closing"].produces_facts, ("gap",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_self_reference(corpus)\n",
+            "",
+            "tests.test_paper_writing.FactSelfReferenceTests"
+            ".test_a_block_requiring_and_producing_the_same_fact_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class FactRouteExclusivityTests(unittest.TestCase):
+    """`fact-production` spec is silent on the exact name; design.md,
+    Refusal Codes #4 ('a `produces_facts` entry names a declarable
+    fact'); `tasks.md` unit 0.4 finalizes `FACT_ROUTE_AMBIGUOUS`. A
+    `produces_facts` entry naming a fact in `paper_declarations.
+    OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS` refuses — those facts are only
+    ever declared or structurally resolved, never written by a block."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_produces_facts_entry_naming_an_observable_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["dataset"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["dataset"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_ROUTE_AMBIGUOUS")
+        self.assertIn("dataset", ctx.exception.detail)
+
+    def test_a_produces_facts_entry_naming_the_structural_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["skeleton"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["skeleton"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_ROUTE_AMBIGUOUS")
+        self.assertIn("skeleton", ctx.exception.detail)
+
+    def test_a_produces_facts_entry_naming_a_derived_fact_is_unaffected(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_route_exclusivity(declarations)\n",
+            "",
+            "tests.test_paper_writing.FactRouteExclusivityTests"
+            ".test_a_produces_facts_entry_naming_an_observable_fact_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class FactProducerDuplicationTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: Every Producer Is Either Sole
+    Or Corroborated`; `coupling-verification` spec, Coupling 3. Two
+    uncorroborated producers of one fact refuse `FACT_PRODUCER_DUPLICATE`;
+    the one corroborated pair an existing coupling-verification check names
+    (`gap`, `paper_verify.CHECKS`) is legal — checked structurally (is the
+    fact id itself a member of the existing coupling roster?), never by a
+    hand-listed exception list of fact ids (design.md, Decision F)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_two_uncorroborated_producers_of_one_fact_refuse(self) -> None:
+        """`limitations` has no coupling-verification check named after it
+        (`"limitations" not in paper_verify.CHECKS`) — an uncorroborated
+        duplicate."""
+        self.assertNotIn("limitations", paper_verify.CHECKS)
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", produces=["limitations"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_DUPLICATE")
+        self.assertIn("limitations", ctx.exception.detail)
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("b.only", ctx.exception.detail)
+
+    def test_the_corroborated_pair_of_gap_producers_is_legal(self) -> None:
+        """`gap` has an existing coupling-verification check named after it
+        (`"gap" in paper_verify.CHECKS`, Coupling 3) — the one corroborated
+        duplicate `fact-production`'s carve-out allows."""
+        self.assertIn("gap", paper_verify.CHECKS)
+        header_a = _produces_facts_section(
+            "related-work", "rw-closing", produces=["gap"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "introduction", "block-3", produces=["gap"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["gap"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["gap"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["related-work.rw-closing"].produces_facts, ("gap",))
+        self.assertEqual(corpus.blocks["introduction.block-3"].produces_facts, ("gap",))
+
+    def test_three_producers_of_the_corroborated_fact_still_refuse(self) -> None:
+        """Corroboration legalizes exactly the PAIR — a third producer of
+        `gap` is still a duplicate, never silently absorbed."""
+        header_a = _produces_facts_section(
+            "related-work", "rw-closing", produces=["gap"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "introduction", "block-3", produces=["gap"], file="sections/02-b.md",
+        )
+        header_c = _produces_facts_section(
+            "c", "only", produces=["gap"], file="sections/03-c.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["gap"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["gap"]))
+        self._write("03-c.md", header_c, _produces_facts_body(produces=["gap"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_DUPLICATE")
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_producer_duplication(declarations)\n",
+            "",
+            "tests.test_paper_writing.FactProducerDuplicationTests"
+            ".test_two_uncorroborated_producers_of_one_fact_refuse",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_removing_the_corroboration_carve_out_flips_the_legal_pair_test_from_green_to_red(
+        self,
+    ) -> None:
+        """Proves the carve-out is a real branch, not vacuous: without it,
+        `gap`'s own corroborated pair would refuse too."""
+        proc = _run_against_mutant(
+            'len(producer_ids) == 2 and fact_id in paper_verify.CHECKS',
+            "False",
+            "tests.test_paper_writing.FactProducerDuplicationTests"
+            ".test_the_corroborated_pair_of_gap_producers_is_legal",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
@@ -4262,8 +4642,21 @@ class RefusalRosterTests(unittest.TestCase):
         adds no new code at all: it changes what `EVIDENCE_EXHAUSTED`'s
         detail says and what `finalize_block` returns, never what it can
         raise. Measured directly against `reachable_paper_refusal_codes()`,
-        never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 127)
+        never forecast. Moved from 127 to 130 in
+        `a-fact-is-declared-or-it-is-produced`, unit 1: `paper_graph.py`
+        gains three new raise sites, reachable the instant `produces_facts`
+        entries exist anywhere in the parsed corpus (today: nowhere, since
+        this unit touches no `sections/*.md` file) --
+        `FACT_SELF_REQUIRED` (a block requiring what it produces),
+        `FACT_ROUTE_AMBIGUOUS` (a `produces_facts` entry naming a
+        declarable fact), and `FACT_PRODUCER_DUPLICATE` (an uncorroborated
+        duplicate producer; a corroborated pair, e.g. `gap` via Coupling 3,
+        is legal and raises nothing). `paper_contract.py`'s own grammar
+        widening adds no new code: `MALFORMED_HEADER`/`UNKNOWN_FACT` are
+        reused verbatim, the identical `requires_facts` schema check.
+        Measured directly against `reachable_paper_refusal_codes()`, never
+        forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 130)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

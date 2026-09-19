@@ -373,6 +373,19 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # producer `paper/couplings.json` never had (paper_couplings.py) -------
     "COUPLINGS_INPUT_UNREADABLE": INVOCATION_DEFECT,
     "COUPLINGS_RECORD_MALFORMED": WORK_STATE,
+    # --- a-fact-is-declared-or-it-is-produced, unit 1: `produces_facts`
+    # joins the header grammar (`paper_contract.py`) and three assemble-
+    # time checks land in `paper_graph.py` -- self-reference, route
+    # exclusivity against the declarable route
+    # (`paper_declarations.OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`), and
+    # duplicate-producer (corroborated pairs an existing
+    # coupling-verification check names, e.g. `gap` / Coupling 3, are
+    # legal; every other duplicate still refuses). Unit 2 adds
+    # `FACT_PRODUCER_ABSENT` (totality) and `PRODUCER_CHAIN_ABSENT`
+    # (reachability) -- not yet reachable here. -------------------------
+    "FACT_SELF_REQUIRED": WORK_STATE,
+    "FACT_ROUTE_AMBIGUOUS": WORK_STATE,
+    "FACT_PRODUCER_DUPLICATE": WORK_STATE,
 }
 
 

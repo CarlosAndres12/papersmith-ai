@@ -399,6 +399,139 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
 
 
+class ProducesFactsSchemaTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: produces_facts Field Grammar`:
+    a block (and, symmetrically, a section) MAY declare `produces_facts`,
+    parsed through the identical `_normalize_requirement_entry` shape
+    `requires_facts` already uses (design.md, Decision B). Shape-only here —
+    the corpus-wide quote-transcription gate lives in
+    `paper_graph.assemble_corpus` (`tests/test_paper_writing.py`), the same
+    split `SchemaTests.test_valid_header_parses_with_no_refusal` already
+    documents for `requires_facts`."""
+
+    def test_a_valid_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "gap",
+            "source": {"file": "related-work.md", "quote": "The gap itself."},
+        }
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "rw-closing",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [rich_entry],
+                }
+            ]
+        )
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [rich_entry])
+
+    def test_produces_facts_defaults_to_an_empty_list_when_absent(self) -> None:
+        header = _minimal_header()
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [])
+        self.assertEqual(
+            parsed.produces_facts, [],
+            "the section-level field must default the same way `after` does, "
+            "so every existing fixture and construction site stays green",
+        )
+
+    def test_a_valid_section_level_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "limitations",
+            "source": {"file": "limitations.md", "quote": "The limits themselves."},
+        }
+        header = _minimal_header(produces_facts=[rich_entry])
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.produces_facts, [rich_entry])
+
+    def test_produces_facts_entry_missing_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap"}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_produces_facts_entry_with_null_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap", "source": None}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_block_declaring_produces_facts_with_an_unknown_fact_refuses_unknown_fact(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [
+                        {
+                            "value": "discussion",
+                            "source": {"file": "b.md", "quote": "The discussion."},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertIn("discussion", ctx.exception.detail)
+
+    def test_produces_facts_that_is_not_a_list_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": "gap",
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("produces_facts", ctx.exception.detail)
+
+
 #: The ten shipped contracts' body digests as committed at HEAD **before**
 #: this change (578d117f9008062c08bc3a4bd93f2e7245b4ce9b), when every file
 #: was headerless prose end to end. Captured once, by running

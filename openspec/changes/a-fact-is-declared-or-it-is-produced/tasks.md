@@ -23,7 +23,7 @@ Unit 2 is design-declared atomic (grammar/totality/ordering/corpus land together
 | # | Unit | Touches | New refusals | Est. lines | Budget risk (vs 1200) | Depends on | Status |
 |---|------|---------|---------------|-----------|------------------------|-----------|--------|
 | 0 | Reconciliation | `specs/fact-production/spec.md`, `design.md` | none (naming/wording only) | ~50 | Low | — | [x] |
-| 1 | Grammar, parser, additive refusals | `paper_contract.py`, `paper_graph.py`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `FACT_SELF_REQUIRED`, duplicate-producer code, route-ambiguity code | ~350 | Low | 0 | [ ] |
+| 1 | Grammar, parser, additive refusals | `paper_contract.py`, `paper_graph.py`, `tests/test_paper_contract.py`, `tests/test_paper_writing.py` | `FACT_SELF_REQUIRED`, duplicate-producer code, route-ambiguity code | ~350 | Low | 0 | [x] |
 | 2 | Corpus edits + totality + ordering (atomic) | `sections/*.md` (05, 06, 04 + edges into 02/03/07), `paper_graph.py`, `tests/test_paper_writing.py` | `FACT_PRODUCER_ABSENT`, `PRODUCER_CHAIN_ABSENT` | ~450 | Medium | 1 | [ ] |
 | 3 | Consumers: readiness, declare, cli, verify, coupling evidence | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `paper_verify.py`, `paper_coupling_evidence.py`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_evidence.py` | `PRODUCED_FACT_UNDECLARABLE` | ~350 | Low | 2 | [ ] |
 
@@ -42,14 +42,14 @@ Focused test / runtime harness / rollback per PR:
 
 ## Unit 1 — Grammar, parser, additive refusals (PR 1)
 
-- [ ] 1.1 Add `produces_facts` to `paper_contract.py`'s `_TOP_LEVEL_OPTIONAL`/`_BLOCK_OPTIONAL`, reusing `_normalize_requirement_entry`. Test in `tests/test_paper_contract.py`: valid entry parses; missing `value`/`source` refuses `MALFORMED_HEADER`; unknown fact refuses `UNKNOWN_FACT`.
-- [ ] 1.2 Add `BlockRecord.produces_facts: tuple = ()` (and the section-level equivalent on `ContractHeader`) in `paper_graph.py`, defaulted so every existing construction site stays green.
-- [ ] 1.3 Widen `paper_graph._verify_requirement_transcription`'s tuple to include `produces_facts` at both section and block level. Mutation: fabricate an unbacked quote, confirm `SPAN_NOT_IN_SOURCE` fires (`_run_against_mutant`).
-- [ ] 1.4 Implement `FACT_SELF_REQUIRED`: a block whose `produces_facts` and `requires_facts` name the same fact refuses, naming block+fact. Mutation test on a synthetic header; confirm the corrected `rw-closing` shape parses clean.
-- [ ] 1.5 Implement route-exclusivity refusal (name per 0.4) for a `produces_facts` entry naming a fact in `paper_declarations.OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`. Synthetic-header mutation test (e.g. naming `skeleton`).
-- [ ] 1.6 Implement the duplicate-producer refusal (name per 0.4): 2+ uncorroborated block producers of one fact refuse; a pair corroborated per 0.2's rule passes. Synthetic-header tests for both branches + mutation.
-- [ ] 1.7 Run `python3.12 -m unittest discover tests -p 'test_paper_*.py'`; confirm zero new refusals fire against the unedited shipped corpus (Unit 1 is additive).
-- [ ] 1.8 Re-run `RefusalRosterTests`; confirm the four new codes are reachable and classified.
+- [x] 1.1 Add `produces_facts` to `paper_contract.py`'s `_TOP_LEVEL_OPTIONAL`/`_BLOCK_OPTIONAL`, reusing `_normalize_requirement_entry`. Test in `tests/test_paper_contract.py`: valid entry parses; missing `value`/`source` refuses `MALFORMED_HEADER`; unknown fact refuses `UNKNOWN_FACT`. **`ProducesFactsSchemaTests`, 7 tests, RED-first (reverted via `git stash`, confirmed 6/7 failing, reapplied).**
+- [x] 1.2 Add `BlockRecord.produces_facts: tuple = ()` (and the section-level equivalent on `ContractHeader`) in `paper_graph.py`, defaulted so every existing construction site stays green. **Safety net: `GraphTests` + `test_paper_decisions` (181 tests) green before and after.**
+- [x] 1.3 Widen `paper_graph._verify_requirement_transcription`'s tuple to include `produces_facts` at both section and block level. Mutation: fabricate an unbacked quote, confirm `SPAN_NOT_IN_SOURCE` fires (`_run_against_mutant`). **4 new tests in `RequirementTranscriptionGateTests` + 2 `_run_against_mutant` proofs (block-level tuple, section-level loop), RED-first via stash/pop.**
+- [x] 1.4 Implement `FACT_SELF_REQUIRED`: a block whose `produces_facts` and `requires_facts` name the same fact refuses, naming block+fact. Mutation test on a synthetic header; confirm the corrected `rw-closing` shape parses clean. **`FactSelfReferenceTests`, 3 tests incl. `_run_against_mutant`.**
+- [x] 1.5 Implement route-exclusivity refusal (name per 0.4) for a `produces_facts` entry naming a fact in `paper_declarations.OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`. Synthetic-header mutation test (e.g. naming `skeleton`). **`FactRouteExclusivityTests`, 4 tests incl. `_run_against_mutant`.**
+- [x] 1.6 Implement the duplicate-producer refusal (name per 0.4): 2+ uncorroborated block producers of one fact refuse; a pair corroborated per 0.2's rule passes. Synthetic-header tests for both branches + mutation. **`FactProducerDuplicationTests`, 6 tests incl. 2 `_run_against_mutant` proofs (duplicate check + corroboration carve-out); corroboration checked structurally via `fact_id in paper_verify.CHECKS`, never a hand-listed fact-id list.**
+- [x] 1.7 Run `python3.12 -m unittest discover tests -p 'test_paper_*.py'`; confirm zero new refusals fire against the unedited shipped corpus (Unit 1 is additive). **791/791 OK (`.venv/bin/python`); `contract`/`order`/`phases` outputs byte-identical to baseline (47 blocks, waves 28/11/5/2/1).**
+- [x] 1.8 Re-run `RefusalRosterTests`; confirm the four new codes are reachable and classified. **Measured 3 new codes (not 4 — tasks.md's own count was stale, per this file's repeated warning; `FACT_PRODUCER_ABSENT`/`PRODUCER_CHAIN_ABSENT` are unit 2's), roster 127→130, all reachable and bidirectionally classified in `paper_cli.REFUSAL_CLASSIFICATION`.**
 
 ## Unit 2 — Corpus edits, totality, ordering — atomic (PR 2)
 

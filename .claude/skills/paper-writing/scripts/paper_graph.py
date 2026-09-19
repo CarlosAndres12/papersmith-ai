@@ -18,6 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_contract  # noqa: E402
+import paper_declarations  # noqa: E402
+import paper_verify  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -94,6 +96,12 @@ class BlockRecord:
     requires_declarations: tuple
     citations: str
     optional: bool
+    #: `fact-production` spec, `Requirement: produces_facts Field Grammar`
+    #: (design.md, Decision B) — defaulted so every existing construction
+    #: site (this file's own `assemble_corpus` loop AND
+    #: `tests/test_paper_decisions.py`'s own direct `BlockRecord(...)`
+    #: fixture) stays green without passing it.
+    produces_facts: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +173,7 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                 ),
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
+                produces_facts=paper_contract.requirement_values(raw_block["produces_facts"]),
             )
             order_by_section[section_id].append(qualified_id)
 
@@ -174,6 +183,10 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
+    declarations = _produces_facts_declarations(corpus)
+    _verify_route_exclusivity(declarations)
+    _verify_producer_duplication(declarations)
+    _verify_self_reference(corpus)
     return corpus
 
 
@@ -254,11 +267,32 @@ def _verify_requirement_transcription(corpus: Corpus, bodies: dict) -> None:
     dangling-target case, there is no legitimate reason to skip an entry
     here. Reads the SAME `bodies` dict its siblings already hold — zero
     extra disk passes.
+
+    `a-fact-is-declared-or-it-is-produced` (`fact-production` spec,
+    `Requirement: Transcribed produces_facts Entries Only`; design.md,
+    Decision B) widens the block-level tuple with `produces_facts` — the
+    entry shape is byte-identical to `requires_facts`, so no second check
+    is written, only one more field name walked. The section-level half
+    (`header.produces_facts`) is walked SEPARATELY, the same way
+    `paper_contract._verify_mode_transcription` already walks `header.mode`
+    apart from block-level `mode` entries — `requires_facts` /
+    `requires_declarations` have no section-level counterpart, so only
+    `produces_facts` needs this extra loop.
     """
     for section_id, header in corpus.sections.items():
+        for entry in header.produces_facts:
+            source = entry["source"]
+            body = bodies.get(source["file"])
+            if body is None or not paper_contract.quote_in_body(body, source["quote"]):
+                raise Refused(
+                    "SPAN_NOT_IN_SOURCE",
+                    f"{section_id}: produces_facts quote {source['quote']!r} for "
+                    f"{entry['value']!r} not found verbatim (whitespace-collapsed, "
+                    f"markdown-emphasis-stripped) in {source['file']}'s prose body",
+                )
         for raw_block in header.blocks:
             block_id = raw_block["id"]
-            for field in ("requires_facts", "requires_declarations"):
+            for field in ("requires_facts", "requires_declarations", "produces_facts"):
                 for entry in raw_block[field]:
                     source = entry["source"]
                     body = bodies.get(source["file"])
@@ -269,6 +303,86 @@ def _verify_requirement_transcription(corpus: Corpus, bodies: dict) -> None:
                             f"{entry['value']!r} not found verbatim (whitespace-collapsed, "
                             f"markdown-emphasis-stripped) in {source['file']}'s prose body",
                         )
+
+
+def _produces_facts_declarations(corpus: Corpus) -> list:
+    """Every `(fact_id, producer_qualified_id)` pair a `produces_facts`
+    entry declares, section- and block-level alike — the producer id is the
+    qualified SECTION id for a section-level entry, the qualified BLOCK id
+    for a block-level one. Shared by `_verify_route_exclusivity` and
+    `_verify_producer_duplication` below so both read the same scan
+    (`fact-production` spec, `Requirement: produces_facts Field Grammar` /
+    `Requirement: Every Producer Is Either Sole Or Corroborated`)."""
+    declarations: list = []
+    for section_id, header in corpus.sections.items():
+        for entry in header.produces_facts:
+            declarations.append((entry["value"], section_id))
+        for raw_block in header.blocks:
+            qualified_id = f"{section_id}.{raw_block['id']}"
+            for entry in raw_block["produces_facts"]:
+                declarations.append((entry["value"], qualified_id))
+    return declarations
+
+
+#: `fact-production` spec, `Requirement: Every Producer Is Either Sole Or
+#: Corroborated`: the facts declarable through `paper_declarations` (never
+#: written by a block) — a `produces_facts` entry naming one of these is a
+#: route conflict, not a legitimate production claim.
+_DECLARABLE_ROUTE_FACTS = frozenset(
+    paper_declarations.OBSERVABLE_FACTS
+) | frozenset(paper_declarations.STRUCTURAL_FACTS)
+
+
+def _verify_route_exclusivity(declarations: list) -> None:
+    """Refuses `FACT_ROUTE_AMBIGUOUS` (work-state) naming the producer and
+    the fact, when a `produces_facts` entry names a fact that only
+    resolves through the declarable route (`paper_declarations.
+    OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`) — design.md, Refusal Codes #4."""
+    for fact_id, producer_id in declarations:
+        if fact_id in _DECLARABLE_ROUTE_FACTS:
+            raise Refused(
+                "FACT_ROUTE_AMBIGUOUS",
+                f"{producer_id}: 'produces_facts' names {fact_id!r}, which is only "
+                f"ever declared or structurally resolved, never produced by a block",
+            )
+
+
+def _verify_producer_duplication(declarations: list) -> None:
+    """Refuses `FACT_PRODUCER_DUPLICATE` (work-state) naming the fact and
+    every competing producer, for a fact named by two or more blocks'
+    `produces_facts` — UNLESS it is named by EXACTLY two, and an existing
+    coupling-verification check names that fact (`paper_verify.CHECKS`,
+    e.g. `gap` / Coupling 3): corroboration is checked structurally, by
+    asking the real, existing coupling roster, never by a hand-listed
+    exception list of fact ids here (`fact-production` spec, `Requirement:
+    Every Producer Is Either Sole Or Corroborated`; design.md, Decision F)."""
+    producers_by_fact: dict = {}
+    for fact_id, producer_id in declarations:
+        producers_by_fact.setdefault(fact_id, []).append(producer_id)
+    for fact_id, producer_ids in producers_by_fact.items():
+        if len(producer_ids) < 2:
+            continue
+        if len(producer_ids) == 2 and fact_id in paper_verify.CHECKS:
+            continue
+        raise Refused(
+            "FACT_PRODUCER_DUPLICATE",
+            f"{fact_id!r} is produced by {sorted(producer_ids)!r}",
+        )
+
+
+def _verify_self_reference(corpus: Corpus) -> None:
+    """Refuses `FACT_SELF_REQUIRED` (work-state) naming the block and the
+    fact, when a block's `produces_facts` and `requires_facts` name the
+    same fact id (`fact-production` spec, `Requirement: A Block MUST NOT
+    Require What It Produces`)."""
+    for qualified_id, record in corpus.blocks.items():
+        overlap = set(record.requires_facts) & set(record.produces_facts)
+        if overlap:
+            fact_id = sorted(overlap)[0]
+            raise Refused(
+                "FACT_SELF_REQUIRED",
+                f"{qualified_id}: requires and produces {fact_id!r}",
+            )
 
 
 def _internal_chain_rows(text: str) -> list:

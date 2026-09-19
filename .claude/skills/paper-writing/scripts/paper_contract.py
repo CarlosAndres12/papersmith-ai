@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -44,7 +44,11 @@ _TOP_LEVEL_REQUIRED = ("section", "position", "blocks")
 #: `mode` widened in `the-writer-may-assert-only-what-it-was-given`
 #: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
 #: the section-level drafting-mode default, optional, overridden per block.
-_TOP_LEVEL_OPTIONAL = ("after", "mode")
+#: `produces_facts` added in `a-fact-is-declared-or-it-is-produced`
+#: (`fact-production` spec, `Requirement: produces_facts Field Grammar`):
+#: the section-level half of the same field `_BLOCK_OPTIONAL` gains below,
+#: parsed the identical way `after` already is at this level.
+_TOP_LEVEL_OPTIONAL = ("after", "mode", "produces_facts")
 _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED + _TOP_LEVEL_OPTIONAL
 
 _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
@@ -54,7 +58,12 @@ _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
 #: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
 #: a per-block diagram obligation, read by `paper_obligation.py` and never
 #: hardcoded against a section or block id.
-_BLOCK_OPTIONAL = ("optional", "after", "mode", "figure")
+#: `produces_facts` added in `a-fact-is-declared-or-it-is-produced`
+#: (`fact-production` spec, `Requirement: produces_facts Field Grammar`): a
+#: block MAY declare the facts it writes rather than observes, entry shape
+#: byte-identical to `requires_facts` (design.md, Decision B) and parsed
+#: through the same `_normalize_requirement_entry`.
+_BLOCK_OPTIONAL = ("optional", "after", "mode", "figure", "produces_facts")
 _BLOCK_ALLOWED = _BLOCK_REQUIRED + _BLOCK_OPTIONAL
 
 #: A `figure` object's own six subkeys. Five are required, nothing else
@@ -119,16 +128,21 @@ _ITALIC_EMPHASIS_RE = re.compile(r"\*([^\s*][^*]*)\*")
 class ContractHeader:
     """One parsed header. `blocks` is a list of validated dicts, each
     carrying exactly `id`, `requires_facts`, `requires_declarations`,
-    `citations`, `optional`, `after`, `mode` — defaults filled in, nothing
-    extra. `mode` is the section-level default (`None` when the header
-    declares none); a block's own `mode` entry, also `None` when absent,
-    wins over it (`resolve_mode` below)."""
+    `citations`, `optional`, `after`, `mode`, `figure`, `produces_facts` —
+    defaults filled in, nothing extra. `mode` is the section-level default
+    (`None` when the header declares none); a block's own `mode` entry, also
+    `None` when absent, wins over it (`resolve_mode` below). `produces_facts`
+    is this dataclass's OWN section-level list, the same shape `after`
+    already has at this level (`fact-production` spec, `Requirement:
+    produces_facts Field Grammar`; design.md, Decision B) — defaulted to an
+    empty list so every existing construction site and fixture stays green."""
 
     section: str
     position: int
     after: list
     blocks: list
     mode: dict | None = None
+    produces_facts: list = field(default_factory=list)
 
 
 def _split_front_matter(data: bytes) -> tuple[str, bytes]:
@@ -406,6 +420,18 @@ def _parse_block(raw, section: str) -> dict:
 
     block_after = _validate_after_list(raw.get("after", []), f"{section}.{block_id}")
 
+    produces_facts_raw = raw.get("produces_facts", [])
+    if not isinstance(produces_facts_raw, list):
+        raise Refused(
+            "MALFORMED_HEADER", f"{section}.{block_id}: 'produces_facts' must be a list"
+        )
+    produces_facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.produces_facts"
+        )
+        for entry in produces_facts_raw
+    ]
+
     # `raw.get("mode") is not None` rather than `"mode" in raw`: this
     # function's own OWN output round-trips through re-serialization in
     # `paper_graph.py`'s corpus assembly and this suite's own fixtures
@@ -435,6 +461,7 @@ def _parse_block(raw, section: str) -> dict:
         "after": block_after,
         "mode": block_mode,
         "figure": block_figure,
+        "produces_facts": list(produces_facts),
     }
 
 
@@ -473,8 +500,23 @@ def parse_header(header) -> ContractHeader:
     if header.get("mode") is not None:
         section_mode = _validate_mode_object(header["mode"], section)
 
+    produces_facts_raw = header.get("produces_facts", [])
+    if not isinstance(produces_facts_raw, list):
+        raise Refused("MALFORMED_HEADER", f"{section}: 'produces_facts' must be a list")
+    produces_facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.produces_facts"
+        )
+        for entry in produces_facts_raw
+    ]
+
     return ContractHeader(
-        section=section, position=position, after=after, blocks=blocks, mode=section_mode
+        section=section,
+        position=position,
+        after=after,
+        blocks=blocks,
+        mode=section_mode,
+        produces_facts=produces_facts,
     )
 
 
