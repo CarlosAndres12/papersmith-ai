@@ -77,3 +77,4 @@ tmp-reference/
 # skill's own pre-image sidecar: no separate ignore line is needed for it.
 paper/*
 !paper/.gitkeep
+.claude/worktrees/
