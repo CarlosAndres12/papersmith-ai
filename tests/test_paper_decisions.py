@@ -436,6 +436,13 @@ class ValidateSourceMdGuardTests(unittest.TestCase):
             identifier=None, resolver=None, metadata_digest=None, regime="none",
             section_md=None, round=None, guidance=str(self.guidance_dir), body=None,
             sentence=None,
+            # `min_sources=1`: this class's own proof is the guidance-
+            # classification guard (style-reference/evidence/unclassified),
+            # orthogonal to `the-pdf-arrives-or-the-operator-is-told`'s own
+            # distinct-source-count minimum -- pinned to 1 so a single
+            # submitted record still reads `satisfied`, exactly as before
+            # that feature existed.
+            min_sources=1,
         )
 
     def test_a_quote_from_a_style_reference_source_refuses(self) -> None:

@@ -24,7 +24,10 @@ measured `full_text_url` and placing it loose under `guidance/<section-
 id>/` for `paper-ingestion` to find; `bib build` rebuilds `refs.bib` whole
 from cached resolved metadata only; `validate` is the single gate deciding
 verdict, placement and the bounded search-round budget before any block
-reaches disk); `write` (from `the-
+reaches disk, now counting each claim's DISTINCT source papers against a
+configurable minimum (`paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM`,
+`the-pdf-arrives-or-the-operator-is-told`, item 2), never bare record
+count); `write` (from `the-
 writer-may-assert-only-what-it-was-given` — a judge, never an invoker: it
 reconciles an already-shuttled redactor draft and contract-auditor account
 against one block's real contract, evidence set and mode, and either
@@ -899,7 +902,14 @@ def cmd_validate(args: argparse.Namespace) -> dict:
     body = None
     if args.body is not None:
         body = sys.stdin.buffer.read() if args.body == "-" else Path(args.body).read_bytes()
-    return paper_validate.finalize_block(paper_dir, args.block, claims, records, body)
+    explicit_min_sources = getattr(args, "min_sources", None)
+    min_sources = (
+        explicit_min_sources if explicit_min_sources is not None
+        else paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM
+    )
+    return paper_validate.finalize_block(
+        paper_dir, args.block, claims, records, body, min_sources=min_sources,
+    )
 
 
 def _compute_provenance_report(
@@ -1922,6 +1932,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="an already-headered sections/*.md path to read --block's citations regime from",
     )
     p_validate.add_argument("--round", type=int, default=None, help="override the auto-derived round number")
+    p_validate.add_argument(
+        "--min-sources", type=int, default=None,
+        help="override the minimum DISTINCT source papers required per claim "
+             "(default: paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM)",
+    )
     p_validate.add_argument(
         "--guidance", default=None,
         help="override guidance/ location; must resolve inside the repository root",
