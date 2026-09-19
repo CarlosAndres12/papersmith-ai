@@ -14,7 +14,13 @@
       "id": "bm-author-contributions",
       "requires_facts": [],
       "requires_declarations": [
-        "author-roles"
+        {
+          "value": "author-roles",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The author-roles — the author list, and each author's confirmed roles"
+          }
+        }
       ],
       "citations": "none"
     },
@@ -22,8 +28,20 @@
       "id": "bm-funding",
       "requires_facts": [],
       "requires_declarations": [
-        "grant-title",
-        "grant-code"
+        {
+          "value": "grant-title",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The grant-title and grant-code — the funding project's registered title, funder, and code"
+          }
+        },
+        {
+          "value": "grant-code",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The grant-title and grant-code — the funding project's registered title, funder, and code"
+          }
+        }
       ],
       "citations": "none"
     },
@@ -31,7 +49,13 @@
       "id": "bm-data-availability",
       "requires_facts": [],
       "requires_declarations": [
-        "repository-url"
+        {
+          "value": "repository-url",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The repository-url — the project repository URL, and the date it was checked"
+          }
+        }
       ],
       "citations": "none"
     },

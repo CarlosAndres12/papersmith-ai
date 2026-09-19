@@ -13,7 +13,13 @@
     {
       "id": "block-1",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The dataset — the condition, population, or process it contains"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery"
@@ -21,7 +27,13 @@
     {
       "id": "block-2",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery",
@@ -38,7 +50,13 @@
     {
       "id": "block-3",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Block 3 — state of the art and gap depends on the problem statement when there is no Related Work section"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery",
@@ -55,7 +73,13 @@
     {
       "id": "block-4a",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the core idea comes from the mathematical formulation"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -79,8 +103,20 @@
     {
       "id": "block-4b",
       "requires_facts": [
-        "formulation",
-        "results"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The mathematical formulation of the proposal"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -88,8 +124,20 @@
     {
       "id": "block-5",
       "requires_facts": [
-        "experimental-design",
-        "results"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The experimental design — scenarios, comparisons, criteria, complementary analyses"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -97,7 +145,13 @@
     {
       "id": "block-6",
       "requires_facts": [
-        "skeleton"
+        {
+          "value": "skeleton",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The section skeleton of the manuscript"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"

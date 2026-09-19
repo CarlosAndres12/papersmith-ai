@@ -13,7 +13,13 @@
     {
       "id": "rw-preamble",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The list of specific problems — to announce the blocks and their order"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -22,7 +28,13 @@
     {
       "id": "rw-panorama",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The general problem of the problem statement"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery",
@@ -31,7 +43,13 @@
     {
       "id": "rw-problem-blocks",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The specific problems, one block each"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery",
@@ -40,7 +58,13 @@
     {
       "id": "rw-closing",
       "requires_facts": [
-        "gap"
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The gap, which is also stated in the introduction and must agree"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -58,7 +82,13 @@
     {
       "id": "rw-synthesis-artefact",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The properties (contributions) the proposal declares"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",

@@ -13,7 +13,13 @@
     {
       "id": "rd-general-task",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The results — the main runs, against the baselines"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -21,8 +27,20 @@
     {
       "id": "rd-contribution-blocks",
       "requires_facts": [
-        "contributions",
-        "results"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The property a contribution promised, and the instrument the setup named for it"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "Input the results of the experiments"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",
@@ -39,8 +57,20 @@
     {
       "id": "rd-cost",
       "requires_facts": [
-        "results",
-        "implementation"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "Input the results of the experiments"
+          }
+        },
+        {
+          "value": "implementation",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The implementation — the most demanding configuration, and the hardware declared in the setup"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",

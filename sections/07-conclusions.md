@@ -13,7 +13,13 @@
     {
       "id": "concl-block-1",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/07-conclusions.md",
+            "quote": "The contributions, as defined — same count, order, and names as the introduction and the methods section"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -21,7 +27,13 @@
     {
       "id": "concl-block-2",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/07-conclusions.md",
+            "quote": "The results, and the number of experimental scenarios, which decides one paragraph or two"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -35,7 +47,13 @@
     {
       "id": "concl-block-4",
       "requires_facts": [
-        "limitations"
+        {
+          "value": "limitations",
+          "source": {
+            "file": "sections/07-conclusions.md",
+            "quote": "The limitations, which it is the relevant subset of, and one reference per direction"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"

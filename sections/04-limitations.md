@@ -13,7 +13,13 @@
     {
       "id": "lim-opening-concession",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The results — the concrete achievement they do support"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -21,7 +27,13 @@
     {
       "id": "lim-proposal-items",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The mathematical section — its design decisions, one by one"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -29,7 +41,13 @@
     {
       "id": "lim-validation-items",
       "requires_facts": [
-        "experimental-design"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The experimental design — what was fixed instead of searched, what was tested at a single point"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -37,7 +55,13 @@
     {
       "id": "lim-failure-mode",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The results — the worst reported cell, and the baseline's performance there"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",

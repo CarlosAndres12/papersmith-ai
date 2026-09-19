@@ -22,7 +22,13 @@
     {
       "id": "slot-1",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The dataset — the condition, population, or process it contains"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -30,7 +36,13 @@
     {
       "id": "slot-2",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -47,7 +59,13 @@
     {
       "id": "slot-3",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The mathematical formulation"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -64,8 +82,20 @@
     {
       "id": "slot-4",
       "requires_facts": [
-        "formulation",
-        "results"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The mathematical formulation"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -73,7 +103,13 @@
     {
       "id": "slot-5",
       "requires_facts": [
-        "experimental-design"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The experimental design"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -81,7 +117,13 @@
     {
       "id": "slot-6",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -89,7 +131,13 @@
     {
       "id": "slot-7",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"

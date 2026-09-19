@@ -5,7 +5,7 @@
 | # | Unit | Touches | New refusals | Est. lines | Budget risk (vs 1200) | Depends on | Status |
 |---|------|---------|---------------|-----------|------------------------|------------|--------|
 | U1 | Schema + validators + derived accessor — gate INERT | `paper_contract.py`, `paper_graph.py` (`BlockRecord` ctor), `paper_cli.py:1455`, `tests/test_paper_writing.py` | None (`MALFORMED_HEADER` gains a new failure surface, no new code) | ~190 | Low | — | [x] |
-| U2 | Transcribe the anchorable, report the rest — gate still INERT | `sections/*.md` (10, headers only), `openspec/changes/the-requirement-names-the-sentence-that-demands-it/unanchored-requirements.md` | None | ~330 | Low | U1 | [ ] |
+| U2 | Transcribe the anchorable, report the rest — gate still INERT | `sections/*.md` (10, headers only), `openspec/changes/the-requirement-names-the-sentence-that-demands-it/unanchored-requirements.md` | None | ~330 | Low | U1 | [x] |
 | DP | Operator ruling — **blocking** | `unanchored-requirements.md` (operator writes the ruling into it) | N/A | 0 | N/A (no code) | U2 | [ ] |
 | U3 | Apply ruling; gate LIVE unconditional; fixtures; roster re-derive — atomic | `paper_contract.py`, `paper_graph.py`, `sections/*.md` (per ruling), `tests/test_paper_contract.py`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py`, `tests/test_paper_figure.py`, `specs/section-contract/spec.md`, `SKILL.md` | None (`SPAN_NOT_IN_SOURCE` reachable on this field; `MALFORMED_HEADER` on bare string) | ~700 | Medium–High | DP | [ ] |
 
@@ -56,10 +56,10 @@ Chain strategy: pending
 
 ## U2 — Transcribe the Anchorable, Report the Rest
 
-- [ ] 2.1 For each of the 10 `sections/*.md` contracts, transcribe every `requires_facts`/`requires_declarations` entry that has a literal-substring quote anywhere in the corpus (self-file or cross-file, per D2's `bodies` dict) into `{value, source: {file, quote}}`. Prose bodies stay byte-identical.
-- [ ] 2.2 For every entry with no textual anchor, do NOT transcribe it. Add it to `openspec/changes/the-requirement-names-the-sentence-that-demands-it/unanchored-requirements.md`, one row per entry, carrying design D4's fields: block/field/value/contract file; the block's own `### External inputs` rows verbatim; whether the value appears anywhere in that file's body; which other blocks anchor the same value and where; whether it is already an `### Internal chain` row; block `optional`; blocks whose readiness changes if deleted.
-- [ ] 2.3 Confirm the report covers exactly the 3 DP-input groups (4 requirements) named in the Work-Unit Table; flag any additional unanchored entry found during the full read. Grep transcribed quotes against `scripts/` (read-only) for any paper-specific literal (the `MM_DATASET_ID`-class leak) — expect none, since only `sections/*.md` changed.
-- [ ] 2.4 Full suite still green (U1's shape layer still accepts bare strings for untouched entries): `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
+- [x] 2.1 For each of the 10 `sections/*.md` contracts, transcribe every `requires_facts`/`requires_declarations` entry that has a literal-substring quote anywhere in the corpus (self-file or cross-file, per D2's `bodies` dict) into `{value, source: {file, quote}}`. Prose bodies stay byte-identical.
+- [x] 2.2 For every entry with no textual anchor, do NOT transcribe it. Add it to `openspec/changes/the-requirement-names-the-sentence-that-demands-it/unanchored-requirements.md`, one row per entry, carrying design D4's fields: block/field/value/contract file; the block's own `### External inputs` rows verbatim; whether the value appears anywhere in that file's body; which other blocks anchor the same value and where; whether it is already an `### Internal chain` row; block `optional`; blocks whose readiness changes if deleted.
+- [x] 2.3 Confirm the report covers exactly the 3 DP-input groups (4 requirements) named in the Work-Unit Table; flag any additional unanchored entry found during the full read. Grep transcribed quotes against `scripts/` (read-only) for any paper-specific literal (the `MM_DATASET_ID`-class leak) — expect none, since only `sections/*.md` changed.
+- [x] 2.4 Full suite still green (U1's shape layer still accepts bare strings for untouched entries): `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`
 
 ## DP — Operator Ruling (Blocking)
 

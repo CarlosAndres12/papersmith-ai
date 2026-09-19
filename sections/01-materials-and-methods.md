@@ -28,7 +28,13 @@
     {
       "id": "mm-dataset",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "The dataset — when this section owns it"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",
@@ -37,7 +43,13 @@
     {
       "id": "mm-borrowed-machinery",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "The mathematical formulation of the proposal"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -45,7 +57,13 @@
     {
       "id": "mm-proposal",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "The mathematical formulation of the proposal"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",

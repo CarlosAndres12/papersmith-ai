@@ -13,7 +13,13 @@
     {
       "id": "title",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The contributions, already defined — the title selects among them"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -24,8 +30,20 @@
         "contributions"
       ],
       "requires_declarations": [
-        "keyword-bounds",
-        "classification-line"
+        {
+          "value": "keyword-bounds",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The keyword-bounds and classification-line — the target journal's requirements"
+          }
+        },
+        {
+          "value": "classification-line",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The keyword-bounds and classification-line — the target journal's requirements"
+          }
+        }
       ],
       "citations": "none",
       "after": [

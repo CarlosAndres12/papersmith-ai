@@ -19,7 +19,13 @@
     {
       "id": "es-dataset",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The dataset — when this section owns it"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",
@@ -29,7 +35,13 @@
       "id": "es-assessment",
       "requires_facts": [
         "dataset",
-        "contributions",
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
+          }
+        },
         "experimental-design",
         "gap"
       ],
@@ -55,7 +67,13 @@
     {
       "id": "es-training-details",
       "requires_facts": [
-        "implementation"
+        {
+          "value": "implementation",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The implementation of the experiments and its configuration — what actually ran"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
