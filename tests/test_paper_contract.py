@@ -12,6 +12,8 @@ One class per concern, no class name reused — `design.md`, `Testing Strategy`.
 """
 from __future__ import annotations
 
+import argparse
+import ast
 import hashlib
 import json
 import os
@@ -31,6 +33,7 @@ import paper_vocabulary  # noqa: E402
 import paper_contract  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
+import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -40,6 +43,20 @@ from impl_refusals import Refused  # noqa: E402
 # `tests/test_proposal_implementation.py` already use.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import forge_vocabulary  # noqa: E402
+from paper_mutation import _run_against_mutant  # noqa: E402
+
+
+def _assert_mutant_test_failed(case: unittest.TestCase, proc) -> None:
+    """Shared two-part assertion every `_run_against_mutant` proof in this
+    suite uses: `MUTANT_IMPORTED_OK` proves the mutant module actually
+    loaded and `unittest` actually ran the named test against it, and a
+    non-zero exit proves the guard genuinely failed rather than the
+    process crashing on import before the test ever ran. A local copy --
+    `tests/test_paper_decisions.py` keeps its own -- since these are two
+    independent suites on purpose (design.md, `File Changes`)."""
+    output = proc.stdout + proc.stderr
+    case.assertIn("MUTANT_IMPORTED_OK", output, output)
+    case.assertNotEqual(proc.returncode, 0, output)
 
 
 def _header_bytes(header: dict) -> bytes:
@@ -1740,6 +1757,321 @@ class OrderTests(unittest.TestCase):
             order = paper_graph.derive_order(corpus, edges)
 
             self.assertLess(order.index("a.only"), order.index("b.only"))
+
+
+class OrderCliFrontDoorTests(unittest.TestCase):
+    """`order`: `paper_cli.cmd_order`, the CLI front door a real caller
+    actually dispatches through -- never `paper_graph.derive_order` called
+    directly, which is all `OrderTests` above (and `test_paper_writing.py`)
+    do, 21 times combined. That coverage proves `derive_order`'s ALGORITHM
+    holds; it never once proves `cmd_order`'s own WIRING holds -- reading
+    `args.sections`, resolving it, assembling the corpus, collecting
+    edges, and shaping the `{"order", "danglingEdges"}` envelope `main()`
+    prints. This is the exact shape `cmd_write` shipped with zero direct
+    coverage until a missing phase gate survived an entire unit undetected
+    (`the-writer-may-assert-only-what-it-was-given`, item 1) -- the FUNCTION
+    was covered, the VERB was not."""
+
+    def test_cmd_order_returns_the_order_and_dangling_edges_envelope_over_the_real_corpus(
+        self,
+    ) -> None:
+        result = paper_cli.cmd_order(argparse.Namespace(sections=None))
+
+        self.assertEqual(set(result.keys()), {"order", "danglingEdges"})
+        self.assertEqual(result["danglingEdges"], [])
+        index = {qid: i for i, qid in enumerate(result["order"])}
+        # The same three acid-test assertions `OrderTests.test_the_
+        # introductions_three_chain_rows_become_three_after_edges` makes
+        # against `derive_order`'s own return value -- made here against
+        # `cmd_order`'s envelope instead, never against `derive_order`'s.
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-2"])
+        self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
+
+    def test_cmd_order_propagates_a_cycle_refusal_from_a_fixture_corpus(self) -> None:
+        """`cmd_order` must not swallow or reshape `derive_order`'s own
+        refusal -- proven against a real `--sections` override, the
+        argument name `cmd_order` actually reads off `args`. Lives under
+        `implementations/` (gitignored scratch, containment-eligible),
+        never a bare system tempdir: `resolve_sections_dir` refuses an
+        out-of-repository `--sections` with `SECTIONS_OUTSIDE_REPOSITORY`
+        before `assemble_corpus` ever runs, which would hide the very
+        `ORDER_CYCLE` propagation this test exists to prove."""
+        test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-order-cli-cycle-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        sections_dir = test_root / "sections"
+        sections_dir.mkdir(parents=True)
+        _write_section(sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "blocks": [_block(
+                "x", after=[{"target": "b.y", "source": _quote_source("sections/01-a.md", "Prose.")}]
+            )],
+        })
+        _write_section(sections_dir, "02-b.md", {
+            "section": "b", "position": 2,
+            "blocks": [_block(
+                "y", after=[{"target": "a.x", "source": _quote_source("sections/02-b.md", "Prose.")}]
+            )],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_order(argparse.Namespace(sections=str(sections_dir)))
+
+        self.assertEqual(ctx.exception.code, "ORDER_CYCLE")
+
+    def test_mutation_swapping_cmd_orders_own_attribute_name_fails_its_front_door_test(
+        self,
+    ) -> None:
+        """RED-first, deliberate mutation: `derive_order`'s 21 existing
+        tests call it directly with a `corpus`/`edge_set` pair they built
+        themselves -- none of them would ever notice `cmd_order` reading
+        the wrong argparse attribute off `args`, because none of them go
+        through `cmd_order` at all. Mutating `args.sections` to
+        `args.section` inside `cmd_order` itself proves THIS test's own
+        `Namespace(sections=...)` call is what catches it: `AttributeError`,
+        surfaced through `_run_against_mutant` as a failing dotted test,
+        never a clean run -- the exact defect shape a direct front-door
+        test exists to make impossible."""
+        proc = _run_against_mutant(
+            'def cmd_order(args: argparse.Namespace) -> dict:\n'
+            '    sections_dir = paper_contract.resolve_sections_dir(args.sections)',
+            'def cmd_order(args: argparse.Namespace) -> dict:\n'
+            '    sections_dir = paper_contract.resolve_sections_dir(args.section)',
+            "tests.test_paper_contract.OrderCliFrontDoorTests."
+            "test_cmd_order_returns_the_order_and_dangling_edges_envelope_over_the_real_corpus",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_mutant_test_failed(self, proc)
+
+
+def _shipped_paper_cli_verbs() -> set[str]:
+    """The verb roster `paper_cli.py`'s own `build_parser()` accepts --
+    read from the live parser, never grepped or hand-listed, the same
+    derivation `test_paper_writing.ObjectiveNorthTests.shipped_verbs`
+    already uses for the identical reason: a renamed, removed, or freshly
+    -added verb changes this set with zero edits here. This branch's own
+    working tree is shared with other concurrent agent sessions on other
+    branches; this function reads whatever `paper_cli.py` actually
+    contains at call time on THIS branch's checkout, never a cached or
+    hand-counted figure, which is exactly what let a mid-session sighting
+    of an unrelated branch's own in-flight verbs (`reuse`, `exhaustion` --
+    never part of this branch's history) get caught and corrected rather
+    than silently pinned as if they were this branch's own gap."""
+    parser = paper_cli.build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices.keys())
+    raise AssertionError(
+        "paper_cli.py's parser declares no subcommands -- build_parser()'s shape moved"
+    )
+
+
+#: The six `paper-writing` suites this task's own Verification section
+#: names and counts (695 tests, six `python -m unittest` targets) -- the
+#: scan scope for "does a verb have a front-door test", fixed to exactly
+#: that roster rather than globbed, because a 7th `test_paper_*.py` file
+#: can appear mid-session from unrelated concurrent work (`tests/
+#: test_paper_lifecycle.py` did, while this item was in flight) without
+#: that work's suite being part of what this task's baseline counts.
+_PAPER_CLI_SUITE_FILES = (
+    "test_paper_writing.py",
+    "test_paper_citation.py",
+    "test_paper_evidence.py",
+    "test_paper_figure.py",
+    "test_paper_contract.py",
+    "test_paper_decisions.py",
+)
+
+
+def _string_constant(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _cli_shelling_run_helper_names(tree: ast.Module) -> set[str]:
+    """Every `_run` helper anywhere in this ONE module CONFIRMED, by
+    walking its own body, to shell out to `paper_cli.py` as `subprocess.
+    run([sys.executable, ...])` -- never assumed from the name alone, so a
+    future `_run` meaning something unrelated is never read as front-door
+    evidence. All four `_run` helpers across the six suites match this
+    shape today (`test_paper_figure.CLIWiringTests._run`, `test_paper_
+    writing.CLIWiringTests._run`, `test_paper_writing.<E2E>._run`, `test_
+    paper_decisions.<E2E>._run`)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_run":
+            dumped = ast.dump(node)
+            if "subprocess" in dumped and "executable" in dumped:
+                names.add(node.name)
+    return names
+
+
+def _front_door_verbs_in_file(path: Path) -> set[str]:
+    """Every verb ONE test file exercises through a front door this
+    repository's own tests already recognize as one: `paper_cli.cmd_<verb>
+    (...)` (`test_paper_decisions.CouplingsCliTests`'s own docstring calls
+    this exactly "the ... front door"), `paper_cli.main([<verb>, ...])`
+    (the real argparse dispatch), a confirmed CLI-shelling `self._run(
+    <verb>, ...)` helper, or a raw `subprocess.run([..., <a path ending in
+    paper_cli.py>, <verb>, ...])` call with no `_run` wrapper.
+
+    AST-based, never a flat-text grep: this repository's own calls wrap
+    across lines (`subprocess.run(\\n    [sys.executable, str(CLI), *args]`
+    is the shipped shape in every `_run` helper), and a flat-text search
+    for `subprocess.run([sys.executable` reads a real call as an absence
+    that is not there -- the same SEARCH TRAP this change's own brief
+    warns about for contract prose, equally real for source text.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    run_like = _cli_shelling_run_helper_names(tree)
+    verbs: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr.startswith("cmd_"):
+            verbs.add(func.attr[len("cmd_"):])
+            continue
+        if (isinstance(func, ast.Attribute) and func.attr == "main") or (
+            isinstance(func, ast.Name) and func.id == "main"
+        ):
+            if node.args and isinstance(node.args[0], (ast.List, ast.Tuple)) and node.args[0].elts:
+                verb = _string_constant(node.args[0].elts[0])
+                if verb:
+                    verbs.add(verb)
+            continue
+        if isinstance(func, ast.Attribute) and func.attr in run_like:
+            if node.args:
+                verb = _string_constant(node.args[0])
+                if verb:
+                    verbs.add(verb)
+            continue
+        if (
+            isinstance(func, ast.Attribute) and func.attr == "run"
+            and isinstance(func.value, ast.Name) and func.value.id == "subprocess"
+        ):
+            if node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+                elts = node.args[0].elts
+                cli_index = None
+                for i, elt in enumerate(elts):
+                    try:
+                        rendered = ast.unparse(elt)
+                    except Exception:
+                        continue
+                    if "paper_cli.py" in rendered:
+                        cli_index = i
+                        break
+                if cli_index is not None and cli_index + 1 < len(elts):
+                    verb = _string_constant(elts[cli_index + 1])
+                    if verb:
+                        verbs.add(verb)
+    return verbs
+
+
+#: Verbs `_front_door_verbs_in_file` measures as uncovered across the six
+#: `paper-writing` suites, pinned explicitly and dated -- the way `paper_
+#: cli.REFUSAL_CLASSIFICATION` pins every reachable code by name rather
+#: than leaving an unclassified one to read as covered by omission. A verb
+#: leaves this set only by gaining a real front-door test in one of the
+#: six suites; a verb enters it only by a deliberate, measured edit here.
+#:
+#: - `bib` (2026-09-19, measured on this branch, base `7b91bc5`, 22 shipped
+#:   verbs): `paper_bib.build_refs_bib` and `cmd_bib`'s own `reciprocal`
+#:   check are exercised directly (`test_paper_evidence.py`, `test_paper_
+#:   writing.py`), but nothing calls `paper_cli.cmd_bib`, `paper_cli.main(
+#:   ["bib", "build", ...])`, or shells out to `paper_cli.py bib build` in
+#:   any of the six suites -- out of this item's scope (tests only;
+#:   `scripts/*.py` belongs to another agent).
+_KNOWN_UNCOVERED_PAPER_CLI_VERBS = frozenset({"bib"})
+
+
+class VerbFrontDoorCoverageTests(unittest.TestCase):
+    """Item 1's general guard: `cmd_order` shipped with zero direct tests
+    while `derive_order` carried 21 across two suites -- the FUNCTION was
+    covered, the VERB was not, the exact shape `cmd_write` shipped with
+    until a missing phase gate survived an entire unit undetected. This
+    class holds every CURRENT and FUTURE `paper_cli.py` verb to the same
+    bar, derived from `build_parser()` itself, never a hand-listed tuple:
+    `COMMANDS` already drifted from this module's own docstring once (the
+    docstring's own prose enumeration never mentions `couplings`, though
+    `build_parser()` and `COMMANDS` both ship it) -- a second hand-kept
+    roster here would be exactly that failure mode again."""
+
+    def _tested_verbs(self) -> set[str]:
+        tested: set[str] = set()
+        for name in _PAPER_CLI_SUITE_FILES:
+            tested |= _front_door_verbs_in_file(FORGE_ROOT / "tests" / name)
+        return tested
+
+    def test_every_shipped_verb_has_a_front_door_test_or_a_pinned_gap(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        unpinned = sorted(uncovered - _KNOWN_UNCOVERED_PAPER_CLI_VERBS)
+        self.assertEqual(
+            unpinned, [],
+            f"{unpinned} ship in paper_cli.py's own parser roster with no front-door "
+            "test in any of the six suites and no pinned, dated entry in "
+            "_KNOWN_UNCOVERED_PAPER_CLI_VERBS explaining why -- either add a direct "
+            "test or pin the gap deliberately, the way REFUSAL_CLASSIFICATION pins "
+            "its own")
+
+    def test_the_pinned_gap_list_carries_nothing_already_covered(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        stale = sorted(_KNOWN_UNCOVERED_PAPER_CLI_VERBS - uncovered)
+        self.assertEqual(
+            stale, [],
+            f"{stale} are pinned as uncovered gaps but a front-door test for them "
+            "exists in the six suites now -- shrink the backlog instead of leaving "
+            "a stale pin standing")
+
+    def test_the_pinned_gap_list_names_only_verbs_paper_cli_still_ships(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        stray = sorted(_KNOWN_UNCOVERED_PAPER_CLI_VERBS - shipped)
+        self.assertEqual(
+            stray, [],
+            f"{stray} are pinned as uncovered verbs but paper_cli.py ships no such "
+            "verb -- a removed verb's pin must be removed with it")
+
+    def test_the_ast_scanner_recognizes_a_synthetic_front_door_call_and_nothing_else(
+        self,
+    ) -> None:
+        """Prove the scanner is not a rubber stamp: a synthetic file
+        calling `paper_cli.cmd_scaffold(...)` is read as covering
+        `scaffold` and nothing else; one calling nothing paper_cli-shaped
+        covers nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            covering = Path(tmp) / "covering.py"
+            covering.write_text(
+                "import paper_cli\n\n\ndef test_x():\n    paper_cli.cmd_scaffold(object())\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_front_door_verbs_in_file(covering), {"scaffold"})
+
+            empty = Path(tmp) / "empty.py"
+            empty.write_text("def test_y():\n    pass\n", encoding="utf-8")
+            self.assertEqual(_front_door_verbs_in_file(empty), set())
+
+    def test_the_guard_itself_goes_red_when_a_real_gap_is_unpinned(self) -> None:
+        """RED-first proof for this guard's OWN logic (never `_run_
+        against_mutant`, which mutates `scripts/*.py` -- this guard's own
+        defect surface is the pin list and the AST scanner, both living in
+        this test file, not in any mutable script). Reproduce the exact
+        completeness check with `bib` deliberately dropped from the pinned
+        set and confirm it reports `bib` as an unpinned gap -- proof this
+        guard genuinely distinguishes a pinned gap from an unpinned one,
+        rather than always reporting `[]` regardless of input."""
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        self.assertIn("bib", uncovered, "bib is expected to still be a real, measured gap")
+
+        reduced_pins = _KNOWN_UNCOVERED_PAPER_CLI_VERBS - {"bib"}
+        unpinned = sorted(uncovered - reduced_pins)
+        self.assertIn("bib", unpinned)
 
 
 class ReadinessTests(unittest.TestCase):
