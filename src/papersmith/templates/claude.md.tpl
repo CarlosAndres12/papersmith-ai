@@ -16,3 +16,11 @@ This standalone paper workspace is managed by `papersmith` {{version}}.
 The `.claude/agents/` tree is the single source of truth for agent
 definitions. Other harness documents are generated projections; do not fork
 their instructions manually.
+
+## Slash commands
+
+Every top-level skill under `skills/` is also generated as a slash command in
+`.claude/commands/<name>.md`, so it can be invoked directly. Each command body
+loads that skill's `SKILL.md` and passes your text through as `$ARGUMENTS`. The
+directory is a framework artifact: `papersmith audit --check-drift` reports drift
+and `papersmith upgrade` restores it, so do not edit it by hand.

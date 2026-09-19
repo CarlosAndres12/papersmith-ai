@@ -9,3 +9,9 @@ Read `papersmith.yaml`, `guidance/paper-guide/`, and the applicable
 ## Agents
 
 {{agents}}
+
+## Commands
+
+Pi receives no generated slash commands — only the `claude` and `opencode`
+projections emit command files. Invoke a capability by name; read the applicable
+`skills/<name>/SKILL.md` first, since that file remains the source of truth.

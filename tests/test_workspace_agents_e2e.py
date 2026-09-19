@@ -121,3 +121,15 @@ class AgentRoutingTests(unittest.TestCase):
         claude = (workspace / "CLAUDE.md").read_text(encoding="utf-8")
         self.assertIn(".claude/agents/", claude)
         self.assertIn("single source of truth", claude)
+
+    def test_generated_routing_docs_document_their_command_surface(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        opencode = (workspace / "OPENCODE.md").read_text(encoding="utf-8")
+        self.assertIn(".opencode/commands/", opencode)
+        self.assertIn("refuse-offpath-push.js", opencode)
+        claude = (workspace / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn(".claude/commands/", claude)
+        for doc_name in ("PI.md", ".antigravity/rules.md"):
+            with self.subTest(doc=doc_name):
+                text = (workspace / doc_name).read_text(encoding="utf-8")
+                self.assertIn("no generated slash commands", text)

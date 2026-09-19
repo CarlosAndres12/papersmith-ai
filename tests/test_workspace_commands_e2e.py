@@ -173,6 +173,70 @@ class HarnessProjectionTests(unittest.TestCase):
             self.assertTrue((workspace / relpath).is_symlink(), f"{relpath} must survive a re-run")
 
 
+class HarnessCommandProjectionTests(unittest.TestCase):
+    """The nine skills arrive as slash commands, plus the OpenCode safety plugin."""
+
+    COMMAND_NAMES = (
+        "experimental-deliberation",
+        "experimental-implementation",
+        "kaggle-accounts",
+        "paper-ingestion",
+        "paper-writing",
+        "proposal-deliberation",
+        "proposal-implementation",
+        "remote-execution",
+        "skill-audit",
+    )
+
+    def test_init_projects_nine_commands_per_command_harness(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        for harness in (".opencode/commands", ".claude/commands"):
+            with self.subTest(harness=harness):
+                names = sorted(path.stem for path in (workspace / harness).glob("*.md"))
+                self.assertEqual(names, sorted(self.COMMAND_NAMES))
+                body = (workspace / harness / "paper-ingestion.md").read_text(encoding="utf-8")
+                self.assertIn("$ARGUMENTS", body)
+                self.assertIn("skills/paper-ingestion/SKILL.md", body)
+
+    def test_non_command_harnesses_receive_no_command_directory(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        self.assertFalse((workspace / ".pi/commands").exists())
+        self.assertFalse((workspace / ".antigravity/commands").exists())
+
+    def test_opencode_json_is_valid_and_declares_no_plugin_key(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        payload = json.loads((workspace / "opencode.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["$schema"], "https://opencode.ai/config.json")
+        self.assertIn("permission", payload)
+        self.assertNotIn("plugin", payload,
+                         "plugins are auto-discovered; a plugin key would duplicate that")
+
+    def test_opencode_plugin_is_the_generated_relay(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        text = (workspace / ".opencode/plugins/refuse-offpath-push.js").read_text(encoding="utf-8")
+        self.assertIn("export const server", text)
+        self.assertIn("tool.execute.before", text)
+        self.assertIn("_load_push_surfaces", text)
+
+    def test_audit_is_clean_and_upgrade_restores_a_tampered_command(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("drift: clean", out)
+
+        command = workspace / ".opencode/commands/paper-writing.md"
+        original = command.read_bytes()
+        command.write_bytes(b"tampered\n")
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        self.assertIn(".opencode/commands/paper-writing.md", out)
+        self.assertEqual(command.read_bytes(), b"tampered\n", "audit must never repair")
+
+        rc, _, _ = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, SUCCESS)
+        self.assertEqual(command.read_bytes(), original)
+
+
 class TargetCommandTests(unittest.TestCase):
 
     def test_target_list_set_and_check_round_trip(self) -> None:

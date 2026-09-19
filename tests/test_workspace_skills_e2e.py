@@ -17,6 +17,8 @@ import json
 import unittest
 from pathlib import Path
 
+from papersmith.generators import collect_commands
+
 from workspace_series import (
     REPO_ROOT,
     link_node_modules,
@@ -84,6 +86,13 @@ class SkillTreeTests(unittest.TestCase):
         workspace = make_workspace(new_tmp(self))
         self.assertTrue((workspace / "skills/_core/deliberation/engine/cli.mjs").is_file())
         self.assertTrue((workspace / "skills/_core/implementation/engine").is_dir())
+
+    def test_every_skill_becomes_exactly_one_slash_command(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        sink: list[str] = []
+        names = [item["name"] for item in collect_commands(workspace, warnings=sink)]
+        self.assertEqual(names, list(SKILL_NAMES))
+        self.assertEqual(sink, [], "a healthy workspace skips no skill")
 
 
 class SkillFrontDoorTests(unittest.TestCase):
