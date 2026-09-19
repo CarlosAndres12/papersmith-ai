@@ -246,3 +246,20 @@ never written.
   anchor.
 - **U3 blocking condition**: every row's "Ruling" cell above must be filled
   before U3 (`tasks.md` DP.1) may begin.
+
+---
+
+## Operator ruling — 2026-09-19
+
+| # | Block · requirement | Ruling | Reasoning as ruled |
+|---|---|---|---|
+| 1 | `experimental-setup.es-assessment` · `experimental-design` | **B — the contract never wrote it down** | Three orphan `### External inputs` rows (competing methods, axes, purpose-built corpus criteria) ARE experimental design under other names. The idea is present; the fact's name is not. Add the row. |
+| 2 | `experimental-setup.es-assessment` · `gap` | **B — the contract never wrote it down** | The orphan row "The **purpose-built corpus** — that no standard reference measures what is claimed" IS a gap claim: it justifies building a corpus because nothing existing measures what is asserted. The block consumes the gap to make that argument. Add the row naming the fact. |
+| 3 | `experimental-setup.es-assessment` · `dataset` | **A — the requirement is spurious** | The section's own table routes the dataset row to `es-dataset`, not to `es-assessment`, and the Structural-decisions note already frames it as an internal chain edge. The requirement duplicates an edge that exists. |
+| 4 | `title-and-keywords.keywords` · `contributions` | **A — the requirement is spurious** | Measured: `keywords` already depends on all seven `introduction.*` blocks in the graph. The operator's own rule is that keywords come from the introduction's representative words, so the contributions reach them through the introduction. The fact requirement is redundant with an ordering dependency that already holds. |
+
+### Recorded while ruling, deliberately NOT acted on here
+
+`gap` is mis-classified at a deeper level than this change touches. `related-work.rw-closing`'s prose ("Name the fronts left open — as many as there are blocks"; "State which of them the proposal attacks") shows that block PRODUCES the gap by writing it, yet its header demands `gap` as an external input. The operator's flow: proposal → problem statement → state of the art → gap → justifies the proposal without modifying it.
+
+Ruling 2 above holds in either world — `es-assessment` consumes the gap whether the gap is declared or derived — so U3 proceeds. The re-classification is a separate change, opened on the operator's instruction.
