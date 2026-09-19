@@ -175,6 +175,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "GUIDANCE_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
     "UNKNOWN_GUIDANCE_CLASS": WORK_STATE,
     "MALFORMED_GUIDANCE_MARKER": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 8: `packet`'s own
+    # outline assembly over ingested guidance markdown (paper_guidance.
+    # read_markdown_outline) -- reachable the instant that raise site
+    # exists, `paper_guidance.py` already being an ahead-of-its-own-verb
+    # import (design.md D5) --------------------------------------------
+    "GUIDANCE_MARKDOWN_UNREADABLE": WORK_STATE,
     # --- declare (paper_declarations.py; UNKNOWN_FACT/UNKNOWN_DECLARATION
     # already classified above -- reused verbatim, never a second code for
     # the same condition, design.md's own decision) ---------------------
@@ -1019,6 +1025,78 @@ def _resolve_repo_path(raw: str) -> Path:
     return target
 
 
+def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:
+    """The redactor packet (`redactor-packet` spec; design.md Decision D5):
+    one block's own section contract prose, verbatim, plus -- per `style-
+    reference`-classed `guidance/` root -- every ingested paper's heading
+    OUTLINE (`paper_guidance.read_markdown_outline`: `{title, level,
+    byte_start, byte_end}`, never the span text itself). Read-only: never
+    opens a reference `.md` for anything beyond computing its own outline,
+    and never writes anything under any input, including every refusal
+    path (tasks.md 8.14).
+
+    This is the structural half of the leak guard the operator raised
+    twice: the packet is physically incapable of carrying reference
+    prose, because outlines are all it ever carries (design.md: "Rejected
+    alternative -- the packet inlines each extracted section's text --
+    puts an unaudited copy of reference prose in a file the redactor can
+    read without ever passing residency verification or the eight-token
+    tripwire"). The style-sampler agent reads this outline, picks the
+    heading it judges equivalent, reads THAT span itself from the real
+    file, and reports it; `paper_style.resolve_style_set` residency-
+    verifies that account into `R` exactly as before -- this function
+    never resolves a span and never calls `resolve_style_set` itself, so
+    there is exactly one resolution path, not a second one this function
+    could drift from (tasks.md 8.9).
+
+    A `style-reference` root with no ingested papers under it (`paper_
+    guidance.ingested_papers`), and a root the registry classes anything
+    other than `style-reference`, both contribute nothing to `references`
+    -- never a refusal (`redactor-packet` spec, `Scenario: A reference
+    with no equivalent block contributes nothing` is the sampler's own
+    later degrade; this is the same "contributes nothing, never refuses"
+    shape one step earlier, over roots rather than resolved spans).
+    """
+    section_path = sections_dir / f"{section}.md"
+    header, body = paper_contract.parse(section_path.read_bytes())
+    next(b for b in header.blocks if b["id"] == block_id)
+
+    registry = paper_guidance.read_registry(guidance_dir)
+    style_roots = sorted(name for name, cls in registry.items() if cls == "style-reference")
+    ingested = paper_guidance.ingested_papers(guidance_dir)
+
+    references = []
+    for root in style_roots:
+        for paper in ingested.get(root, []):
+            outline = paper_guidance.read_markdown_outline(Path(paper["markdown"]))
+            references.append({
+                "root": root,
+                "folder": paper["folder"],
+                "markdown": paper["markdown"],
+                **outline,
+            })
+
+    return {
+        "block": block_id,
+        "section": section,
+        "contract": body.decode("utf-8"),
+        "references": references,
+    }
+
+
+def cmd_packet(args: argparse.Namespace) -> dict:
+    """`packet`: the CLI's own front door onto `assemble_packet` (tasks.md
+    8.6) -- read-only, so an operator/orchestrator session can shuttle a
+    block's contract prose plus every reference paper's heading outline
+    to the redactor and style-sampler agents by hand without risking
+    dropping one of the channels ("Why this verb exists at all": no
+    script in this skill may import `subprocess`, so the skill can never
+    invoke either agent itself)."""
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    return assemble_packet(sections_dir, guidance_dir, args.section, args.block)
+
+
 def cmd_write(args: argparse.Namespace) -> dict:
     """`write`: reconciles an already-shuttled redactor draft and
     contract-auditor account against one block's real contract, evidence
@@ -1044,10 +1122,24 @@ def cmd_write(args: argparse.Namespace) -> dict:
     closes that gap: it runs before `write_block`'s own attempt ledger is
     touched and before any byte reaches `main.tex`, so a block never
     burns a judge-cycle attempt on a refusal unrelated to its draft.
+
+    Immediately after that gate -- still before `--draft`/`--audit` are
+    read -- `assemble_packet` runs for this exact block (`writing-
+    orchestration` spec, `Requirement: Packet Assembly Precedes Draft`).
+    Its own return value is not otherwise consumed here (the redactor's
+    draft and the style-sampler's account both already reached `write`
+    through their own established channels, `--draft`/`--style`); running
+    it is the gate: a `style-reference` root whose ingested markdown
+    cannot be read refuses `GUIDANCE_MARKDOWN_UNREADABLE` here, before the
+    draft/audit stage is ever reached, rather than surfacing only later
+    and possibly after a judge-cycle attempt was already spent.
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
     _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")
+
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    assemble_packet(sections_dir, guidance_dir, args.section, args.block)
 
     draft_path = _resolve_repo_path(args.draft)
     audit_path = _resolve_repo_path(args.audit)
@@ -1070,7 +1162,6 @@ def cmd_write(args: argparse.Namespace) -> dict:
     style_set = ()
     if args.style:
         proposals = json.loads(Path(args.style).read_text(encoding="utf-8"))
-        guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
         recorded, _no_equivalent = paper_style.resolve_style_set(guidance_dir, proposals)
         style_set = tuple(recorded)
 
@@ -1553,12 +1644,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to a JSON record naming the run this figure was measured from",
     )
 
+    p_packet = sub.add_parser(
+        "packet",
+        help="read-only: this block's own contract prose plus every style-reference "
+             "paper's heading outline (offsets only, never reference prose)",
+    )
+    p_packet.add_argument("--section", required=True, help="the sections/<id>.md stem this block belongs to")
+    p_packet.add_argument("--block", required=True, help="block id to assemble the packet for")
+    p_packet.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_packet.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+
     return parser
 
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
     "declare", "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
+    "packet",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1580,6 +1688,7 @@ _COMMANDS = {
     "render": cmd_render,
     "place": cmd_place,
     "verify": cmd_verify,
+    "packet": cmd_packet,
 }
 
 

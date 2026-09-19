@@ -62,3 +62,19 @@ assembled from any reference material outside `R`.
 - WHEN the packet is assembled
 - THEN it refuses rather than admitting reference text unmeasured by the
   leak tripwires
+
+### Requirement: An Unreadable Ingested Paper Refuses During Outline Assembly
+
+Assembling a `style-reference`-classed paper's heading outline MUST refuse
+`GUIDANCE_MARKDOWN_UNREADABLE` (work-state) when that paper's ingested
+`.md` cannot be read or is not valid UTF-8, rather than silently omitting
+that reference or reporting an empty outline as if the file had no
+headings.
+
+#### Scenario: An unreadable ingested markdown file refuses assembly
+
+- GIVEN a `style-reference`-classed `guidance/` root with one ingested
+  paper whose `.md` file cannot be read as UTF-8
+- WHEN the packet is assembled
+- THEN it refuses `GUIDANCE_MARKDOWN_UNREADABLE`, naming the unreadable
+  file, and writes nothing

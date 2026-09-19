@@ -49,7 +49,7 @@ unmentioned.
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [x] |
 | 6b | **Correction to unit 6.** `PHASE_NOT_READY` gated the read-only `phases` verb only; `cmd_write` never consulted `derive_waves`, so nothing stopped a later wave being written before an earlier one existed — the gate reported, it did not gate. Wires the SAME gate computation into `cmd_write`, RED-first through the real `write` verb | `paper_cli.py`, `design.md`, `tasks.md`, `tests/test_paper_writing.py` | none (`PHASE_NOT_READY` already registered; second raise site only) | ~140 | Low | 6 | [x] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [x] |
-| 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
+| 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [x] |
 | 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
 
 ## Work-Unit Evidence
@@ -887,21 +887,24 @@ matters reads as protection while protecting nothing.
 
 ## Phase 8: `packet` + `segment_markdown`
 
-- [ ] 8.1 Edit `specs/redactor-packet/spec.md`: add a Requirement + scenario for an unreadable `guidance/*.md` refusing `GUIDANCE_MARKDOWN_UNREADABLE` during outline assembly.
-- [ ] 8.2 `segment_markdown(body)`: end a section at the next heading of level ≤ its own (never same-level-only); EOF only when no such heading follows; a headingless paper reports `{"headings": [], "reason": "NO_HEADINGS"}`.
-- [ ] 8.3 RED test (must go red before the fix): a fixture whose last section is a deeper-level appendix is swallowed under the same-level-only rule; confirm the fix keeps it.
-- [ ] 8.4 RED test: `NO_HEADINGS` reported for a headingless guidance `.md`, never a silent empty list.
-- [ ] 8.5 RED test: an unreadable `.md` refuses `GUIDANCE_MARKDOWN_UNREADABLE`.
-- [ ] 8.6 `packet --section <stem> --block <id>` (read-only): emits the block's own contract prose verbatim plus, per `style-reference`-classed entry, a heading OUTLINE (`{title, level, byte_start, byte_end}`) only — never inlined span text.
-- [ ] 8.7 RED test (leak proof): a mutated `packet` that inlines span text instead of offsets — assert "no reference byte in the payload" goes red without the offsets-only fix.
-- [ ] 8.8 RED test: a `noEquivalent` style-reference entry contributes nothing; assembly does not refuse on its account.
-- [ ] 8.9 Wire packet's style extracts through the existing `paper_style.resolve_style_set` call path only — no second resolution path; extracts land in the same recorded `R`.
-- [ ] 8.10 RED test: `R` read back after assembly contains exactly the two extracts a two-reference packet resolved.
-- [ ] 8.11 Leak-tripwire proof: run the existing `STYLE_OVERLAP` tripwire, register-distance and relative-overlap proofs against a packet's own extracts using exactly `R`; confirm no violation attributable to material outside `R`, and confirm material not in `R` is refused before assembly.
-- [ ] 8.12 `writing-orchestration`: wire packet assembly ahead of `write`'s `draft` stage — a draft stage invoked without an assembled packet must not proceed; shuttle through files only (`NoSubprocessScanTests` coverage).
-- [ ] 8.13 Register `GUIDANCE_MARKDOWN_UNREADABLE: WORK_STATE`; move the roster assertion from 104 to 105 (final target — all nine reconciled codes accounted for).
-- [ ] 8.14 Read-only proof: before/after content-manifest for `packet` — writes nothing under every input, including refusal paths.
-- [ ] 8.15 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+- [x] 8.1 Edit `specs/redactor-packet/spec.md`: add a Requirement + scenario for an unreadable `guidance/*.md` refusing `GUIDANCE_MARKDOWN_UNREADABLE` during outline assembly.
+- [x] 8.2 `segment_markdown(body)`: end a section at the next heading of level ≤ its own (never same-level-only); EOF only when no such heading follows; a headingless paper reports `{"headings": [], "reason": "NO_HEADINGS"}`.
+- [x] 8.3 RED test (must go red before the fix): a fixture whose last section is a deeper-level appendix is swallowed under the same-level-only rule; confirm the fix keeps it.
+- [x] 8.4 RED test: `NO_HEADINGS` reported for a headingless guidance `.md`, never a silent empty list.
+- [x] 8.5 RED test: an unreadable `.md` refuses `GUIDANCE_MARKDOWN_UNREADABLE`.
+- [x] 8.6 `packet --section <stem> --block <id>` (read-only): emits the block's own contract prose verbatim plus, per `style-reference`-classed entry, a heading OUTLINE (`{title, level, byte_start, byte_end}`) only — never inlined span text.
+- [x] 8.7 RED test (leak proof): a mutated `packet` that inlines span text instead of offsets — assert "no reference byte in the payload" goes red without the offsets-only fix.
+- [x] 8.8 RED test: a `noEquivalent` style-reference entry contributes nothing; assembly does not refuse on its account.
+- [x] 8.9 Wire packet's style extracts through the existing `paper_style.resolve_style_set` call path only — no second resolution path; extracts land in the same recorded `R`.
+- [x] 8.10 RED test: `R` read back after assembly contains exactly the two extracts a two-reference packet resolved.
+- [x] 8.11 Leak-tripwire proof: run the existing `STYLE_OVERLAP` tripwire, register-distance and relative-overlap proofs against a packet's own extracts using exactly `R`; confirm no violation attributable to material outside `R`, and confirm material not in `R` is refused before assembly.
+- [x] 8.12 `writing-orchestration`: wire packet assembly ahead of `write`'s `draft` stage — a draft stage invoked without an assembled packet must not proceed; shuttle through files only (`NoSubprocessScanTests` coverage).
+- [x] 8.13 Register `GUIDANCE_MARKDOWN_UNREADABLE: WORK_STATE`; move the roster assertion. **Measured, not the forecast**: real baseline going into this unit was already 106 (unit 7 measured 103→106, not this artifact's own stale 101→104 forecast, per its own Work Unit Table note), so the real move is **106 → 107**, not 104→105 — all nine reconciled codes are still accounted for, only the absolute endpoints were stale.
+- [x] 8.14 Read-only proof: before/after content-manifest for `packet` — writes nothing under every input, including refusal paths.
+- [x] 8.15 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+- [ ] 9.6 **OUR regression, not pre-existing noise.** `tests/test_skill_audit.py:8951` hardcodes `("paper-writing", 17)` and the skill now ships 20 verbs — units 6, 7 and 8 added `phases`, `skeleton` and `packet` and none updated it. The failure is `AssertionError: 20 != 17`. Unit 8's executor correctly declined to touch a file outside its edit roots and reported it, but framed it as predating the branch: it predates unit 8, not this change. Update the expected count to the measured one and re-run `tests.test_skill_audit.NewlyCoveredSubjectRosterTests`.
+- [ ] 9.7 Sweep the class rather than the instance: find every OTHER hardcoded expectation about `paper-writing`'s shape anywhere under `tests/` (verb counts, refusal counts, module lists, asset rosters) and confirm each is either derived or updated. A count that lives in one file and describes another is exactly the coupling this change exists to close, and we just proved the repo has at least one.
 
 ## Phase 9b: wire `optional` into the real `verify` call
 

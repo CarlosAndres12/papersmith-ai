@@ -15,10 +15,18 @@ style/evidence classification `plan` reports.
 is a second, independent walk -- two levels deep, gitignore-blind by
 `Path.iterdir()`'s own construction -- feeding `plan`/`packet`'s report of
 which papers actually sit under `guidance/`.
+
+`segment_markdown`/`read_markdown_outline` (unit 8, `redactor-packet`
+spec) are a third, independent capability: a heading OUTLINE -- never
+reference prose -- over one ingested paper's own markdown, which is what
+lets `packet` hand the style-sampler agent a map of every reference
+paper's structure without ever carrying a byte of its substantive
+content itself (design.md, Decision D5).
 """
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -133,6 +141,84 @@ def ingested_papers(guidance_dir: Path) -> dict:
                 papers.append({"folder": paper_entry.name, "markdown": str(markdown_path)})
         registry[root_entry.name] = papers
     return registry
+
+
+#: One ATX heading (`#` through `######`), anchored at the start of a
+#: line (`re.MULTILINE`, never `str.splitlines()`'s own broader notion of
+#: a line boundary -- exotic Unicode separators must never move a byte
+#: offset away from what `md_path.read_bytes()` itself would report). A
+#: run of more than six `#` never matches: CommonMark caps heading depth
+#: at 6, and the mandatory `[ \t]+` separator after the captured run
+#: rejects a bare `#comment`-style line with no space.
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*$", re.MULTILINE)
+
+
+def segment_markdown(body: str) -> dict:
+    """Every ATX heading in `body`, each carrying its own `{title, level,
+    byte_start, byte_end}` -- byte offsets into `body.encode("utf-8")`,
+    the same convention `paper_evidence.EvidenceSpan` already uses, so a
+    caller can slice `body.encode("utf-8")[byte_start:byte_end]` and get
+    exactly this heading's own span, never anything this function itself
+    hands back as text (`redactor-packet` spec, design.md Decision D5:
+    "the packet carries locators, never reference prose").
+
+    A heading's own span ends at the next heading whose level is **less
+    than or equal to** its own -- same level OR shallower -- never "the
+    next heading of the SAME level", which is what swallowed a deeper
+    appendix here before: a section followed later by a shallower heading
+    (with no intervening same-level heading first) would otherwise extend
+    all the way to EOF under a same-level-only rule, folding that
+    shallower heading's whole nested tree -- including whatever appendix
+    it contains -- into the wrong span (tasks.md 8.2-8.3; design.md, D5's
+    own "Segmentation, and the appendix it must not swallow"). Heading
+    DISCOVERY is one independent pass over the whole body before any span
+    is computed, so a deeper, nested heading is always found regardless
+    of how any ancestor's own span resolves -- only the ancestor's
+    `byte_end` is at stake under the old rule, never whether the nested
+    heading is reported at all.
+
+    A headingless body reports `{"headings": [], "reason": "NO_HEADINGS"}`
+    -- a reported state, like `unclassified`, never a silently empty list
+    that could also mean "not checked yet" (tasks.md 8.4).
+    """
+    matches = list(_HEADING_RE.finditer(body))
+    if not matches:
+        return {"headings": [], "reason": "NO_HEADINGS"}
+
+    total_bytes = len(body.encode("utf-8"))
+    raw = [
+        {
+            "level": len(match.group(1)),
+            "title": match.group(2).strip(),
+            "byte_start": len(body[:match.start()].encode("utf-8")),
+        }
+        for match in matches
+    ]
+
+    headings = []
+    for index, heading in enumerate(raw):
+        byte_end = total_bytes
+        for later in raw[index + 1:]:
+            if later["level"] <= heading["level"]:
+                byte_end = later["byte_start"]
+                break
+        headings.append({**heading, "byte_end": byte_end})
+    return {"headings": headings}
+
+
+def read_markdown_outline(md_path: Path) -> dict:
+    """`segment_markdown`'s own disk-reading boundary. Refuses
+    `GUIDANCE_MARKDOWN_UNREADABLE` (work-state) when `md_path` cannot be
+    read or is not valid UTF-8 -- `segment_markdown` itself stays a pure
+    function over already-decoded text, the same separation `paper_
+    evidence.EvidenceSpan.locate` already keeps between disk I/O and its
+    own pure byte search (`redactor-packet` spec, `packet`'s outline-
+    assembly requirement)."""
+    try:
+        body = md_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refused("GUIDANCE_MARKDOWN_UNREADABLE", f"{md_path}: {exc}")
+    return segment_markdown(body)
 
 
 def read_registry(guidance_dir: Path) -> dict:

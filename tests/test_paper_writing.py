@@ -47,6 +47,7 @@ import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_region  # noqa: E402
+import paper_guidance  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -3661,8 +3662,18 @@ class RefusalRosterTests(unittest.TestCase):
         raise site exists, no new import needed. This is the measured +3,
         not the tasks artifact's own forecast (101 to 104), which predates
         this same drift already flagged for units 4/6 above and was never
-        corrected forward either."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 106)
+        corrected forward either. Moved from 106 to 107 in unit 8
+        (`packet` + `segment_markdown`, tasks.md 8.1-8.15): `paper_
+        guidance.read_markdown_outline` (already-imported module) gains
+        `GUIDANCE_MARKDOWN_UNREADABLE`, reachable the instant that raise
+        site exists -- no new import needed. `cmd_packet`/`assemble_
+        packet` and `cmd_write`'s own new `assemble_packet` call raise no
+        code of their own; this is the measured +1, matching the tasks
+        artifact's own forecast (104 to 105) in shape though not in the
+        absolute numbers either endpoint names, since both predate unit
+        7's own measured +3 (103 to 106, not the tasks artifact's stale
+        101-to-104) that was never corrected forward."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 107)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -5011,6 +5022,529 @@ class SkeletonPathContainmentTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SECTIONS_OUTSIDE_REPOSITORY")
         self.assertFalse(outside.exists())
         self.assertEqual(self._manifest(), before)
+
+
+def _write_guidance_style_reference(guidance_dir: Path, root: str, papers: dict) -> None:
+    """Test fixture (unit 8): classifies `guidance_dir/<root>` `style-
+    reference` and ingests one `.md` per `{folder: body}` entry in
+    `papers`, two levels deep -- exactly the shape `paper_guidance.
+    ingested_papers` walks (design.md D4/D5)."""
+    root_dir = guidance_dir / root
+    root_dir.mkdir(parents=True, exist_ok=True)
+    (root_dir / ".paper-writing.json").write_text(
+        json.dumps({"class": "style-reference"}), encoding="utf-8",
+    )
+    for folder, body in papers.items():
+        paper_dir = root_dir / folder
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        (paper_dir / f"{folder}.md").write_text(body, encoding="utf-8")
+
+
+def _write_packet_section(sections_dir: Path, stem: str, section: str, block_id: str, prose: str) -> None:
+    """Test fixture (unit 8): the smallest `sections/<stem>.md` contract
+    `paper_contract.parse` accepts, carrying one block -- `assemble_
+    packet` never calls `paper_graph.assemble_corpus`, so no `### External
+    inputs`/`### Internal chain` sections are required here."""
+    header = json.dumps({
+        "section": section, "position": 1,
+        "blocks": [
+            {"id": block_id, "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ],
+    })
+    (sections_dir / f"{stem}.md").write_text(f"---\n{header}\n---\n\n{prose}\n", encoding="utf-8")
+
+
+class SegmentMarkdownTests(unittest.TestCase):
+    """`paper_guidance.segment_markdown`/`read_markdown_outline` (tasks.md
+    8.2-8.5; `redactor-packet` spec, design.md Decision D5)."""
+
+    def test_no_headings_reports_the_reason_not_a_silent_empty_list(self) -> None:
+        result = paper_guidance.segment_markdown("Just a paragraph, no heading anywhere.\n")
+        self.assertEqual(result, {"headings": [], "reason": "NO_HEADINGS"})
+
+    def test_a_deeper_level_appendix_is_not_swallowed_by_its_shallower_predecessor(self) -> None:
+        """tasks.md 8.3, RED-first: `## Section Two` is followed by `#
+        Appendix` (SHALLOWER, level 1), which itself nests `### Appendix
+        Detail` (DEEPER, level 3) as the document's own LAST heading. A
+        same-level-only rule finds no further level-2 heading after
+        `Section Two` and extends its span all the way to EOF, swallowing
+        both the Appendix and its own nested Detail; the fixed `level <=
+        own` rule stops `Section Two` exactly where `# Appendix` begins.
+        `SegmentMarkdownMutationProofTests` below re-introduces the
+        same-level-only rule and confirms this exact assertion goes red
+        without the fix -- this is not merely a one-time dev-loop RED,
+        it is design.md's own mutation 8, permanently re-run."""
+        body = (
+            "## Section Two\n"
+            "content of section 2\n"
+            "# Appendix\n"
+            "appendix intro\n"
+            "### Appendix Detail\n"
+            "detail content to end of file\n"
+        )
+        result = paper_guidance.segment_markdown(body)
+        by_title = {heading["title"]: heading for heading in result["headings"]}
+        data = body.encode("utf-8")
+
+        self.assertEqual(set(by_title), {"Section Two", "Appendix", "Appendix Detail"})
+        appendix_start = by_title["Appendix"]["byte_start"]
+        self.assertEqual(by_title["Section Two"]["byte_end"], appendix_start)
+        section_two_slice = data[by_title["Section Two"]["byte_start"]:by_title["Section Two"]["byte_end"]]
+        self.assertNotIn(b"Appendix", section_two_slice)
+        # The deepest, last heading in the whole document always ends at EOF.
+        self.assertEqual(by_title["Appendix Detail"]["byte_end"], len(data))
+
+    def test_unreadable_markdown_refuses_guidance_markdown_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_path = Path(tmp) / "bad.md"
+            bad_path.write_bytes(b"\xff\xfe# Not valid UTF-8\n")
+            with self.assertRaises(Refused) as ctx:
+                paper_guidance.read_markdown_outline(bad_path)
+            self.assertEqual(ctx.exception.code, "GUIDANCE_MARKDOWN_UNREADABLE")
+
+
+class SegmentMarkdownMutationProofTests(unittest.TestCase):
+    """tasks.md 8.3; design.md mutation 8: `segment_markdown` ending a
+    section at the next SAME-level heading (rather than `level <= own`)
+    must fail `SegmentMarkdownTests.test_a_deeper_level_appendix_is_not_
+    swallowed_by_its_shallower_predecessor` -- a passing assertion beside
+    an unexercised rule is not a mutation that ran."""
+
+    def test_mutation_same_level_only_fails_the_appendix_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if later["level"] <= heading["level"]:',
+            'if later["level"] == heading["level"]:',
+            "tests.test_paper_writing.SegmentMarkdownTests"
+            ".test_a_deeper_level_appendix_is_not_swallowed_by_its_shallower_predecessor",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class PacketAssemblyTests(unittest.TestCase):
+    """`paper_cli.assemble_packet`/`cmd_packet` (tasks.md 8.6; `redactor-
+    packet` spec, `Requirement: The Packet Carries Contract Prose Plus
+    Same-Section Style Extracts`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+
+    def test_packet_assembles_contract_prose_and_reference_outlines(self) -> None:
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {
+            "paper-one": "# Introduction\n\nReference sentence one.\n\n## Methods\n\nReference sentence two.\n",
+            "paper-two": "# Overview\n\nA different reference paper's own sentence.\n",
+        })
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+
+        self.assertEqual(packet["block"], "a")
+        self.assertEqual(packet["section"], "01-intro")
+        self.assertIn("Our own contract prose.", packet["contract"])
+        self.assertEqual({ref["folder"] for ref in packet["references"]}, {"paper-one", "paper-two"})
+        for ref in packet["references"]:
+            self.assertEqual(ref["root"], "reference-papers")
+            self.assertIn("headings", ref)
+            self.assertNotIn("span", ref)
+            self.assertNotIn("text", ref)
+            for heading in ref["headings"]:
+                self.assertEqual(set(heading), {"title", "level", "byte_start", "byte_end"})
+
+    def test_a_non_style_reference_root_contributes_nothing(self) -> None:
+        _write_guidance_style_reference(self.guidance_dir, "evidence-root", {"paper-one": "# X\n\nBody.\n"})
+        (self.guidance_dir / "evidence-root" / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+
+        self.assertEqual(packet["references"], [])
+
+    def test_an_unclassified_root_contributes_nothing_either(self) -> None:
+        (self.guidance_dir / "unclassified-root" / "paper-one").mkdir(parents=True)
+        (self.guidance_dir / "unclassified-root" / "paper-one" / "paper-one.md").write_text(
+            "# X\n\nBody.\n", encoding="utf-8",
+        )
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+
+        self.assertEqual(packet["references"], [])
+
+    def test_a_headingless_reference_reports_no_headings_reason(self) -> None:
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {
+            "paper-one": "Just a paragraph, no heading anywhere.\n",
+        })
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+
+        self.assertEqual(len(packet["references"]), 1)
+        self.assertEqual(packet["references"][0]["headings"], [])
+        self.assertEqual(packet["references"][0]["reason"], "NO_HEADINGS")
+
+    def test_an_unreadable_ingested_paper_refuses_guidance_markdown_unreadable(self) -> None:
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {"paper-one": "# X\n\nBody.\n"})
+        bad_md = self.guidance_dir / "reference-papers" / "paper-one" / "paper-one.md"
+        bad_md.write_bytes(b"\xff\xfe# Not valid UTF-8\n")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_MARKDOWN_UNREADABLE")
+
+
+class PacketLeakGuardTests(unittest.TestCase):
+    """tasks.md 8.7; design.md mutation 7: the packet is structurally
+    incapable of carrying reference prose -- proved by mutation, not
+    merely asserted (design.md, D5: "Rejected alternative -- the packet
+    inlines each extracted section's text -- puts an unaudited copy of
+    reference prose in a file the redactor can read without ever passing
+    residency verification or the eight-token tripwire")."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {
+            "paper-one": "# Introduction\n\nA reference sentence naming a specific unpublished finding.\n",
+        })
+
+    def test_no_reference_byte_in_the_payload(self) -> None:
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        payload = json.dumps(packet)
+        self.assertNotIn("unpublished finding", payload)
+        self.assertNotIn("A reference sentence", payload)
+
+    def test_mutation_inlining_span_text_fails_the_no_reference_byte_guard(self) -> None:
+        proc = _run_against_mutant(
+            '            references.append({\n'
+            '                "root": root,\n'
+            '                "folder": paper["folder"],\n'
+            '                "markdown": paper["markdown"],\n'
+            '                **outline,\n'
+            '            })\n',
+            '            leaked = Path(paper["markdown"]).read_text(encoding="utf-8")\n'
+            '            references.append({\n'
+            '                "root": root,\n'
+            '                "folder": paper["folder"],\n'
+            '                "markdown": paper["markdown"],\n'
+            '                "excerpt": leaked,\n'
+            '                **outline,\n'
+            '            })\n',
+            "tests.test_paper_writing.PacketLeakGuardTests.test_no_reference_byte_in_the_payload",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class PacketStyleResolutionIntegrationTests(unittest.TestCase):
+    """tasks.md 8.8-8.11: packet's outline feeds the (simulated) style-
+    sampler, whose account is resolved through the EXISTING `paper_style.
+    resolve_style_set` call path -- no second resolution path (design.md,
+    D5's own diagram: packet -> style-sampler -> resolve_style_set -> R ->
+    write -> check_tripwire)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+
+    def test_two_reference_packet_resolves_into_r_exactly(self) -> None:
+        """tasks.md 8.10: `R` read back after assembly contains exactly
+        the two extracts a two-reference packet resolved."""
+        _write_guidance_style_reference(self.guidance_dir, "root-a", {
+            "paper-a": "# Intro\n\nSentence one from paper A, whole and unexcerpted.\n",
+        })
+        _write_guidance_style_reference(self.guidance_dir, "root-b", {
+            "paper-b": "# Intro\n\nSentence two from paper B, whole and unexcerpted.\n",
+        })
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        self.assertEqual({ref["root"] for ref in packet["references"]}, {"root-a", "root-b"})
+
+        # The (simulated) style-sampler reads the outline above, resolves
+        # the equivalent heading itself, and reports the span verbatim.
+        proposals = [
+            {
+                "reference": "root-a",
+                "source_md": str(self.guidance_dir / "root-a" / "paper-a" / "paper-a.md"),
+                "span": "Sentence one from paper A, whole and unexcerpted.",
+            },
+            {
+                "reference": "root-b",
+                "source_md": str(self.guidance_dir / "root-b" / "paper-b" / "paper-b.md"),
+                "span": "Sentence two from paper B, whole and unexcerpted.",
+            },
+        ]
+        recorded, no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+
+        self.assertEqual(no_equivalent, [])
+        self.assertEqual({entry["reference"] for entry in recorded}, {"root-a", "root-b"})
+        self.assertEqual(
+            {entry["span"] for entry in recorded},
+            {
+                "Sentence one from paper A, whole and unexcerpted.",
+                "Sentence two from paper B, whole and unexcerpted.",
+            },
+        )
+
+    def test_a_no_equivalent_entry_contributes_nothing_and_does_not_refuse(self) -> None:
+        """tasks.md 8.8: a `noEquivalent` style-reference entry contributes
+        nothing; assembly (of `R`) does not refuse on its account."""
+        _write_guidance_style_reference(self.guidance_dir, "root-a", {
+            "paper-a": "# Intro\n\nSentence from paper A.\n",
+        })
+        _write_guidance_style_reference(self.guidance_dir, "root-b", {
+            "paper-b": "# Intro\n\nSentence from paper B.\n",
+        })
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        self.assertEqual({ref["root"] for ref in packet["references"]}, {"root-a", "root-b"})
+
+        proposals = [
+            {"reference": "root-a", "noEquivalent": True},
+            {
+                "reference": "root-b",
+                "source_md": str(self.guidance_dir / "root-b" / "paper-b" / "paper-b.md"),
+                "span": "Sentence from paper B.",
+            },
+        ]
+        recorded, no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+
+        self.assertEqual(no_equivalent, ["root-a"])
+        self.assertEqual([entry["reference"] for entry in recorded], ["root-b"])
+
+    def test_leak_tripwire_runs_clean_against_packet_informed_r(self) -> None:
+        """tasks.md 8.11: the existing `STYLE_OVERLAP` tripwire runs against
+        a packet's own extracts, using exactly `R`; confirm no violation
+        attributable to material outside `R`."""
+        _write_guidance_style_reference(self.guidance_dir, "root-a", {
+            "paper-a": "# Intro\n\nA reference sentence with its own distinct register and words.\n",
+        })
+        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        proposals = [{
+            "reference": "root-a",
+            "source_md": str(self.guidance_dir / "root-a" / "paper-a" / "paper-a.md"),
+            "span": "A reference sentence with its own distinct register and words.",
+        }]
+        recorded, _no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+
+        styled_draft = "A completely unrelated styled sentence about our own results."
+        paper_leak.check_tripwire(styled_draft, recorded)  # must not raise
+
+    def test_leak_tripwire_refuses_material_lifted_from_r(self) -> None:
+        """The complementary half: a styled draft that lifts at least
+        eight normalized tokens verbatim from a recorded sample refuses
+        `STYLE_OVERLAP` -- confirming the tripwire is actually wired
+        against `R`, not vacuously passing."""
+        _write_guidance_style_reference(self.guidance_dir, "root-a", {
+            "paper-a": "# Intro\n\nEight distinct normalized tokens appear verbatim right here today.\n",
+        })
+        proposals = [{
+            "reference": "root-a",
+            "source_md": str(self.guidance_dir / "root-a" / "paper-a" / "paper-a.md"),
+            "span": "Eight distinct normalized tokens appear verbatim right here today.",
+        }]
+        recorded, _no_equivalent = paper_style.resolve_style_set(self.guidance_dir, proposals)
+
+        styled_draft = "Eight distinct normalized tokens appear verbatim right here today."
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_tripwire(styled_draft, recorded)
+        self.assertEqual(ctx.exception.code, "STYLE_OVERLAP")
+
+
+class PacketWriteGateTests(unittest.TestCase):
+    """`writing-orchestration` spec, `Requirement: Packet Assembly
+    Precedes Draft` (tasks.md 8.12): `cmd_write` assembles this block's
+    packet before `--draft`/`--audit` are ever opened -- a broken style-
+    reference guidance corpus is caught here, before any judge-cycle
+    attempt is spent, rather than surfacing only later inside `resolve_
+    style_set`. Runs under the real, non-injectable `FORGE_ROOT` default,
+    the same `implementations/` convention `WriteGateTests` uses."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-packet-write-gate-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks_a = [
+            {"id": "a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "phase-a", "position": 1, "blocks": blocks_a})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.guidance_dir = self.test_root / "guidance"
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {"paper-one": "# X\n\nBody.\n"})
+
+        self.args = argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="01-a", block="a",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+        )
+
+    def test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened(self) -> None:
+        bad_md = self.guidance_dir / "reference-papers" / "paper-one" / "paper-one.md"
+        bad_md.write_bytes(b"\xff\xfe# Not valid UTF-8\n")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self.args)
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_MARKDOWN_UNREADABLE")
+        self.assertFalse((self.test_root / "draft.json").exists())
+        self.assertFalse((self.test_root / "audit.json").exists())
+
+    def test_a_readable_corpus_proceeds_past_the_packet_gate(self) -> None:
+        """A packet that assembles cleanly is not itself the failure --
+        `cmd_write` proceeds past the gate and fails on the very next real
+        stage instead, the draft file this test deliberately never
+        creates, never `Refused('GUIDANCE_MARKDOWN_UNREADABLE')`."""
+        with self.assertRaises(FileNotFoundError):
+            paper_cli.cmd_write(self.args)
+
+
+class PacketWriteGateMutationProofTests(unittest.TestCase):
+    """tasks.md 8.12: the packet gate must be load-bearing on the real
+    write path, not merely present beside it. Removing `cmd_write`'s own
+    call to `assemble_packet` must fail `PacketWriteGateTests.test_an_
+    unreadable_style_reference_paper_refuses_before_draft_is_opened` -- a
+    passing test beside an unexercised guard is not a mutation that ran.
+    """
+
+    def test_mutation_removing_the_packet_assembly_call_fails_the_gate(self) -> None:
+        proc = _run_against_mutant(
+            "    assemble_packet(sections_dir, guidance_dir, args.section, args.block)\n",
+            "",
+            "tests.test_paper_writing.PacketWriteGateTests"
+            ".test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class PacketReadOnlyTests(unittest.TestCase):
+    """tasks.md 8.14: `packet` writes nothing under every input, including
+    every refusal path -- the same before/after content manifest
+    `ReadinessPhasesReadOnlyTests` already established for `phases`/
+    `readiness`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+        _write_guidance_style_reference(self.guidance_dir, "reference-papers", {
+            "paper-one": "# Introduction\n\nA reference sentence.\n",
+        })
+        self.broken_guidance_dir = self.tmp_path / "guidance-broken"
+        _write_guidance_style_reference(self.broken_guidance_dir, "reference-papers", {
+            "paper-one": "# X\n\nBody.\n",
+        })
+        (self.broken_guidance_dir / "reference-papers" / "paper-one" / "paper-one.md").write_bytes(
+            b"\xff\xfe# Not valid UTF-8\n",
+        )
+
+    def _manifest(self) -> dict:
+        return {
+            str(path.relative_to(self.tmp_path)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(self.tmp_path.rglob("*")) if path.is_file()
+        }
+
+    def test_packet_writes_nothing_including_when_it_refuses(self) -> None:
+        before = self._manifest()
+
+        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        with self.assertRaises(Refused):
+            paper_cli.assemble_packet(self.sections_dir, self.broken_guidance_dir, "01-intro", "a")
+
+        after = self._manifest()
+        self.assertEqual(before, after)
+
+    def test_mutation_a_write_inside_assemble_packet_fails_the_manifest_guard(self) -> None:
+        proc = _run_against_mutant(
+            "def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:",
+            "def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:\n"
+            "    marker = sections_dir / '01-intro.md'\n"
+            "    marker.write_bytes(marker.read_bytes() + b'x')",
+            "tests.test_paper_writing.PacketReadOnlyTests"
+            ".test_packet_writes_nothing_including_when_it_refuses",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class PacketPathContainmentTests(unittest.TestCase):
+    """Threat Matrix, `Path containment`: `packet` reuses `paper_contract.
+    resolve_sections_dir` / `paper_guidance.resolve_guidance_dir`
+    verbatim -- never a new containment check (design.md; tasks.md 8.6).
+    Runs under the real, non-injectable `FORGE_ROOT` default, the same
+    `implementations/` convention `SkeletonPathContainmentTests` uses."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-packet-containment-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Prose.")
+        self.guidance_dir = self.test_root / "guidance"
+
+    def test_sections_outside_repository_refuses_and_writes_nothing(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-sections-{os.getpid()}"
+        args = argparse.Namespace(
+            section="01-intro", block="a", sections=str(outside), guidance=str(self.guidance_dir),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_packet(args)
+
+        self.assertEqual(ctx.exception.code, "SECTIONS_OUTSIDE_REPOSITORY")
+        self.assertFalse(outside.exists())
+
+    def test_guidance_outside_repository_refuses_and_writes_nothing(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-guidance-{os.getpid()}"
+        args = argparse.Namespace(
+            section="01-intro", block="a", sections=str(self.sections_dir), guidance=str(outside),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_packet(args)
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_OUTSIDE_REPOSITORY")
+        self.assertFalse(outside.exists())
 
 
 if __name__ == "__main__":
