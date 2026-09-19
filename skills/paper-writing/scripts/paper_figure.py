@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_latex  # noqa: E402
+import paper_tikz  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -283,6 +284,137 @@ def render(paper_dir: Path, figure_id: str, *, path: str | None = None) -> dict:
         "budgetRemaining": REPAIR_BUDGET - len(attempts),
         "diagnostics": [d.message for d in result.diagnostics],
     }
+
+
+def render_optimized_text(tex_path: Path, *, strip_comments: bool = False) -> dict:
+    """Dry run: the optimized candidate text for one source path, writing
+    nothing.
+
+    The CLI's `--file` route and its `--no-write` route both land here. The
+    guards and the compile belong to `optimize_figure` below and a dry run
+    deliberately performs neither — it answers "what would optimization
+    do to this file", and nothing else.
+    """
+    tex_text = tex_path.read_text(encoding="utf-8")
+    result = paper_tikz.optimize(tex_text, strip_comments=strip_comments)
+    return {
+        "figureId": tex_path.stem,
+        "text": result.text,
+        "changes": list(result.changes),
+        "librariesAdded": list(result.libraries_added),
+        "librariesRemoved": list(result.libraries_removed),
+        "stylesFactored": list(result.styles_factored),
+        "warnings": list(result.warnings),
+    }
+
+
+def optimize_source(
+    tex_path: Path, *, manifest: dict | None = None, strip_comments: bool = False,
+    compile_candidate: bool = True, output: Path | None = None, path: str | None = None,
+) -> dict:
+    """The whole `optimize` pipeline for one source path: transform, the two
+    always-run guards, compile-validation, and an atomic commit.
+
+    `paper_tikz.optimize` is a pure function; everything that could make a
+    rewrite unsafe-to-commit is decided here, and none of it is skipped by
+    a flag:
+
+    1. `cross_check_manifest` and `scan_data_boundary` run on the CANDIDATE,
+       unconditionally — before the compile and, importantly, **also under
+       `compile_candidate=False`**. Both are pure text checks, independent
+       of the compiler, so the `--no-compile` shortcut skips the compiler
+       and nothing else. A candidate failing either is discarded with the
+       original left byte-identical (refusals `MANIFEST_SOURCE_MISMATCH` /
+       `DIAGRAM_PLOTS_DATA` — existing codes, never a new one).
+    2. The candidate is compiled from a staging directory under the real
+       `<id>.tex` name (`latexmk` resolves the source by name, so the name
+       is not negotiable), and only a `success` verdict reaches the atomic
+       commit. A compile failure is the loop's ordinary cost, not a guard:
+       it returns `verdict: "rolled_back"` with the diagnostics, exactly as
+       `render` reports a repairable failure — never a `Refused`, and never
+       a partial write.
+
+    `output` redirects the commit to another path (`--output`); `None`
+    means in place. `path` is `paper_latex.compile`'s own injectable
+    `latexmk` search path, test-only, same as `render`'s.
+    """
+    source = Path(tex_path)
+    if not source.is_file():
+        raise Refused("DIAGRAM_SOURCE_ABSENT", f"{source} does not exist")
+
+    original = source.read_text(encoding="utf-8")
+    figure_id = source.stem
+    result = paper_tikz.optimize(original, strip_comments=strip_comments)
+    candidate = result.text
+    target = Path(output) if output is not None else source
+
+    # Always-run, compile-independent guards. Deliberately BEFORE the
+    # `candidate == original` short-circuit: a source that is already
+    # optimal still has to be a legal diagram, and reporting "unchanged"
+    # for a source stop A would refuse would be a false green. The manifest
+    # cross-check applies only where a manifest exists (`--figure-id`); the
+    # bare `--file` case has none to check against, which is a different
+    # fact from skipping the check.
+    if manifest is not None:
+        cross_check_manifest(manifest, candidate)
+    scan_data_boundary(candidate)
+
+    report = {
+        "figureId": figure_id,
+        "changes": list(result.changes),
+        "librariesAdded": list(result.libraries_added),
+        "librariesRemoved": list(result.libraries_removed),
+        "stylesFactored": list(result.styles_factored),
+        "warnings": list(result.warnings),
+    }
+
+    if candidate == original:
+        return {**report, "verdict": "unchanged", "written": None, "compiled": False}
+
+    if compile_candidate:
+        # A private staging tree: `latexmk` resolves the source by its own
+        # name, so the candidate is compiled as the real `<id>.tex` inside a
+        # throwaway directory rather than anywhere under `paper/`.
+        with tempfile.TemporaryDirectory(prefix="paper-tikz-") as tmp:
+            staging = Path(tmp) / "src"
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / f"{figure_id}.tex").write_text(candidate, encoding="utf-8")
+            compiled = paper_latex.compile(staging, figure_id, Path(tmp) / "out", path=path)
+        if compiled.verdict != "success":
+            return {
+                **report,
+                "verdict": "rolled_back",
+                "written": None,
+                "compiled": True,
+                "diagnostics": [diagnostic.message for diagnostic in compiled.diagnostics],
+            }
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_replace(target, candidate.encode("utf-8"))
+    return {
+        **report, "verdict": "committed", "written": str(target), "compiled": bool(compile_candidate),
+    }
+
+
+def optimize_figure(
+    paper_dir: Path, figure_id: str, *, strip_comments: bool = False,
+    compile_candidate: bool = True, output: Path | None = None, path: str | None = None,
+) -> dict:
+    """`optimize_source` for one figure id, with its manifest cross-check.
+
+    The id-keyed entry point exists so the happy path — "optimize the
+    diagram this block's contract declares" — cannot accidentally skip the
+    manifest check: the manifest is read here, from the layout this skill
+    already owns, and handed to `optimize_source` as a non-optional fact.
+    """
+    paths = figure_paths(paper_dir, figure_id)
+    if not paths["tex"].is_file():
+        raise Refused("DIAGRAM_SOURCE_ABSENT", f"{paths['tex']} does not exist")
+    manifest = read_manifest(paths)
+    return optimize_source(
+        paths["tex"], manifest=manifest, output=output,
+        strip_comments=strip_comments, compile_candidate=compile_candidate, path=path,
+    )
 
 
 def place_figure(paper_dir: Path, figure_id: str, pdf_source: Path, provenance_source: Path) -> dict:

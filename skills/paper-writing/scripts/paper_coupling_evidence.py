@@ -39,6 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
+import paper_contract  # noqa: E402
+import paper_figure_audit  # noqa: E402 -- one-way: this module MAY import the auditor; the auditor MUST NOT import this one or `paper_verify` (`paper_verify.py` is AST-locked to `re` and could not anyway)
 import paper_graph  # noqa: E402
 import paper_provenance  # noqa: E402
 import paper_vocabulary  # noqa: E402
@@ -93,6 +95,14 @@ class Evidence:
     contract_drift: dict = field(default_factory=dict)
     block_bodies: dict = field(default_factory=dict)
     blocks_by_fact: dict = field(default_factory=dict)
+    #: The eighth check's whole input: `paper_figure_audit.audit_semantics`'s
+    #: already-computed report, one entry per figure under `paper/Figures/`,
+    #: or `None` when the paper declares no figure at all. A `dict`, never
+    #: `Path`-typed — the read lock (`tests/test_paper_writing.py`,
+    #: `ReadOnlyTests`) forbids `paper_verify.py` touching any `Path`-typed
+    #: field, and this field exists so that module can read a verdict without
+    #: parsing anything itself.
+    figure_semantics: dict | None = None
 
 
 def _read_declaration_record(paper_dir: Path) -> dict:
@@ -166,6 +176,77 @@ def _compute_contract_drift(main_tex_bytes: bytes, provenance: dict | None) -> d
     return result
 
 
+def _figure_prose(sections_dir: Path) -> str:
+    """The bodies of every section that declares at least one `figure:`
+    obligation.
+
+    **Why this is coarse, and why that is stated rather than hidden:**
+    binding a figure id to a section is not declared anywhere — the
+    contract's `figure:` object carries no id, and `paper_contract` refuses
+    unknown keys there (`MALFORMED_FIGURE_OBLIGATION`) — so the aggregate
+    check compares a figure's declared components against the prose of the
+    sections that carry figures at all. The standalone `figure audit` verb,
+    which takes `--section` explicitly, is the precise path; this one is
+    deliberately wider and says so instead of inventing a binding nobody
+    declared.
+    """
+    if not sections_dir.is_dir():
+        return ""
+    chunks: list = []
+    for path in sorted(sections_dir.glob("*.md")):
+        try:
+            header, body = paper_contract.parse(path.read_bytes())
+        except (Refused, OSError):
+            continue
+        if any(block.get("figure") is not None for block in header.blocks):
+            chunks.append(body.decode("utf-8", errors="replace"))
+    return "\n".join(chunks)
+
+
+def _figure_semantics(paper_dir: Path, sections_dir: Path) -> dict | None:
+    """Run `paper_figure_audit.audit_semantics` over every figure with a
+    manifest, and aggregate. `None` when the paper has no figure at all —
+    a fact the eighth check reports as `NO_FIGURE_DECLARED` rather than as a
+    vacuous pass."""
+    figures_dir = paper_dir / "Figures"
+    if not figures_dir.is_dir():
+        return None
+    manifests = sorted(figures_dir.glob("*.diagram.json"))
+    if not manifests:
+        return None
+
+    prose = _figure_prose(sections_dir)
+    reports: dict = {}
+    for manifest_path in manifests:
+        figure_id = manifest_path.name[: -len(".diagram.json")]
+        tex_path = figures_dir / f"{figure_id}.tex"
+        if not tex_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        reports[figure_id] = paper_figure_audit.audit_semantics(
+            tex=tex_path.read_text(encoding="utf-8", errors="replace"),
+            manifest=manifest,
+            section_text=prose,
+            contract_figure=None,
+        )
+    if not reports:
+        return None
+
+    verdicts = {report["verdict"] for report in reports.values()}
+    if "fail" in verdicts:
+        verdict = "fail"
+    elif "unmeasured" in verdicts:
+        verdict = "unmeasured"
+    else:
+        verdict = "pass"
+    return {"verdict": verdict, "figures": reports}
+
+
 def gather(paper_dir: Path, sections_dir: Path) -> Evidence:
     """The one function every disk read `verify` performs funnels through.
 
@@ -195,6 +276,7 @@ def gather(paper_dir: Path, sections_dir: Path) -> Evidence:
     }
 
     blocks_by_fact = _blocks_by_fact(sections_dir)
+    figure_semantics = _figure_semantics(paper_dir, sections_dir)
 
     return Evidence(
         paper_dir=paper_dir,
@@ -206,4 +288,5 @@ def gather(paper_dir: Path, sections_dir: Path) -> Evidence:
         contract_drift=contract_drift,
         block_bodies=block_bodies,
         blocks_by_fact=blocks_by_fact,
+        figure_semantics=figure_semantics,
     )

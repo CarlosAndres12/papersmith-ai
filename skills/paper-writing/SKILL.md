@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify, figure optimize, figure audit. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -13,7 +13,7 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Seventeen verbs, wired into one front door (`scripts/paper_cli.py`):
+Nineteen verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `declare`, `observe` (validates an
@@ -25,9 +25,10 @@ the verdict/placement gate — `no-claim-without-a-source-that-holds-it`),
 `write` (evidence-bound drafting, contract audit and the style-leak proof —
 `the-writer-may-assert-only-what-it-was-given`), `render`/`place` (a
 diagram that compiles or says why, the repair-budget ledger, and the
-data-figure boundary — `a-diagram-that-compiles-or-says-why`), and `verify`
+data-figure boundary — `a-diagram-that-compiles-or-says-why`), `verify`
 (read-only coupling verification, citation integrity and contract currency —
-`the-couplings-hold-or-they-do-not`). To the substitution engine, block ids
+`the-couplings-hold-or-they-do-not`), and `figure optimize`/`figure audit`
+(the TikZ optimizer and the figure-prose semantic auditor). To the substitution engine, block ids
 stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
 contract reader is what says which ids exist, what each requires, and where
 in the document they belong, entirely over in `sections/*.md`.
@@ -504,6 +505,25 @@ existing `substitute` verb's `\includegraphics`; no TikZ byte ever enters
 | `render --figure-id <id> --section <stem> --block <id> [--sections <dir>] [--paper <dir>]` | The same compile, and then the full obligation suite (components — only when the block declares `components_from`, excludes, caption, mandatory, cross-diagram separation) against the block's own `figure:` declaration | adds `MALFORMED_FIGURE_OBLIGATION`, `COMPONENT_MISMATCH`, `COMPONENTS_FACT_UNRESOLVED`, `COMPONENTS_FACT_NOT_A_LIST`, `EXCLUDED_COMPONENT`, `SHARED_COMPONENT`, `CAPTION_INCOMPLETE`, `MANDATORY_DIAGRAM_ABSENT` |
 | `render --figure-id <id> --acknowledge-reset [--paper <dir>]` | The explicit operator acknowledgement that clears a spent ledger — compiles nothing, never combined with a compile in the same call | (none beyond `render`'s own) |
 | `place --figure-id <id> --pdf <path> --provenance <path> [--paper <dir>]` | Places an already-measured figure's PDF — compiles nothing, requires a provenance record naming the run that produced it | `DIAGRAM_SOURCE_ABSENT` (reused: the named artifact this call needs is absent) |
+| `figure optimize --figure-id <id> [--in-place \| --output <path>] [--strip-comments] [--no-compile] [--paper <dir>]` | Rewrites one diagram's TikZ source: prunes the libraries it can **prove** unused, adds the ones it detects as missing, factors repeated option lists into one `\tikzset`, then compiles the candidate and commits it only on a `success` verdict. `background=2pt` headers, relative positioning, and `% node:` markers are preserved by construction | `DIAGRAM_SOURCE_ABSENT`, `DIAGRAM_PLOTS_DATA`, `MANIFEST_SOURCE_MISMATCH`, `LATEX_TOOLCHAIN_ABSENT`, `LATEX_PACKAGE_ABSENT`, `LATEX_OUTCOME_UNEXPLAINED` |
+| `figure optimize --file <path.tex> [--strip-comments]` | Dry run: prints the optimized candidate for one source path and writes nothing (no manifest, so no cross-check applies) | `DIAGRAM_SOURCE_ABSENT` |
+| `figure audit --figure-id <id> --section <stem> [--block <id>] [--sections <dir>] [--paper <dir>]` | Compares the manifest's declared components — **not** every `\node{}` string — against the section prose, and the `components_from` fact's list against both. Emits `verdict` (`pass`/`fail`/`unmeasured`) plus `unmatched_nodes`, `missing_pipeline_steps`, `label_mismatches`, `warnings`, `remediation`, and writes `figure_audit.json` beside the figure's ledger | `DIAGRAM_SOURCE_ABSENT`, `SECTION_CONTRACTS_UNREADABLE`, `BLOCK_ABSENT` |
+| `figure audit --file <path.tex> --manifest <path.json> --section <stem> [--block <id>]` | The same audit for a figure outside `paper/Figures/`; `--file` requires `--manifest` | as above |
+
+**`figure optimize`'s two guards run even under `--no-compile`.** The manifest
+cross-check and stop A are pure text checks, independent of the compiler, so
+the shortcut skips the compiler and nothing else; a candidate failing either is
+discarded with the original left byte-identical. A repairable compile failure
+is likewise an ordinary outcome, not a refusal: the call returns `status: ok`
+with `verdict: "rolled_back"` and the diagnostics. A library `optimize` cannot
+recognize it never removes — it only prunes what it can prove unused.
+
+**`figure audit`'s findings are a verdict, never a refusal.** A `fail` is a
+successful call (`status: ok`, `verdict: fail`), the same way `render` treats a
+repairable compile failure as the loop's ordinary cost. `unmeasured` exists so
+"could not check" never reads as "checked and clean": a figure whose contract
+declares no `components_from`, or a call that omits `--block`, reports
+`unmeasured` rather than a vacuous pass.
 
 **A repairable failure is an ordinary outcome, not a refusal.** `render`
 returns `"status": "ok"`, `"verdict": "failure"` with the parsed
@@ -571,6 +591,19 @@ loop up to the repair budget, stopping at `REPAIR_BUDGET_SPENT` or an
 unrecoverable refusal for the operator to resolve — it never clears a spent
 ledger itself.
 
+**Auditing a diagram against its own prose delegates to the `figure-auditor` agent.**
+It runs `figure audit` and reports that JSON as the authoritative
+semantic verdict, bounds the visual half (overlaps, legibility, out-of-bounds
+text) to the `figure-review` skill when that skill is present — reporting those
+dimensions `unmeasured` when it is not — and checks typographic parity between
+the figure's preamble and the paper's own font setup. It never repairs the
+figure and never reports a visual verdict it did not measure.
+
+**Measure this before delegating (figure-auditor):** confirm the block's
+`figure:` declaration is readable (`contract --file <path>`) and that the
+figure's `<id>.tex` and `<id>.diagram.json` both exist; an agent asked to audit
+a figure it cannot read cannot distinguish "clean" from "unreadable."
+
 **Measure this before delegating (diagram-author):** confirm the block's
 `figure:` declaration is already readable (`contract --file <path>`) and,
 when it declares a `components_from` fact, that fact is already declared
@@ -594,16 +627,30 @@ never repairs anything it finds — `skill-audit`'s own shape, reused here.
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `verify [--sections <dir>]` | Read-only report: `contribution-list`, `chain`, `gap`, `artefacts`, `future-work`, `citations`, `contract-currency` | `DECLARATION_RECORD_ABSENT` |
+| `verify [--sections <dir>]` | Read-only report: `contribution-list`, `chain`, `gap`, `artefacts`, `future-work`, `citations`, `contract-currency`, `figure-semantics` | `DECLARATION_RECORD_ABSENT` |
 
 **Three values, never two.** Every check's own `verdict` is `pass`, `fail`
 or `unmeasured` — `unmeasured` is never folded into `pass`. Two new modules
 carry this: `paper_coupling_evidence.py` (every disk read `verify`
 performs — named to avoid colliding with `paper_evidence.py`, the
 claim<->source evidence module `no-claim-without-a-source-that-holds-it`
-already ships) and `paper_verify.py` (the seven pure checks and the report
+already ships) and `paper_verify.py` (the eight pure checks and the report
 they assemble; an AST lock and an executed before/after content manifest
 both hold it, and `paper_coupling_evidence.py`, to writing nothing).
+
+**The eighth check, `figure-semantics`, reads a dict and imports nothing.**
+`paper_verify.py` is held to an import allowlist of exactly `re`, so it can
+neither parse JSON nor reach the auditor. The invocation therefore lives in
+`paper_coupling_evidence.gather()` — the module that already owns every disk
+read — which runs `paper_figure_audit.audit_semantics` over each figure and
+stores the **already-computed report dict** on `Evidence.figure_semantics`.
+`paper_verify.py` maps that dict's verdict into its own closed
+`pass|fail|unmeasured` vocabulary and never touches a `Path`-typed field. No
+figure at all reports `unmeasured`, reason `NO_FIGURE_DECLARED`; a figure the
+audit could not compare reports `unmeasured`, reason
+`FIGURE_SEMANTICS_UNMEASURED`. The dependency direction is one-way:
+`paper_coupling_evidence.py` may import `paper_figure_audit.py`; the auditor
+may not import the reader or `paper_verify.py`.
 
 **`verify` reads its own declaration record, `paper/couplings.json` —
 read-only, untracked like `main.tex` itself, and written by nobody this

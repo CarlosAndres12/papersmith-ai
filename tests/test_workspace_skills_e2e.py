@@ -41,7 +41,7 @@ SKILL_NAMES = (
 PAPER_WRITING_VERBS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness",
     "order", "declare", "observe", "resolve", "bib", "validate", "plan",
-    "write", "render", "verify", "place",
+    "write", "render", "verify", "place", "figure",
 )
 
 
@@ -89,7 +89,7 @@ class SkillTreeTests(unittest.TestCase):
 class SkillFrontDoorTests(unittest.TestCase):
     """Each shipped front door explains its own accepted set, offline."""
 
-    def test_paper_writing_front_door_lists_its_seventeen_verbs(self) -> None:
+    def test_paper_writing_front_door_lists_its_nineteen_verbs(self) -> None:
         workspace = make_workspace(new_tmp(self))
         proc = run_workspace_script(workspace, "skills/paper-writing/scripts/paper_cli.py", ["--help"])
         self.assertEqual(proc.returncode, 0, proc.stderr)

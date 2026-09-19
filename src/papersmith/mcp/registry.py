@@ -36,6 +36,7 @@ PAPER_VERBS: tuple[str, ...] = (
     "render",
     "place",
     "verify",
+    "figure",
 )
 
 #: The orchestrator CLI's own command roster (``cli._REGISTRY``).
@@ -1060,6 +1061,15 @@ CLI_DISPOSITIONS: dict[str, str] = {
 }
 
 PAPER_DISPOSITIONS: dict[str, str] = {
-    verb: ("deferred" if verb in {"resolve", "render"} else "exposed")
+    verb: (
+        "deferred" if verb in {"resolve", "render"}
+        # `figure` bundles a READ-ONLY verb (`audit`) and a SOURCE-MUTATING one
+        # (`optimize`) under a single namespace, so one MCP tool spec would have
+        # to state one `readOnlyHint`/`destructiveHint` pair and be wrong about
+        # the other half. Declared out rather than exposed with a hint that
+        # lies; `PAPER_VERBS` still carries it, so the roster stays total.
+        else "out" if verb == "figure"
+        else "exposed"
+    )
     for verb in PAPER_VERBS
 }

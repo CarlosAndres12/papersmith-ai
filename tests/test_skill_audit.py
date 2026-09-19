@@ -8944,12 +8944,18 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
     #: hardcodes `9` for `proposal-deliberation`: it is the number the
     #: subject's own refusal names today, and a real change to that number
     #: is exactly what a hardcoded count exists to catch.
+    #:
+    #: `paper-writing` moved from 17 to 18 when `figure` (the
+    #: `figure optimize` / `figure audit` namespace) was wired into
+    #: `paper_cli.py`: the roster is derived from the subject's own refusal,
+    #: so a new verb that reached the CLI and not this number would be the
+    #: drift this table exists to report, not a stale expectation to relax.
     _CASES = (
         ("paper-ingestion", 4),
         ("experimental-deliberation", 9),
         ("experimental-implementation", 22),
         ("kaggle-accounts", 5),
-        ("paper-writing", 17),
+        ("paper-writing", 18),
     )
 
     def test_each_new_recipe_derives_a_real_nonempty_roster(self):

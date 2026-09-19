@@ -56,6 +56,8 @@ import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-g
 import paper_latex  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the sole subprocess seam (latexmk), invocation, log parse, verdict; for the roster derivation
 import paper_figure  # noqa: E402 -- a-diagram-that-compiles-or-says-why: source/manifest layout, stop A, the compile pipeline, the repair-budget ledger; `render`/`place` verbs
 import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: components/separation/caption/mandatory checks over the contract's `figure:` declaration; imported ahead of any verb calling it directly (the same shape `paper_region.py`/`paper_guidance.py` already established) so its refusals are reachable the moment the import lands
+import paper_tikz  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the pure TikZ optimization transforms (`figure optimize`); imported ahead of its verb wiring, the same shape `paper_region.py`/`paper_guidance.py`/`paper_obligation.py` already established, and required the moment the module exists (`ModuleCompletenessTests`)
+import paper_figure_audit  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the figure-prose semantic auditor (`figure audit`, and `verify`'s eighth check through `paper_coupling_evidence.gather`); imported ahead of its verb wiring for the same `ModuleCompletenessTests` reason
 import paper_coupling_evidence  # noqa: E402 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module)
 import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`)
 
@@ -811,6 +813,123 @@ def cmd_place(args: argparse.Namespace) -> dict:
     )
 
 
+def cmd_figure(args: argparse.Namespace) -> dict:
+    """`figure`: one nested namespace over the two halves of this skill's
+    diagram capability — `optimize` (rewrite a source, compile-validated)
+    and `audit` (compare a source against the prose that describes it).
+
+    Nested the way `bib build` already is. `render`/`place` stay top-level:
+    moving them would break every call site and every document that names
+    them, for no gain.
+    """
+    if args.figure_command == "optimize":
+        return _cmd_figure_optimize(args)
+    return _cmd_figure_audit(args)
+
+
+def _cmd_figure_optimize(args: argparse.Namespace) -> dict:
+    """`--figure-id` is the guarded path: the manifest is read from this
+    skill's own layout, so the always-run cross-check has something to check
+    against. `--file` alone is a DRY RUN by construction — it has no
+    manifest, so it prints the candidate and writes nothing. `--file` with
+    `--in-place`/`--output` still runs stop A and the compile; it simply has
+    no manifest to cross-check, which is a different fact from skipping it.
+    """
+    if args.file:
+        if not args.in_place and not args.output:
+            return paper_figure.render_optimized_text(
+                Path(args.file), strip_comments=args.strip_comments,
+            )
+        return paper_figure.optimize_source(
+            Path(args.file),
+            output=Path(args.output) if args.output else None,
+            strip_comments=args.strip_comments,
+            compile_candidate=not args.no_compile,
+            path=args.latexmk_path,
+        )
+
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_figure.optimize_figure(
+        paper_dir, args.figure_id,
+        strip_comments=args.strip_comments,
+        compile_candidate=not args.no_compile,
+        output=Path(args.output) if args.output else None,
+        path=args.latexmk_path,
+    )
+
+
+def _cmd_figure_audit(args: argparse.Namespace) -> dict:
+    """`figure audit`: the findings are a verdict, never a refusal — a
+    failing audit is a successful call (`status: ok`, `verdict: fail`), the
+    same way `render` treats an ordinary repairable compile failure as the
+    loop's ordinary cost. Only an unreadable invocation refuses, and it
+    reuses `SECTION_CONTRACTS_UNREADABLE`/`DIAGRAM_SOURCE_ABSENT` rather
+    than inventing a code for a condition the repo already names.
+    """
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    section_path = sections_dir / f"{args.section}.md"
+    if not section_path.is_file():
+        raise Refused(
+            "SECTION_CONTRACTS_UNREADABLE", f"{section_path} does not exist as a section file",
+        )
+    header, body = paper_contract.parse(section_path.read_bytes())
+
+    paper_dir = None
+    scratch_dir = None
+    if args.figure_id:
+        paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+        paths = paper_figure.figure_paths(paper_dir, args.figure_id)
+        tex_path, manifest_path, scratch_dir = paths["tex"], paths["manifest"], paths["scratch"]
+    else:
+        if not args.manifest:
+            raise Refused("DIAGRAM_SOURCE_ABSENT", "--file requires --manifest")
+        tex_path, manifest_path = Path(args.file), Path(args.manifest)
+
+    if not tex_path.is_file() or not manifest_path.is_file():
+        raise Refused(
+            "DIAGRAM_SOURCE_ABSENT",
+            f"{tex_path} and {manifest_path} must both exist to audit a figure",
+        )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    contract_figure = None
+    expected_components = None
+    if args.block:
+        block = next((entry for entry in header.blocks if entry["id"] == args.block), None)
+        if block is None:
+            raise Refused(
+                "BLOCK_ABSENT", f"{args.block!r} is not a block of {args.section!r}",
+            )
+        contract_figure = block["figure"]
+        if contract_figure is not None and contract_figure.get("components_from") is not None:
+            # An unresolved fact is `unmeasured`, not a refusal: the audit's
+            # own third value exists so "could not check" never reads as
+            # "checked and clean".
+            try:
+                expected_components = _resolve_expected_components(
+                    paper_dir or paper_scaffold.resolve_paper_dir(args.paper),
+                    contract_figure["components_from"],
+                )
+            except Refused:
+                expected_components = None
+
+    report = paper_figure_audit.audit_semantics(
+        tex=tex_path.read_text(encoding="utf-8"),
+        manifest=manifest,
+        section_text=body.decode("utf-8", errors="replace"),
+        contract_figure=contract_figure,
+        expected_components=expected_components,
+    )
+    report["figureId"] = args.figure_id or tex_path.stem
+    report["evidence"]["section"] = f"{args.section}.md"
+    if scratch_dir is not None:
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        (scratch_dir / "figure_audit.json").write_text(
+            json.dumps(report, indent=2), encoding="utf-8",
+        )
+    return report
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="paper_cli.py")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1087,12 +1206,81 @@ def build_parser() -> argparse.ArgumentParser:
         help="path to a JSON record naming the run this figure was measured from",
     )
 
+    p_figure = sub.add_parser(
+        "figure", help="optimize a diagram's TikZ source, or audit it against the prose",
+    )
+    figure_sub = p_figure.add_subparsers(dest="figure_command", required=True)
+
+    p_figure_optimize = figure_sub.add_parser(
+        "optimize",
+        help="compact and compile-validate one TikZ source: prune provably-unused libraries, "
+             "add detected-missing ones, factor repeated styles into one \\tikzset",
+    )
+    p_figure_optimize.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    figure_source = p_figure_optimize.add_mutually_exclusive_group(required=True)
+    figure_source.add_argument(
+        "--figure-id",
+        help="the diagram id under paper/Figures/; reads its manifest and writes back in place",
+    )
+    figure_source.add_argument(
+        "--file",
+        help="a .tex path; alone it is a dry run that prints the candidate and writes nothing",
+    )
+    figure_destination = p_figure_optimize.add_mutually_exclusive_group()
+    figure_destination.add_argument(
+        "--output", default=None, help="write the optimized source here instead of in place",
+    )
+    figure_destination.add_argument(
+        "--in-place", action="store_true", help="write back over the source (the default for --figure-id)",
+    )
+    p_figure_optimize.add_argument(
+        "--strip-comments", action="store_true",
+        help="drop comment text; %% node: markers and %%! directives are always preserved",
+    )
+    p_figure_optimize.add_argument(
+        "--no-compile", action="store_true",
+        help="skip compile-validation (unsafe: stop A and the manifest cross-check still run)",
+    )
+    p_figure_optimize.add_argument(
+        "--latexmk-path", default=None,
+        help="test-only: override the PATH shutil.which searches for latexmk",
+    )
+
+    p_figure_audit = figure_sub.add_parser(
+        "audit",
+        help="verify a diagram's declared components against its section's prose "
+             "(pass | fail | unmeasured; a content finding is never a refusal)",
+    )
+    p_figure_audit.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_figure_audit.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    figure_audit_source = p_figure_audit.add_mutually_exclusive_group(required=True)
+    figure_audit_source.add_argument("--figure-id", help="the diagram id under paper/Figures/")
+    figure_audit_source.add_argument("--file", help="a .tex path; requires --manifest")
+    p_figure_audit.add_argument(
+        "--manifest", default=None, help="the <id>.diagram.json to compare against; required with --file",
+    )
+    p_figure_audit.add_argument("--section", required=True, help="the sections/<id>.md stem")
+    p_figure_audit.add_argument(
+        "--block", default=None,
+        help="the block whose figure: obligation this diagram answers (optional; without it the "
+             "audit reports unmeasured rather than guessing a binding)",
+    )
+
     return parser
 
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "observe",
-    "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
+    "plan", "resolve", "bib", "validate", "write", "render", "place", "verify", "figure",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1112,6 +1300,7 @@ _COMMANDS = {
     "render": cmd_render,
     "place": cmd_place,
     "verify": cmd_verify,
+    "figure": cmd_figure,
 }
 
 

@@ -1,4 +1,4 @@
-"""paper_verify: seven pure checks over a `paper_coupling_evidence.Evidence`,
+"""paper_verify: eight pure checks over a `paper_coupling_evidence.Evidence`,
 and the report they assemble into (`the-couplings-hold-or-they-do-not`).
 
 Every function below is a pure function of an already-built `Evidence`
@@ -9,7 +9,8 @@ a side can be derived, publish the provenance of every side that cannot,
 report, never repair.
 
 `CHECKS` is one closed roster (contribution-list, chain, gap, artefacts,
-future-work, citations, contract-currency); `run()` is held to producing
+future-work, citations, contract-currency, figure-semantics); `run()` is
+held to producing
 exactly one report object per member, in both directions
 (`ReportShapeTests`). `UNMEASURED_REASONS` is a second closed roster; every
 member is proven reachable by a fixture elsewhere in the suite.
@@ -45,6 +46,7 @@ CHECKS: tuple[str, ...] = (
     "future-work",
     "citations",
     "contract-currency",
+    "figure-semantics",
 )
 
 #: Every reason a check's `unmeasured_reason` may carry. Closed: a check
@@ -56,6 +58,13 @@ UNMEASURED_REASONS: tuple[str, ...] = (
     "BLOCK_NOT_DECLARED",
     "ASSISTED_READING_REQUIRED",
     "CONTRACT_RECORD_ABSENT",
+    # `figure-semantics`'s own two reasons. `NO_FIGURE_DECLARED` is "the
+    # paper declares no figure at all, so there is nothing to compare";
+    # `FIGURE_SEMANTICS_UNMEASURED` is "a figure exists but the audit could
+    # not reach a verdict" — kept distinct because they are different facts
+    # about the paper, and folding either into the other would hide which.
+    "NO_FIGURE_DECLARED",
+    "FIGURE_SEMANTICS_UNMEASURED",
 )
 
 _VERDICTS = ("pass", "fail", "unmeasured")
@@ -452,6 +461,47 @@ def check_contract_currency(evidence) -> dict:
     )
 
 
+def check_figure_semantics(evidence) -> dict:
+    """Check C (`a-diagram-that-compiles-or-says-why`'s semantic half).
+
+    Reads ONLY the already-computed `evidence.figure_semantics` dict that
+    `paper_coupling_evidence.gather()` stored. It imports nothing, opens
+    nothing, and touches no `Path`-typed field — the invocation moved into
+    the reader precisely so this module's import allowlist could stay at
+    `re` rather than being widened to admit `json` and the auditor.
+
+    A manifest component the section prose never names is the
+    phantom-component case; a `components_from` step absent from both the
+    manifest and the prose is the missing-stage case. Both are `fail`. An
+    audit that could not compare anything is `unmeasured`, never `pass` —
+    the third value exists exactly so "could not check" is not reported as
+    agreement.
+    """
+    semantics = evidence.figure_semantics
+    if semantics is None:
+        return _unmeasured("figure-semantics", "mechanical", "NO_FIGURE_DECLARED")
+
+    if semantics.get("verdict") == "unmeasured":
+        return _unmeasured(
+            "figure-semantics", "mechanical", "FIGURE_SEMANTICS_UNMEASURED",
+            evidence={"figures": semantics.get("figures", {})},
+        )
+
+    return _entry(
+        "figure-semantics", classification="mechanical",
+        verdict=semantics.get("verdict", "unmeasured"),
+        sides=[
+            {
+                "name": "figure manifest components", "source": "declared",
+                "origin": "paper/Figures/<id>.diagram.json",
+            },
+            {"name": "section prose", "source": "derived", "origin": "sections/*.md bodies"},
+        ],
+        evidence={"figures": semantics.get("figures", {})},
+        limits=[], unmeasured_reason=None,
+    )
+
+
 _CHECK_FUNCTIONS = {
     "contribution-list": check_contribution_list,
     "chain": check_chain,
@@ -460,6 +510,7 @@ _CHECK_FUNCTIONS = {
     "future-work": check_future_work,
     "citations": check_citations,
     "contract-currency": check_contract_currency,
+    "figure-semantics": check_figure_semantics,
 }
 assert set(_CHECK_FUNCTIONS) == set(CHECKS), "every CHECKS member needs exactly one function, and the reverse"
 
