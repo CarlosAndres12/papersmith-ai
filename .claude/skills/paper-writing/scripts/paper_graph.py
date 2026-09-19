@@ -159,8 +159,10 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                 qualified_id=qualified_id,
                 block_index=index,
                 position=header.position,
-                requires_facts=tuple(raw_block["requires_facts"]),
-                requires_declarations=tuple(raw_block["requires_declarations"]),
+                requires_facts=paper_contract.requirement_values(raw_block["requires_facts"]),
+                requires_declarations=paper_contract.requirement_values(
+                    raw_block["requires_declarations"]
+                ),
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
             )

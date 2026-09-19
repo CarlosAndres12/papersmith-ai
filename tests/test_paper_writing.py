@@ -1015,6 +1015,261 @@ class ModeWideningTests(unittest.TestCase):
                 self.assertIsNotNone(resolved, (path.name, block["id"]))
 
 
+class RequirementEntryShapeTests(unittest.TestCase):
+    """`the-requirement-names-the-sentence-that-demands-it` — Work Unit U1.
+    `section-contract` spec delta, `Requirement: Front Matter Schema`
+    (widened `requires_facts` / `requires_declarations` entry shape);
+    `requirement-transcription` spec, `Requirement: Transcribed
+    Requirement Entries Only`. U1 leaves the corpus-wide quote gate
+    (`requirement-transcription`'s own `assemble_corpus` wiring, U3)
+    INERT — every test here proves the SHAPE layer alone: a bare id
+    string still parses, and a rich `{value, source}` object either
+    parses or refuses on its own shape, with no quote ever checked
+    against a body at this layer (design.md D2: "`paper_contract`
+    validates shape only")."""
+
+    def _header(self, *, fact=None, declaration=None) -> dict:
+        block = {
+            "id": "b1",
+            "requires_facts": [fact] if fact is not None else [],
+            "requires_declarations": [declaration] if declaration is not None else [],
+            "citations": "none",
+        }
+        return {"section": "demo", "position": 1, "blocks": [block]}
+
+    def _rich(self, value: str, *, file: str = "demo.md", quote: str = "some prose") -> dict:
+        return {"value": value, "source": {"file": file, "quote": quote}}
+
+    def test_a_bare_fact_string_still_parses_and_normalizes_to_a_null_sourced_entry(self) -> None:
+        header = paper_contract.parse_header(self._header(fact="contributions"))
+        self.assertEqual(
+            header.blocks[0]["requires_facts"],
+            [{"value": "contributions", "source": None}],
+        )
+
+    def test_a_bare_declaration_string_still_parses_and_normalizes_to_a_null_sourced_entry(
+        self,
+    ) -> None:
+        header = paper_contract.parse_header(self._header(declaration="author-roles"))
+        self.assertEqual(
+            header.blocks[0]["requires_declarations"],
+            [{"value": "author-roles", "source": None}],
+        )
+
+    def test_reparsing_a_bare_entrys_own_normalized_output_is_a_fixed_point(self) -> None:
+        """The same `raw.get(...) is not None` round-trip convention
+        `mode` and `figure` already use (design.md D3, "Round-trip holds
+        throughout"): this parser's own `{"value": ..., "source": None}`
+        output, fed back in as the raw entry, MUST normalize to the
+        identical shape — never refuse on its own null `source`, since
+        `header.blocks` re-serializes verbatim through
+        `paper_graph.assemble_corpus` and this suite's own fixtures."""
+        once = paper_contract.parse_header(self._header(fact="contributions"))
+        normalized_entry = once.blocks[0]["requires_facts"][0]
+        twice = paper_contract.parse_header(self._header(fact=normalized_entry))
+        self.assertEqual(twice.blocks[0]["requires_facts"], once.blocks[0]["requires_facts"])
+        self.assertEqual(twice.blocks[0]["requires_facts"], [{"value": "contributions", "source": None}])
+
+    def test_a_rich_fact_entry_parses_and_carries_its_source(self) -> None:
+        header = paper_contract.parse_header(
+            self._header(fact=self._rich("contributions", file="06-introduction.md", quote="Prose."))
+        )
+        self.assertEqual(
+            header.blocks[0]["requires_facts"],
+            [{"value": "contributions", "source": {"file": "06-introduction.md", "quote": "Prose."}}],
+        )
+
+    def test_a_rich_entry_with_an_explicit_null_source_also_round_trips(self) -> None:
+        """A dict entry MAY declare `source: null` directly (not only as
+        this function's own transient output) — the same key-present,
+        value-null convention `mode`/`figure` already use, held here as
+        `None` rather than validated."""
+        header = paper_contract.parse_header(
+            self._header(fact={"value": "contributions", "source": None})
+        )
+        self.assertEqual(
+            header.blocks[0]["requires_facts"],
+            [{"value": "contributions", "source": None}],
+        )
+
+    def test_a_rich_entry_missing_source_refuses_malformed_header_naming_source(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact={"value": "contributions"}))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_a_rich_entry_with_an_unknown_key_refuses_malformed_header_naming_it(self) -> None:
+        broken = dict(self._rich("contributions"), extra_key="nope")
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("extra_key", ctx.exception.detail)
+
+    def test_a_rich_entry_with_a_non_string_value_refuses_malformed_header(self) -> None:
+        """Mirrors `_validate_mode_object`'s own `mode.value` check."""
+        broken = dict(self._rich("contributions"), value=42)
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+
+    def test_a_rich_entry_with_a_non_object_source_refuses_malformed_header(self) -> None:
+        broken = dict(self._rich("contributions"), source="not-an-object")
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact=broken))
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+
+    def test_an_unknown_bare_fact_still_refuses_unknown_fact(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact="not-a-real-fact"))
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_an_unknown_rich_facts_value_still_refuses_unknown_fact(self) -> None:
+        """Task 1.11: `UNKNOWN_FACT` keeps firing, now reading
+        `entry["value"]` rather than the bare string itself."""
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(fact=self._rich("not-a-real-fact")))
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_an_unknown_bare_declaration_still_refuses_unknown_declaration(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(self._header(declaration="not-a-real-declaration"))
+        self.assertEqual(ctx.exception.code, "UNKNOWN_DECLARATION")
+
+    def test_an_unknown_rich_declarations_value_still_refuses_unknown_declaration(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse_header(
+                self._header(declaration=self._rich("not-a-real-declaration"))
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_DECLARATION")
+
+    def test_requirement_values_derives_the_plain_tuple_in_declaration_order(self) -> None:
+        entries = [
+            {"value": "contributions", "source": None},
+            self._rich("dataset", file="06-introduction.md", quote="Prose."),
+        ]
+        self.assertEqual(paper_contract.requirement_values(entries), ("contributions", "dataset"))
+
+    def test_block_record_derives_plain_tuples_from_the_real_shipped_corpus(self) -> None:
+        """`requirement-transcription` spec, `Requirement: Derived Plain
+        Tuple For Downstream Consumers`: `BlockRecord.requires_facts` /
+        `.requires_declarations` stay plain tuples of ids over the real
+        corpus, with no rich shape leaking through — proven against
+        `sections/*.md` as shipped today (every entry still a bare
+        string; U2 is what starts transcribing some of them)."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        for record in corpus.blocks.values():
+            for value in record.requires_facts:
+                self.assertIsInstance(value, str)
+            for value in record.requires_declarations:
+                self.assertIsInstance(value, str)
+
+
+def _requirement_subscript_violations(root: Path) -> dict:
+    """AST scan (design.md D1): no module OTHER than `paper_contract.py`
+    may subscript `["requires_facts"]` / `["requires_declarations"]` on a
+    parsed block dict except as a direct argument to
+    `paper_contract.requirement_values(...)` — the single legitimate
+    derivation point. `paper_contract.py` is exempt: it is where the dict
+    is BUILT (`_parse_block`'s own `raw["requires_facts"]`), never read
+    back through the accessor it defines.
+
+    Every `ast.Subscript` node whose slice is a string constant equal to
+    one of the two target keys is a candidate; it is excluded only when it
+    sits (anywhere in its own subtree) inside the argument list of a call
+    whose `func` is an `ast.Attribute` named `requirement_values` — the
+    exact shape both real call sites (`paper_graph.py`, `paper_cli.py`)
+    use: `paper_contract.requirement_values(raw_block["requires_facts"])`.
+    """
+    target_keys = {"requires_facts", "requires_declarations"}
+    violations: dict = {}
+    for path in sorted(root.glob("*.py")):
+        if path.name == "paper_contract.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        allowed_ids: set = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "requirement_values"
+            ):
+                for arg in node.args:
+                    for sub in ast.walk(arg):
+                        allowed_ids.add(id(sub))
+        found: list = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Subscript):
+                continue
+            key_node = node.slice
+            if isinstance(key_node, ast.Constant) and key_node.value in target_keys:
+                if id(node) not in allowed_ids:
+                    found.append(key_node.value)
+        if found:
+            violations[path.name] = found
+    return violations
+
+
+class RequirementSubscriptSingleDerivationTests(unittest.TestCase):
+    """design.md D1: "A second path is made unreachable by an AST test
+    over `scripts/*.py`: no module outside `paper_contract` may subscript
+    `["requires_facts"]` / `["requires_declarations"]` on a parsed block
+    dict except through" `requirement_values`. Two representations can
+    drift only if a second construction path exists; this guard makes
+    that path structurally unreachable rather than merely convention."""
+
+    def test_no_shipped_script_outside_paper_contract_subscripts_the_two_keys_directly(
+        self,
+    ) -> None:
+        self.assertEqual(_requirement_subscript_violations(SKILL_SCRIPTS), {})
+
+    def test_a_planted_direct_subscript_is_caught(self) -> None:
+        """Mutation proof: a synthetic module reading
+        `block["requires_facts"]` OUTSIDE a `requirement_values(...)` call
+        is exactly the second derivation path this guard exists to make
+        unreachable. Planted in a temp directory rather than the shipped
+        tree, since mutating the REAL construction sites would break
+        every other test in this suite that assembles the corpus."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / "evil.py").write_text(
+                'def f(block):\n    return tuple(block["requires_facts"])\n',
+                encoding="utf-8",
+            )
+            violations = _requirement_subscript_violations(tmp_dir)
+        self.assertIn("evil.py", violations)
+        self.assertIn("requires_facts", violations["evil.py"])
+
+    def test_a_direct_argument_to_requirement_values_is_not_flagged(self) -> None:
+        """The two REAL call sites this accessor exists for
+        (`paper_graph.py`'s `BlockRecord` construction, `paper_cli.py`'s
+        `BlockContract` construction) both subscript the raw dict AS the
+        argument to `paper_contract.requirement_values(...)` — proving the
+        scanner recognizes that shape as the single legitimate derivation
+        point, not a false positive the shipped-tree test above would
+        otherwise silently hide."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / "good.py").write_text(
+                "import paper_contract\n\n\n"
+                "def f(block):\n"
+                '    return paper_contract.requirement_values(block["requires_facts"])\n',
+                encoding="utf-8",
+            )
+            violations = _requirement_subscript_violations(tmp_dir)
+        self.assertEqual(violations, {})
+
+    def test_paper_contract_py_itself_is_exempt_from_the_scan(self) -> None:
+        """`paper_contract.py` DOES subscript both keys directly today
+        (`_parse_block`'s own `raw["requires_facts"]` /
+        `raw["requires_declarations"]`) — proving the exemption is real,
+        not vacuous: a scan that failed to exempt it would fail on the
+        shipped tree for the wrong reason."""
+        contract_source = (SKILL_SCRIPTS / "paper_contract.py").read_text(encoding="utf-8")
+        self.assertIn('raw["requires_facts"]', contract_source)
+        violations = _requirement_subscript_violations(SKILL_SCRIPTS)
+        self.assertNotIn("paper_contract.py", violations)
+
+
 class ContractHeaderTests(unittest.TestCase):
     """`a-diagram-that-compiles-or-says-why`, `section-contract` spec
     delta: `figure` joins `_BLOCK_OPTIONAL`, five subkeys required and

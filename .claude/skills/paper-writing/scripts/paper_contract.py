@@ -92,6 +92,13 @@ _SOURCE_REQUIRED = ("file", "quote")
 #: Closed Mode Vocabulary And Transcription`). Reuses `_validate_source`
 #: below rather than a second copy of the same three checks.
 _MODE_REQUIRED = ("value", "source")
+#: `requires_facts` / `requires_declarations` entry shape
+#: (`requirement-transcription` spec, `Requirement: Transcribed Requirement
+#: Entries Only`; `section-contract` spec, `Requirement: Front Matter
+#: Schema`). U1: a bare string still parses (normalizes to
+#: `{"value": raw, "source": None}`); a dict entry MUST carry both keys.
+#: U3 removes bare-string acceptance — see `_normalize_requirement_entry`.
+_REQUIREMENT_REQUIRED = ("value", "source")
 
 #: The transcription lock's own emphasis strip — a closed, enumerated pair
 #: of markdown constructs, never a bare-character removal (corrective:
@@ -246,6 +253,66 @@ def _validate_mode_object(raw, owner: str) -> dict:
     return {"value": value, "source": dict(source)}
 
 
+def _normalize_requirement_entry(raw, validate, owner: str) -> dict:
+    """The single normalization point for one `requires_facts` /
+    `requires_declarations` entry (`requirement-transcription` spec,
+    `Requirement: Transcribed Requirement Entries Only`; design.md D1: "the
+    plain id list is never stored, only derived at read time through one
+    accessor"). `validate` is the caller's own closed-vocabulary check
+    (`paper_vocabulary.validate_fact` or `validate_declaration`), applied to
+    the id either way so a bare string and a rich `value` are held to the
+    same vocabulary.
+
+    U1/U2: a bare string still parses, normalizing to
+    `{"value": raw, "source": None}`. A dict entry MUST carry exactly the
+    two keys `value` (a string, validated) and `source` — the KEY must be
+    present (an entirely absent `source` refuses `MALFORMED_HEADER` naming
+    it), but the same `raw.get(...) is not None` round-trip convention
+    `mode` and `figure` already use applies to its VALUE: an explicit
+    `source: null` is held as `None` rather than validated, so this
+    function's own bare-string output (`{"value": ..., "source": None}`)
+    re-parses to the identical shape — the fixed point design.md's
+    "Round-trip holds throughout" requires. A non-null `source` goes
+    through `_validate_source`, the same `{file, quote}` shape enforced for
+    `after` and `mode`. An unknown key or a non-string `value` refuses
+    `MALFORMED_HEADER` naming it, mirroring `_validate_mode_object`. U3
+    removes the bare-string branch entirely (design.md D3), making a
+    non-null `source` unconditionally required.
+    """
+    if isinstance(raw, str):
+        validate(raw)
+        return {"value": raw, "source": None}
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry must be a string or an object")
+    missing = [key for key in _REQUIREMENT_REQUIRED if key not in raw]
+    if missing:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry missing {missing[0]!r}")
+    unknown = [key for key in raw if key not in _REQUIREMENT_REQUIRED]
+    if unknown:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry carries unknown key {unknown[0]!r}")
+    value = raw["value"]
+    if not isinstance(value, str):
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry 'value' must be a string")
+    validate(value)
+    source = raw["source"]
+    if source is not None:
+        source = dict(_validate_source(source, owner))
+    return {"value": value, "source": source}
+
+
+def requirement_values(entries) -> tuple:
+    """The ONLY way a caller turns `requires_facts` / `requires_declarations`
+    entries into a plain tuple of ids, in declaration order (design.md D1:
+    "the plain tuple exists only as a transient at two construction
+    sites"). Nothing stores the result; every caller — `paper_graph`'s
+    `BlockRecord` construction and `paper_cli.py`'s `BlockContract`
+    construction — derives it fresh at the point of use, so two
+    representations can never drift. An AST scan over `scripts/*.py`
+    (`tests/test_paper_writing.py`) asserts no other module subscripts a
+    parsed block's `["requires_facts"]` / `["requires_declarations"]`."""
+    return tuple(entry["value"] for entry in entries)
+
+
 def _parse_figure(raw, owner: str) -> dict:
     """`diagram-obligation` spec, `Requirement: Obligations Read From
     Contract Front Matter`; `section-contract` spec, `Requirement: Front
@@ -313,19 +380,27 @@ def _parse_block(raw, section: str) -> dict:
     if not isinstance(block_id, str) or not block_id:
         raise Refused("MALFORMED_HEADER", f"{section}: block 'id' must be a non-empty string")
 
-    facts = raw["requires_facts"]
-    if not isinstance(facts, list):
+    facts_raw = raw["requires_facts"]
+    if not isinstance(facts_raw, list):
         raise Refused("MALFORMED_HEADER", f"{section}.{block_id}: 'requires_facts' must be a list")
-    for fact in facts:
-        paper_vocabulary.validate_fact(fact)
+    facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.requires_facts"
+        )
+        for entry in facts_raw
+    ]
 
-    declarations = raw["requires_declarations"]
-    if not isinstance(declarations, list):
+    declarations_raw = raw["requires_declarations"]
+    if not isinstance(declarations_raw, list):
         raise Refused(
             "MALFORMED_HEADER", f"{section}.{block_id}: 'requires_declarations' must be a list"
         )
-    for declaration in declarations:
-        paper_vocabulary.validate_declaration(declaration)
+    declarations = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_declaration, f"{section}.{block_id}.requires_declarations"
+        )
+        for entry in declarations_raw
+    ]
 
     citations = raw["citations"]
     if not isinstance(citations, str):

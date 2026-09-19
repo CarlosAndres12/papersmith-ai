@@ -1452,7 +1452,7 @@ def cmd_write(args: argparse.Namespace) -> dict:
         contract_source=str(section_path),
         citations_regime=block["citations"],
         mode=mode,
-        requires_facts=tuple(block["requires_facts"]),
+        requires_facts=paper_contract.requirement_values(block["requires_facts"]),
         evidence_set=evidence_set,
         style_set=style_set,
     )
