@@ -8,8 +8,13 @@ marker files exist yet. That is designed behavior, not a default and not a
 fault (`specs/guidance-registry/spec.md`).
 
 `guidance/` is not a fact source (`design.md`, `A fact the agent may
-observe is a partition, not a guideline`); this registry feeds only the
-style/evidence classification `plan` reports.
+observe is a partition, not a guideline`); this registry feeds the
+style/evidence classification `plan` reports AND, since
+`the-skill-stops-trusting-memory` item 2/3, gates `validate --source-md`:
+`classify_source_md` is what `paper_cli._build_evidence_record` calls to
+refuse a quote sourced from a `style-reference`-classed folder and accept
+one sourced from an `evidence`-classed folder -- the classification's own
+first real consumer, not merely a label `plan` echoes back.
 
 `ingested_papers(guidance_dir)` (`the-phases-are-derived-not-remembered`)
 is a second, independent walk -- two levels deep, gitignore-blind by
@@ -242,3 +247,30 @@ def read_registry(guidance_dir: Path) -> dict:
             continue
         registry[entry.name] = _classify(entry)
     return registry
+
+
+def classify_source_md(source_md: Path, guidance_dir: Path) -> str | None:
+    """Which `guidance/<root>` folder (per `read_registry`'s own
+    classification) `source_md` resolves inside, or `None` when it does not
+    resolve under `guidance_dir` at all -- a quote sourced from outside the
+    guidance registry entirely is not this function's business, and every
+    caller treats `None` as "no classification to enforce", never as a
+    class of its own.
+
+    Read-only, like every other function in this module: no marker file is
+    ever written here. Reuses `read_registry` verbatim rather than a second
+    walk of `guidance_dir` (`the-skill-stops-trusting-memory`, item 2/3:
+    `validate --source-md` is the first REAL caller of the registry this
+    module has ever had -- `plan`'s own read never gated anything on the
+    result).
+    """
+    try:
+        resolved = source_md.resolve()
+        relative = resolved.relative_to(guidance_dir.resolve())
+    except (OSError, ValueError):
+        return None
+    if not relative.parts:
+        return None
+    root_name = relative.parts[0]
+    registry = read_registry(guidance_dir)
+    return registry.get(root_name, "unclassified")

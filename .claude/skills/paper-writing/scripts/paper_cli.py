@@ -198,6 +198,11 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "GUIDANCE_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
     "UNKNOWN_GUIDANCE_CLASS": WORK_STATE,
     "MALFORMED_GUIDANCE_MARKER": WORK_STATE,
+    # --- the-skill-stops-trusting-memory, item 2/3: the guidance registry's
+    # own classification gates `validate --source-md` for the first time
+    # (paper_cli._guard_source_md_classification) ---------------------------
+    "SOURCE_STYLE_REFERENCE": WORK_STATE,
+    "SOURCE_NOT_EVIDENCE": WORK_STATE,
     # --- the-phases-are-derived-not-remembered, unit 8: `packet`'s own
     # outline assembly over ingested guidance markdown (paper_guidance.
     # read_markdown_outline) -- reachable the instant that raise site
@@ -685,9 +690,47 @@ def _round_for_new_record(existing_records: list[dict]) -> int:
     return max((record.get("round", 0) for record in existing_records), default=0) + 1
 
 
-def _build_evidence_record(args: argparse.Namespace, round_number: int) -> paper_evidence.EvidenceRecord:
+def _guard_source_md_classification(source_md: Path, guidance_dir: Path) -> None:
+    """`the-skill-stops-trusting-memory`, item 2/3: `guidance/`'s per-folder
+    classification (`paper_guidance.CLASSES`) is enforced here for the
+    first time -- `plan` only ever echoed it back before this.
+
+    Refuses `SOURCE_STYLE_REFERENCE` (work-state) when `source_md` resolves
+    inside a folder the registry classes `style-reference`: that class
+    feeds STYLE only, never content, and a quote lifted from one is not
+    evidence no matter how well it locates (`style-channel` spec). Refuses
+    `SOURCE_NOT_EVIDENCE` (work-state) when `source_md` resolves inside a
+    guidance folder classed anything else (`unclassified`, or a future
+    class outside `{"style-reference", "evidence"}`) -- `evidence` is the
+    one class this gate accepts, its own real consequence rather than a
+    label with nothing wired to it. A `source_md` that does not resolve
+    under `guidance_dir` at all (`classify_source_md` returns `None`) is
+    outside this gate's business and is never refused here.
+    """
+    source_class = paper_guidance.classify_source_md(source_md, guidance_dir)
+    if source_class is None:
+        return
+    if source_class == "style-reference":
+        raise Refused(
+            "SOURCE_STYLE_REFERENCE",
+            f"{source_md} resolves inside a guidance folder classed 'style-reference'; "
+            "style-reference feeds style only, never a quote submitted as evidence",
+        )
+    if source_class != "evidence":
+        raise Refused(
+            "SOURCE_NOT_EVIDENCE",
+            f"{source_md} resolves inside a guidance folder classed {source_class!r}, "
+            "not 'evidence'; classify the folder before quoting it as evidence",
+        )
+
+
+def _build_evidence_record(
+    args: argparse.Namespace, round_number: int, guidance_dir: Path,
+) -> paper_evidence.EvidenceRecord:
     if args.quote and args.source_md:
-        span = paper_evidence.EvidenceSpan.locate(Path(args.source_md), args.quote)
+        source_md_path = Path(args.source_md)
+        _guard_source_md_classification(source_md_path, guidance_dir)
+        span = paper_evidence.EvidenceSpan.locate(source_md_path, args.quote)
         if args.verdict == "holds":
             verdict = paper_evidence.Verdict.holds(span)
         elif args.verdict == "does-not-hold":
@@ -742,8 +785,8 @@ def cmd_validate(args: argparse.Namespace) -> dict:
     if args.claim:
         existing = paper_evidence.read_records(paper_dir, args.block)
         round_number = args.round if args.round is not None else _round_for_new_record(existing)
-        record = _build_evidence_record(args, round_number)
         guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+        record = _build_evidence_record(args, round_number, guidance_dir)
         paper_evidence.append_record(paper_dir, record, guidance_dir=guidance_dir)
 
     records = paper_evidence.read_records(paper_dir, args.block)

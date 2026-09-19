@@ -408,19 +408,27 @@ order.
 **`guidance/` classifies as `style-reference` or `evidence`, from a
 per-folder marker only — never a folder's name.** A folder with no
 `.paper-writing.json` reports `unclassified`, including every folder on a
-fresh clone; that is designed behavior, not a fault.
+fresh clone; that is designed behavior, not a fault. Both classes have a
+real, wired consequence: `style-reference` feeds the style channel
+(`packet`/`resolve_style_set`, below) and, since `the-skill-stops-trusting-
+memory`, GATES `validate --source-md` shut (`SOURCE_STYLE_REFERENCE`);
+`evidence` is the one class `validate --source-md` accepts
+(`SOURCE_NOT_EVIDENCE` otherwise) — classifying a folder is no longer a
+label with nothing reading it back.
 
 **`read_registry` and the actual ingested papers live at two different
-depths.** `read_registry` (above, driving `plan`) enumerates exactly one
-level — `guidance/<category>/` — and reports each category's own class or
-`unclassified`. The eight ingested papers this skill ships sit one level
-further down, at `guidance/<category>/<paper>/<paper>.md`; `ingested_papers`
-walks that second level for `packet` below. `guidance/*/*` is a
-`.gitignore` pattern, so `fd`/`rg` report that whole tree empty — both
-readers walk it with `Path.iterdir()`, gitignore-blind by construction,
-never a shell call. None of the four category folders is classified today,
-so the style channel `packet` feeds `write` reports `unmeasured` — correct,
-and the operator's own pending decision, not a defect.
+depths.** `read_registry` (above, driving `plan` and now `validate`)
+enumerates exactly one level — `guidance/<category>/` — and reports each
+category's own class or `unclassified`. The eight ingested papers this
+skill ships sit one level further down, at
+`guidance/<category>/<paper>/<paper>.md`; `ingested_papers` walks that
+second level for `packet` below. `guidance/*/*` is a `.gitignore` pattern,
+so `fd`/`rg` report that whole tree empty — both readers walk it with
+`Path.iterdir()`, gitignore-blind by construction, never a shell call. A
+category folder still unclassified on a given checkout keeps reporting
+`unmeasured` through the style channel, and now refuses `SOURCE_NOT_
+EVIDENCE` from `validate` — correct, and the operator's own pending
+decision, not a defect.
 
 **No `--adopt` exists for either region.** A hand-edited `declarations` or
 `provenance` region refuses (`DECLARATIONS_HAND_EDITED` /
@@ -487,11 +495,21 @@ every claim the block has evidence for holds:
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `validate --block <id> [--claim ... --quote ... --source-md ... --verdict holds\|does-not-hold] [--body <path\|->] [--sentence <json>] [--regime <r> \| --section-md <path>]` | Optionally records one evidence submission, then reports `pending`/`satisfied`/`written`, or refuses on exhaustion | `SPAN_NOT_IN_SOURCE`, `VALIDATE_VERDICT_REQUIRED`, `EVIDENCE_EXHAUSTED`, `CITATION_MULTI_CLAIM_SENTENCE`, `CITATION_NOUN_PHRASE`, `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`, `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT` |
+| `validate --block <id> [--claim ... --quote ... --source-md ... --verdict holds\|does-not-hold] [--body <path\|->] [--sentence <json>] [--regime <r> \| --section-md <path>] [--guidance <dir>]` | Optionally records one evidence submission, then reports `pending`/`satisfied`/`written`, or refuses on exhaustion | `SPAN_NOT_IN_SOURCE`, `VALIDATE_VERDICT_REQUIRED`, `EVIDENCE_EXHAUSTED`, `CITATION_MULTI_CLAIM_SENTENCE`, `CITATION_NOUN_PHRASE`, `CITATION_NOT_AT_SENTENCE_END`, `CITATION_DETACHED_FROM_OBJECT`, `CITATION_UNDER_NONE_REGIME`, `CONTRACT_HEADER_ABSENT`, `SOURCE_STYLE_REFERENCE`, `SOURCE_NOT_EVIDENCE` |
 
 `--section-md <path>` reads `--block`'s `citations` regime straight from an
 already-headered `sections/*.md` file, instead of typing `--regime` by
 hand; an explicit `--regime` always wins when both are given.
+
+**A `--source-md` that resolves inside a `guidance/` folder is gated by
+that folder's own registry class** (`plan`'s `style-reference`/`evidence`
+classification, above — never a second classifier). A folder classed
+`style-reference` refuses `SOURCE_STYLE_REFERENCE`: that class feeds STYLE
+only, and a quote lifted from one is not evidence no matter how well it
+locates. A folder classed anything else — `unclassified` included — refuses
+`SOURCE_NOT_EVIDENCE`: `evidence` is the one class this gate accepts. A
+`--source-md` that does not resolve under `guidance/` at all is outside
+this gate's business and is never refused here.
 
 **Three search rounds per block, then exhaustion.** `insufficient` fails a
 claim exactly as `does-not-hold` does — never a soft `holds`. On the third

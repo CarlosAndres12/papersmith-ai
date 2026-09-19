@@ -10,6 +10,7 @@ so the real repository tree is never touched.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 
 FORGE_ROOT = Path(__file__).resolve().parent.parent
@@ -331,6 +333,205 @@ class GuidanceRegistryMutationTests(unittest.TestCase):
             "tests.test_paper_decisions.GuidanceRegistryTests"
             ".test_fresh_clone_reports_every_folder_unclassified_refuses_nothing",
             source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class SourceMdClassificationTests(unittest.TestCase):
+    """`the-skill-stops-trusting-memory`, item 2/3: `paper_guidance.
+    classify_source_md` -- the pure lookup `validate --source-md`'s guard is
+    built on."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.guidance_dir = self.forge_root / "guidance"
+
+    def _write_marker(self, folder: str, cls: str) -> Path:
+        target = self.guidance_dir / folder
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".paper-writing.json").write_text(json.dumps({"class": cls}), encoding="utf-8")
+        return target
+
+    def test_a_path_under_a_style_reference_folder_classifies_style_reference(self) -> None:
+        folder = self._write_marker("reference-papers", "style-reference")
+        paper_dir = folder / "paper1" / "paper1.md"
+        paper_dir.parent.mkdir(parents=True)
+        paper_dir.write_text("body", encoding="utf-8")
+
+        self.assertEqual(
+            paper_guidance.classify_source_md(paper_dir, self.guidance_dir), "style-reference",
+        )
+
+    def test_a_path_under_an_evidence_folder_classifies_evidence(self) -> None:
+        folder = self._write_marker("data-paper", "evidence")
+        paper_dir = folder / "paper1" / "paper1.md"
+        paper_dir.parent.mkdir(parents=True)
+        paper_dir.write_text("body", encoding="utf-8")
+
+        self.assertEqual(paper_guidance.classify_source_md(paper_dir, self.guidance_dir), "evidence")
+
+    def test_a_path_under_an_unmarked_folder_classifies_unclassified(self) -> None:
+        target = self.guidance_dir / "area-benchmark" / "paper1"
+        target.mkdir(parents=True)
+        md_path = target / "paper1.md"
+        md_path.write_text("body", encoding="utf-8")
+
+        self.assertEqual(
+            paper_guidance.classify_source_md(md_path, self.guidance_dir), "unclassified",
+        )
+
+    def test_a_path_outside_guidance_entirely_classifies_none(self) -> None:
+        outside = Path(self._tmp.name) / "elsewhere" / "paper1.md"
+        outside.parent.mkdir(parents=True)
+        outside.write_text("body", encoding="utf-8")
+
+        self.assertIsNone(paper_guidance.classify_source_md(outside, self.guidance_dir))
+
+
+class ValidateSourceMdGuardTests(unittest.TestCase):
+    """`the-skill-stops-trusting-memory`, item 2/3: `validate --source-md`
+    refuses a `style-reference`-classed source and accepts an
+    `evidence`-classed one -- the exact scenario measured before this
+    change: `validate --block X --quote "<a sentence lifted from a
+    style-reference paper>" --source-md guidance/reference-papers/<paper>/
+    <paper>.md --verdict holds` used to return `satisfied`.
+
+    Runs under the real, non-injectable `FORGE_ROOT` default, the same
+    `implementations/` convention `SkeletonPathContainmentTests`
+    (`tests/test_paper_writing.py`) uses, because `cmd_validate` resolves
+    both `--paper`/`--guidance` through it."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-validate-source-md-guard-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.guidance_dir = self.test_root / "guidance"
+
+    def _write_marker(self, folder: str, cls: str) -> Path:
+        target = self.guidance_dir / folder
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".paper-writing.json").write_text(json.dumps({"class": cls}), encoding="utf-8")
+        return target
+
+    def _write_source(self, folder: Path, text: str) -> Path:
+        paper_dir = folder / "paper1"
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        md_path = paper_dir / "paper1.md"
+        md_path.write_text(text, encoding="utf-8")
+        return md_path
+
+    def _args(self, *, source_md: Path, quote: str) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), block="intro.b1", claim="c1", quote=quote,
+            source_md=str(source_md), verdict="holds", reason=None, cite_key=None,
+            identifier=None, resolver=None, metadata_digest=None, regime="none",
+            section_md=None, round=None, guidance=str(self.guidance_dir), body=None,
+            sentence=None,
+        )
+
+    def test_a_quote_from_a_style_reference_source_refuses(self) -> None:
+        folder = self._write_marker("reference-papers", "style-reference")
+        source_md = self._write_source(folder, "An Explainable Framework Integrating Local")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_validate(self._args(
+                source_md=source_md, quote="An Explainable Framework Integrating Local",
+            ))
+
+        self.assertEqual(ctx.exception.code, "SOURCE_STYLE_REFERENCE")
+        self.assertIn(str(source_md), ctx.exception.detail)
+
+    def test_a_quote_from_an_evidence_source_is_accepted(self) -> None:
+        folder = self._write_marker("data-paper", "evidence")
+        source_md = self._write_source(folder, "scientific data")
+
+        result = paper_cli.cmd_validate(self._args(source_md=source_md, quote="scientific data"))
+
+        self.assertEqual(result["status"], "satisfied")
+
+    def test_a_quote_from_an_unclassified_source_refuses(self) -> None:
+        target = self.guidance_dir / "area-benchmark" / "paper1"
+        target.mkdir(parents=True)
+        source_md = target / "paper1.md"
+        source_md.write_text("hello world quote", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_validate(self._args(source_md=source_md, quote="hello world quote"))
+
+        self.assertEqual(ctx.exception.code, "SOURCE_NOT_EVIDENCE")
+
+    def test_a_quote_from_outside_guidance_entirely_is_unaffected_by_this_guard(self) -> None:
+        """`classify_source_md` returns `None` for a path outside
+        `guidance_dir` altogether -- this guard must not refuse THAT case;
+        whatever else may apply to it is out of this gate's scope."""
+        outside_dir = self.test_root / "elsewhere"
+        outside_dir.mkdir()
+        source_md = outside_dir / "paper1.md"
+        source_md.write_text("free text", encoding="utf-8")
+
+        result = paper_cli.cmd_validate(self._args(source_md=source_md, quote="free text"))
+
+        self.assertEqual(result["status"], "satisfied")
+
+    def test_no_claim_given_never_reaches_the_guard_and_writes_nothing(self) -> None:
+        """The guard lives inside `_build_evidence_record`, called only
+        when `--claim` is given -- a bare `validate --block` (status
+        check) never touches `guidance_dir` classification at all."""
+        args = self._args(source_md=Path("unused.md"), quote="unused")
+        args.claim = None
+
+        result = paper_cli.cmd_validate(args)
+
+        self.assertEqual(result["status"], "satisfied")
+        self.assertEqual(result["unsupported"], [])
+
+
+class ValidateSourceMdGuardMutationTests(unittest.TestCase):
+    """Proves both new refusal branches are load-bearing, not dead code."""
+
+    def _write_marker(self, guidance_dir: Path, folder: str, cls: str) -> Path:
+        target = guidance_dir / folder
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".paper-writing.json").write_text(json.dumps({"class": cls}), encoding="utf-8")
+        return target
+
+    def test_mutation_dropping_the_style_reference_branch_breaks_the_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if source_class == "style-reference":\n'
+            '        raise Refused(\n'
+            '            "SOURCE_STYLE_REFERENCE",\n'
+            '            f"{source_md} resolves inside a guidance folder classed '
+            "'style-reference'; \"\n"
+            '            "style-reference feeds style only, never a quote submitted as evidence",\n'
+            '        )',
+            'if False:\n'
+            '        raise Refused("SOURCE_STYLE_REFERENCE", "unreachable")',
+            "tests.test_paper_decisions.ValidateSourceMdGuardTests"
+            ".test_a_quote_from_a_style_reference_source_refuses",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_dropping_the_not_evidence_branch_breaks_the_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if source_class != "evidence":\n'
+            '        raise Refused(\n'
+            '            "SOURCE_NOT_EVIDENCE",\n'
+            '            f"{source_md} resolves inside a guidance folder classed {source_class!r}, "\n'
+            '            "not \'evidence\'; classify the folder before quoting it as evidence",\n'
+            '        )',
+            'if False:\n'
+            '        raise Refused("SOURCE_NOT_EVIDENCE", "unreachable")',
+            "tests.test_paper_decisions.ValidateSourceMdGuardTests"
+            ".test_a_quote_from_an_unclassified_source_refuses",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 
