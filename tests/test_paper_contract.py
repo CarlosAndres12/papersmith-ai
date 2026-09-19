@@ -146,7 +146,12 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(parsed.position, 1)
         self.assertEqual(len(parsed.blocks), 1)
         self.assertEqual(parsed.blocks[0]["id"], "results-block")
-        self.assertEqual(parsed.blocks[0]["requires_facts"], ["results"])
+        self.assertEqual(
+            parsed.blocks[0]["requires_facts"],
+            [{"value": "results", "source": None}],
+            "U1 widened the parsed shape: a bare id normalizes to an entry whose "
+            "source is None until U2 transcribes it and U3 stops accepting the bare form",
+        )
         self.assertEqual(body, b"Prose.\n")
 
     def test_header_missing_position_refuses_naming_position(self) -> None:
