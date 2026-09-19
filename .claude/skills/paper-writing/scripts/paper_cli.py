@@ -968,11 +968,20 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     corpus = paper_graph.assemble_corpus(sections_dir) if sections_dir is not None else None
     provenance_report = _compute_provenance_report(main_tex_bytes, status, declarations_body, corpus)
 
-    return {
+    result = {
         "guidance": guidance_report,
         "declarations": declarations_body,
         "provenance": provenance_report,
     }
+    if corpus is not None:
+        # item 1 (`no-citation-before-its-paper-is-ingested`): every
+        # section-shaped guidance folder's own citation status, additive to
+        # `guidance` above -- `corpus.sections` is the parsed corpus's own
+        # set of section ids, never a hand-listed tuple.
+        result["sectionGuidance"] = paper_guidance.section_citation_folders(
+            guidance_dir, corpus.sections,
+        )
+    return result
 
 
 def cmd_plan(args: argparse.Namespace) -> dict:

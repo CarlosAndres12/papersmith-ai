@@ -148,6 +148,76 @@ def ingested_papers(guidance_dir: Path) -> dict:
     return registry
 
 
+def section_citation_status(guidance_dir: Path, section_id: str) -> dict:
+    """One SECTION's own citation folder (`guidance/<section-id>/`) --
+    ADDITIVE to whatever pre-existing function-named folders `read_registry`
+    already reports: a folder becomes a section's own citation folder
+    exactly when its name equals a section id the parsed corpus declares
+    (`paper_graph.assemble_corpus(...).sections`), never a hand-listed
+    tuple -- and every other `guidance/` folder keeps flowing through
+    `read_registry`/`classify_source_md` completely unchanged
+    (`no-citation-before-its-paper-is-ingested`, item 1; `SKILL.md`, "Two
+    kinds of guidance folder").
+
+    Reports `{"section": section_id, "exists": bool, "classification":
+    str | None, "ingested": [...same shape as `ingested_papers`'s own
+    per-root list...], "pending_pdfs": [...]}`. `classification` is `None`
+    exactly when the folder does not exist yet -- there is nothing to
+    classify. `pending_pdfs` is every loose `*.pdf` sitting DIRECTLY under
+    the folder: `paper-ingestion`'s own contract is that a folder holding a
+    loose PDF is a root to scan, and ingestion MOVES that PDF into
+    `<paper>/<paper>.pdf` once it is processed -- so a name surviving here
+    is exactly a citation this section still owes an ingestion pass
+    (`.claude/skills/paper-ingestion/SKILL.md`).
+
+    `write`'s own citation gate (`paper_cli._guard_section_citations_ready`)
+    is the real caller: it reads this status for one block's own section,
+    before that block is ever drafted, and refuses by name when a stage is
+    missing -- never a second, independent walk of the same folder.
+    """
+    folder = guidance_dir / section_id
+    if not folder.is_dir():
+        return {
+            "section": section_id, "exists": False, "classification": None,
+            "ingested": [], "pending_pdfs": [],
+        }
+    ingested = []
+    for paper_entry in sorted(folder.iterdir()):
+        if not paper_entry.is_dir():
+            continue
+        markdown_path = paper_entry / f"{paper_entry.name}.md"
+        if markdown_path.is_file():
+            ingested.append({"folder": paper_entry.name, "markdown": str(markdown_path)})
+    pending_pdfs = sorted(
+        entry.name for entry in folder.iterdir()
+        if entry.is_file() and entry.suffix.lower() == ".pdf"
+    )
+    return {
+        "section": section_id, "exists": True, "classification": _classify(folder),
+        "ingested": ingested, "pending_pdfs": pending_pdfs,
+    }
+
+
+def section_citation_folders(guidance_dir: Path, section_ids) -> dict:
+    """`{section_id: section_citation_status(guidance_dir, section_id)}`
+    for every id in `section_ids` -- the discovery half of the per-section
+    citation-folder capability (item 1). `section_ids` is always derived
+    by the caller from the parsed corpus (`plan`'s own
+    `set(paper_graph.assemble_corpus(sections_dir).sections)`), never a
+    hand-listed tuple: the exact anti-pattern this change's own launch
+    context names ("one went stale silently in this repository the day
+    the skill grew past its first three verbs") is what handing this
+    function a derived set, rather than a literal, rules out. Wired into
+    `plan` (`paper_cli.compute_plan`) so an operator sees every section's
+    own citation-folder status in one read, the same place `guidance`'s
+    function-named-folder registry already reports.
+    """
+    return {
+        section_id: section_citation_status(guidance_dir, section_id)
+        for section_id in sorted(section_ids)
+    }
+
+
 #: One ATX heading (`#` through `######`), anchored at the start of a
 #: line (`re.MULTILINE`, never `str.splitlines()`'s own broader notion of
 #: a line boundary -- exotic Unicode separators must never move a byte

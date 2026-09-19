@@ -430,6 +430,31 @@ category folder still unclassified on a given checkout keeps reporting
 EVIDENCE` from `validate` — correct, and the operator's own pending
 decision, not a defect.
 
+**Two kinds of guidance folder coexist, ADDITIVELY.** A function-named
+folder (`reference-papers`, `paper-guide`, `data-paper`, `area-benchmark`,
+…) is whatever the operator has always used it for — style references, a
+general paper guide, a benchmark's own data paper — and every one of those
+keeps flowing through `read_registry`/`classify_source_md` exactly as
+before; nothing here deletes, moves or reclassifies any of them. A
+**section citation folder** is a SECOND, independent kind: a folder whose
+name equals a section id the parsed `sections/` corpus declares (from
+`SECTION_ID` in a contract's own front matter — `introduction`,
+`related-work`, `materials-and-methods`, … — never a hand-listed tuple,
+since one went stale silently in this repository the day the skill grew
+past its first three verbs). It holds exactly that section's own cited
+PDFs, downloaded there for `paper-ingestion` to turn into evidence
+(`no-citation-before-its-paper-is-ingested`, item 1). Nothing distinguishes
+the two kinds structurally — a folder is read either way through the same
+`.paper-writing.json` marker and the same `Path.iterdir()` walk
+(`paper_guidance.section_citation_status`) — the ONLY thing that makes a
+folder a section citation folder is its name matching a real section id;
+an operator's function-named folder that happens to collide with a future
+section id would simply become both at once, which is intended, not a
+conflict to resolve. `plan` reports every corpus section's own citation
+status under `sectionGuidance` — `{exists, classification, ingested,
+pending_pdfs}` per section id — alongside `guidance`'s pre-existing
+function-named-folder registry, in the same call.
+
 **No `--adopt` exists for either region.** A hand-edited `declarations` or
 `provenance` region refuses (`DECLARATIONS_HAND_EDITED` /
 `PROVENANCE_HAND_EDITED`) and writes nothing — unlike a block body, a

@@ -624,6 +624,141 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         self.assertEqual(total_papers, 8)
 
 
+class SectionCitationStatusTests(unittest.TestCase):
+    """`no-citation-before-its-paper-is-ingested`, item 1:
+    `paper_guidance.section_citation_status`/`section_citation_folders` --
+    the discovery half of the per-section citation-folder capability.
+    A folder is a section's own citation folder exactly when its name
+    equals a section id, and that id is always DERIVED from the parsed
+    corpus, never a hand-listed tuple -- exercised below against a section
+    id no production section contract has ever declared, which a
+    hand-listed tuple could not have found."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.guidance_dir = self.forge_root / "guidance"
+
+    def test_a_section_with_no_folder_yet_reports_absent_with_no_classification(self) -> None:
+        status = paper_guidance.section_citation_status(self.guidance_dir, "introduction")
+        self.assertEqual(
+            status,
+            {"section": "introduction", "exists": False, "classification": None,
+             "ingested": [], "pending_pdfs": []},
+        )
+
+    def test_a_freshly_created_folder_reports_unclassified_and_empty(self) -> None:
+        (self.guidance_dir / "introduction").mkdir(parents=True)
+        status = paper_guidance.section_citation_status(self.guidance_dir, "introduction")
+        self.assertTrue(status["exists"])
+        self.assertEqual(status["classification"], "unclassified")
+        self.assertEqual(status["ingested"], [])
+        self.assertEqual(status["pending_pdfs"], [])
+
+    def test_a_loose_pdf_is_reported_pending_until_ingestion_moves_it(self) -> None:
+        section_dir = self.guidance_dir / "introduction"
+        section_dir.mkdir(parents=True)
+        (section_dir / "smith2024.pdf").write_bytes(b"%PDF-1.4 fake")
+
+        status = paper_guidance.section_citation_status(self.guidance_dir, "introduction")
+        self.assertEqual(status["pending_pdfs"], ["smith2024.pdf"])
+        self.assertEqual(status["ingested"], [])
+
+        # paper-ingestion's own contract: ingestion MOVES the PDF into
+        # <paper>/<paper>.pdf and writes <paper>/<paper>.md alongside it.
+        (section_dir / "smith2024.pdf").unlink()
+        paper_dir = section_dir / "smith2024"
+        paper_dir.mkdir()
+        (paper_dir / "smith2024.pdf").write_bytes(b"%PDF-1.4 fake")
+        (paper_dir / "smith2024.md").write_text("# Smith 2024\n", encoding="utf-8")
+
+        after = paper_guidance.section_citation_status(self.guidance_dir, "introduction")
+        self.assertEqual(after["pending_pdfs"], [])
+        self.assertEqual([p["folder"] for p in after["ingested"]], ["smith2024"])
+
+    def test_a_classified_folder_reports_its_own_class(self) -> None:
+        section_dir = self.guidance_dir / "introduction"
+        section_dir.mkdir(parents=True)
+        (section_dir / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+        status = paper_guidance.section_citation_status(self.guidance_dir, "introduction")
+        self.assertEqual(status["classification"], "evidence")
+
+    def test_folders_are_discovered_from_a_section_id_never_hardcoded(self) -> None:
+        """Never assumed: a made-up section id this repository's own
+        contracts have never declared, `unlikely-future-section`, is
+        discovered from a real parsed corpus exactly like any other id --
+        proof that nothing in this path enumerates section ids from a
+        literal tuple."""
+        sections_dir = self.forge_root / "sections"
+        sections_dir.mkdir()
+        header = json.dumps({
+            "section": "unlikely-future-section", "position": 1,
+            "blocks": [
+                {"id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+            ],
+        })
+        (sections_dir / "99-unlikely.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.guidance_dir / "unlikely-future-section").mkdir(parents=True)
+
+        corpus = paper_graph.assemble_corpus(sections_dir)
+        self.assertIn("unlikely-future-section", corpus.sections)
+
+        folders = paper_guidance.section_citation_folders(self.guidance_dir, corpus.sections)
+        self.assertTrue(folders["unlikely-future-section"]["exists"])
+        self.assertEqual(folders["unlikely-future-section"]["classification"], "unclassified")
+
+    def test_a_section_id_the_registry_has_never_seen_is_untouched_by_this_walk(self) -> None:
+        """ADDITIVE, never destructive: an unrelated function-named folder
+        sitting beside a section folder keeps reporting through
+        `read_registry` exactly as before -- this walk never mutates or
+        reclassifies it."""
+        (self.guidance_dir / "reference-papers").mkdir(parents=True)
+        (self.guidance_dir / "reference-papers" / ".paper-writing.json").write_text(
+            json.dumps({"class": "style-reference"}), encoding="utf-8",
+        )
+        (self.guidance_dir / "introduction").mkdir(parents=True)
+
+        paper_guidance.section_citation_folders(self.guidance_dir, {"introduction"})
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+        self.assertEqual(registry["reference-papers"], "style-reference")
+
+
+class SectionCitationStatusMutationTests(unittest.TestCase):
+    """The decisive proof for item 1: a hand-listed tuple of section ids
+    standing in for the corpus-derived set must fail
+    `SectionCitationStatusTests.test_folders_are_discovered_from_a_section_
+    id_never_hardcoded` -- exactly the failure mode the launch context
+    names ("one went stale silently... the day the skill grew past its
+    first three verbs")."""
+
+    def test_mutation_a_hardcoded_tuple_in_place_of_sorted_section_ids_fails_the_discovery_proof(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "    return {\n"
+            "        section_id: section_citation_status(guidance_dir, section_id)\n"
+            "        for section_id in sorted(section_ids)\n"
+            "    }",
+            "    return {\n"
+            "        section_id: section_citation_status(guidance_dir, section_id)\n"
+            '        for section_id in ("introduction", "related-work", "materials-and-methods")\n'
+            "    }",
+            "tests.test_paper_decisions.SectionCitationStatusTests"
+            ".test_folders_are_discovered_from_a_section_id_never_hardcoded",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
 _FIXED_CLOCK = "2024-01-01T00:00:00+00:00"
 
 
@@ -1583,6 +1718,44 @@ class PlanTests(unittest.TestCase):
         provenance_by_block = {p["block"]: p["state"] for p in report["provenance"]}
         self.assertEqual(provenance_by_block["results-a"], "drifted")
         self.assertEqual(provenance_by_block["results-b"], "drifted")
+
+    def test_a_bare_call_with_no_sections_dir_reports_no_section_guidance_key(self) -> None:
+        """The two pre-existing `compute_plan` callers that never built a
+        section corpus keep getting exactly the same three keys back —
+        `sectionGuidance` is additive, never a required key."""
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+        self.assertNotIn("sectionGuidance", report)
+
+    def test_plan_reports_every_corpus_sections_own_citation_status(self) -> None:
+        """item 1: given a real `sections_dir`, `plan` reports one
+        `sectionGuidance` entry per section id the corpus declares —
+        derived from the corpus, never a hand-listed tuple — additive to
+        `guidance`'s own function-named-folder registry."""
+        sections_dir = Path(self._tmp.name) / "real-sections"
+        sections_dir.mkdir()
+        header = json.dumps({
+            "section": "introduction", "position": 1,
+            "blocks": [
+                {"id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+            ],
+        })
+        (sections_dir / "01-intro.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.guidance_dir / "introduction").mkdir(parents=True)
+        (self.guidance_dir / "reference-papers").mkdir(parents=True)
+
+        report = paper_cli.compute_plan(
+            self.paper_dir, guidance_dir=self.guidance_dir, sections_dir=sections_dir,
+        )
+
+        self.assertIn("sectionGuidance", report)
+        self.assertEqual(set(report["sectionGuidance"]), {"introduction"})
+        self.assertTrue(report["sectionGuidance"]["introduction"]["exists"])
+        # `guidance`'s own function-named-folder registry is untouched.
+        self.assertEqual(report["guidance"]["reference-papers"], "unclassified")
 
 
 class InsumosObserverThreatMatrixTests(unittest.TestCase):
