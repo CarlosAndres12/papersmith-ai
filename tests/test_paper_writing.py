@@ -3917,6 +3917,142 @@ class OptionalReadinessTests(unittest.TestCase):
         self.assertNotEqual(report["status"], "not-applicable")
 
 
+class OptionalVerifyWiringTests(unittest.TestCase):
+    """tasks.md Work Unit 9b: the wiring Work Unit 3 built and proved but
+    could not perform itself (`OptionalVerifyTests`, above, calls
+    `paper_verify.check_contribution_list` directly with a hand-supplied
+    `optional_block_ids`). This class exercises `paper_cli.cmd_verify`
+    itself -- the defect this unit closes lived entirely in that function's
+    own body, which never resolved or passed `optional_block_ids` at all.
+
+    `cmd_verify` resolves `--paper`/`--sections` against the REAL
+    repository root (`paper_scaffold.FORGE_ROOT`), so -- the same
+    convention `CouplingVerifyCLITests` already established -- this
+    fixture lives under the already-gitignored `implementations/` tree,
+    never an arbitrary tempdir outside it.
+    """
+
+    def setUp(self) -> None:
+        test_root = FORGE_ROOT / "implementations" / f".paper-writing-9b-verify-wiring-{os.getpid()}"
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        self.paper_dir = test_root / "paper"
+        self.sections_dir = test_root / "sections"
+        _write_optional_contribution_section(self.sections_dir, optional=True)
+        paper_scaffold.scaffold(self.paper_dir)
+        # `res-contrib` is declared but never opened: absent from `main.tex`.
+        # `contributions` is non-empty on purpose (unlike `OptionalVerifyTests`'
+        # own `_build`, whose empty list would report `BLOCK_NOT_DECLARED`
+        # either way and hide the exact difference this unit proves) --
+        # with the wire absent, this specific record instead reaches the
+        # order-comparison branch and reports `fail`.
+        (self.paper_dir / "couplings.json").write_text(
+            json.dumps({"blocks": {"res-contrib": True}, "facts": {"contributions": ["Foo"]}}),
+            encoding="utf-8",
+        )
+        self.args = argparse.Namespace(paper=str(self.paper_dir), sections=str(self.sections_dir))
+
+    def test_resolve_optional_block_ids_measures_the_shipped_corpus(self) -> None:
+        """Measured directly against the real, shipped `sections/` tree --
+        never forecast. `paper_readiness`'s own shipped-corpus test
+        (`OptionalReadinessTests.test_optional_flag_is_read_verbatim_over_
+        the_shipped_corpus`) checks two individual blocks; this asserts the
+        WHOLE derived set `cmd_verify` would thread through `verify` today."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        expected = frozenset(b.block_id for b in corpus.blocks.values() if b.optional)
+
+        self.assertEqual(paper_cli._resolve_optional_block_ids(SECTIONS_DIR), expected)
+        # None of the four facts `verify`'s own checks read (`contributions`,
+        # `problem-statement`, `gap`, `limitations`) map to an ENTIRELY
+        # optional block set on the real shipped corpus today -- every one
+        # of them is also required by at least one non-optional block --
+        # so `OPTIONAL_BLOCK_ABSENT` cannot be observed through the real
+        # `verify` verb against the unmodified `sections/` tree. Measured,
+        # not assumed: this is why the load-bearing proof below builds its
+        # own minimal fixture, the same way `WaveTests`/`SkeletonPathContain
+        # mentTests` already do for their own units, rather than forcing a
+        # false positive out of data this unit's scope may not edit.
+        by_fact = {}
+        for record in corpus.blocks.values():
+            for fact in ("contributions", "problem-statement", "gap", "limitations"):
+                if fact in record.requires_facts:
+                    by_fact.setdefault(fact, []).append(record.optional)
+        for fact, flags in by_fact.items():
+            self.assertFalse(all(flags), f"{fact!r} unexpectedly maps to an all-optional block set")
+
+    def test_cmd_verify_reports_optional_block_absent_for_an_unopened_optional_block(self) -> None:
+        report = paper_cli.cmd_verify(self.args)
+
+        by_check = {entry["check"]: entry for entry in report["checks"]}
+        self.assertEqual(by_check["contribution-list"]["verdict"], "unmeasured")
+        self.assertEqual(by_check["contribution-list"]["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+
+    def test_mutation_the_wire_is_load_bearing_not_merely_present(self) -> None:
+        """RED-first mutation, run against the exact defect Work Unit 3's
+        own notes name: `cmd_verify` never resolving or passing
+        `optional_block_ids` at all (its shipped body called
+        `paper_verify.run(evidence)` with no keyword). Patching
+        `_resolve_optional_block_ids` to always return an empty set
+        reproduces that exact shipped defect; against the SAME fixture the
+        previous test proves `pass`es today, the coupling stops reporting
+        `unmeasured` altogether and reports `fail` instead -- proving the
+        parameter changes real behavior, not merely that it is accepted."""
+        with unittest.mock.patch.object(paper_cli, "_resolve_optional_block_ids", return_value=frozenset()):
+            unwired_report = paper_cli.cmd_verify(self.args)
+        wired_report = paper_cli.cmd_verify(self.args)
+
+        unwired_entry = {e["check"]: e for e in unwired_report["checks"]}["contribution-list"]
+        wired_entry = {e["check"]: e for e in wired_report["checks"]}["contribution-list"]
+
+        self.assertEqual(wired_entry["unmeasured_reason"], "OPTIONAL_BLOCK_ABSENT")
+        self.assertNotEqual(unwired_entry["verdict"], "unmeasured")
+        self.assertEqual(unwired_entry["verdict"], "fail")
+
+    def test_paper_verify_import_allowlist_is_unchanged_and_still_green(self) -> None:
+        """9b.4: the resolution belongs one level up in `cmd_verify`
+        precisely because `paper_verify.py`'s own AST-enforced import lock
+        (`ReadOnlyTests`, above) forbids it from reading `sections_dir`
+        itself -- confirm that lock is UNCHANGED: still exactly `{"re"}`
+        for real imports (`__future__` is the one `ImportFrom` the same
+        lock already exempts), never widened to make this unit's own fix
+        easier. `ReadOnlyTests` itself, run as part of this same suite,
+        is the load-bearing proof; this is a direct, local confirmation."""
+        tree = ast.parse((SKILL_SCRIPTS / "paper_verify.py").read_text(encoding="utf-8"))
+        real_imports = set()
+        import_from_modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                real_imports.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                import_from_modules.add(node.module)
+        self.assertEqual(real_imports, {"re"})
+        self.assertEqual(import_from_modules, {"__future__"})
+
+    def test_verify_writes_nothing_including_this_units_own_refusal_paths(self) -> None:
+        """9b.5: the before/after content manifest, over this unit's own
+        fixture -- `verify` must write nothing under every input, including
+        every refusal path, exactly as it did before this unit existed."""
+
+        def _manifest() -> dict:
+            return {
+                str(path.relative_to(self.paper_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in sorted(self.paper_dir.rglob("*")) if path.is_file()
+            }
+
+        paper_cli.cmd_verify(self.args)
+        before = _manifest()
+
+        (self.paper_dir / "couplings.json").unlink()
+        with self.assertRaises(Refused):
+            paper_cli.cmd_verify(self.args)
+        after = _manifest()
+
+        # `couplings.json` was removed by this test itself, above, as the
+        # refusal trigger -- everything else must still match byte for byte.
+        before.pop("couplings.json", None)
+        after.pop("couplings.json", None)
+        self.assertEqual(before, after)
+
+
 # =====================================================================
 # `derive_waves` -- Work Unit 5
 # =====================================================================

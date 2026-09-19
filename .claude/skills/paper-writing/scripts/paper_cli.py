@@ -6,24 +6,41 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires thirteen verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires twenty verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
-(from `the-contract-is-data-not-code`); `declare`, `plan` (from
-`the-paper-carries-its-own-decisions`, Slices B and C2); `resolve`,
-`bib build`, `validate` (from `no-claim-without-a-source-that-holds-it`,
-WU1/WU2/WU3 — `resolve` is the one path that makes this CLI not offline end
-to end, keyless and behind a role `papersmith.yaml` can empty; `bib build`
-rebuilds `refs.bib` whole from cached resolved metadata only; `validate` is
-the single gate deciding verdict, placement and the bounded search-round
-budget before any block reaches disk); and `write` (from `the-writer-may-
-assert-only-what-it-was-given` — a judge, never an invoker: it reconciles an
-already-shuttled redactor draft and contract-auditor account against one
-block's real contract, evidence set and mode, and either substitutes the
-block or reports why not, with exactly one bounded re-draft). Left
-extensible on purpose; nothing here assumes it is the last verb this file
-will ever grow.
+(from `the-contract-is-data-not-code` — the section-contract reader);
+`declare`, `observe`, `plan` (from `the-paper-carries-its-own-decisions`,
+Slices B and C2 — `observe` validates an `insumos-observer` report against
+the observable-fact schema before a human runs `declare` against it);
+`resolve`, `bib build`, `validate` (from `no-claim-without-a-source-that-
+holds-it`, WU1/WU2/WU3 — `resolve` is the one path that makes this CLI not
+offline end to end, keyless and behind a role `papersmith.yaml` can empty;
+`bib build` rebuilds `refs.bib` whole from cached resolved metadata only;
+`validate` is the single gate deciding verdict, placement and the bounded
+search-round budget before any block reaches disk); `write` (from `the-
+writer-may-assert-only-what-it-was-given` — a judge, never an invoker: it
+reconciles an already-shuttled redactor draft and contract-auditor account
+against one block's real contract, evidence set and mode, and either
+substitutes the block or reports why not, with exactly one bounded
+re-draft); `render`, `place` (from `a-diagram-that-compiles-or-says-why` —
+a diagram that compiles standalone or says why, the repair-budget ledger,
+and the data-figure boundary); `verify` (from `the-couplings-hold-or-they-
+do-not` — a read-only report over five cross-section couplings, citation
+integrity and contract currency; resolves the corpus's own optional-block
+ids and threads them into `paper_verify.run`, so an unopened `optional:
+true` block excuses a coupling as `unmeasured` rather than failing it); and
+`phases`, `skeleton`, `packet` (from `the-phases-are-derived-not-
+remembered` — `phases` reports each Kahn wave's own readiness basis and
+gates `write` against it, `PHASE_NOT_READY`; `skeleton` infers Related Work
+/ dataset-placement decisions straight from disk and opens every
+non-excluded block id in derived order, once, never re-asking,
+`SKELETON_ANSWER_REQUIRED`/`SKELETON_ALREADY_DECIDED`; `packet` assembles
+one block's own contract prose plus, per `style-reference` guidance folder,
+a heading OUTLINE only — offsets, never inlined span text — ahead of
+`write`'s draft stage). Left extensible on purpose; nothing here assumes it
+is the last verb this file will ever grow.
 """
 from __future__ import annotations
 
@@ -1298,6 +1315,37 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     return {"checked": True}
 
 
+def _resolve_optional_block_ids(sections_dir: Path) -> frozenset:
+    """The raw (unqualified) block ids `paper_verify.run` treats as
+    `optional`, derived from the same corpus `cmd_verify` already reads
+    through `paper_coupling_evidence.gather` (`paper_graph.assemble_corpus`)
+    -- never a second, independently-maintained classification.
+
+    `paper_verify.py` cannot resolve this itself: its own AST-enforced
+    import allowlist (`tests/test_paper_writing.py`,
+    `_PAPER_VERIFY_ALLOWED_IMPORTS = {"re"}`) forbids it from ever reading
+    `sections_dir`, by design (`the-couplings-hold-or-they-do-not`'s own
+    diskless-checks guarantee). Work Unit 3 built and proved
+    `optional_block_ids` end to end but left this exact resolution
+    unwired, naming `paper_cli.py`/`cmd_verify` as the one place that
+    already holds `sections_dir` and calls `paper_verify.run` (tasks.md,
+    Work Unit 9b) -- this is that resolution, one level up from the module
+    that cannot perform it.
+
+    An unreadable corpus resolves to an empty set: `gather`'s own
+    `_blocks_by_fact` already reports `SECTION_CONTRACTS_UNREADABLE` for
+    every fact in that case, so this helper never needs to raise a second
+    time for the same condition -- an empty `optional_block_ids` changes no
+    check's verdict beyond what `SECTION_CONTRACTS_UNREADABLE` already
+    reports.
+    """
+    try:
+        corpus = paper_graph.assemble_corpus(sections_dir)
+    except Refused:
+        return frozenset()
+    return frozenset(record.block_id for record in corpus.blocks.values() if record.optional)
+
+
 def cmd_verify(args: argparse.Namespace) -> dict:
     """`verify`: a pure, read-only report over the five cross-section
     couplings, citation integrity, and contract currency
@@ -1306,11 +1354,18 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     (`block-substitution` spec, `Requirement: verify Verb Is Registered
     And Read-Only`) -- `paper_coupling_evidence.gather` performs every
     disk read this needs; `paper_verify.run` is pure over the result.
+
+    `optional_block_ids` (`_resolve_optional_block_ids`, tasks.md Work Unit
+    9b) is resolved from the same `sections_dir` corpus and threaded
+    through, so an unopened `optional: true` block excuses the couplings
+    that depend on it alone as `unmeasured`/`OPTIONAL_BLOCK_ABSENT` rather
+    than reporting a false `fail` or `BLOCK_NOT_DECLARED`.
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
     evidence = paper_coupling_evidence.gather(paper_dir, sections_dir)
-    return paper_verify.run(evidence)
+    optional_block_ids = _resolve_optional_block_ids(sections_dir)
+    return paper_verify.run(evidence, optional_block_ids=optional_block_ids)
 
 
 def cmd_place(args: argparse.Namespace) -> dict:

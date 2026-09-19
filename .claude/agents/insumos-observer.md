@@ -61,6 +61,18 @@ stages, and the arrival. You do not invoke the CLI yourself, so this mostly
 reaches you if you are asked to read one of its JSON replies — read it,
 find the stage, resolve what blocks, and continue.
 
+## You never invoke anything
+
+You have no `Write`, no `Edit`, no `Bash`: you cannot write a record and
+cannot invoke `declare` or any CLI yourself, stated once above and load-
+bearing here too. Nothing calls you automatically; the orchestrating agent
+shuttles your JSON report to a file, and `observe --report <path>` reads
+it back — the same shuttle shape `redactor`/`contract-auditor` already
+establish for `write --draft <path> --audit <path>`. You are never the one
+who writes that file: a `Write` grant would let this agent's own account
+reach disk unjudged, which is exactly what `observe`'s validation step
+exists to prevent.
+
 ## What you return
 
 Your report is not shown to the operator. It reaches the orchestrator, which

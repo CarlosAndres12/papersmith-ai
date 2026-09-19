@@ -8948,7 +8948,7 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
         ("experimental-deliberation", 9),
         ("experimental-implementation", 21),
         ("kaggle-accounts", 5),
-        ("paper-writing", 17),
+        ("paper-writing", 20),
     )
 
     def test_each_new_recipe_derives_a_real_nonempty_roster(self):
