@@ -47,6 +47,8 @@ Invariants a test must hold:
 
 `phases [--phase N]` reports waves 1..N with per-block readiness, `opened`, provenance state, and per-wave `complete|open|gated`; `--phase N` refuses `PHASE_NOT_READY` while any required block of waves 1..N-1 is unwritten. `compute_readiness` gains its second and third callers, closing the one-caller seam.
 
+**Unit 6b correction.** Unit 6 wired this refusal onto `phases` alone, read-only; `cmd_write` never consulted `derive_waves`, so nothing stopped a later wave being written before an earlier one existed — the gate reported, it did not gate, and `specs/writing-phases/spec.md`'s own scenarios ("WHEN `write` is invoked on a wave-2 block") already said the refusal belonged to `write` too. `PHASE_NOT_READY` now has two raise sites sharing ONE gate computation (`_refuse_on_incomplete_waves`, `paper_cli.py`, extracted out of `compute_phases`'s own loop): `phases --phase N` (read-only, phase-indexed) and `cmd_write` (real, block-indexed — resolves the target block's own wave via `derive_waves` and refuses before any draft/audit file is read, before `write_block`'s attempt ledger is touched, and before any byte reaches `main.tex`). No new refusal code; `reachable_paper_refusal_codes()` does not move.
+
 ### D4 — The skeleton is inferred from disk, and the `skeleton` fact is left alone
 
 **Choice.** Pure disk inference over `paper_block.read_status(paper_dir)["blocks"]`, intersected with the corpus:
@@ -111,7 +113,7 @@ Contract data changes: `es-dataset` added to `02-experimental-setup.md` (`option
 | `.../scripts/paper_declarations.py` | Modify | `read_satisfied`, skeleton inference helpers (pure, over `read_status` output) |
 | `.../scripts/paper_guidance.py` | Modify | `ingested_papers`, `segment_markdown`, `GUIDANCE_MARKDOWN_UNREADABLE` |
 | `.../scripts/paper_verify.py` | Modify | `OPTIONAL_BLOCK_ABSENT` reason; optional-aware block sets |
-| `.../scripts/paper_cli.py` | Modify | `phases`, `skeleton`, `packet`; `readiness` basis; 8 roster entries; docstring `thirteen` → 20 |
+| `.../scripts/paper_cli.py` | Modify | `phases`, `skeleton`, `packet`; `readiness` basis; 8 roster entries; docstring `thirteen` → 20; unit 6b: `cmd_write` gains the same `PHASE_NOT_READY` gate `phases` uses, via a shared `_refuse_on_incomplete_waves` |
 | `.claude/skills/paper-writing/SKILL.md` | Modify | 17 → 20 verbs; `readiness` row; new verb tables and decision gates |
 | `.claude/agents/insumos-observer.md`, `style-sampler.md` | Modify | Write-tool/shuttle mismatch; sampler consumes the packet's outline |
 | `tests/test_paper*.py` | Modify | Roster count 96 → 104; new scenarios and mutations |

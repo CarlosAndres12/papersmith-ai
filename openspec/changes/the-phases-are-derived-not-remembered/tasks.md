@@ -47,6 +47,7 @@ unmentioned.
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [x] |
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [x] |
 | 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [x] |
+| 6b | **Correction to unit 6.** `PHASE_NOT_READY` gated the read-only `phases` verb only; `cmd_write` never consulted `derive_waves`, so nothing stopped a later wave being written before an earlier one existed — the gate reported, it did not gate. Wires the SAME gate computation into `cmd_write`, RED-first through the real `write` verb | `paper_cli.py`, `design.md`, `tasks.md`, `tests/test_paper_writing.py` | none (`PHASE_NOT_READY` already registered; second raise site only) | ~140 | Low | 6 | [x] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
 | 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
 | 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
@@ -61,6 +62,7 @@ unmentioned.
 | 3 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Optional` | `paper_cli.py readiness --paper paper/` and `paper_cli.py verify` | Revert the two consumer diffs independently of unit 4/5 |
 | 5 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Wave` | N/A — pure function, no CLI verb of its own yet (exercised via unit 6's `phases`) | Revert `derive_waves` + `_build_graph` extraction; `derive_order` restored to its pre-extraction body |
 | 6 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Readiness` | `paper_cli.py readiness --paper paper/` then `paper_cli.py phases` against a scaffolded `paper/` | Revert `phases` verb + basis dispatch independently; `readiness`'s flag-only path is preserved as a fallback |
+| 6b | `.venv/bin/python -m unittest tests.test_paper_writing -v -k WriteGate` | `cmd_write` on a wave-2 block, real two-wave corpus, real `paper_dir` under `implementations/` | Revert `_resolve_write_gate`, `_unwritten_required_blocks`, `_refuse_on_incomplete_waves` and their one call site in `cmd_write`; `compute_phases` reverts to its own pre-extraction closure, `phases` unaffected |
 | 7 | `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions -v -k Skeleton` | `paper_cli.py skeleton --related-work yes --dataset-in experimental-setup` against a fresh scaffolded `paper/` | Revert `skeleton` verb + inference helpers; no writer added beyond `open_block`, so `main.tex` byte-identity is unaffected by rollback |
 | 8 | `.venv/bin/python -m unittest tests.test_paper_writing -v -k Packet` | `paper_cli.py packet --section 06-introduction --block block-1` against the shipped `guidance/` tree | Revert `packet` verb + `segment_markdown`; `write`'s pipeline wiring reverts to no packet-assembly step |
 | 9 | `npm test && .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` | full skill walkthrough per `SKILL.md`'s own verb tables | Revert docs/docstrings only — zero behavior change |
@@ -711,13 +713,85 @@ This is not spec/design drift to reconcile on paper. It is a missing guard, and 
 belongs to is already recorded in this repository: a refusal that cannot fire on the path that
 matters reads as protection while protecting nothing.
 
-- [ ] 6b.1 `cmd_write` resolves the block's wave via `paper_graph.derive_waves` and refuses `PHASE_NOT_READY` when any earlier wave still holds an unwritten, non-`optional` block — naming the blocking block, as the spec requires. Reuse `compute_phases`'s existing gate computation; do not write a second one.
-- [ ] 6b.2 `optional` blocks never block a wave. Reuse unit 3's absence semantics; an unopened optional block is satisfied-by-absence for gating, never a blocker.
-- [ ] 6b.3 RED-first: a wave-2 block whose wave-1 dependency is unwritten refuses `PHASE_NOT_READY` through the real `write` verb, naming that wave-1 block. Write the test, watch it fail against today's `cmd_write`, then implement.
-- [ ] 6b.4 RED-first, the other direction: the same wave-2 block proceeds once the wave-1 block is written. A gate that never opens is as wrong as one that never closes.
-- [ ] 6b.5 MUTATION: remove the gate call from `cmd_write` and confirm 6b.3 goes red. The gate must be load-bearing on the write path, not merely present.
-- [ ] 6b.6 Confirm `PHASE_NOT_READY` is already classified and the roster count does not move — the code exists, this unit only adds a second raise site.
-- [ ] 6b.7 Reconcile the artifacts to the implemented reality: `design.md` and `tasks.md` described the refusal as belonging to the `phases` verb alone. After 6b.1 it belongs to both. Correct them rather than leaving three documents disagreeing — that disagreement is the defect this whole change exists to close.
+- [x] 6b.1 `cmd_write` resolves the block's wave via `paper_graph.derive_waves` and refuses `PHASE_NOT_READY` when any earlier wave still holds an unwritten, non-`optional` block — naming the blocking block, as the spec requires. Reuse `compute_phases`'s existing gate computation; do not write a second one.
+- [x] 6b.2 `optional` blocks never block a wave. Reuse unit 3's absence semantics; an unopened optional block is satisfied-by-absence for gating, never a blocker.
+- [x] 6b.3 RED-first: a wave-2 block whose wave-1 dependency is unwritten refuses `PHASE_NOT_READY` through the real `write` verb, naming that wave-1 block. Write the test, watch it fail against today's `cmd_write`, then implement.
+- [x] 6b.4 RED-first, the other direction: the same wave-2 block proceeds once the wave-1 block is written. A gate that never opens is as wrong as one that never closes.
+- [x] 6b.5 MUTATION: remove the gate call from `cmd_write` and confirm 6b.3 goes red. The gate must be load-bearing on the write path, not merely present.
+- [x] 6b.6 Confirm `PHASE_NOT_READY` is already classified and the roster count does not move — the code exists, this unit only adds a second raise site.
+- [x] 6b.7 Reconcile the artifacts to the implemented reality: `design.md` and `tasks.md` described the refusal as belonging to the `phases` verb alone. After 6b.1 it belongs to both. Correct them rather than leaving three documents disagreeing — that disagreement is the defect this whole change exists to close.
+
+---
+
+## Unit 6b — Notes / Deviations
+
+- **One gate computation, two raise sites, exactly as 6b.1 required.**
+  `compute_phases`'s own `--phase N` loop was extracted into two
+  module-level functions in `paper_cli.py`: `_unwritten_required_blocks`
+  (unit 3's absence semantics — an unopened `optional` block never
+  blocks a wave, tasks.md 6b.2) and `_refuse_on_incomplete_waves` (the
+  refusal itself, parametrized by `blocked_label` so the detail string
+  can name either a phase number or a qualified block id). `compute_
+  phases` and the new `_resolve_write_gate` both call the SAME
+  `_refuse_on_incomplete_waves` — no second gate exists anywhere to
+  drift from the first.
+- **RED-first, proven, not asserted.** `WriteGateTests.test_write_on_a_
+  wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten`
+  (tasks.md 6b.3) was run against the pre-6b.1 `cmd_write` (implementation
+  stashed, test kept) before any production edit landed: it failed with
+  a bare `FileNotFoundError` on the never-created `draft.json`, never
+  `Refused`, proving the write path never reached the gate at all — the
+  exact defect this unit closes, not a hypothetical one. `test_write_on_
+  the_same_block_proceeds_once_wave_1_is_written` (6b.4) trivially
+  "passed" on that same stashed run for the same reason (no gate existed
+  to block it), which is itself evidence the RED test was the one
+  actually exercising the missing guard.
+- **6b.5's mutation deletes the one call site, not a comment.**
+  `WriteGateMutationProofTests` removes the exact line `_resolve_write_
+  gate(paper_dir, sections_dir, f"{args.section}.{args.block}")` (one
+  occurrence, asserted via the anchor-count check `_run_against_mutant`
+  already performs) from a temp-copied `paper_cli.py` and reruns 6b.3's
+  own test against the mutant: it fails (`FileNotFoundError` again,
+  non-zero exit), proving the gate is load-bearing on the real write
+  path and not merely present beside it.
+- **6b.6 measured, not assumed.** `PHASE_NOT_READY` was already a key of
+  `REFUSAL_CLASSIFICATION` (unit 6). `tests.test_paper_writing`'s own
+  roster count assertion (`reachable_paper_refusal_codes()) == 103`)
+  passed unmodified after 6b.1-6b.5 landed — confirmed by running the
+  full 231-test suite, not by inspecting the table. No new code, no
+  roster move.
+- **Tests exercise the real `cmd_write` root, not `paper_write.write_
+  block` alone.** Every other write-pipeline test in this suite
+  (`WritingPipelineTests`) calls `paper_write.write_block` directly,
+  which is exactly the path unit 6's own gap slipped through undetected
+  — `write_block` has no phase awareness at all; the gate belongs one
+  layer up, in `cmd_write`, which is what `WriteGateTests` calls. Both
+  new tests run under a real `paper_dir`/`sections_dir` rooted under
+  `FORGE_ROOT` (the already-gitignored `implementations/` convention
+  `test_cli_scaffold_verb_runs_and_emits_json` established), because
+  `cmd_write` resolves both through the non-injectable real `FORGE_ROOT`
+  default — unlike `compute_phases`, which `PhasesTests` calls directly
+  with an injected `forge_root`.
+- **`--draft`/`--audit` deliberately name files that are never created.**
+  Building a fully valid draft/audit/mode/disqualifier round trip through
+  the real `cmd_write` parser purely to prove a phase gate would add
+  machinery this unit does not own or need. Instead, both tests use
+  nonexistent draft/audit paths: when the gate refuses, `Refused` fires
+  and the files are proven never touched (`assertFalse(path.exists())`);
+  when the gate opens, execution proceeds to the very next real
+  statement (`draft_path.read_text()`) and hits `FileNotFoundError`
+  instead — a minimal, unambiguous proof of which side of the gate
+  execution reached, without needing `write_block` to reach `"written"`.
+- **`design.md` and `tasks.md` corrected in place (6b.7).** D3's own
+  closing sentence now records the two raise sites sharing one gate
+  computation and the ordering guarantee (before any draft/audit file is
+  read, before the attempt ledger, before any byte reaches `main.tex`);
+  the File Changes table's `paper_cli.py` row now names the write-path
+  gate too. Unit 6's own Notes section (above) is left as written — it
+  is an accurate historical record of what unit 6 actually shipped and
+  the drift it flagged for a future unit to route, not a claim about
+  current reality; this unit is that routed follow-up, so it stands
+  beside unit 6's Notes rather than rewriting them.
 
 ## Phase 7: `skeleton` + disk inference + `ingested_papers`
 

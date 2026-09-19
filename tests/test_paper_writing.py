@@ -4529,6 +4529,120 @@ class PhasesTests(unittest.TestCase):
         )
 
 
+class WriteGateTests(unittest.TestCase):
+    """`writing-phases` spec, `Requirement: Phase N Is Gated On Phase N-1`
+    -- its own scenarios name `write`, not `phases` (tasks.md 6b.1-6b.5).
+    Unit 6 wired `PHASE_NOT_READY` onto the read-only `phases` verb alone;
+    `cmd_write` never consulted `derive_waves` at all, so nothing stopped
+    a later wave being written before an earlier one existed -- the gate
+    reported, it never gated. Unit 6's own Notes flagged that no test
+    anywhere bound `PHASE_NOT_READY` to `write`; this class closes exactly
+    that gap by exercising the REAL `cmd_write` root directly, never
+    `paper_write.write_block` alone.
+
+    Runs under a real `paper_dir`/`sections_dir` rooted under `FORGE_ROOT`
+    -- `paper_scaffold.resolve_paper_dir`'s own containment requirement,
+    the same already-gitignored `implementations/` convention
+    `test_cli_scaffold_verb_runs_and_emits_json` above uses -- because
+    `cmd_write` resolves both through the real, non-injectable
+    `FORGE_ROOT` default, unlike `compute_phases`, which `PhasesTests`
+    above calls directly with an injected `forge_root`.
+
+    `--draft`/`--audit` deliberately name files that are NEVER created:
+    the phase gate must refuse (or, once open, the pipeline must fail on
+    a DIFFERENT, unrelated error) before either path is ever opened --
+    which side of that line execution reached is exactly what each test
+    below proves.
+    """
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-write-gate-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+        blocks_a = [
+            {"id": "a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "phase-a", "position": 1, "blocks": blocks_a})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.sections_dir / "02-b.md").write_text(
+            "---\n" + json.dumps({
+                "section": "phase-b", "position": 2,
+                "blocks": [
+                    {"id": "b", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+                ],
+                "after": [
+                    {"target": "phase-a.a", "source": {"file": "sections/02-b.md", "quote": "Prose."}},
+                ],
+            })
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\n`phase-b.b` — `phase-a.a`\n",
+            encoding="utf-8",
+        )
+
+        self.args = argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="phase-b", block="b",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten(self) -> None:
+        """tasks.md 6b.3, RED-first: written before `cmd_write` consulted
+        `derive_waves` at all, this failed against that `cmd_write` with
+        `FileNotFoundError` on `draft.json` instead of `Refused` -- proof
+        the gate was never reached on the real write path."""
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self.args)
+
+        self.assertEqual(ctx.exception.code, "PHASE_NOT_READY")
+        self.assertIn("phase-a.a", ctx.exception.detail)
+        self.assertFalse((self.test_root / "draft.json").exists())
+        self.assertFalse((self.test_root / "audit.json").exists())
+
+    def test_write_on_the_same_block_proceeds_once_wave_1_is_written(self) -> None:
+        """tasks.md 6b.4: a gate that never opens is as wrong as one that
+        never closes. Opening `phase-a.a` clears the gate; `cmd_write`
+        then runs PAST it and fails on the very next real stage instead
+        -- the draft file this test deliberately never creates --
+        `FileNotFoundError`, never `Refused('PHASE_NOT_READY')`."""
+        paper_block.open_block(self.paper_dir, "phase-a.a", at_end=True)
+
+        with self.assertRaises(FileNotFoundError):
+            paper_cli.cmd_write(self.args)
+
+
+class WriteGateMutationProofTests(unittest.TestCase):
+    """tasks.md 6b.5: the gate must be load-bearing on the real write
+    path, not merely present beside it. Removing `cmd_write`'s own call
+    to `_resolve_write_gate` must fail `WriteGateTests.test_write_on_a_
+    wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten` -- a
+    passing test beside an unexercised guard is not a mutation that ran.
+    """
+
+    def test_mutation_removing_the_gate_call_fails_the_write_path_refusal(self) -> None:
+        proc = _run_against_mutant(
+            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            "",
+            "tests.test_paper_writing.WriteGateTests"
+            ".test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 class ReadinessPhasesReadOnlyTests(unittest.TestCase):
     """tasks.md 6.14: `phases` and `readiness` write nothing under every
     input, including every refusal path -- the same before/after content

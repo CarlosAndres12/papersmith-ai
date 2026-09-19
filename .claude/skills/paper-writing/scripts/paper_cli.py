@@ -701,6 +701,81 @@ def cmd_plan(args: argparse.Namespace) -> dict:
     return compute_plan(paper_dir, guidance_dir=guidance_dir, sections_dir=sections_dir)
 
 
+def _unwritten_required_blocks(corpus, wave: list, opened_blocks: set) -> list:
+    """Non-optional blocks in `wave` that are not yet opened -- unit 3's
+    absence semantics: an unopened `optional` block never blocks a wave
+    (tasks.md 6b.2). Extracted out of `compute_phases`'s own gate loop
+    (unit 6) so `cmd_write`'s write-path gate (unit 6b) shares the exact
+    same definition of "written" rather than a second one that could
+    drift from it.
+    """
+    return sorted(
+        qualified_id for qualified_id in wave
+        if not corpus.blocks[qualified_id].optional and qualified_id not in opened_blocks
+    )
+
+
+def _refuse_on_incomplete_waves(
+    waves: list, corpus, opened_blocks: set, up_to_index: int, *, blocked_label: str,
+) -> None:
+    """Raises `PHASE_NOT_READY` naming the first still-incomplete wave
+    among `waves[:up_to_index]` and its unwritten non-optional blocks.
+    `blocked_label` names what is being gated -- a phase number for
+    `compute_phases`'s own `--phase N`, a qualified block id for
+    `cmd_write`'s write-path gate -- in the refusal detail. ONE gate
+    computation (tasks.md 6b.1's own instruction: "do not write a second
+    one"), two callers below.
+    """
+    for index, wave in enumerate(waves[:up_to_index]):
+        unwritten = _unwritten_required_blocks(corpus, wave, opened_blocks)
+        if unwritten:
+            raise Refused(
+                "PHASE_NOT_READY",
+                f"wave {index + 1} is not complete ({unwritten} still unwritten); "
+                f"{blocked_label} cannot proceed until every wave before it is complete",
+            )
+
+
+def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) -> None:
+    """`cmd_write`'s own phase gate (tasks.md 6b.1-6b.2; `specs/writing-
+    phases/spec.md`, `Requirement: Phase N Is Gated On Phase N-1`, whose
+    own scenarios name `write` -- the verb unit 6 left unwired). Runs
+    BEFORE any draft/audit file is opened, before `paper_write.write_
+    block`'s own attempt ledger is touched, and before any byte reaches
+    `main.tex` -- a block must never burn a judge-cycle attempt on a
+    refusal that has nothing to do with its draft.
+
+    Resolves `qualified_id`'s own Kahn wave via `paper_graph.derive_
+    waves` and calls `_refuse_on_incomplete_waves`, the SAME gate
+    computation `compute_phases`'s own `--phase N` refusal uses -- so
+    `phases` and `write` can never disagree about what "not ready" means
+    (Unit 6's own Notes flagged exactly this drift; this closes it).
+
+    A `qualified_id` the corpus's own waves do not contain (a typo'd
+    `--section`/`--block`, or a block the section header does not
+    declare) is left to `cmd_write`'s existing downstream lookup to
+    refuse on its own terms -- this gate only ever narrows what CAN
+    proceed, it never invents a refusal for a condition it was not asked
+    to police.
+    """
+    corpus = paper_graph.assemble_corpus(sections_dir)
+    edge_set = paper_graph.collect_edges(corpus)
+    waves = paper_graph.derive_waves(corpus, edge_set)
+
+    wave_index = next((index for index, wave in enumerate(waves) if qualified_id in wave), None)
+    if wave_index is None:
+        return
+
+    tex_path = paper_block.resolve_main_tex(paper_dir)
+    status = paper_block.status(tex_path.read_bytes())
+    opened_blocks = {block["id"] for block in status["blocks"]}
+
+    _refuse_on_incomplete_waves(
+        waves, corpus, opened_blocks, wave_index,
+        blocked_label=f"{qualified_id!r} (wave {wave_index + 1})",
+    )
+
+
 def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:
     """`phases`: the read-only "what can I write now" report `readiness`
     alone never answered -- `compute_readiness` had exactly one caller
@@ -730,12 +805,15 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
 
     `phase` given -> refuses `PHASE_NOT_READY`, before any output is built,
     naming the first still-incomplete wave among waves `1..phase-1` and its
-    unwritten non-optional blocks; only waves `1..phase` are then reported.
-    `phase` omitted -> every wave is reported -- the full plan the operator
-    approves once, before writing starts (`specs/writing-phases/spec.md`,
-    `Requirement: The Operator Approves The Phase Plan Before Writing
-    Starts`; unit 9 wires this report into `SKILL.md`'s own approval
-    prose).
+    unwritten non-optional blocks (via the shared `_refuse_on_incomplete_
+    waves`, unit 6b: `cmd_write`'s own write-path gate below calls the
+    identical function, so this read-only report and the real write path
+    can never disagree about what "not ready" means); only waves `1..phase`
+    are then reported. `phase` omitted -> every wave is reported -- the
+    full plan the operator approves once, before writing starts
+    (`specs/writing-phases/spec.md`, `Requirement: The Operator Approves
+    The Phase Plan Before Writing Starts`; unit 9 wires this report into
+    `SKILL.md`'s own approval prose).
     """
     corpus = paper_graph.assemble_corpus(sections_dir)
     edge_set = paper_graph.collect_edges(corpus)
@@ -761,28 +839,17 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
     )
     readiness_by_block = {entry["block"]: entry for entry in readiness_report}
 
-    def _unwritten_required(wave: list) -> list:
-        return sorted(
-            qualified_id for qualified_id in wave
-            if not corpus.blocks[qualified_id].optional and qualified_id not in opened_blocks
-        )
-
     if phase is not None:
-        for index, wave in enumerate(waves[: phase - 1]):
-            unwritten = _unwritten_required(wave)
-            if unwritten:
-                raise Refused(
-                    "PHASE_NOT_READY",
-                    f"wave {index + 1} is not complete ({unwritten} still unwritten); "
-                    f"phase {phase} cannot begin until every wave before it is complete",
-                )
+        _refuse_on_incomplete_waves(
+            waves, corpus, opened_blocks, phase - 1, blocked_label=f"phase {phase}",
+        )
 
     selected_waves = waves if phase is None else waves[:phase]
 
     wave_reports = []
     previous_complete = True
     for index, wave in enumerate(selected_waves):
-        wave_complete = not _unwritten_required(wave)
+        wave_complete = not _unwritten_required_blocks(corpus, wave, opened_blocks)
         if not previous_complete:
             wave_status = "gated"
         elif wave_complete:
@@ -853,8 +920,22 @@ def cmd_write(args: argparse.Namespace) -> dict:
     inside `write_block` before `substitute`, never only importable and
     unreachable (`style-leak-detection` spec, `Requirement: The
     Eight-Token Tripwire`).
+
+    Before any of that -- before `--draft`/`--audit` are even read off
+    disk -- `_resolve_write_gate` refuses `PHASE_NOT_READY` when this
+    block's own wave has an earlier, still-incomplete wave (tasks.md
+    6b.1-6b.5; `specs/writing-phases/spec.md`, `Requirement: Phase N Is
+    Gated On Phase N-1`). Unit 6 wired this refusal onto the read-only
+    `phases` verb alone; `cmd_write` never consulted `derive_waves`, so a
+    later wave could be written before an earlier one existed. This gate
+    closes that gap: it runs before `write_block`'s own attempt ledger is
+    touched and before any byte reaches `main.tex`, so a block never
+    burns a judge-cycle attempt on a refusal unrelated to its draft.
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")
+
     draft_path = _resolve_repo_path(args.draft)
     audit_path = _resolve_repo_path(args.audit)
     if args.transcript:
@@ -863,7 +944,6 @@ def cmd_write(args: argparse.Namespace) -> dict:
     draft = json.loads(draft_path.read_text(encoding="utf-8"))
     audit_account = json.loads(audit_path.read_text(encoding="utf-8"))
 
-    sections_dir = paper_contract.resolve_sections_dir(args.sections)
     section_path = sections_dir / f"{args.section}.md"
     header, body = paper_contract.parse(section_path.read_bytes())
     block = next(b for b in header.blocks if b["id"] == args.block)
