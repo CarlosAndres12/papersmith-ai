@@ -2860,3 +2860,52 @@ class RefusalCodeNamingConventionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LifecycleCliFrontDoorTests(unittest.TestCase):
+    """`reuse` and `exhaustion` exercised through `paper_cli`'s own command
+    functions -- the door a caller actually goes through -- not through
+    `paper_lifecycle`'s pure functions, which their own suite already covers.
+
+    These exist because `VerbFrontDoorCoverageTests` went RED the moment
+    these two verbs merged in from another branch: that guard derives the
+    shipped verb list from `build_parser()` live, so it noticed two new
+    doors nobody had knocked on without any human remembering to update a
+    list. This is the guard working, and these are its answer.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="lifecycle-front-door-", dir=FORGE_ROOT))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.paper = self.root / "paper"
+        self.paper.mkdir()
+        (self.paper / "main.tex").write_bytes(b"")
+        self.guidance = self.root / "guidance"
+        self.guidance.mkdir()
+
+    def _args(self, **extra) -> argparse.Namespace:
+        base = {"paper": str(self.paper), "guidance": str(self.guidance),
+                "min_sources": None}
+        base.update(extra)
+        return argparse.Namespace(**base)
+
+    def test_reuse_returns_its_envelope_through_the_command_function(self) -> None:
+        payload = paper_cli.cmd_reuse(self._args(block="intro.claim"))
+        self.assertIsInstance(payload, dict)
+        self.assertNotIn("status", payload,
+                         "cmd_* returns the body; `main` adds `status` itself")
+
+    def test_exhaustion_returns_its_envelope_through_the_command_function(self) -> None:
+        payload = paper_cli.cmd_exhaustion(self._args())
+        self.assertIsInstance(payload, dict)
+
+    def test_both_refuse_outside_the_repository_before_reading_anything(self) -> None:
+        """Path containment is the one guard that must fire before either
+        report touches disk -- the same `PAPER_OUTSIDE_REPOSITORY` every
+        other verb raises, reused, never a second code for one condition."""
+        outside = argparse.Namespace(paper="/tmp/not-in-this-repo",
+                                     guidance=str(self.guidance),
+                                     min_sources=None, block="intro.claim")
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_reuse(outside)
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
