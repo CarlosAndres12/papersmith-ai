@@ -379,7 +379,11 @@ agentes (`.claude/agents/`), y sus routing docs apuntan al árbol canónico
 `skills/*/SKILL.md`. Los documentos de routing son generated projections: la
 fuente real de cada agente es `.claude/agents/*.md` y la de cada skill es su
 `SKILL.md`. No edites las proyecciones a mano; se regeneran (y
-`papersmith audit --check-drift` avisa si una se desvió).
+`papersmith audit --check-drift` avisa si una se desvió). Para que tu harness
+liste las skills como comandos `/`, corré `npm run setup:harnesses` dentro del
+workspace: enlaza el árbol embarcado en `.claude/skills`, `.pi/skills`,
+`.opencode/skills` y `.antigravity/skills`, igual de relativo e idempotente que
+en el checkout.
 
 ---
 
@@ -3018,10 +3022,12 @@ skill. Lo mismo vale para los motores de implementación:
 directo en vez de a través de `implementation_cli.py`, que es quien los arranca
 con su perfil.
 
-**"El workspace no tiene `.claude/skills`."** Correcto: un workspace embarca el
-árbol `skills/` completo y `.claude/agents/`, y sus documentos de routing
-apuntan al árbol canónico `skills/*/SKILL.md`. Los agentes leen las skills desde
-ahí.
+**"El workspace no tiene `.claude/skills`."** Es el estado por defecto: un
+workspace embarca el árbol `skills/` completo y `.claude/agents/`, y sus
+documentos de routing apuntan al árbol canónico `skills/*/SKILL.md`; los
+agentes leen las skills desde ahí. Si querés que tu harness las liste como
+comandos `/`, corré `npm run setup:harnesses` dentro del workspace: crea las
+proyecciones de los cuatro harness, relativas e idempotentes.
 
 **"`papersmith audit` reporta drift."** Algún archivo generado cambió respecto
 del manifest. No lo edites a mano: corré `papersmith upgrade` (y `--force` si

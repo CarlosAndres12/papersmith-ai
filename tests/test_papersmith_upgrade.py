@@ -66,6 +66,19 @@ class UpgradeTests(unittest.TestCase):
         expected = manifest.workspace_framework_files(workspace, Path(__file__).parents[1])
         assert stored["files"] == expected
 
+    def test_upgrade_delivers_the_harness_projection_script(self) -> None:
+        """A workspace made before the script shipped receives it on upgrade."""
+        tmp_path = self.new_tmp()
+        workspace = _workspace(tmp_path)
+        script = workspace / "scripts" / "setup-harnesses.sh"
+        assert script.is_file()
+        script.unlink()
+
+        result = upgrade_module.upgrade(workspace)
+
+        assert "scripts/setup-harnesses.sh" in result["changed_files"]
+        assert script.is_file()
+
     def test_upgrade_rebuilds_generated_projections(self) -> None:
         tmp_path = self.new_tmp()
         workspace = _workspace(tmp_path)

@@ -103,6 +103,7 @@ class GeneratedWorkspaceTests(unittest.TestCase):
             "skills/paper-writing/SKILL.md",
             "skills/proposal-deliberation/cli.mjs",
             "scripts/setup_env.py",
+            "scripts/setup-harnesses.sh",
         ):
             self.assertTrue((workspace / relpath).exists(), relpath)
         rc, out, _ = capture(["status", str(workspace), "--json"])
@@ -140,6 +141,36 @@ class UpgradeCommandTests(unittest.TestCase):
         rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
         self.assertEqual(rc, SUCCESS)
         self.assertIn("drift: clean", out)
+
+
+class HarnessProjectionTests(unittest.TestCase):
+    """The workspace ships the script its package.json advertises for harness wiring."""
+
+    HARNESS_LINKS = (".claude/skills", ".pi/skills", ".opencode/skills", ".antigravity/skills")
+
+    def test_projection_script_wires_every_harness(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        package = (workspace / "package.json").read_text(encoding="utf-8")
+        self.assertIn("bash scripts/setup-harnesses.sh", package)
+        script = workspace / "scripts" / "setup-harnesses.sh"
+        self.assertTrue(script.is_file(), "the workspace must ship the script it advertises")
+
+        first = subprocess.run(
+            ["bash", str(script)], cwd=workspace, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(first.returncode, 0, first.stderr)
+        for relpath in self.HARNESS_LINKS:
+            link = workspace / relpath
+            self.assertTrue(link.is_symlink(), f"{relpath} must be a symlink")
+            self.assertEqual(os.readlink(link), os.path.relpath(workspace / "skills", link.parent))
+            self.assertTrue((link / "paper-ingestion" / "SKILL.md").is_file(), relpath)
+
+        second = subprocess.run(
+            ["bash", str(script)], cwd=workspace, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(second.returncode, 0, second.stderr)
+        for relpath in self.HARNESS_LINKS:
+            self.assertTrue((workspace / relpath).is_symlink(), f"{relpath} must survive a re-run")
 
 
 class TargetCommandTests(unittest.TestCase):

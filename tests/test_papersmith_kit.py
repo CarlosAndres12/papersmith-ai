@@ -35,6 +35,7 @@ def _make_checkout(tmp_path: Path) -> Path:
             "skills/paper-ingestion/__pycache__/mod.pyc": "junk\n",
             "skills/paper-ingestion/.hidden.md": "junk\n",
             "scripts/setup_env.py": "# env\n",
+            "scripts/setup-harnesses.sh": "#!/usr/bin/env bash\n",
             "CLAUDE.md": "# claude\n",
             "guidance/paper-guide/venue.md": "# venue\n",
             ".claude/agents/paper-ingestion.md": "# agent\n",
@@ -112,6 +113,7 @@ class KitTests(unittest.TestCase):
         assert "skills/paper-ingestion/__pycache__/mod.pyc" not in files
         assert "skills/paper-ingestion/.hidden.md" not in files
         assert "scripts/setup_env.py" in files
+        assert "scripts/setup-harnesses.sh" in files
         assert "package.json" in files
         assert "requirements.txt" in files
         assert "guidance/paper-guide/venue.md" in files
@@ -201,6 +203,8 @@ class KitTests(unittest.TestCase):
         assert data["kind"] == "kit"
         assert data["version"] == __version__
         assert "skills/skill-audit/scripts/audit_cli.py" in data["files"]
+        assert "scripts/setup-harnesses.sh" in data["files"]
+        assert (kit_dir / "scripts" / "setup-harnesses.sh").is_file()
         # every hashed file must exist and match its hash
         for relpath, digest in data["files"].items():
             assert (kit_dir / relpath).is_file(), relpath

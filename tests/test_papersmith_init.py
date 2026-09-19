@@ -45,6 +45,7 @@ class InitTests(unittest.TestCase):
             "skills/paper-ingestion/SKILL.md",
             "skills/proposal-deliberation/cli.mjs",
             "skills/kaggle-accounts/store/.gitignore",
+            "scripts/setup-harnesses.sh",
             "guidance/paper-guide",
             "guidance/reference-papers",
             "proposals/drafts",

@@ -30,6 +30,7 @@ KIT_ENTRIES = (
     "guidance/paper-guide",
     ".claude/agents",
     "scripts/setup_env.py",
+    "scripts/setup-harnesses.sh",
     "package.json",
     "requirements.txt",
 )
