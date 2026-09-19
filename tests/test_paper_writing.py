@@ -1803,6 +1803,246 @@ class FactProducerDuplicationTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, output)
 
 
+class FactTotalityTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: Every Producer Is Either Sole
+    Or Corroborated`; design.md, Decision D ('Totality is relative to
+    consumption'); tasks.md 2.6. Consumption-relative: a fact SOME BLOCK
+    REQUIRES (excluding the structural `skeleton` fact) must resolve
+    through `paper_declarations.FACT_SOURCE_ROOT` (the five observable
+    facts) or a block's `produces_facts`, else refuses
+    `FACT_PRODUCER_ABSENT` naming the fact; a produced-class fact nobody
+    requires needs no producer at all — an unconditional totality
+    invariant is precisely what broke every raw-header fixture in the
+    previous change."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_required_fact_with_no_producer_anywhere_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", requires=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_ABSENT")
+        self.assertIn("limitations", ctx.exception.detail)
+
+    def test_a_required_observable_fact_needs_no_block_producer(self) -> None:
+        """`dataset` resolves externally (`FACT_SOURCE_ROOT`) — requiring
+        it with no `produces_facts` anywhere must not refuse."""
+        header = _produces_facts_section(
+            "a", "only", requires=["dataset"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["dataset"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].requires_facts, ("dataset",))
+
+    def test_a_required_fact_with_a_producer_elsewhere_is_accepted(self) -> None:
+        header_a = _produces_facts_section(
+            "a", "only", requires=["limitations"], file="sections/01-a.md",
+        )
+        header_a["blocks"][0]["after"] = [
+            {
+                "target": "b.only",
+                "source": {
+                    "file": "sections/01-a.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        header_b = _produces_facts_section(
+            "b", "only", produces=["limitations"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(requires=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].requires_facts, ("limitations",))
+
+    def test_an_unrequired_produced_fact_needs_no_producer_check(self) -> None:
+        """Decision D: a produced-class fact nobody requires is simply
+        absent from this paper, legally — `produces_facts` alone, with no
+        consumer anywhere, must not refuse."""
+        header = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_fact_totality(corpus, declarations)\n",
+            "",
+            "tests.test_paper_writing.FactTotalityTests"
+            ".test_a_required_fact_with_no_producer_anywhere_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class ProducerReachabilityTests(unittest.TestCase):
+    """`contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row`; design.md, Decision C ('Ordering
+    is VERIFIED, never derived'); tasks.md 2.7. Every one of a produced
+    fact's producer(s) must reach the requiring consumer in the
+    `after`-edge graph (`collect_edges`/`_build_graph` — the SAME graph
+    `derive_order`/`derive_waves` consume); an indirect, transitively
+    backed chain is legal, a required DIRECT edge is not."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_consumer_reachable_from_its_producer_is_accepted(self) -> None:
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", requires=["limitations"], file="sections/02-b.md",
+        )
+        header_b["blocks"][0]["after"] = [
+            {
+                "target": "a.only",
+                "source": {
+                    "file": "sections/02-b.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(requires=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["b.only"].requires_facts, ("limitations",))
+
+    def test_a_consumer_not_reachable_from_its_producer_refuses(self) -> None:
+        """Same shape as the accepted case above, minus the `after` edge —
+        the producer never reaches the consumer."""
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", requires=["limitations"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(requires=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+        self.assertIn("b.only", ctx.exception.detail)
+        self.assertIn("limitations", ctx.exception.detail)
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_transitive_reachability_through_an_intermediate_block_is_accepted(self) -> None:
+        """Design.md Decision C: an indirect chain is legal — the producer
+        need not name the consumer directly, only reach it."""
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_mid = _produces_facts_section(
+            "mid", "only", file="sections/02-mid.md",
+        )
+        header_mid["blocks"][0]["after"] = [
+            {
+                "target": "a.only",
+                "source": {"file": "sections/02-mid.md", "quote": "Prose."},
+            }
+        ]
+        header_c = _produces_facts_section(
+            "c", "only", requires=["limitations"], file="sections/03-c.md",
+        )
+        header_c["blocks"][0]["after"] = [
+            {
+                "target": "mid.only",
+                "source": {
+                    "file": "sections/03-c.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-mid.md", header_mid, _produces_facts_body())
+        self._write("03-c.md", header_c, _produces_facts_body(requires=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["c.only"].requires_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_producer_reachability(corpus, declarations)\n",
+            "",
+            "tests.test_paper_writing.ProducerReachabilityTests"
+            ".test_a_consumer_not_reachable_from_its_producer_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_cyclic_corpus_still_surfaces_order_cycle_at_derive_order(self) -> None:
+        """tasks.md 2.8: reachability (cycle-tolerant by construction, a
+        visited set never unbounded recursion) must not hang and must not
+        misreport a cycle as `PRODUCER_CHAIN_ABSENT` here — the cycle
+        itself only ever surfaces at `derive_order`/`derive_waves`."""
+        header_a = _produces_facts_section(
+            "a", "cyc-a", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_a["blocks"][0]["after"] = [
+            {
+                "target": "b.cyc-b",
+                "source": {"file": "sections/01-a.md", "quote": "This block produces the limitations."},
+            }
+        ]
+        header_b = _produces_facts_section(
+            "b", "cyc-b", requires=["limitations"], file="sections/02-b.md",
+        )
+        header_b["blocks"][0]["after"] = [
+            {
+                "target": "a.cyc-a",
+                "source": {"file": "sections/02-b.md", "quote": "This block requires the limitations."},
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(requires=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing here
+
+        edges = paper_graph.collect_edges(corpus)
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.derive_order(corpus, edges)
+        self.assertEqual(ctx.exception.code, "ORDER_CYCLE")
+
+
 class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
     """`design.md`, Testing Strategy, 'Corpus — equality': `{qid:
     record.requires_facts}` / `.requires_declarations` over the shipped
@@ -1863,7 +2103,7 @@ class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
         "materials-and-methods.mm-dataset": ("dataset",),
         "materials-and-methods.mm-preamble": (),
         "materials-and-methods.mm-proposal": ("formulation",),
-        "related-work.rw-closing": ("gap",),
+        "related-work.rw-closing": (),
         "related-work.rw-panorama": ("problem-statement",),
         "related-work.rw-preamble": ("problem-statement",),
         "related-work.rw-problem-blocks": ("problem-statement",),
@@ -2955,16 +3195,60 @@ def _coupling_requirement(fact: str, filename: str) -> dict:
     }
 
 
+def _coupling_production(fact: str, filename: str) -> dict:
+    """One rich `produces_facts` entry, the `_coupling_requirement`
+    counterpart — `00-produced-facts.md`'s own four blocks are this
+    fixture's producers (`a-fact-is-declared-or-it-is-produced`,
+    `fact-production` spec), so `contributions`/`gap`/`problem-statement`/
+    `limitations` each resolve to a producer and `FACT_PRODUCER_ABSENT`
+    never fires here."""
+    return {
+        "value": fact,
+        "source": {
+            "file": f"sections/{filename}",
+            "quote": f"This block produces the {fact}.",
+        },
+    }
+
+
+def _coupling_after(fact: str, filename: str) -> list:
+    """The `after` edge every requiring block in this fixture carries to
+    its fact's producer in `00-produced-facts.md`, position 0 — always
+    the earliest section, so this edge alone backs reachability for
+    every consumer (`fact-production` spec, `Requirement: Every Producer
+    Is Either Sole Or Corroborated`; design.md, Decision C). Reuses the
+    SAME `requires_facts` quote already anchored in `filename`'s own
+    prose — no second sentence needed."""
+    return [{
+        "target": f"produced-facts.pf-{fact}",
+        "source": {
+            "file": f"sections/{filename}",
+            "quote": f"This block requires the {fact}.",
+        },
+    }]
+
+
 _COUPLING_SECTIONS = {
+    "00-produced-facts.md": {
+        "section": "produced-facts", "position": 0,
+        "blocks": [
+            {"id": f"pf-{fact}",
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production(fact, "00-produced-facts.md")]}
+            for fact in ("contributions", "gap", "problem-statement", "limitations")
+        ],
+    },
     "01-introduction.md": {
         "section": "introduction", "position": 1,
         "blocks": [
             {"id": "intro-contrib",
              "requires_facts": [_coupling_requirement("contributions", "01-introduction.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "01-introduction.md")},
             {"id": "intro-gap",
              "requires_facts": [_coupling_requirement("gap", "01-introduction.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("gap", "01-introduction.md")},
         ],
     },
     "02-methods.md": {
@@ -2972,10 +3256,12 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "methods-contrib",
              "requires_facts": [_coupling_requirement("contributions", "02-methods.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "02-methods.md")},
             {"id": "methods-chain",
              "requires_facts": [_coupling_requirement("problem-statement", "02-methods.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("problem-statement", "02-methods.md")},
         ],
     },
     "03-related-work.md": {
@@ -2983,7 +3269,8 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "related-work-gap",
              "requires_facts": [_coupling_requirement("gap", "03-related-work.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("gap", "03-related-work.md")},
         ],
     },
     "04-abstract.md": {
@@ -2991,7 +3278,8 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "abstract-contrib",
              "requires_facts": [_coupling_requirement("contributions", "04-abstract.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "04-abstract.md")},
         ],
     },
     "05-conclusions.md": {
@@ -2999,10 +3287,12 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "conclusions-contrib",
              "requires_facts": [_coupling_requirement("contributions", "05-conclusions.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "05-conclusions.md")},
             {"id": "conclusions-future",
              "requires_facts": [_coupling_requirement("limitations", "05-conclusions.md")],
-             "requires_declarations": [], "citations": "discovery"},
+             "requires_declarations": [], "citations": "discovery",
+             "after": _coupling_after("limitations", "05-conclusions.md")},
         ],
     },
 }
@@ -3010,9 +3300,20 @@ _COUPLING_SECTIONS = {
 #: Every fact this fixture's blocks require, in file declaration order —
 #: `_write_coupling_sections` appends one `This block requires the
 #: <fact>.` sentence per fact to that file's own prose, matching
-#: `_coupling_requirement`'s quote exactly.
+#: `_coupling_requirement`'s quote exactly. `00-produced-facts.md`'s own
+#: blocks require nothing, so they contribute no entry here.
 _COUPLING_FACTS_BY_FILE = {
-    name: [entry["requires_facts"][0]["value"] for entry in header["blocks"]]
+    name: [entry["requires_facts"][0]["value"] for entry in header["blocks"] if entry["requires_facts"]]
+    for name, header in _COUPLING_SECTIONS.items()
+}
+
+#: The `produces_facts` mirror of `_COUPLING_FACTS_BY_FILE` — only
+#: `00-produced-facts.md` carries any.
+_COUPLING_PRODUCES_BY_FILE = {
+    name: [
+        entry["produces_facts"][0]["value"]
+        for entry in header["blocks"] if entry.get("produces_facts")
+    ]
     for name, header in _COUPLING_SECTIONS.items()
 }
 
@@ -3079,6 +3380,8 @@ def _write_coupling_sections(sections_dir: Path) -> None:
     for name, header in _COUPLING_SECTIONS.items():
         anchors = "".join(
             f" This block requires the {fact}." for fact in _COUPLING_FACTS_BY_FILE[name]
+        ) + "".join(
+            f" This block produces the {fact}." for fact in _COUPLING_PRODUCES_BY_FILE[name]
         )
         text = (
             "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse." + anchors + "\n\n"
@@ -4655,8 +4958,19 @@ class RefusalRosterTests(unittest.TestCase):
         widening adds no new code: `MALFORMED_HEADER`/`UNKNOWN_FACT` are
         reused verbatim, the identical `requires_facts` schema check.
         Measured directly against `reachable_paper_refusal_codes()`, never
-        forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 130)
+        forecast. Moved from 130 to 132 in the same change's unit 2:
+        `paper_graph.py` gains two new raise sites, called from
+        `assemble_corpus` (an already-imported module) --
+        `FACT_PRODUCER_ABSENT` (a fact some block requires, excluding
+        `skeleton`, resolves via neither `FACT_SOURCE_ROOT` nor any
+        block's `produces_facts`) and `PRODUCER_CHAIN_ABSENT` (a producer
+        does not reach one of its consumers in the `after`-edge graph).
+        Both are reachable the instant their raise sites exist -- no new
+        import needed, since the corpus edits landing in the same commit
+        (`sections/*.md`) are exactly what makes each condition
+        exercisable against the real, shipped corpus. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 132)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -4757,8 +5071,36 @@ def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) 
     minimal enough that `check_contribution_list`'s derived block set for
     this corpus is exactly this one block, so "entirely optional-and-
     unopened" is trivially the whole set (`optional-block-semantics` spec,
-    tasks.md Work Unit 3, 3.6/3.7)."""
+    tasks.md Work Unit 3, 3.6/3.7). A second file supplies `contributions`'
+    own producer (`a-fact-is-declared-or-it-is-produced`, `fact-production`
+    spec, `Requirement: Every Producer Is Either Sole Or Corroborated`) --
+    non-optional and never itself required, so it neither enters
+    `check_contribution_list`'s own derived block set nor `optional_ids`."""
     sections_dir.mkdir(parents=True, exist_ok=True)
+    source_header = {
+        "section": "front-matter", "position": 0,
+        "blocks": [
+            {
+                "id": "contrib-source",
+                "requires_facts": [], "requires_declarations": [], "citations": "none",
+                "produces_facts": [
+                    {
+                        "value": "contributions",
+                        "source": {
+                            "file": "sections/00-front-matter.md",
+                            "quote": "This block produces the contributions.",
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+    source_text = (
+        "---\n" + json.dumps(source_header, indent=2) + "\n---\n\nProse. This block produces the "
+        "contributions.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+    (sections_dir / "00-front-matter.md").write_text(source_text, encoding="utf-8")
+
     header = {
         "section": "results", "position": 1,
         "blocks": [
@@ -4774,6 +5116,15 @@ def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) 
                     }
                 ],
                 "requires_declarations": [], "citations": "none", "optional": optional,
+                "after": [
+                    {
+                        "target": "front-matter.contrib-source",
+                        "source": {
+                            "file": "sections/01-results.md",
+                            "quote": "This block requires the contributions.",
+                        },
+                    }
+                ],
             },
         ],
     }

@@ -381,11 +381,15 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # duplicate-producer (corroborated pairs an existing
     # coupling-verification check names, e.g. `gap` / Coupling 3, are
     # legal; every other duplicate still refuses). Unit 2 adds
-    # `FACT_PRODUCER_ABSENT` (totality) and `PRODUCER_CHAIN_ABSENT`
-    # (reachability) -- not yet reachable here. -------------------------
+    # `FACT_PRODUCER_ABSENT` (consumption-relative totality: a fact some
+    # block requires resolves via `FACT_SOURCE_ROOT` or a producer, else
+    # refuses) and `PRODUCER_CHAIN_ABSENT` (every one of a fact's
+    # producer(s) must reach the consumer in the `after`-edge graph). ----
     "FACT_SELF_REQUIRED": WORK_STATE,
     "FACT_ROUTE_AMBIGUOUS": WORK_STATE,
     "FACT_PRODUCER_DUPLICATE": WORK_STATE,
+    "FACT_PRODUCER_ABSENT": WORK_STATE,
+    "PRODUCER_CHAIN_ABSENT": WORK_STATE,
 }
 
 

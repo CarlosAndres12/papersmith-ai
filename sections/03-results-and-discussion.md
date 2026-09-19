@@ -51,6 +51,13 @@
             "file": "sections/03-results-and-discussion.md",
             "quote": "A mechanism block opens by naming the previous block's result as the question it comes to answer."
           }
+        },
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The property a contribution promised, and the instrument the setup named for it"
+          }
         }
       ]
     },
@@ -251,7 +258,6 @@ to read the data, or a **behaviour already established** that the result agrees 
 | Input | Unblocks |
 |---|---|
 | The **results** — the main runs, against the baselines | `rd-general-task` |
-| The **property** a contribution promised, and the **instrument** the setup named for it | `rd-contribution-blocks` |
 | The **implementation** — the most demanding configuration, and the hardware declared in the setup | `rd-cost` |
 
 ### Internal chain
@@ -259,6 +265,7 @@ to read the data, or a **behaviour already established** that the result agrees 
 | Block | Depends on |
 |---|---|
 | `results-and-discussion.rd-contribution-blocks` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-general-task` — the general task's evidence, the block immediately before it |
+| `results-and-discussion.rd-contribution-blocks` — The property a contribution promised, and the instrument the setup named for it | `introduction.block-4b` — the enumerated contributions each property traces to |
 | `results-and-discussion.rd-cost` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-contribution-blocks` — the per-contribution validation, the block immediately before cost |
 
 ### Structural decisions

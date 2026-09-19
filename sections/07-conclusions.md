@@ -22,7 +22,16 @@
         }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/07-conclusions.md",
+            "quote": "The contributions, as defined — same count, order, and names as the introduction and the methods section"
+          }
+        }
+      ]
     },
     {
       "id": "concl-block-2",
@@ -56,7 +65,16 @@
         }
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "after": [
+        {
+          "target": "limitations.lim-closing",
+          "source": {
+            "file": "sections/07-conclusions.md",
+            "quote": "The limitations, which it is the relevant subset of, and one reference per direction"
+          }
+        }
+      ]
     }
   ]
 }
@@ -163,18 +181,19 @@ section, because it compresses it.
 
 | Input | Unblocks |
 |---|---|
-| The **contributions**, as defined — same count, order, and names as the introduction and the methods section | `concl-block-1` |
 | The **results**, and the number of experimental scenarios, which decides one paragraph or two | `concl-block-2` |
-| The **limitations**, which it is the relevant subset of, and one reference per direction | `concl-block-4` |
 
 ### Internal chain
 
-None — checked each of the four ids (`concl-block-1`, `concl-block-2`,
-`concl-block-3`, `concl-block-4`) against its own `requires_facts` and this
-file's own prose body for a reference to a sibling block's own text: every
-block draws only on the external facts named above; block 3's placement as
-its own paragraph or the close of block 2 is a placement option (see
-Structural decisions), not a content derivation from block 2's own prose.
+| Block | Depends on |
+|---|---|
+| `conclusions.concl-block-1` — The contributions, as defined — same count, order, and names as the introduction and the methods section | `introduction.block-4b` — the enumerated contributions restated here |
+| `conclusions.concl-block-4` — The limitations, which it is the relevant subset of, and one reference per direction | `limitations.lim-closing` — the closed limitations this block draws its relevant subset from |
+
+Block 3's own placement — its own paragraph or the close of block 2 — is a
+placement option (see Structural decisions), not a content derivation from
+block 2's own prose, so `concl-block-3` carries neither an external input nor
+an internal-chain row.
 
 ### Structural decisions
 

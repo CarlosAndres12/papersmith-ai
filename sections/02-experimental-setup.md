@@ -65,6 +65,27 @@
             "file": "sections/02-experimental-setup.md",
             "quote": "Its one dependency that is NOT internal is the data it must show entering, which live in `es-dataset` when the dataset belongs to this section"
           }
+        },
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
+          }
+        },
+        {
+          "target": "introduction.block-3",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
+        },
+        {
+          "target": "related-work.rw-closing",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
         }
       ],
       "figure": {
@@ -247,12 +268,10 @@ box appearing in both means one of them is wrong.
 | Input | Unblocks |
 |---|---|
 | The **dataset** — when this section owns it | `es-dataset` |
-| Which **property** each contribution claims — if it was promised, this is where its instrument is named | `es-assessment` |
 | The **competing methods** — the baseline list settled in the state of the art | `es-assessment` |
 | The **axes** — what the comparison is swept over | `es-assessment` |
 | The **purpose-built corpus** — that no standard reference measures what is claimed | `es-assessment` |
 | The **experimental design** — the competing methods, the axes, and the purpose-built corpus criteria settled as one comparison protocol | `es-assessment` |
-| The **gap** — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `es-assessment` |
 | The **implementation** of the experiments and its configuration — what actually ran | `es-training-details` |
 
 ### Internal chain
@@ -260,6 +279,9 @@ box appearing in both means one of them is wrong.
 | Block | Depends on |
 |---|---|
 | `experimental-setup.es-assessment` — the closing diagram's "which data enter" panel | `experimental-setup.es-dataset` — the dataset block, when this section owns it |
+| `experimental-setup.es-assessment` — Which property each contribution claims — if it was promised, this is where its instrument is named | `introduction.block-4b` — the enumerated contributions the instrument is named for |
+| `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `introduction.block-3` — the joint gap, condensed there |
+| `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `related-work.rw-closing` — the joint gap, developed there |
 
 ### Structural decisions
 

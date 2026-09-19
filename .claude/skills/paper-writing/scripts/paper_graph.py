@@ -187,6 +187,8 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_route_exclusivity(declarations)
     _verify_producer_duplication(declarations)
     _verify_self_reference(corpus)
+    _verify_fact_totality(corpus, declarations)
+    _verify_producer_reachability(corpus, declarations)
     return corpus
 
 
@@ -356,9 +358,7 @@ def _verify_producer_duplication(declarations: list) -> None:
     asking the real, existing coupling roster, never by a hand-listed
     exception list of fact ids here (`fact-production` spec, `Requirement:
     Every Producer Is Either Sole Or Corroborated`; design.md, Decision F)."""
-    producers_by_fact: dict = {}
-    for fact_id, producer_id in declarations:
-        producers_by_fact.setdefault(fact_id, []).append(producer_id)
+    producers_by_fact = _producers_by_fact(declarations)
     for fact_id, producer_ids in producers_by_fact.items():
         if len(producer_ids) < 2:
             continue
@@ -383,6 +383,103 @@ def _verify_self_reference(corpus: Corpus) -> None:
                 "FACT_SELF_REQUIRED",
                 f"{qualified_id}: requires and produces {fact_id!r}",
             )
+
+
+def _producers_by_fact(declarations: list) -> dict:
+    """`fact_id -> [producer_id, ...]`, the same grouping
+    `_verify_producer_duplication` derives inline — factored out so
+    `_verify_fact_totality` and `_verify_producer_reachability` share one
+    derivation rather than each re-scanning `declarations` its own way."""
+    producers_by_fact: dict = {}
+    for fact_id, producer_id in declarations:
+        producers_by_fact.setdefault(fact_id, []).append(producer_id)
+    return producers_by_fact
+
+
+def _verify_fact_totality(corpus: Corpus, declarations: list) -> None:
+    """Refuses `FACT_PRODUCER_ABSENT` (work-state) naming a fact some block
+    REQUIRES (`requires_facts`, excluding the structural `skeleton` fact,
+    resolved by the existing skeleton-startup mechanism) that resolves
+    through neither `paper_declarations.FACT_SOURCE_ROOT` (the five
+    observable facts, always externally available) nor any block's
+    `produces_facts` (`fact-production` spec, `Requirement: Every Producer
+    Is Either Sole Or Corroborated`; design.md, Decision D:
+    'Totality is relative to consumption'). A produced-class fact that no
+    block requires needs no producer — it is simply absent from this paper,
+    legally; an unconditional (never-required) totality invariant is
+    precisely what broke every raw-header fixture in the previous change."""
+    producers_by_fact = _producers_by_fact(declarations)
+    required_facts = {
+        fact_id for record in corpus.blocks.values() for fact_id in record.requires_facts
+    }
+    for fact_id in sorted(required_facts):
+        if fact_id in paper_declarations.STRUCTURAL_FACTS:
+            continue
+        if fact_id in paper_declarations.FACT_SOURCE_ROOT:
+            continue
+        if fact_id in producers_by_fact:
+            continue
+        raise Refused(
+            "FACT_PRODUCER_ABSENT",
+            f"{fact_id!r} is required but has no producer: absent from "
+            f"FACT_SOURCE_ROOT and named by no block's produces_facts",
+        )
+
+
+def _verify_producer_reachability(corpus: Corpus, declarations: list) -> None:
+    """Refuses `PRODUCER_CHAIN_ABSENT` (work-state) naming the consumer, the
+    fact, and the producer, when a block requiring a produced-class fact is
+    not reachable, in the `after`-edge block graph (`collect_edges` /
+    `_build_graph` — the SAME graph `derive_order`/`derive_waves` consume),
+    from every one of that fact's producer block(s) (`internal-chain-edges`
+    spec / `contract-input-partition` spec; design.md, Decision C: refuse
+    unless the producer reaches every consumer, never a derived edge and
+    never a required DIRECT edge — a cycle can only ever come from the
+    hand-written corpus, and an indirect, transitively-backed chain is
+    legal). `gap`'s corroborated pair (design.md, Decision F) means BOTH
+    producers must reach a `gap` consumer — satisfaction requires every
+    producer opened (Decision E), so the writing order must guarantee both
+    precede it."""
+    producers_by_fact = _producers_by_fact(declarations)
+    if not producers_by_fact:
+        return
+    successors, _indegree = _build_graph(corpus, collect_edges(corpus))
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id in record.requires_facts:
+            producer_ids = producers_by_fact.get(fact_id)
+            if not producer_ids:
+                continue
+            for producer_id in producer_ids:
+                if producer_id == qualified_id:
+                    continue  # FACT_SELF_REQUIRED already refuses this shape
+                if not _reaches(successors, producer_id, qualified_id):
+                    raise Refused(
+                        "PRODUCER_CHAIN_ABSENT",
+                        f"{qualified_id}: requires {fact_id!r}, produced by "
+                        f"{producer_id!r}, but {producer_id!r} does not reach "
+                        f"{qualified_id!r} in the writing order",
+                    )
+
+
+def _reaches(successors: dict, source: str, target: str) -> bool:
+    """Iterative, cycle-tolerant DFS (a visited set, never unbounded
+    recursion) over `successors` — `True` when `target` is reachable from
+    `source`, `False` when `source` names no node in the graph at all (a
+    section-level producer id, never measured in the shipped corpus, whose
+    every block would need to be checked individually instead)."""
+    if source not in successors:
+        return False
+    visited = {source}
+    stack = [source]
+    while stack:
+        node = stack.pop()
+        for successor in successors.get(node, ()):
+            if successor == target:
+                return True
+            if successor not in visited:
+                visited.add(successor)
+                stack.append(successor)
+    return False
 
 
 def _internal_chain_rows(text: str) -> list:

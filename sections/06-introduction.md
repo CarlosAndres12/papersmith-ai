@@ -37,6 +37,15 @@
       ],
       "requires_declarations": [],
       "citations": "discovery",
+      "produces_facts": [
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Turn the general need into a concrete technical problem, and decompose it into the specific problems the proposal resolves."
+          }
+        }
+      ],
       "after": [
         {
           "target": "introduction.block-4b",
@@ -60,7 +69,23 @@
       ],
       "requires_declarations": [],
       "citations": "discovery",
+      "produces_facts": [
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The closing is the joint gap, and the conjunction is what makes it a gap."
+          }
+        }
+      ],
       "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Block 3 — state of the art and gap depends on the problem statement when there is no Related Work section"
+          }
+        },
         {
           "target": "related-work",
           "source": {
@@ -119,7 +144,16 @@
         }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "produces_facts": [
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The number of items is the number of contributions the proposal has."
+          }
+        }
+      ]
     },
     {
       "id": "block-5",
@@ -214,16 +248,19 @@ the design and completed from the measurement.
 | Block | Depends on |
 |---|---|
 | `introduction.block-2` — the general problem and the specific ones | `introduction.block-4b` — each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
+| `introduction.block-3` — state of the art and gap, depending on the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
 | `introduction.block-4a` — the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
 | `introduction.block-4a` — the presenting prose | `introduction.block-4b` — the announcement of the count, stated before the list enumerates it |
 
 ### Structural decisions
 
 - **Block 3 — state of the art and gap** depends on the problem statement
-  when there is no Related Work section; the problem statement **and the
-  written Related Work section** when there is one — the conditional
-  cross-section case this block's own `after` edge to `related-work`
-  already carries, not a second graph edge.
+  when there is no Related Work section — its own `after` edge to
+  `introduction.block-2` carries this now that `problem-statement` is a
+  produced-class fact — **and** the problem statement **and the written
+  Related Work section** when a Related Work section exists — the
+  conditional cross-section case this block's own second `after` edge to
+  `related-work` carries.
 - **`introduction.block-4a` / `block-4b` are two blocks, not one.** The
   contract's own extent line says so — "Two physical paragraphs, 120-180
   words in total" — and names them `Paragraph 4a - the prose` and
