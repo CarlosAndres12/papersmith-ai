@@ -29631,15 +29631,19 @@ class NoTestClassShadowsAnotherTests(unittest.TestCase):
         import pathlib
         for path in sorted(pathlib.Path(__file__).parent.glob("test_*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"))
+            # `unittest discover` and pytest both collect module ATTRIBUTES, so
+            # a repeated top-level name loses the earlier definition whether it
+            # is a class or a function. Scanning both keeps the guard honest for
+            # the function-style suites too.
             names = [node.name for node in tree.body
-                     if isinstance(node, ast.ClassDef)]
-            assert names, f"{path.name} parsed to no classes at all"
+                     if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))]
+            assert names, f"{path.name} parsed to no module-level definitions at all"
             duplicated = sorted({name for name in names
                                  if names.count(name) > 1})
             with self.subTest(file=path.name):
                 self.assertEqual(
                     duplicated, [],
-                    f"{path.name} defines these class names twice; the later "
+                    f"{path.name} defines these names twice; the later "
                     "definition silently replaces the earlier one and every "
                     "test the earlier one held stops running")
 
