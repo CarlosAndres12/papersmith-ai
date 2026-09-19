@@ -181,6 +181,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "SKELETON_ANSWER_REQUIRED": INVOCATION_DEFECT,
     "SKELETON_ALREADY_DECIDED": WORK_STATE,
     "DATASET_PLACEMENT_CONFLICT": WORK_STATE,
+    # --- the-skill-stops-trusting-memory, item 1: dataset placement is
+    # derived from the corpus's own `requires_facts`/`optional` shape,
+    # never a literal id pair (paper_declarations.
+    # dataset_placement_candidates) -------------------------------------
+    "DATASET_PLACEMENT_CANDIDATE_ABSENT": WORK_STATE,
+    "DATASET_PLACEMENT_CANDIDATE_AMBIGUOUS": WORK_STATE,
     # --- region grammar (paper_region.py) -- twins of Phase 1's marker
     # codes, reachable ahead of their own verb wiring because paper_cli.py
     # imports paper_region.py at module level (Slice A, `the-paper-carries-
@@ -478,16 +484,24 @@ def cmd_order(args: argparse.Namespace) -> dict:
 def _skeleton_excluded_ids(corpus, *, related_work: bool, dataset_in: str) -> set:
     """The block ids `skeleton` leaves unopened for the given answers
     (design.md D4; tasks.md 7.8): every `related-work` block when Related
-    Work is "no", and whichever of `mm-dataset` / `es-dataset` was NOT
-    chosen. Every other block id is opened unconditionally.
+    Work is "no", and every dataset-placement candidate
+    (`paper_declarations.dataset_placement_candidates`) NOT sitting in the
+    chosen section. Every other block id is opened unconditionally.
+
+    Derives which candidate belongs to which section from the corpus
+    itself -- never a literal `mm-dataset`/`es-dataset` id pair (the
+    `a-fact-source-nobody-checks` corrective: those two ids used to be
+    hardcoded here, via `paper_declarations.MM_DATASET_ID`/`ES_DATASET_ID`,
+    a violation of this skill's own "block ids are shape only" invariant).
     """
     excluded: set = set()
     if not related_work:
         excluded |= set(corpus.order_by_section.get("related-work", ()))
-    excluded.add(
-        paper_declarations.ES_DATASET_ID if dataset_in == "materials"
-        else paper_declarations.MM_DATASET_ID
+    candidates = paper_declarations.dataset_placement_candidates(corpus)
+    chosen_section = (
+        "materials-and-methods" if dataset_in == "materials" else "experimental-setup"
     )
+    excluded |= {qid for section, qid in candidates.items() if section != chosen_section}
     return excluded
 
 

@@ -32,7 +32,10 @@ Public surface:
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
     infer_related_work(corpus, opened_ids) -> bool  (pure; skeleton inference)
-    infer_dataset_placement(opened_ids) -> str  (pure; raises DATASET_PLACEMENT_CONFLICT)
+    dataset_placement_candidates(corpus) -> dict  (pure; section -> qualified id;
+        raises DATASET_PLACEMENT_CANDIDATE_ABSENT, DATASET_PLACEMENT_CANDIDATE_AMBIGUOUS)
+    infer_dataset_placement(corpus, opened_ids) -> str  (pure; raises DATASET_PLACEMENT_CONFLICT
+        and whatever dataset_placement_candidates raises)
     infer_skeleton_decisions(paper_dir, corpus) -> dict  (read-only; disk, never a stored flag)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
@@ -477,15 +480,6 @@ def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> di
     return {"id": id_, "kind": kind, "generation": new_body["generation"]}
 
 
-#: The two literal qualified ids `skeleton`'s dataset-placement inference
-#: reads (`the-phases-are-derived-not-remembered`, design.md D4). Literal,
-#: like the module docstring's own `STRUCTURAL_FACTS` -- these two ids are
-#: the shape the shipped corpus declares, never derived from a section id
-#: lookup that could resolve to something else.
-MM_DATASET_ID = "materials-and-methods.mm-dataset"
-ES_DATASET_ID = "experimental-setup.es-dataset"
-
-
 def infer_related_work(corpus, opened_ids) -> bool:
     """Pure: Related Work is present iff any of `related-work`'s own block
     ids (`corpus.order_by_section["related-work"]`) is a member of
@@ -498,26 +492,67 @@ def infer_related_work(corpus, opened_ids) -> bool:
     return any(qualified_id in opened_ids for qualified_id in related_work_ids)
 
 
-def infer_dataset_placement(opened_ids) -> str:
-    """Pure: `"materials-and-methods"` if `MM_DATASET_ID` is opened,
-    `"experimental-setup"` if `ES_DATASET_ID` is opened, `"undecided"` if
-    neither. Refuses `DATASET_PLACEMENT_CONFLICT` (work-state), naming both
-    ids, when both are opened at once -- the paper says two things and the
-    skill will not pick one (design.md D4).
+def dataset_placement_candidates(corpus) -> dict:
+    """Pure: the dataset-placement candidate block, per section, DERIVED
+    from the corpus itself rather than hardcoded (SKILL.md:154-158, "block
+    ids are shape only ... never validates an id against a list of what
+    should exist" -- WHICH ids exist is `sections/*.md`'s business, never
+    this engine's). A candidate is any block whose own contract REQUIRES
+    the `dataset` fact and is `optional` -- exactly the shape the real,
+    shipped corpus already declares for both `materials-and-methods.
+    mm-dataset` and `experimental-setup.es-dataset` (measured on disk, 2026
+    -09-18, not assumed): renaming either block id in its own contract no
+    longer desynchronizes this inference, because nothing here ever spells
+    either id.
+
+    Refuses `DATASET_PLACEMENT_CANDIDATE_ABSENT` (work-state) when NO block
+    anywhere in the corpus matches -- a corpus that declares no such
+    candidate at all is a shape this inference cannot silently read as
+    `"undecided"`; an absence must be named, not swallowed. Refuses
+    `DATASET_PLACEMENT_CANDIDATE_AMBIGUOUS` (work-state) when any ONE
+    section offers more than one such candidate -- the "one per section"
+    shape this inference requires does not hold for that corpus.
     """
-    mm_open = MM_DATASET_ID in opened_ids
-    es_open = ES_DATASET_ID in opened_ids
-    if mm_open and es_open:
+    by_section: dict[str, list[str]] = {}
+    for qualified_id, block in corpus.blocks.items():
+        if block.optional and "dataset" in block.requires_facts:
+            by_section.setdefault(block.section, []).append(qualified_id)
+
+    if not by_section:
+        raise Refused(
+            "DATASET_PLACEMENT_CANDIDATE_ABSENT",
+            "no block in this corpus requires the 'dataset' fact and is optional; "
+            "dataset placement has no candidate to infer from",
+        )
+    ambiguous = {section: ids for section, ids in by_section.items() if len(ids) > 1}
+    if ambiguous:
+        raise Refused(
+            "DATASET_PLACEMENT_CANDIDATE_AMBIGUOUS",
+            f"more than one dataset-placement candidate in one section: {ambiguous}",
+        )
+    return {section: ids[0] for section, ids in by_section.items()}
+
+
+def infer_dataset_placement(corpus, opened_ids) -> str:
+    """Pure: the section name of whichever `dataset_placement_candidates`
+    entry is opened, `"undecided"` if none is. Refuses `DATASET_PLACEMENT_
+    CONFLICT` (work-state), naming every opened candidate, when more than
+    one is opened at once -- the paper says two things and the skill will
+    not pick one (design.md D4). Also raises whatever `dataset_placement_
+    candidates` itself raises, unchanged.
+    """
+    candidates = dataset_placement_candidates(corpus)
+    opened = {section: qid for section, qid in candidates.items() if qid in opened_ids}
+    if len(opened) > 1:
+        ids = ", ".join(repr(qid) for qid in sorted(opened.values()))
         raise Refused(
             "DATASET_PLACEMENT_CONFLICT",
-            f"both {MM_DATASET_ID!r} and {ES_DATASET_ID!r} are opened; the paper "
-            "names two placements and the skill will not pick one",
+            f"{ids} are opened; the paper names two placements and the skill will not pick one",
         )
-    if mm_open:
-        return "materials-and-methods"
-    if es_open:
-        return "experimental-setup"
-    return "undecided"
+    if not opened:
+        return "undecided"
+    (section,) = opened
+    return section
 
 
 def infer_skeleton_decisions(paper_dir: Path, corpus) -> dict:
@@ -536,7 +571,7 @@ def infer_skeleton_decisions(paper_dir: Path, corpus) -> dict:
     opened_ids = {block["id"] for block in status["blocks"]} & set(corpus.blocks)
     return {
         "relatedWork": infer_related_work(corpus, opened_ids),
-        "datasetPlacement": infer_dataset_placement(opened_ids),
+        "datasetPlacement": infer_dataset_placement(corpus, opened_ids),
     }
 
 

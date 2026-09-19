@@ -424,13 +424,20 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
 _FIXED_CLOCK = "2024-01-01T00:00:00+00:00"
 
 
-def _block_record(qualified_id: str, *, requires_facts=(), requires_declarations=()):
+def _block_record(
+    qualified_id: str, *, requires_facts=(), requires_declarations=(), optional=False,
+    section="synthetic",
+):
     """A minimal, real `paper_graph.BlockRecord` — `affected_blocks` only
     ever reads `.requires_facts`/`.requires_declarations`, so the other
     fields are filled with harmless placeholders rather than driven through
-    a full `assemble_corpus` disk fixture."""
+    a full `assemble_corpus` disk fixture. `section` defaults to the same
+    placeholder every existing caller already relies on; a caller that
+    needs `dataset_placement_candidates` to group by a REAL section name
+    (it reads `.section`, never `qualified_id`'s own dotted prefix) passes
+    one explicitly."""
     return paper_graph.BlockRecord(
-        section="synthetic",
+        section=section,
         block_id=qualified_id.split(".")[-1],
         qualified_id=qualified_id,
         block_index=0,
@@ -438,7 +445,7 @@ def _block_record(qualified_id: str, *, requires_facts=(), requires_declarations
         requires_facts=tuple(requires_facts),
         requires_declarations=tuple(requires_declarations),
         citations="none",
-        optional=False,
+        optional=optional,
     )
 
 
@@ -842,9 +849,17 @@ class SkeletonInferenceTests(unittest.TestCase):
         self.corpus = paper_graph.Corpus(
             sections={},
             blocks={
-                "related-work.rw-a": _block_record("related-work.rw-a"),
-                "materials-and-methods.mm-dataset": _block_record("materials-and-methods.mm-dataset"),
-                "experimental-setup.es-dataset": _block_record("experimental-setup.es-dataset"),
+                "related-work.rw-a": _block_record(
+                    "related-work.rw-a", section="related-work",
+                ),
+                "materials-and-methods.mm-dataset": _block_record(
+                    "materials-and-methods.mm-dataset", section="materials-and-methods",
+                    requires_facts=["dataset"], optional=True,
+                ),
+                "experimental-setup.es-dataset": _block_record(
+                    "experimental-setup.es-dataset", section="experimental-setup",
+                    requires_facts=["dataset"], optional=True,
+                ),
             },
             order_by_section={
                 "related-work": ["related-work.rw-a"],
@@ -913,6 +928,180 @@ class SkeletonInferenceMutationTests(unittest.TestCase):
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
+
+
+class DatasetPlacementCandidateDerivationTests(unittest.TestCase):
+    """the-skill-stops-trusting-memory, item 1: `paper_declarations.
+    MM_DATASET_ID`/`ES_DATASET_ID` are gone. `dataset_placement_candidates`
+    derives the same two ids from the corpus's own `requires_facts`/
+    `optional` shape instead -- SKILL.md:154-158, "block ids are shape
+    only ... never validates an id against a list of what should exist"."""
+
+    def test_against_the_real_shipped_corpus(self) -> None:
+        """The real `sections/*.md` corpus is what motivated this change:
+        `mm-dataset`/`es-dataset` both carry `requires_facts: ["dataset"]`
+        and `optional: true` on disk (measured, not assumed)."""
+        corpus = paper_graph.assemble_corpus(FORGE_ROOT / "sections")
+
+        candidates = paper_declarations.dataset_placement_candidates(corpus)
+
+        self.assertEqual(
+            candidates,
+            {
+                "materials-and-methods": "materials-and-methods.mm-dataset",
+                "experimental-setup": "experimental-setup.es-dataset",
+            },
+        )
+
+    def test_a_corpus_with_no_candidate_at_all_refuses_absent(self) -> None:
+        """Renaming `mm-dataset`'s `requires_facts` away from `dataset` (the
+        exact scenario the task names: 'rename mm-dataset in its contract
+        and infer_dataset_placement silently reports undecided forever')
+        must now REFUSE, never silently degrade to `undecided`."""
+        corpus = paper_graph.Corpus(
+            sections={},
+            blocks={
+                "materials-and-methods.mm-preamble": _block_record(
+                    "materials-and-methods.mm-preamble", section="materials-and-methods",
+                ),
+            },
+            order_by_section={"materials-and-methods": ["materials-and-methods.mm-preamble"]},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.dataset_placement_candidates(corpus)
+
+        self.assertEqual(ctx.exception.code, "DATASET_PLACEMENT_CANDIDATE_ABSENT")
+
+    def test_a_section_with_two_candidates_refuses_ambiguous(self) -> None:
+        corpus = paper_graph.Corpus(
+            sections={},
+            blocks={
+                "materials-and-methods.mm-dataset": _block_record(
+                    "materials-and-methods.mm-dataset", section="materials-and-methods",
+                    requires_facts=["dataset"], optional=True,
+                ),
+                "materials-and-methods.mm-dataset-2": _block_record(
+                    "materials-and-methods.mm-dataset-2", section="materials-and-methods",
+                    requires_facts=["dataset"], optional=True,
+                ),
+            },
+            order_by_section={
+                "materials-and-methods": [
+                    "materials-and-methods.mm-dataset", "materials-and-methods.mm-dataset-2",
+                ],
+            },
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.dataset_placement_candidates(corpus)
+
+        self.assertEqual(ctx.exception.code, "DATASET_PLACEMENT_CANDIDATE_AMBIGUOUS")
+        self.assertIn("materials-and-methods.mm-dataset", ctx.exception.detail)
+        self.assertIn("materials-and-methods.mm-dataset-2", ctx.exception.detail)
+
+    def test_a_candidate_that_is_optional_but_does_not_require_dataset_is_not_a_candidate(
+        self,
+    ) -> None:
+        """`optional` alone is not enough -- the block must also require the
+        `dataset` fact. This is exactly the shape the OUT-OF-SCOPE
+        `tests/test_paper_writing.py` fixture `_write_skeleton_corpus` used
+        to carry (`optional: true`, no `requires_facts`) before this
+        change; report note: that fixture needs `requires_facts:
+        ["dataset"]` added to its `mm-dataset`/`es-dataset` blocks for
+        `SkeletonTests` to keep passing under this derivation."""
+        corpus = paper_graph.Corpus(
+            sections={},
+            blocks={
+                "materials-and-methods.mm-dataset": _block_record(
+                    "materials-and-methods.mm-dataset", section="materials-and-methods",
+                    optional=True,
+                ),
+            },
+            order_by_section={"materials-and-methods": ["materials-and-methods.mm-dataset"]},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.dataset_placement_candidates(corpus)
+
+        self.assertEqual(ctx.exception.code, "DATASET_PLACEMENT_CANDIDATE_ABSENT")
+
+    def test_mutation_dropping_the_optional_check_breaks_the_ambiguous_guard(self) -> None:
+        """If `dataset_placement_candidates` ever stopped checking `block.
+        optional` (matched on `requires_facts` alone), a section carrying a
+        non-optional block that also requires `dataset` would silently
+        become a second candidate, and the real shipped corpus -- which has
+        several non-optional blocks requiring `dataset` alongside
+        `mm-dataset`/`es-dataset`? No: measured, only the two optional ones
+        require it. This mutation instead proves the REQUIRES_FACTS check
+        is load-bearing: dropping it turns every optional block into a
+        candidate, which the real corpus's `related-work`/other optional
+        blocks (if any) would trip. To keep this hermetic, exercise it
+        against a synthetic ambiguous fixture instead of relying on the
+        real corpus's own shape drifting under test."""
+        proc = _run_against_mutant(
+            'if block.optional and "dataset" in block.requires_facts:',
+            'if block.optional:',
+            "tests.test_paper_decisions.DatasetPlacementCandidateDerivationTests"
+            ".test_a_candidate_that_is_optional_but_does_not_require_dataset_is_not_a_candidate",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class SkeletonExcludedIdsDerivationTests(unittest.TestCase):
+    """`paper_cli._skeleton_excluded_ids` no longer reads `paper_
+    declarations.MM_DATASET_ID`/`ES_DATASET_ID` -- it derives the excluded
+    candidate from the corpus via `dataset_placement_candidates`."""
+
+    def _corpus(self) -> "paper_graph.Corpus":
+        return paper_graph.Corpus(
+            sections={},
+            blocks={
+                "related-work.rw-a": _block_record("related-work.rw-a", section="related-work"),
+                "materials-and-methods.mm-dataset": _block_record(
+                    "materials-and-methods.mm-dataset", section="materials-and-methods",
+                    requires_facts=["dataset"], optional=True,
+                ),
+                "experimental-setup.es-dataset": _block_record(
+                    "experimental-setup.es-dataset", section="experimental-setup",
+                    requires_facts=["dataset"], optional=True,
+                ),
+            },
+            order_by_section={
+                "related-work": ["related-work.rw-a"],
+                "materials-and-methods": ["materials-and-methods.mm-dataset"],
+                "experimental-setup": ["experimental-setup.es-dataset"],
+            },
+        )
+
+    def test_materials_choice_excludes_the_experimental_setup_candidate(self) -> None:
+        excluded = paper_cli._skeleton_excluded_ids(
+            self._corpus(), related_work=True, dataset_in="materials",
+        )
+
+        self.assertEqual(excluded, {"experimental-setup.es-dataset"})
+
+    def test_experimental_setup_choice_excludes_the_materials_candidate(self) -> None:
+        excluded = paper_cli._skeleton_excluded_ids(
+            self._corpus(), related_work=True, dataset_in="experimental-setup",
+        )
+
+        self.assertEqual(excluded, {"materials-and-methods.mm-dataset"})
+
+    def test_a_corpus_with_no_dataset_candidate_at_all_refuses(self) -> None:
+        """`build_skeleton`/`_skeleton_excluded_ids` can no longer silently
+        open every block when the corpus names no dataset-placement
+        candidate at all -- it refuses, naming the absence, exactly like
+        `dataset_placement_candidates` itself."""
+        corpus = paper_graph.Corpus(
+            sections={}, blocks={}, order_by_section={},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._skeleton_excluded_ids(corpus, related_work=True, dataset_in="materials")
+
+        self.assertEqual(ctx.exception.code, "DATASET_PLACEMENT_CANDIDATE_ABSENT")
 
 
 class ProvenanceTests(unittest.TestCase):
