@@ -158,52 +158,53 @@ A visual review is not evidence.
 
 ### Requirement: Transcribed `after` Edges Only
 
-An `after` edge MUST be admitted only when the contract's own prose states it.
-Across the ten shipped contracts exactly three edges exist: section `abstract`
-after section `conclusions` (conclusions' own prose: "The abstract is written
-after this section, because it compresses it"); the introduction's block 3
-after section `related-work` (introduction's own prose: "When a Related Work
-section exists, this block is written after it"); and section
-`title-and-keywords` after every section the `skeleton` fact declares as body
-(title-and-keywords' own prose: "Every keyword appears in the body" resolved
-against the skeleton's body-section list). A test MUST assert the shipped edge
-set is exactly these three; a fourth or different edge on any shipped contract
-fails that test.
+An `after` edge MUST be admitted only when the contract's own prose states
+it, verified as a literal (whitespace-collapsed, markdown-emphasis-stripped)
+substring of the named `source.file`'s prose body — unchanged from before.
+The edge count is no longer a fixed number: normalizing all ten contracts'
+`### Internal chain` tables into transcribed edges (`internal-chain-edges`)
+raises the shipped edge set well past three. What remains invariant instead:
+every `after` edge, wherever declared, carries a verified, prose-backed
+quote; no edge exists that is not backed by a quote (`SPAN_NOT_IN_SOURCE`
+on failure); and no `### Internal chain` row is left unmapped to a backing
+edge (`CHAIN_ROW_UNBACKED` on failure, per `internal-chain-edges`). A test
+MUST assert both properties hold across the full shipped corpus — never a
+fixed cardinality.
 
-#### Scenario: The shipped edge set is exactly three
+(Previously: asserted the shipped edge set is exactly three named edges,
+which this change invalidates by construction.)
 
-- GIVEN the ten contracts' parsed headers
+#### Scenario: Every shipped edge is quote-backed
+
+- GIVEN the ten contracts' parsed headers, normalized under
+  `contract-input-partition`
 - WHEN every `after` edge, section- and block-level, is collected
-- THEN the collected set contains exactly the three transcribed edges above and
-  no other
+- THEN each one's `source.quote` is a verified literal substring of its
+  `source.file`'s prose body, with no exceptions
 
 #### Scenario: An invented edge on a shipped contract fails
 
-- GIVEN a shipped contract's header edited to add a fourth `after` edge not
+- GIVEN a shipped contract's header edited to add an `after` edge not
   backed by that contract's own prose
 - WHEN the edge-set test runs
 - THEN it fails, naming the untranscribed edge
 
+#### Scenario: No internal-chain row is left unmapped
+
+- GIVEN the ten contracts' normalized `### Internal chain` tables
+- WHEN every row is checked against the collected edge set
+- THEN every row maps to exactly one backing `after` edge; a row with none
+  fails the test naming that row
+
 #### Implementation note (recorded at apply, not re-opening the decision)
 
-The third edge above — `title-and-keywords` after every section the
-`skeleton` fact declares as body — is implemented as **position-derived**,
-not enumerated in `title-and-keywords`'s header and not resolved against the
-`skeleton` fact. Measured at design time: `skeleton` occurs exactly once
-across all ten contracts (`sections/06-introduction.md`, unblocking
-introduction block 6) and names no body-section list anywhere, so the literal
-resolution this scenario's parenthetical describes has nothing to read. The
-reader instead computes "the body" as every section whose `position` is
-strictly between `abstract`'s and `back-matter`'s (positions 3–9), looked up
-by section id and never by a hardcoded integer or a filename — the same
-seven targets design.md's rejected "enumerate seven targets" option would
-have named. `tests/test_paper_contract.py::GraphTests` therefore holds two
-separate assertions rather than one three-element set: exactly two literal,
-header-declared cross-section `after` edges (`abstract`→`conclusions`,
-`introduction.block-3`→`related-work`), and the third edge proven separately
-as a property of the derived writing order. This document's scenario above
-is left as written, historically accurate about the intended data-vs-code
-split; this note is the correction for a reader implementing it today.
+The `title-and-keywords` after every body-section edge remains
+**position-derived**, not enumerated in `title-and-keywords`'s header and
+not resolved against the `skeleton` fact — unchanged from the prior note.
+This change adds no new special-cased edge of that kind; every additional
+edge this change introduces is a literal, header-declared transcription
+from an `### Internal chain` row, following the same discipline as the two
+pre-existing literal edges.
 
 ### Requirement: Headers Written Before `mode` Existed
 
@@ -247,3 +248,33 @@ mirroring the transcription discipline already required of `after` edges.
   quote: "..."}}`
 - WHEN the reader parses it
 - THEN it refuses `UNKNOWN_MODE` naming `exposition`
+### Requirement: Symmetric Optional Fork For Dataset Placement
+
+The dataset-placement fork — whether the dataset is described in Materials
+and Methods or in Experimental Setup — MUST be structurally represented on
+both sides: `01-materials-and-methods.md` declares `mm-dataset`
+(`optional: true`, `requires_facts: [dataset]`), and
+`02-experimental-setup.md` declares a mirroring `es-dataset`
+(`optional: true`, `requires_facts: [dataset]`), so `skeleton-startup`'s
+disk inference has a branch to read on either side.
+
+#### Scenario: Both sides of the fork exist in the corpus
+
+- GIVEN the shipped corpus after this change
+- WHEN `01-materials-and-methods.md` and `02-experimental-setup.md` are
+  parsed
+- THEN both declare an `optional: true` dataset block requiring `dataset`,
+  under ids `mm-dataset` and `es-dataset` respectively
+
+### Requirement: `mm-proposal`'s Facts Match What It Genuinely Needs
+
+`01-materials-and-methods.md`'s `mm-proposal` block MUST declare
+`requires_facts: [formulation]` only — `implementation` is dropped, since
+the proposal's own formal definition needs no run-time implementation
+detail to be drafted.
+
+#### Scenario: mm-proposal no longer requires implementation
+
+- GIVEN `01-materials-and-methods.md` as parsed after this change
+- WHEN `mm-proposal`'s `requires_facts` is read
+- THEN it contains `formulation` and does not contain `implementation`
