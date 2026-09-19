@@ -29,6 +29,21 @@ never changed after `declare`.
 - THEN a block requiring both `formulation` and `dataset` reports
   `writable`, combining the recorded state with the given flag
 
+### Requirement: A Bare Readiness Call Refuses Rather Than Guessing A Basis
+
+`readiness` MUST refuse `READINESS_BASIS_REQUIRED` when invoked with
+neither `--paper` nor any `--fact`/`--declaration` flag. There is no
+default basis: a call with no `paper_dir` to read and no flag to compute a
+hypothetical from has nothing to compute an answer from, and MUST NOT
+silently report a stale or empty-set result.
+
+#### Scenario: A bare call with no basis refuses
+
+- GIVEN `readiness` is invoked with neither `--paper` nor any `--fact`/
+  `--declaration` flag
+- WHEN the command runs
+- THEN it refuses `READINESS_BASIS_REQUIRED` and reports no block statuses
+
 ### Requirement: Optional Flag Surfaces In Readiness Reports
 
 Every block's readiness report MUST include `optional`, read from the

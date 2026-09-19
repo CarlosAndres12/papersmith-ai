@@ -45,6 +45,8 @@ import paper_verify  # noqa: E402
 import paper_objective  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
+import paper_declarations  # noqa: E402
+import paper_region  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -3638,8 +3640,19 @@ class RefusalRosterTests(unittest.TestCase):
         missing), both called from `assemble_corpus` -- an already-imported
         module, so all four land reachable together the moment their raise
         sites exist, measured as one +4 move rather than the tasks
-        artifact's own three smaller increments forecast in isolation."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 101)
+        artifact's own three smaller increments forecast in isolation.
+        Moved from 101 to 103 in unit 6 (`readiness` gains a basis; `phases`
+        owns "what can I write now", tasks.md 6.1-6.16): `cmd_readiness`
+        gains `READINESS_BASIS_REQUIRED` (neither `--paper` nor any
+        `--fact`/`--declaration` flag given) and the new `cmd_phases` root
+        gains `PHASE_NOT_READY` (a wave before the requested `--phase` is
+        still incomplete) -- both raised directly inside `paper_cli.py`,
+        reachable the instant their `cmd_*` roots exist, no new import
+        needed. This is the measured +2, not the tasks artifact's own
+        forecast (99 to 101), which predates unit 4's own measured +4 (97
+        to 101, not the three separate +1/+1/+2 moves 4.8f/4.10 forecast in
+        isolation) and was never corrected forward."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 103)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -4175,6 +4188,417 @@ class WaveMutationProofTests(unittest.TestCase):
             "tests.test_paper_writing.WaveTests"
             ".test_invariant_2_every_edge_crosses_a_wave_boundary",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class ReadinessBasisTests(unittest.TestCase):
+    """`writing-readiness` spec, `Requirement: Readiness Resolves Declared
+    State From The Paper Directory` / `Requirement: A Bare Readiness Call
+    Refuses Rather Than Guessing A Basis` / `Requirement: Optional Flag
+    Surfaces In Readiness Reports` (tasks.md 6.4-6.7). `cmd_readiness`
+    never opened `main.tex` before this unit -- `paper_cli.compute_
+    readiness_report` is the basis dispatch, kept separate from argparse
+    resolution (the same shape `compute_plan` keeps from `cmd_plan`) and
+    exercised directly here."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        header = json.dumps({
+            "section": "readiness-basis",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "needs-formulation", "requires_facts": ["formulation"],
+                    "requires_declarations": [], "citations": "none",
+                },
+                {
+                    "id": "needs-both", "requires_facts": ["formulation", "dataset"],
+                    "requires_declarations": [], "citations": "none",
+                },
+            ],
+        })
+        (self.sections_dir / "01-readiness-basis.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _status_of(self, report: dict, block_id: str) -> str:
+        block = next(b for b in report["blocks"] if b["block"] == block_id)
+        return block["status"]
+
+    def test_declared_fact_alone_reports_writable_with_no_flags_repeated(self) -> None:
+        """tasks.md 6.5 / spec scenario 'Readiness changes after declare,
+        with no flags repeated'."""
+        paper_declarations.set_fact(
+            self.paper_dir, "formulation", "the delta on the borrowed machinery",
+        )
+
+        report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+
+        self.assertEqual(report["basis"], "declaration-backed")
+        self.assertEqual(
+            self._status_of(report, "readiness-basis.needs-formulation"), "writable",
+        )
+
+    def test_explicit_flag_adds_to_the_recorded_state(self) -> None:
+        """tasks.md 6.6 / spec scenario 'Explicit flags still add to the
+        recorded state'."""
+        paper_declarations.set_fact(self.paper_dir, "formulation", "the delta")
+
+        report = paper_cli.compute_readiness_report(
+            self.sections_dir, paper_dir=self.paper_dir, flag_facts=frozenset({"dataset"}),
+        )
+
+        self.assertEqual(self._status_of(report, "readiness-basis.needs-both"), "writable")
+        self.assertEqual(report.get("supposed"), ["dataset"])
+
+    def test_neither_paper_nor_flags_refuses_readiness_basis_required(self) -> None:
+        """tasks.md 6.7 / spec `Requirement: A Bare Readiness Call Refuses
+        Rather Than Guessing A Basis`."""
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.compute_readiness_report(self.sections_dir)
+        self.assertEqual(ctx.exception.code, "READINESS_BASIS_REQUIRED")
+
+    def test_flags_only_with_no_paper_preserves_the_hypothetical_what_if(self) -> None:
+        """Regression: the pre-existing flags-only path must keep behaving
+        exactly as it did before this unit -- basis `"supposed-only"`, no
+        disk read at all, no `"supposed"` labelling (that only applies on
+        top of a real declaration-backed read)."""
+        report = paper_cli.compute_readiness_report(
+            self.sections_dir, flag_facts=frozenset({"formulation", "dataset"}),
+        )
+        self.assertEqual(report["basis"], "supposed-only")
+        self.assertEqual(self._status_of(report, "readiness-basis.needs-both"), "writable")
+        self.assertNotIn("supposed", report)
+
+    def test_optional_unopened_block_reports_not_applicable_under_declaration_backed_basis(
+        self,
+    ) -> None:
+        """The `opened_blocks` half of 6.4's own wiring: an optional block
+        absent from `main.tex` reports `not-applicable` once `readiness
+        --paper` resolves openness from disk, never merely `blocked`
+        (design.md D6; `optional-block-semantics` spec)."""
+        header = json.dumps({
+            "section": "optional-basis",
+            "position": 2,
+            "blocks": [
+                {
+                    "id": "maybe", "requires_facts": ["dataset"],
+                    "requires_declarations": [], "optional": True, "citations": "none",
+                },
+            ],
+        })
+        (self.sections_dir / "02-optional-basis.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+        report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+
+        self.assertEqual(self._status_of(report, "optional-basis.maybe"), "not-applicable")
+
+
+class ReadinessPhasesEndToEndTests(unittest.TestCase):
+    """`writing-readiness` spec + `writing-phases` spec, driven through the
+    real CLI end to end (tasks.md 6.8: 'a real `declare` write, then
+    `readiness --paper` re-read shows the changed answer with no flags
+    repeated') -- the single regression that proves the seam closed:
+    recording a fact with `declare` must be SEEN by `readiness --paper`
+    and by `phases`, not only by `plan`. `paper_cli.py` always resolves
+    `--paper`/`--sections` against the real repository root, so this lives
+    under the already-gitignored `implementations/` tree, the same shape
+    `CLIWiringTests` already establishes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-phases-e2e-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        self.paper_dir = test_root / "paper"
+        self.sections_dir = test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+        header = json.dumps({
+            "section": "e2e",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "needs-formulation", "requires_facts": ["formulation"],
+                    "requires_declarations": [], "citations": "none",
+                },
+            ],
+        })
+        (self.sections_dir / "01-e2e.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _run(self, *args: str):
+        proc = subprocess.run(
+            [sys.executable, str(CLI), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+        return proc.returncode, json.loads(proc.stdout), proc.stderr
+
+    def _readiness_status(self) -> str:
+        code, payload, stderr = self._run(
+            "readiness", "--paper", str(self.paper_dir), "--sections", str(self.sections_dir),
+        )
+        self.assertEqual(code, 0, stderr or payload)
+        self.assertEqual(payload["basis"], "declaration-backed")
+        block = next(b for b in payload["blocks"] if b["block"] == "e2e.needs-formulation")
+        return block["status"]
+
+    def test_declare_then_readiness_paper_sees_it_with_no_flags_repeated(self) -> None:
+        code, payload, stderr = self._run("scaffold", "--paper", str(self.paper_dir))
+        self.assertEqual(code, 0, stderr or payload)
+
+        self.assertEqual(
+            self._readiness_status(), "blocked",
+            "sanity check before declaring: the fact is not yet recorded",
+        )
+
+        code, payload, stderr = self._run(
+            "declare", "--paper", str(self.paper_dir),
+            "--fact", "formulation", "--value", "research-concept-r21.md",
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        self.assertEqual(
+            self._readiness_status(), "writable",
+            "declare must be seen by readiness --paper with no flag repeated -- "
+            "the regression `cmd_readiness` never opening main.tex left this "
+            "structurally blind",
+        )
+
+    def test_phases_also_sees_the_same_declare(self) -> None:
+        code, payload, stderr = self._run("scaffold", "--paper", str(self.paper_dir))
+        self.assertEqual(code, 0, stderr or payload)
+        code, payload, stderr = self._run(
+            "declare", "--paper", str(self.paper_dir),
+            "--fact", "formulation", "--value", "research-concept-r21.md",
+        )
+        self.assertEqual(code, 0, stderr or payload)
+
+        code, payload, stderr = self._run(
+            "phases", "--paper", str(self.paper_dir), "--sections", str(self.sections_dir),
+        )
+        self.assertEqual(code, 0, stderr or payload)
+        self.assertIn("formulation", payload["declared"]["facts"])
+        block = next(
+            b for wave in payload["waves"] for b in wave["blocks"]
+            if b["block"] == "e2e.needs-formulation"
+        )
+        self.assertEqual(block["status"], "writable")
+
+    def test_bare_readiness_call_refuses_readiness_basis_required(self) -> None:
+        code, payload, stderr = self._run("scaffold", "--paper", str(self.paper_dir))
+        self.assertEqual(code, 0, stderr or payload)
+
+        code, payload, stderr = self._run("readiness", "--sections", str(self.sections_dir))
+
+        self.assertEqual(code, 2, stderr or payload)
+        self.assertEqual(payload["code"], "READINESS_BASIS_REQUIRED")
+
+
+class PhasesTests(unittest.TestCase):
+    """`writing-phases` spec, `Requirement: Phase N Is Gated On Phase N-1`
+    (tasks.md 6.9-6.12); Open Question 2 (design.md), resolved: an
+    `unprovenanced` block still counts as WRITTEN for this gate --
+    provenance currency stays `plan`'s own separately-reported concern."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _two_wave_corpus(self, *, second_optional_extra: bool = False) -> None:
+        blocks_a = [
+            {"id": "a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        if second_optional_extra:
+            blocks_a.append({
+                "id": "opt", "requires_facts": [], "requires_declarations": [],
+                "citations": "none", "optional": True,
+            })
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "phase-a", "position": 1, "blocks": blocks_a})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.sections_dir / "02-b.md").write_text(
+            "---\n" + json.dumps({
+                "section": "phase-b", "position": 2,
+                "blocks": [
+                    {"id": "b", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+                ],
+                "after": [
+                    {"target": "phase-a.a", "source": {"file": "sections/02-b.md", "quote": "Prose."}},
+                ],
+            })
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\n`phase-b.b` — `phase-a.a`\n",
+            encoding="utf-8",
+        )
+
+    def test_phase_2_refuses_phase_not_ready_while_wave_1_is_incomplete(self) -> None:
+        """tasks.md 6.10."""
+        self._two_wave_corpus()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.compute_phases(self.paper_dir, self.sections_dir, phase=2)
+
+        self.assertEqual(ctx.exception.code, "PHASE_NOT_READY")
+        self.assertIn("phase-a.a", ctx.exception.detail)
+
+    def test_phase_2_proceeds_once_wave_1_is_written(self) -> None:
+        """tasks.md 6.11."""
+        self._two_wave_corpus()
+        paper_block.open_block(self.paper_dir, "phase-a.a", at_end=True)
+
+        report = paper_cli.compute_phases(self.paper_dir, self.sections_dir, phase=2)
+
+        self.assertEqual(len(report["waves"]), 2)
+        self.assertEqual(report["waves"][0]["status"], "complete")
+        self.assertEqual(report["waves"][1]["status"], "open")
+
+    def test_an_unwritten_optional_block_never_gates_the_next_wave(self) -> None:
+        """tasks.md 6.12."""
+        self._two_wave_corpus(second_optional_extra=True)
+        paper_block.open_block(self.paper_dir, "phase-a.a", at_end=True)
+
+        report = paper_cli.compute_phases(self.paper_dir, self.sections_dir, phase=2)
+
+        self.assertEqual(report["waves"][0]["status"], "complete")
+        opt_entry = next(
+            b for b in report["waves"][0]["blocks"] if b["block"] == "phase-a.opt"
+        )
+        self.assertFalse(opt_entry["opened"])
+
+    def test_an_unprovenanced_block_still_counts_as_written_for_the_gate(self) -> None:
+        """Open Question 2 (design.md), resolved at task 6.2: `phases`' own
+        gate reads OPENNESS alone (`paper_block.status`), never provenance
+        state -- opening `phase-a.a` with `open_block` and never
+        substituting it (so it stays `unprovenanced`) is still enough to
+        satisfy the wave-1 gate for wave 2."""
+        self._two_wave_corpus()
+        paper_block.open_block(self.paper_dir, "phase-a.a", at_end=True)
+
+        report = paper_cli.compute_phases(self.paper_dir, self.sections_dir, phase=2)
+
+        block_a = next(b for b in report["waves"][0]["blocks"] if b["block"] == "phase-a.a")
+        self.assertEqual(block_a["provenance"], "unprovenanced")
+        self.assertEqual(report["waves"][0]["status"], "complete")
+
+    def test_phases_with_no_flag_reports_every_wave_the_full_plan(self) -> None:
+        """tasks.md 6.13: the full wave plan, unfiltered -- what the
+        operator approves once before writing starts
+        (`specs/writing-phases/spec.md`, `Requirement: The Operator
+        Approves The Phase Plan Before Writing Starts`)."""
+        self._two_wave_corpus()
+
+        report = paper_cli.compute_phases(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(len(report["waves"]), 2)
+        self.assertEqual(
+            {b["block"] for b in report["waves"][0]["blocks"]}, {"phase-a.a"},
+        )
+        self.assertEqual(
+            {b["block"] for b in report["waves"][1]["blocks"]}, {"phase-b.b"},
+        )
+
+
+class ReadinessPhasesReadOnlyTests(unittest.TestCase):
+    """tasks.md 6.14: `phases` and `readiness` write nothing under every
+    input, including every refusal path -- the same before/after content
+    manifest `ReadOnlyTests.test_content_manifest_unchanged_by_a_real_
+    verify_run` already established for `verify`."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        header = json.dumps({
+            "section": "ro", "position": 1,
+            "blocks": [
+                {
+                    "id": "a", "requires_facts": ["formulation"],
+                    "requires_declarations": [], "citations": "none",
+                },
+            ],
+        })
+        (self.sections_dir / "01-ro.md").write_text(
+            f"---\n{header}\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            "### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _manifest(self) -> dict:
+        return {
+            str(path.relative_to(self.paper_dir)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(self.paper_dir.rglob("*")) if path.is_file()
+        }
+
+    def test_readiness_writes_nothing_including_when_it_refuses(self) -> None:
+        paper_declarations.set_fact(self.paper_dir, "formulation", "x")
+        before = self._manifest()
+
+        paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+        with self.assertRaises(Refused):
+            paper_cli.compute_readiness_report(self.sections_dir)  # READINESS_BASIS_REQUIRED
+
+        after = self._manifest()
+        self.assertEqual(before, after)
+
+    def test_phases_writes_nothing_including_when_it_refuses(self) -> None:
+        paper_declarations.set_fact(self.paper_dir, "formulation", "x")
+        before = self._manifest()
+
+        paper_cli.compute_phases(self.paper_dir, self.sections_dir)
+        with self.assertRaises(Refused):
+            # One wave only ("ro.a"), unopened -- phase=2 demands wave 1
+            # complete before a (non-existent) wave 2, so this refuses
+            # PHASE_NOT_READY without writing anything either.
+            paper_cli.compute_phases(self.paper_dir, self.sections_dir, phase=2)
+
+        after = self._manifest()
+        self.assertEqual(before, after)
+
+    def test_mutation_a_write_inside_compute_phases_fails_the_manifest_guard(self) -> None:
+        proc = _run_against_mutant(
+            "def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:",
+            "def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:\n"
+            "    tex = paper_dir / 'main.tex'\n"
+            "    tex.write_bytes(tex.read_bytes() + b'x')",
+            "tests.test_paper_writing.ReadinessPhasesReadOnlyTests"
+            ".test_phases_writes_nothing_including_when_it_refuses",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
         )
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)

@@ -46,7 +46,7 @@ unmentioned.
 | 4 | Internal-chain → `after` transcription + both refusals | `paper_graph.py`, all ten `sections/*.md`, `paper_cli.py`, `specs/section-contract/spec.md` (verify only), `tests/test_paper_writing.py` | `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED` | ~560 | High — consider a 4a(code+tests)/4b(edges) split if review flags it | 1, 2 | [x] |
 | 3 | `optional` across readiness/verify | `paper_readiness.py`, `paper_verify.py`, `tests/test_paper_writing.py` | none (`OPTIONAL_BLOCK_ABSENT` is `UNMEASURED_REASONS`, not `Refused`) | ~230 | Med | 2 | [x] |
 | 5 | `derive_waves` | `paper_graph.py`, `tests/test_paper_writing.py` | none (reuses `ORDER_CYCLE`) | ~260 | Med | 4, 3 | [x] |
-| 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [ ] |
+| 6 | `readiness` basis + `phases` verb | `paper_readiness.py`, `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`, `tests/test_paper_writing.py` | `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY` | ~500 | High (raised from design's Med — basis + a whole new verb in one unit) | 5 | [x] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [ ] |
 | 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [ ] |
 | 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
@@ -606,22 +606,118 @@ genuinely-empty claims checkable, without wiring any `after` edge (unit
 
 ## Phase 6: `readiness` basis + `phases` verb
 
-- [ ] 6.1 Edit `specs/writing-readiness/spec.md`: add a Requirement + scenario for `readiness` invoked with neither `--paper` nor any `--fact`/`--declaration` refusing `READINESS_BASIS_REQUIRED`.
-- [ ] 6.2 Resolve Open Question 2: an `unprovenanced` block counts as WRITTEN for `phases`' gate; provenance currency stays `plan`'s own separate concern. Record as a code comment in the gating function and in `design.md`.
-- [ ] 6.3 `paper_declarations`: expose a `read_satisfied(paper_dir)` reader reusing `_read_declarations`/`_verify_not_hand_edited`/`_body_or_default` — no second region reader.
-- [ ] 6.4 `cmd_readiness`: `--paper` resolves → merge `read_satisfied`'s sets with any `--fact`/`--declaration` flags (flag-only additions labelled `"source": "supposed"`); flags with no `--paper` → preserve the hypothetical path, `"basis": "supposed-only"`; neither → refuse `READINESS_BASIS_REQUIRED`.
-- [ ] 6.5 RED test: `declarations` region records `formulation` satisfied, no `--fact` flags → blocks whose only gap was `formulation` report `writable`.
-- [ ] 6.6 RED test: `readiness --fact dataset` on the same paper (formulation recorded, dataset not) → a block requiring both reports `writable`.
-- [ ] 6.7 RED test: `readiness` with neither `--paper` nor any flag refuses `READINESS_BASIS_REQUIRED`.
-- [ ] 6.8 Integration test: real `declare` write, then `readiness --paper` re-read shows the changed answer with no flags repeated.
-- [ ] 6.9 Add `phases [--phase N]` to `paper_cli.py`: waves 1..N with per-block readiness, `opened`, provenance state, per-wave `complete|open|gated`; `--phase N` refuses `PHASE_NOT_READY` naming the unwritten wave-(N-1) non-optional block, honoring unit 3's optional-excuses-absence semantics.
-- [ ] 6.10 RED test: wave 1's non-optional block unwritten → `write` on a wave-2 block refuses `PHASE_NOT_READY` naming it.
-- [ ] 6.11 RED test: wave 1 complete → the same wave-2 `write` proceeds with no refusal.
-- [ ] 6.12 RED test: wave 1 holds one written non-optional + one unwritten optional block → wave-2 `write` raises no refusal.
-- [ ] 6.13 Implement the read-only "plan awaiting approval" report shape — the skill must present the full wave plan and not begin writing until it is explicitly approved (unit 9 wires `SKILL.md` prose to this).
-- [ ] 6.14 Read-only proof: before/after content-manifest over `paper_dir` for `phases` and `readiness` — writes nothing under every input, including refusal paths.
-- [ ] 6.15 Register `READINESS_BASIS_REQUIRED: INVOCATION_DEFECT`, `PHASE_NOT_READY: WORK_STATE`; move the roster assertion from 99 to 101.
-- [ ] 6.16 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+- [x] 6.1 Edit `specs/writing-readiness/spec.md`: add a Requirement + scenario for `readiness` invoked with neither `--paper` nor any `--fact`/`--declaration` refusing `READINESS_BASIS_REQUIRED`.
+- [x] 6.2 Resolve Open Question 2: an `unprovenanced` block counts as WRITTEN for `phases`' gate; provenance currency stays `plan`'s own separate concern. Record as a code comment in the gating function and in `design.md`. **`design.md` not edited — outside this unit's allowed edit roots; see Notes.**
+- [x] 6.3 `paper_declarations`: expose a `read_satisfied(paper_dir)` reader reusing `_read_declarations`/`_verify_not_hand_edited`/`_body_or_default` — no second region reader.
+- [x] 6.4 `cmd_readiness`: `--paper` resolves → merge `read_satisfied`'s sets with any `--fact`/`--declaration` flags (flag-only additions labelled `"source": "supposed"`); flags with no `--paper` → preserve the hypothetical path, `"basis": "supposed-only"`; neither → refuse `READINESS_BASIS_REQUIRED`.
+- [x] 6.5 RED test: `declarations` region records `formulation` satisfied, no `--fact` flags → blocks whose only gap was `formulation` report `writable`.
+- [x] 6.6 RED test: `readiness --fact dataset` on the same paper (formulation recorded, dataset not) → a block requiring both reports `writable`.
+- [x] 6.7 RED test: `readiness` with neither `--paper` nor any flag refuses `READINESS_BASIS_REQUIRED`.
+- [x] 6.8 Integration test: real `declare` write, then `readiness --paper` re-read shows the changed answer with no flags repeated.
+- [x] 6.9 Add `phases [--phase N]` to `paper_cli.py`: waves 1..N with per-block readiness, `opened`, provenance state, per-wave `complete|open|gated`; `--phase N` refuses `PHASE_NOT_READY` naming the unwritten wave-(N-1) non-optional block, honoring unit 3's optional-excuses-absence semantics.
+- [x] 6.10 RED test: wave 1's non-optional block unwritten → `phases --phase 2` refuses `PHASE_NOT_READY` naming it. **Gated on `phases`, not `write` — see Notes.**
+- [x] 6.11 RED test: wave 1 complete → the same `phases --phase 2` call proceeds with no refusal.
+- [x] 6.12 RED test: wave 1 holds one written non-optional + one unwritten optional block → `phases --phase 2` raises no refusal.
+- [x] 6.13 Implement the read-only "plan awaiting approval" report shape — the skill must present the full wave plan and not begin writing until it is explicitly approved (unit 9 wires `SKILL.md` prose to this).
+- [x] 6.14 Read-only proof: before/after content-manifest over `paper_dir` for `phases` and `readiness` — writes nothing under every input, including refusal paths.
+- [x] 6.15 Register `READINESS_BASIS_REQUIRED: INVOCATION_DEFECT`, `PHASE_NOT_READY: WORK_STATE`; move the roster assertion. **Measured 101 → 103, not the forecast 99 → 101 — see Notes.**
+- [x] 6.16 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
+
+---
+
+## Unit 6 — Notes / Deviations
+
+- **`design.md` not edited (task 6.2's own second half).** The launch
+  brief's own Scope section restricts this unit to `paper_readiness.py`,
+  `paper_declarations.py`, `paper_cli.py`, `specs/writing-readiness/spec.md`,
+  `tests/test_paper_writing.py`, `tasks.md` — "Nothing else." `design.md`
+  is not in that list. Open Question 2's resolution IS recorded as a code
+  comment in the gating function (`compute_phases`'s own docstring and the
+  `_unwritten_required` call site, `paper_cli.py`), per the first half of
+  6.2; the `design.md` half is reported here as deferred, the same shape
+  Unit 3 used for its own out-of-scope-file deferrals, rather than silently
+  widening this unit's edit roots.
+- **A real spec/design drift found, not this unit's to fix.**
+  `specs/writing-phases/spec.md` (pre-existing, from `sdd-spec`/`sdd-design`
+  running in parallel — the exact failure mode the Reconciliation Ledger at
+  the top of this file exists to close) already carries `Requirement: Phase
+  N Is Gated On Phase N-1`, but its own scenarios describe `write` itself
+  refusing `PHASE_NOT_READY` ("WHEN `write` is invoked on a wave-2 block").
+  `design.md` D3 and every task in this phase describe a SEPARATE, read-only
+  `phases [--phase N]` verb owning that refusal instead — never wired into
+  `cmd_write`'s own pipeline. Implemented exactly what `design.md`/`tasks.md`
+  (this file, marked authoritative by the launch brief) describe: `phases`
+  is the gate, `write` is untouched by this unit. No test anywhere currently
+  binds `PHASE_NOT_READY` to `write` (confirmed by search), so nothing
+  regressed — but `specs/writing-phases/spec.md`'s own prose still describes
+  the wrong verb and was not in this unit's allowed edit roots to correct.
+  Flagged for the parent to route: either a follow-up task correcting that
+  spec's scenarios to name `phases` instead of `write`, or a future unit
+  that actually wires the gate into `write` if that was the real intent.
+- **Roster measured 101 → 103, not the forecast 99 → 101.** This task's own
+  forecast predates Unit 4's measured drift (97 → 101 in one step, not
+  4.8f/4.10's separate +1/+1/+2, recorded in Unit 4's own Notes above) and
+  was never corrected forward. The two new codes this unit actually adds
+  (`READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY`) are exactly what
+  `design.md`'s own File Changes / New Refusal Codes tables describe;
+  `test_the_derivation_finds_the_measured_count`'s own docstring is updated
+  in place, following the same "measured, not forecast" discipline Units
+  1b/4/5 already established.
+- **`phases` gains a `"declared"` top-level field, beyond what any task
+  literally asked for.** Added so a `declare` write is provable directly
+  from `phases`' own output (`{"declared": {"facts": [...],
+  "declarations": [...]}}`), rather than only inferable from a block's
+  `missing_facts` shrinking — the parent's own verification step asks to
+  "show that it reports `formulation` as declared", and this field is the
+  direct answer. A small, additive, backward-compatible report-shape
+  change; no task or spec scenario conflicts with it.
+- **`readiness`'s own `"supposed"` labelling is scoped to `basis:
+  "declaration-backed"` only.** Design D3's "each labelled `source:
+  supposed`" describes flag-given ids added ON TOP of a real declaration
+  read; under `basis: "supposed-only"` (no `--paper` at all) EVERY id is
+  flag-given, so labelling all of them "supposed" would say nothing new.
+  `compute_readiness_report` only attaches `"supposed"` when `paper_dir`
+  was given and at least one flag-given id was not already recorded on
+  disk — proven by `ReadinessBasisTests.test_flags_only_with_no_paper_
+  preserves_the_hypothetical_what_if`'s own regression assertion
+  (`assertNotIn("supposed", report)`).
+- **`compute_plan`'s provenance loop extracted, never re-derived.**
+  `_compute_provenance_report` (new, `paper_cli.py`) is `compute_plan`'s
+  own pre-unit-6 body, byte-identical, parametrized over `corpus` (`None`
+  exactly when `compute_plan`'s own `sections_dir` is omitted, preserving
+  its two pre-existing callers that never built a section corpus). `phases`
+  calls the SAME function `plan` does, so the two verbs' provenance
+  reporting can never drift apart. `tests.test_paper_decisions.PlanTests`
+  (outside this unit's edit roots) reruns green, unmodified, confirming the
+  extraction changed no observable behaviour.
+- **`phases`' wave gate reads `opened` alone, per Open Question 2.** An
+  `unprovenanced` block (opened via `open_block`, never substituted) still
+  satisfies the gate for the next wave — proven directly by
+  `PhasesTests.test_an_unprovenanced_block_still_counts_as_written_for_the_
+  gate`. Provenance state (`current`/`drifted`/`unprovenanced`) is still
+  attached per block in the report, purely for visibility.
+
+## Phase 6b: the phase gate must gate `write`, not only report
+
+Unit 6 implemented `PHASE_NOT_READY` on the read-only `phases` verb only. `cmd_write` never
+consults `derive_waves`, so **nothing today stops a wave-5 block being written before wave 1
+exists** — the gate reports, it does not gate. `specs/writing-phases/spec.md` is explicit and
+is the side that is right: "The skill MUST NOT begin writing any block of wave N while wave
+N-1 contains an unwritten, non-`optional` block. An attempt to do so MUST refuse
+`PHASE_NOT_READY`, naming the blocking wave-(N-1) block," with two scenarios naming `write`.
+The operator's own requirement is the same: the waves are sequential, one at a time.
+
+This is not spec/design drift to reconcile on paper. It is a missing guard, and the class it
+belongs to is already recorded in this repository: a refusal that cannot fire on the path that
+matters reads as protection while protecting nothing.
+
+- [ ] 6b.1 `cmd_write` resolves the block's wave via `paper_graph.derive_waves` and refuses `PHASE_NOT_READY` when any earlier wave still holds an unwritten, non-`optional` block — naming the blocking block, as the spec requires. Reuse `compute_phases`'s existing gate computation; do not write a second one.
+- [ ] 6b.2 `optional` blocks never block a wave. Reuse unit 3's absence semantics; an unopened optional block is satisfied-by-absence for gating, never a blocker.
+- [ ] 6b.3 RED-first: a wave-2 block whose wave-1 dependency is unwritten refuses `PHASE_NOT_READY` through the real `write` verb, naming that wave-1 block. Write the test, watch it fail against today's `cmd_write`, then implement.
+- [ ] 6b.4 RED-first, the other direction: the same wave-2 block proceeds once the wave-1 block is written. A gate that never opens is as wrong as one that never closes.
+- [ ] 6b.5 MUTATION: remove the gate call from `cmd_write` and confirm 6b.3 goes red. The gate must be load-bearing on the write path, not merely present.
+- [ ] 6b.6 Confirm `PHASE_NOT_READY` is already classified and the roster count does not move — the code exists, this unit only adds a second raise site.
+- [ ] 6b.7 Reconcile the artifacts to the implemented reality: `design.md` and `tasks.md` described the refusal as belonging to the `phases` verb alone. After 6b.1 it belongs to both. Correct them rather than leaving three documents disagreeing — that disagreement is the defect this whole change exists to close.
 
 ## Phase 7: `skeleton` + disk inference + `ingested_papers`
 

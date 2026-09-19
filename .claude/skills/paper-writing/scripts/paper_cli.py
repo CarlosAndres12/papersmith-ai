@@ -152,6 +152,11 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # (paper_graph.py, `_verify_block_subunits`) ---------------------------
     "BLOCK_SUBUNIT_UNDECLARED": WORK_STATE,
     "UNIT_HEADING_AMBIGUOUS": WORK_STATE,
+    # --- the-phases-are-derived-not-remembered, unit 6: `readiness` gains a
+    # basis (design.md D3) and `phases` owns "what can I write now" (this
+    # file, `cmd_readiness`/`cmd_phases`) -----------------------------------
+    "READINESS_BASIS_REQUIRED": INVOCATION_DEFECT,
+    "PHASE_NOT_READY": WORK_STATE,
     # --- region grammar (paper_region.py) -- twins of Phase 1's marker
     # codes, reachable ahead of their own verb wiring because paper_cli.py
     # imports paper_region.py at module level (Slice A, `the-paper-carries-
@@ -344,15 +349,85 @@ def cmd_contract(args: argparse.Namespace) -> dict:
     }
 
 
-def cmd_readiness(args: argparse.Namespace) -> dict:
-    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+def compute_readiness_report(
+    sections_dir: Path,
+    *,
+    paper_dir: Path | None = None,
+    flag_facts: frozenset = frozenset(),
+    flag_declarations: frozenset = frozenset(),
+) -> dict:
+    """The basis dispatch `readiness` reports, kept separate from `cmd_
+    readiness`'s own `--paper`/`--sections` string resolution -- the same
+    separation `compute_plan` already keeps from `cmd_plan`
+    (`the-phases-are-derived-not-remembered`, design.md D3, tasks.md 6.4).
+
+    `paper_dir` given -> basis `"declaration-backed"`: satisfied sets are
+    read from the `declarations` region (`paper_declarations.read_
+    satisfied`), merged with `flag_facts`/`flag_declarations` on top (any
+    flag-given id not already recorded on disk is reported separately,
+    under `"supposed"` -- design.md D3's own "each labelled `source:
+    supposed`"), and `opened_blocks` is resolved from `main.tex` (`paper_
+    block.read_status`) so `not-applicable` can fire for an optional,
+    unopened block. This closes the regression where `cmd_readiness` never
+    opened `main.tex`, so its answer never changed after `declare`.
+
+    `paper_dir` omitted, with at least one flag given -> the hypothetical
+    what-if preserved exactly as it behaved before this unit, basis
+    `"supposed-only"`.
+
+    Neither given -> refuses `READINESS_BASIS_REQUIRED`: the stale-number
+    path (computing an answer from flags alone while silently ignoring an
+    existing `declarations` region) is removed, never defaulted.
+    """
     corpus = paper_graph.assemble_corpus(sections_dir)
+    flag_facts = set(flag_facts)
+    flag_declarations = set(flag_declarations)
+
+    if paper_dir is not None:
+        declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
+        opened_blocks = {block["id"] for block in paper_block.read_status(paper_dir)["blocks"]}
+        satisfied_facts = declared_facts | flag_facts
+        satisfied_declarations = declared_declarations | flag_declarations
+        basis = "declaration-backed"
+    elif flag_facts or flag_declarations:
+        declared_facts = set()
+        declared_declarations = set()
+        opened_blocks = None
+        satisfied_facts = flag_facts
+        satisfied_declarations = flag_declarations
+        basis = "supposed-only"
+    else:
+        raise Refused(
+            "READINESS_BASIS_REQUIRED",
+            "readiness needs either --paper <dir> (reads the declarations region) "
+            "or at least one --fact/--declaration flag (a hypothetical what-if); "
+            "a bare call with neither has no basis to compute an answer from.",
+        )
+
     report = paper_readiness.compute_readiness(
         corpus,
-        satisfied_facts=set(args.fact or []),
-        satisfied_declarations=set(args.declaration or []),
+        satisfied_facts=satisfied_facts,
+        satisfied_declarations=satisfied_declarations,
+        opened_blocks=opened_blocks,
+        basis=basis,
     )
-    return {"blocks": report}
+    result = {"basis": basis, "blocks": report}
+    if basis == "declaration-backed":
+        supposed = sorted((flag_facts | flag_declarations) - (declared_facts | declared_declarations))
+        if supposed:
+            result["supposed"] = supposed
+    return result
+
+
+def cmd_readiness(args: argparse.Namespace) -> dict:
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper) if args.paper else None
+    return compute_readiness_report(
+        sections_dir,
+        paper_dir=paper_dir,
+        flag_facts=frozenset(args.fact or []),
+        flag_declarations=frozenset(args.declaration or []),
+    )
 
 
 def cmd_order(args: argparse.Namespace) -> dict:
@@ -512,6 +587,57 @@ def cmd_validate(args: argparse.Namespace) -> dict:
     return paper_validate.finalize_block(paper_dir, args.block, claims, records, body)
 
 
+def _compute_provenance_report(
+    main_tex_bytes: bytes, status: dict, declarations_body: dict, corpus: "paper_graph.Corpus | None",
+) -> list:
+    """The `current`/`drifted`/`unprovenanced` per-block state, extracted
+    from `compute_plan` (`the-phases-are-derived-not-remembered`, tasks.md
+    6.9) so `phases` reads the SAME computation `plan` already proved end
+    to end (`ReopenInvalidatesProvenanceEndToEndTests`), never a second one
+    that could drift from it. Byte-identical to `compute_plan`'s own
+    pre-extraction body; `corpus` is `None` exactly when `compute_plan`'s
+    own `sections_dir` is omitted, preserving its two pre-existing callers
+    that never built a section corpus.
+    """
+    provenance_record = paper_region.read_region(main_tex_bytes, "provenance")
+    provenance_entries = (
+        provenance_record["body"]["records"] if provenance_record is not None else []
+    )
+
+    # The generation, per block id, above which that block's own recorded
+    # provenance generation is stale -- 0 (never stale) unless some record
+    # this block's contract names was touched at a strictly later
+    # generation. Computed once, up front, from every declarations record
+    # in one pass over `affected_blocks`, rather than re-deriving the
+    # corpus per block below.
+    stale_since_generation: dict[str, int] = {}
+    if corpus is not None:
+        for declaration_entry in declarations_body["records"]:
+            record_generation = declaration_entry.get("generation", 0)
+            if record_generation <= 0:
+                continue
+            for affected_id in paper_declarations.affected_blocks(
+                corpus, declaration_entry["id"]
+            ):
+                if record_generation > stale_since_generation.get(affected_id, 0):
+                    stale_since_generation[affected_id] = record_generation
+
+    report = []
+    for block in status["blocks"]:
+        block_id = block["id"]
+        entry = next((e for e in provenance_entries if e["block"] == block_id), None)
+        if entry is None:
+            report.append({"block": block_id, "state": "unprovenanced"})
+            continue
+        digest_drifted = paper_provenance.drift(main_tex_bytes, block_id, Path(entry["contract"]))
+        generation_drifted = stale_since_generation.get(block_id, 0) > entry.get("generation", 0)
+        report.append({
+            "block": block_id,
+            "state": "drifted" if (digest_drifted or generation_drifted) else "current",
+        })
+    return report
+
+
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
     """The pure aggregation `plan` reports: every `guidance/` folder's
     class or `unclassified`; the whole `declarations` region body (fill
@@ -557,44 +683,9 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
         else {"generation": 0, "records": []}
     )
 
-    provenance_record = paper_region.read_region(main_tex_bytes, "provenance")
-    provenance_entries = (
-        provenance_record["body"]["records"] if provenance_record is not None else []
-    )
-
-    # The generation, per block id, above which that block's own recorded
-    # provenance generation is stale -- 0 (never stale) unless some record
-    # this block's contract names was touched at a strictly later
-    # generation. Computed once, up front, from every declarations record
-    # in one pass over `affected_blocks`, rather than re-deriving the
-    # corpus per block below.
-    stale_since_generation: dict[str, int] = {}
-    if sections_dir is not None:
-        corpus = paper_graph.assemble_corpus(sections_dir)
-        for declaration_entry in declarations_body["records"]:
-            record_generation = declaration_entry.get("generation", 0)
-            if record_generation <= 0:
-                continue
-            for affected_id in paper_declarations.affected_blocks(
-                corpus, declaration_entry["id"]
-            ):
-                if record_generation > stale_since_generation.get(affected_id, 0):
-                    stale_since_generation[affected_id] = record_generation
-
     status = paper_block.status(main_tex_bytes)
-    provenance_report = []
-    for block in status["blocks"]:
-        block_id = block["id"]
-        entry = next((e for e in provenance_entries if e["block"] == block_id), None)
-        if entry is None:
-            provenance_report.append({"block": block_id, "state": "unprovenanced"})
-            continue
-        digest_drifted = paper_provenance.drift(main_tex_bytes, block_id, Path(entry["contract"]))
-        generation_drifted = stale_since_generation.get(block_id, 0) > entry.get("generation", 0)
-        provenance_report.append({
-            "block": block_id,
-            "state": "drifted" if (digest_drifted or generation_drifted) else "current",
-        })
+    corpus = paper_graph.assemble_corpus(sections_dir) if sections_dir is not None else None
+    provenance_report = _compute_provenance_report(main_tex_bytes, status, declarations_body, corpus)
 
     return {
         "guidance": guidance_report,
@@ -608,6 +699,127 @@ def cmd_plan(args: argparse.Namespace) -> dict:
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
     return compute_plan(paper_dir, guidance_dir=guidance_dir, sections_dir=sections_dir)
+
+
+def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:
+    """`phases`: the read-only "what can I write now" report `readiness`
+    alone never answered -- `compute_readiness` had exactly one caller
+    (`cmd_readiness`) before this unit (design.md D3). Takes `paper_dir`/
+    `sections_dir` directly, the same separation `compute_plan` keeps from
+    `cmd_plan`.
+
+    Waves come from `paper_graph.derive_waves`; per-block readiness from
+    `paper_readiness.compute_readiness` under basis `"declaration-backed"`;
+    `opened` from `paper_block.status`; provenance state from the SAME
+    computation `plan` already proved end to end
+    (`_compute_provenance_report`, extracted from `compute_plan` this unit
+    -- never a second one that could drift from it). The top-level
+    `"declared"` key echoes exactly the two sets `paper_declarations.read_
+    satisfied` returned -- direct, auditable proof that a `declare` write
+    is seen, never inferred only from a block's own `missing_facts`
+    shrinking.
+
+    Open Question 2 (design.md), resolved here: an `unprovenanced` block
+    still counts as WRITTEN for the wave gate below -- the gate reads
+    `opened` (bare `main.tex` block presence) alone, never provenance
+    state. Provenance currency (`drifted`/`unprovenanced`) is attached per
+    block purely for the operator's own visibility and stays `plan`'s
+    separately-reported concern; conflating it with wave-gating would
+    block writing on a documentation gap, not a missing dependency
+    (tasks.md 6.2).
+
+    `phase` given -> refuses `PHASE_NOT_READY`, before any output is built,
+    naming the first still-incomplete wave among waves `1..phase-1` and its
+    unwritten non-optional blocks; only waves `1..phase` are then reported.
+    `phase` omitted -> every wave is reported -- the full plan the operator
+    approves once, before writing starts (`specs/writing-phases/spec.md`,
+    `Requirement: The Operator Approves The Phase Plan Before Writing
+    Starts`; unit 9 wires this report into `SKILL.md`'s own approval
+    prose).
+    """
+    corpus = paper_graph.assemble_corpus(sections_dir)
+    edge_set = paper_graph.collect_edges(corpus)
+    waves = paper_graph.derive_waves(corpus, edge_set)
+
+    tex_path = paper_block.resolve_main_tex(paper_dir)
+    main_tex_bytes = tex_path.read_bytes()
+    status = paper_block.status(main_tex_bytes)
+    opened_blocks = {block["id"] for block in status["blocks"]}
+
+    declarations_record = paper_region.read_region(main_tex_bytes, "declarations")
+    declarations_body = (
+        declarations_record["body"] if declarations_record is not None
+        else {"generation": 0, "records": []}
+    )
+    provenance_report = _compute_provenance_report(main_tex_bytes, status, declarations_body, corpus)
+    provenance_by_block = {entry["block"]: entry["state"] for entry in provenance_report}
+
+    declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
+    readiness_report = paper_readiness.compute_readiness(
+        corpus, satisfied_facts=declared_facts, satisfied_declarations=declared_declarations,
+        opened_blocks=opened_blocks, basis="declaration-backed",
+    )
+    readiness_by_block = {entry["block"]: entry for entry in readiness_report}
+
+    def _unwritten_required(wave: list) -> list:
+        return sorted(
+            qualified_id for qualified_id in wave
+            if not corpus.blocks[qualified_id].optional and qualified_id not in opened_blocks
+        )
+
+    if phase is not None:
+        for index, wave in enumerate(waves[: phase - 1]):
+            unwritten = _unwritten_required(wave)
+            if unwritten:
+                raise Refused(
+                    "PHASE_NOT_READY",
+                    f"wave {index + 1} is not complete ({unwritten} still unwritten); "
+                    f"phase {phase} cannot begin until every wave before it is complete",
+                )
+
+    selected_waves = waves if phase is None else waves[:phase]
+
+    wave_reports = []
+    previous_complete = True
+    for index, wave in enumerate(selected_waves):
+        wave_complete = not _unwritten_required(wave)
+        if not previous_complete:
+            wave_status = "gated"
+        elif wave_complete:
+            wave_status = "complete"
+        else:
+            wave_status = "open"
+        wave_reports.append({
+            "wave": index + 1,
+            "status": wave_status,
+            "blocks": [
+                {
+                    "block": qualified_id,
+                    "status": readiness_by_block[qualified_id]["status"],
+                    "missing_facts": readiness_by_block[qualified_id]["missing_facts"],
+                    "missing_declarations": readiness_by_block[qualified_id]["missing_declarations"],
+                    "optional": readiness_by_block[qualified_id]["optional"],
+                    "opened": qualified_id in opened_blocks,
+                    "provenance": provenance_by_block.get(qualified_id),
+                }
+                for qualified_id in wave
+            ],
+        })
+        previous_complete = previous_complete and wave_complete
+
+    return {
+        "declared": {
+            "facts": sorted(declared_facts),
+            "declarations": sorted(declared_declarations),
+        },
+        "waves": wave_reports,
+    }
+
+
+def cmd_phases(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    return compute_phases(paper_dir, sections_dir, phase=args.phase)
 
 
 def _resolve_repo_path(raw: str) -> Path:
@@ -884,16 +1096,40 @@ def build_parser() -> argparse.ArgumentParser:
         "readiness", help="per-block writable/blocked given satisfied facts and declarations",
     )
     p_readiness.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root -- reads the "
+        "declarations region for its satisfied sets (basis \"declaration-backed\")",
+    )
+    p_readiness.add_argument(
         "--sections", default=None,
         help="override sections/ location; must resolve inside the repository root",
     )
     p_readiness.add_argument(
         "--fact", action="append", default=None,
-        help="a satisfied fact id; repeatable",
+        help="a satisfied fact id; repeatable -- a hypothetical addition when --paper is "
+        "given, or the whole basis (\"supposed-only\") when it is not",
     )
     p_readiness.add_argument(
         "--declaration", action="append", default=None,
-        help="a satisfied declaration id; repeatable",
+        help="a satisfied declaration id; repeatable, same basis rules as --fact",
+    )
+
+    p_phases = sub.add_parser(
+        "phases",
+        help="read-only: what can I write now -- waves with per-block readiness, opened, provenance",
+    )
+    p_phases.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_phases.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_phases.add_argument(
+        "--phase", type=int, default=None,
+        help="report only waves 1..N; refuses PHASE_NOT_READY if any wave before N is "
+        "incomplete. Omitted: report every wave, the full plan awaiting approval",
     )
 
     p_order = sub.add_parser("order", help="derive the writing order from the block graph")
@@ -1107,8 +1343,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 COMMANDS = (
-    "scaffold", "status", "open", "substitute", "contract", "readiness", "order", "declare", "observe",
-    "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
+    "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "order", "declare",
+    "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1117,6 +1353,7 @@ _COMMANDS = {
     "substitute": cmd_substitute,
     "contract": cmd_contract,
     "readiness": cmd_readiness,
+    "phases": cmd_phases,
     "order": cmd_order,
     "declare": cmd_declare,
     "observe": cmd_observe,

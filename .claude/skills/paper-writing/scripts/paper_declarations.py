@@ -24,6 +24,7 @@ Public surface:
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=...)    -> dict
     read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
+    read_satisfied(paper_dir) -> (set[str], set[str])  (read-only; fixed facts, fixed declarations)
     reopen(paper_dir, id, *, clock=...)                  -> dict
     affected_blocks(corpus, id)  -> set[str]  (pure; the reopen scan)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
@@ -240,6 +241,38 @@ def read_fact(paper_dir: Path, fact_id: str) -> str | None:
     if entry is None or not entry.get("fixed"):
         return None
     return entry["resolution"]
+
+
+def read_satisfied(paper_dir: Path) -> tuple[set, set]:
+    """Read-only: every fact id and every declaration id currently FIXED in
+    the `declarations` region, as two sets -- `(satisfied_facts,
+    satisfied_declarations)`. This is the declaration-backed basis
+    `cmd_readiness`/`phases` read (`the-phases-are-derived-not-remembered`,
+    design.md D3, tasks.md 6.3): a bare `readiness` call used to compute its
+    answer from CLI flags alone, never opening `main.tex`, so it never
+    changed after `declare`.
+
+    Reuses the exact same private readers `set_fact`/`reopen`/`read_fact`
+    already go through (`_read_declarations`, `_verify_not_hand_edited`,
+    `_body_or_default`) -- never a second region reader. Raises `PAPER_
+    ABSENT` (via `_read_declarations` -> `paper_block.resolve_main_tex`)
+    when `paper_dir` has no `main.tex`, and `DECLARATIONS_HAND_EDITED` (via
+    `_verify_not_hand_edited`) when the region's own digest no longer
+    matches -- both already reachable through this module's other callers,
+    never a new code for either condition.
+    """
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    satisfied_facts = {
+        entry["id"] for entry in body["records"]
+        if entry["kind"] == "fact" and entry.get("fixed")
+    }
+    satisfied_declarations = {
+        entry["id"] for entry in body["records"]
+        if entry["kind"] == "declaration" and entry.get("fixed")
+    }
+    return satisfied_facts, satisfied_declarations
 
 
 def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> dict:
