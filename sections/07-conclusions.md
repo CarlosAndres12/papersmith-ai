@@ -68,7 +68,7 @@
       "citations": "resolution",
       "after": [
         {
-          "target": "limitations.lim-closing",
+          "target": "limitations.lim-proposal-items",
           "source": {
             "file": "sections/07-conclusions.md",
             "quote": "The limitations, which it is the relevant subset of, and one reference per direction"
@@ -188,7 +188,7 @@ section, because it compresses it.
 | Block | Depends on |
 |---|---|
 | `conclusions.concl-block-1` — The contributions, as defined — same count, order, and names as the introduction and the methods section | `introduction.block-4b` — the enumerated contributions restated here |
-| `conclusions.concl-block-4` — The limitations, which it is the relevant subset of, and one reference per direction | `limitations.lim-closing` — the closed limitations this block draws its relevant subset from |
+| `conclusions.concl-block-4` — The limitations, which it is the relevant subset of, and one reference per direction | `limitations.lim-proposal-items` — the swept limitations this block draws its relevant subset from |
 
 Block 3's own placement — its own paragraph or the close of block 2 — is a
 placement option (see Structural decisions), not a content derivation from

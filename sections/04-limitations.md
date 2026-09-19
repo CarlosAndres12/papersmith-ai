@@ -36,7 +36,16 @@
         }
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "produces_facts": [
+        {
+          "value": "limitations",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "Sweep the mathematical section for gaps in the proposal:"
+          }
+        }
+      ]
     },
     {
       "id": "lim-validation-items",
@@ -72,16 +81,7 @@
       "requires_facts": [],
       "requires_declarations": [],
       "citations": "discovery",
-      "optional": true,
-      "produces_facts": [
-        {
-          "value": "limitations",
-          "source": {
-            "file": "sections/04-limitations.md",
-            "quote": "Either what addressing the limitations would give, or where the field is moving, with a citation."
-          }
-        }
-      ]
+      "optional": true
     }
   ]
 }
