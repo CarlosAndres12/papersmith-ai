@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), see which writing phase is unlocked and which blocks still gate the next one, open the empty section/block skeleton once from two structural decisions inferred off disk thereafter, assemble a block's own redactor packet (contract prose plus reference heading outlines, never reference prose), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, phases, skeleton, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify, packet. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -13,10 +13,13 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Seventeen verbs, wired into one front door (`scripts/paper_cli.py`):
+Twenty verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
-`the-contract-is-data-not-code`), `declare`, `observe` (validates an
+`the-contract-is-data-not-code`), `phases` (the read-only "what can I write
+now" wave report), `skeleton` (opens the empty section/block structure once,
+from two structural decisions inferred off disk on every later call —
+`the-phases-are-derived-not-remembered`), `declare`, `observe` (validates an
 `insumos-observer` report against the observable-fact schema before a human
 runs `declare` against it), `plan` (the paper's own decisions —
 `the-paper-carries-its-own-decisions`), `resolve`,
@@ -25,9 +28,12 @@ the verdict/placement gate — `no-claim-without-a-source-that-holds-it`),
 `write` (evidence-bound drafting, contract audit and the style-leak proof —
 `the-writer-may-assert-only-what-it-was-given`), `render`/`place` (a
 diagram that compiles or says why, the repair-budget ledger, and the
-data-figure boundary — `a-diagram-that-compiles-or-says-why`), and `verify`
+data-figure boundary — `a-diagram-that-compiles-or-says-why`), `verify`
 (read-only coupling verification, citation integrity and contract currency —
-`the-couplings-hold-or-they-do-not`). To the substitution engine, block ids
+`the-couplings-hold-or-they-do-not`), and `packet` (the redactor's own
+context: a block's contract prose plus reference heading outlines, never
+reference prose — `the-phases-are-derived-not-remembered`). To the
+substitution engine, block ids
 stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
 contract reader is what says which ids exist, what each requires, and where
 in the document they belong, entirely over in `sections/*.md`.
@@ -158,21 +164,50 @@ class there, and nothing more.
 
 ## Reading the section contract
 
-Three more verbs, from `the-contract-is-data-not-code`: `contract`,
-`readiness`, `order`. Each `sections/*.md` file now opens with a
-`---`-fenced JSON header — `section`, `position`, optional `after`, and a
-`blocks` list, each block declaring `id`, `requires_facts`,
-`requires_declarations`, `citations`. The prose below the header is
-unchanged; nothing here reads it for meaning.
+Four more verbs, from `the-contract-is-data-not-code` and
+`the-phases-are-derived-not-remembered`: `contract`, `readiness`, `order`,
+`phases`. Each `sections/*.md` file now opens with a `---`-fenced JSON
+header — `section`, `position`, optional `after`, and a `blocks` list, each
+block declaring `id`, `requires_facts`, `requires_declarations`,
+`citations`, `optional`.
+
+**The prose body is no longer merely read by a human.** Every contract's
+prose now carries a `### External inputs` / `### Internal chain` partition
+(a third, `### Structural decisions`, holds whatever names no block at
+all); `contract` refuses `INPUT_PARTITION_ABSENT` when either required
+heading is missing. Each `### Internal chain` row leads with a backticked
+qualified id (`` `<section>.<block-id>` ``) naming a dependency, and that
+dependency must be backed by a real `after` edge whose own quote is
+literally present in the prose — a row naming an unresolvable id refuses
+`CHAIN_ROW_UNRESOLVED`, a resolvable id with no backing edge refuses
+`CHAIN_ROW_UNBACKED`. A `###`-level sub-unit heading (`Paragraph`, `Block`,
+`Slot`, `Subsection`, `Part`, followed by an identifier) that resolves to
+zero declared ids refuses `BLOCK_SUBUNIT_UNDECLARED`; one that resolves to
+more than one refuses `UNIT_HEADING_AMBIGUOUS`. All four are wired into
+`assemble_corpus`, so every verb that reads the corpus (`contract`, `order`,
+`readiness`, `phases`, `plan`, `verify`, `write`) is gated by them.
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `contract [--file <path>]` | Validates the whole `sections/` corpus (flat id namespace, every `after` target resolved or reported dangling), or shows one file's parsed header with `--file` | `MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`, `ID_COLLISION`, `SECTIONS_OUTSIDE_REPOSITORY` |
-| `readiness [--fact <id>]... [--declaration <id>]...` | Per-block `writable`/`blocked`, naming every still-missing fact and declaration separately | adds nothing beyond `contract`'s own guards |
+| `contract [--file <path>]` | Validates the whole `sections/` corpus (flat id namespace, every `after` target resolved or reported dangling, the prose partition and its chain rows), or shows one file's parsed header with `--file` | `MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`, `ID_COLLISION`, `SECTIONS_OUTSIDE_REPOSITORY`, `INPUT_PARTITION_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`, `BLOCK_SUBUNIT_UNDECLARED`, `UNIT_HEADING_AMBIGUOUS` |
+| `readiness (--paper <dir> \| --fact <id>... \| --declaration <id>...)` | Per-block `writable`/`blocked`/`not-applicable`, naming every still-missing fact and declaration separately. `--paper <dir>` reads the `declarations` region for basis `declaration-backed` (any flag also given is reported separately under `supposed`); at least one bare `--fact`/`--declaration` flag with no `--paper` is basis `supposed-only`, an explicit hypothetical what-if | adds `READINESS_BASIS_REQUIRED` |
 | `order` | Derives the writing order from the block graph — `position`, declared block order, and every transcribed `after` edge; never the filename | adds `ORDER_CYCLE` |
+| `phases [--phase N]` | Read-only "what can I write now": Kahn-wave decomposition of the block graph, each block's own readiness (basis `declaration-backed`), `opened` and provenance state, and the facts/declarations already on record. `--phase N` reports only waves `1..N` | adds `PHASE_NOT_READY` |
 
 `--sections <dir>` overrides the default `sections/` at the repository root
-on all three, the same shape `--paper` already has.
+on all four (`--paper <dir>` on `readiness`/`phases` overrides `paper/` the
+same way), the same shape `--paper` already has elsewhere.
+
+**`readiness` alone is not "what can I write now."** A bare `readiness`
+call with neither `--paper` nor a flag has no basis to compute an answer
+from and refuses `READINESS_BASIS_REQUIRED` rather than silently reporting
+a stale, flags-only number — the exact defect that once let `readiness`'s
+answer never change after a `declare`, because it never opened `main.tex`
+at all. `phases` is the read-only report that actually answers "what can I
+write now": it resolves readiness from disk itself, orders it into waves,
+and gates a requested `--phase N` on every earlier wave being complete.
+Over the shipped corpus (47 blocks) `phases` reports five waves shaped
+**28 / 11 / 5 / 2 / 1**.
 
 **The three closed vocabularies** a header may draw from: ten
 `requires_facts` ids (`formulation`, `contributions`, `problem-statement`,
@@ -193,19 +228,77 @@ headers (`abstract` after `conclusions`, `introduction`'s `block-3` after
 `openspec/changes/the-contract-is-data-not-code/` for why.
 
 **Nothing here writes to `paper/main.tex`.** `order`'s output is a sequence
-of block ids (`<section>.<block>`, e.g. `introduction.block-3`) — the same
-shape `open`/`substitute` accept as `--block`. Wiring the two together
-(open every block in derived order, substitute each as it's written) is a
-later capability, not this one.
+of block ids (`<section>.<block>`, e.g. `introduction.block-3`) under its
+own `order` key, alongside `danglingEdges` — the same shape `open`/
+`substitute` accept as `--block`. `order`'s own sequence and `phases`'s
+wave-flattened sequence are NOT the same ordering in general (a
+multi-frontier graph makes `order`'s min-heap interleave across waves where
+`phases` groups by wave); do not assert them equal — `derive_waves` and
+`derive_order` are two distinct read paths over the same graph, on purpose.
+Wiring the two together (open every block in derived order, substitute each
+as it's written) is a later capability, not this one.
 
-### Decision Gates (contract, readiness, order)
+**`optional`, read verbatim off the header, changes an observable outcome
+in three places, never in `order`'s own sequence.** `contract`'s parsed
+header echoes it per block; `readiness` reports `not-applicable` (instead
+of `writable`/`blocked`) for an optional, unopened block under
+`declaration-backed` basis; `verify` reports `unmeasured`, reason
+`OPTIONAL_BLOCK_ABSENT`, for a coupling whose derived block set is entirely
+optional-and-unopened. `order`'s own graph derivation reads no block's
+`optional` flag at all — an optional block is ordered exactly like any
+other.
+
+### Decision Gates (contract, readiness, order, phases)
 
 | Situation | Action |
 | --- | --- |
 | `contract` reports `danglingEdges` | An `after` target names an id absent from the corpus — not a defect on its own (deleting a contract is in scope), but confirm it is intentional before trusting `order`'s result |
 | `order` refuses `ORDER_CYCLE` | Two or more blocks' `after` edges disagree about who comes first; the refusal names every block in the cycle — fix one of the transcribed sentences, it is never resolved by re-running |
 | `readiness` reports a block `blocked` with an empty `missing_facts` | The block is waiting on a declaration only (an operator-supplied input like `repository-url`), not on any measurement |
+| `readiness` refuses `READINESS_BASIS_REQUIRED` | Give `--paper <dir>` to read the real declarations region, or at least one `--fact`/`--declaration` flag for an explicit hypothetical — a bare call has no basis to answer from |
 | A header refuses `UNKNOWN_FACT` / `UNKNOWN_DECLARATION` / `UNKNOWN_CITATIONS_REGIME` | The file declares a value outside the closed vocabulary — fix the header, the vocabularies are not extended by editing the reader |
+| `contract` refuses `INPUT_PARTITION_ABSENT` | The prose body is missing `### External inputs` or `### Internal chain` — add the missing heading, present but empty if the section truly has none |
+| `contract` refuses `CHAIN_ROW_UNRESOLVED` | An `### Internal chain` row does not lead with a resolvable, backticked `<section>.<block-id>` — fix the row's leading token |
+| `contract` refuses `CHAIN_ROW_UNBACKED` | The row names a real block id, but no `after` edge backs that exact dependency — add the edge with a literal quote from the same prose |
+| `contract` refuses `BLOCK_SUBUNIT_UNDECLARED` | A `###` sub-unit heading (`Paragraph`/`Block`/`Slot`/`Subsection`/`Part` + identifier) resolves to zero declared ids — either declare the missing id or fix the heading |
+| `contract` refuses `UNIT_HEADING_AMBIGUOUS` | A `##` unit heading resolves to more than one declared id with no explicit grouping — name every resolved id in the heading itself |
+| `phases` refuses `PHASE_NOT_READY` when `--phase N` is given | An earlier wave still has an unwritten, non-`optional` block — the refusal names it; open/substitute it (or every such block) before asking for a later phase |
+| `write` refuses `PHASE_NOT_READY` | The target block's own wave has an earlier, still-incomplete wave — this fires before any draft/audit byte is read and before an attempt is spent; resolve the same way `phases` names |
+
+## Opening the empty skeleton: `skeleton`
+
+Before any block can be written, every section/block id the manuscript will
+carry must exist, empty, in `paper/main.tex` — `skeleton` builds exactly
+that, and only that: it opens each non-excluded id through the existing
+`open_block` writer alone, in `derive_order` order, and writes no content.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py skeleton \
+    --related-work yes --dataset-in materials
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `skeleton --related-work yes\|no --dataset-in materials\|experimental-setup [--sections <dir>] [--paper <dir>]` | Opens every `sections/*.md` block id the two answers imply, empty, skipping ids already opened | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` |
+
+**Two structural decisions, asked exactly once.** Whether the manuscript
+carries a dedicated Related Work section, and whether the dataset is
+described in Materials and Methods or in Experimental Setup, are answered
+by `--related-work`/`--dataset-in` the first time any block is opened.
+Neither flag given refuses `SKELETON_ANSWER_REQUIRED`, naming which is
+missing.
+
+**Every later call infers both decisions from disk, never from a stored
+flag and never from an agent's own memory.** Once any corpus block is
+already opened, `skeleton` re-derives both answers straight from the
+opened block ids themselves (`paper_declarations.infer_skeleton_decisions`)
+and compares them against whatever was given: a contradiction refuses
+`SKELETON_ALREADY_DECIDED`, naming both what disk already records and what
+was requested. Opening both `mm-dataset` and `es-dataset` at once is a
+genuine conflict the inference cannot resolve one way — it refuses
+`DATASET_PLACEMENT_CONFLICT` rather than silently picking a winner.
+Already-opened ids are skipped, so a repeated `skeleton` call with the same
+answers is idempotent.
 
 ## The paper's own decisions: declarations and provenance
 
@@ -274,6 +367,18 @@ order.
 per-folder marker only — never a folder's name.** A folder with no
 `.paper-writing.json` reports `unclassified`, including every folder on a
 fresh clone; that is designed behavior, not a fault.
+
+**`read_registry` and the actual ingested papers live at two different
+depths.** `read_registry` (above, driving `plan`) enumerates exactly one
+level — `guidance/<category>/` — and reports each category's own class or
+`unclassified`. The eight ingested papers this skill ships sit one level
+further down, at `guidance/<category>/<paper>/<paper>.md`; `ingested_papers`
+walks that second level for `packet` below. `guidance/*/*` is a
+`.gitignore` pattern, so `fd`/`rg` report that whole tree empty — both
+readers walk it with `Path.iterdir()`, gitignore-blind by construction,
+never a shell call. None of the four category folders is classified today,
+so the style channel `packet` feeds `write` reports `unmeasured` — correct,
+and the operator's own pending decision, not a defect.
 
 **No `--adopt` exists for either region.** A hand-edited `declarations` or
 `provenance` region refuses (`DECLARATIONS_HAND_EDITED` /
@@ -383,6 +488,40 @@ and the target implementation repository are readable; an agent asked to
 observe an unreadable source cannot distinguish "not yet true" from "cannot
 be checked."
 
+## The redactor's own context: `packet`
+
+Before delegating to the `redactor` agent, the orchestrating agent needs to
+hand it a block's own contract prose plus whatever reference material the
+`style-sampler` might draw equivalent style from — `packet` assembles
+exactly that, read-only.
+
+```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py packet \
+    --section 06-introduction --block block-1
+```
+
+| Verb | What it does | Refuses |
+| --- | --- | --- |
+| `packet --section <id> --block <id> [--sections <dir>] [--guidance <dir>]` | Read-only: the block's own contract prose verbatim, plus a heading OUTLINE (`{title, level, byte_start, byte_end}`) per ingested paper under every `style-reference`-classed `guidance/` root | `GUIDANCE_MARKDOWN_UNREADABLE` |
+
+**The packet carries no reference prose at all — a structural leak guard,
+never an instructional one.** Each `references` entry is an outline of
+byte offsets into a reference paper's own markdown, never the span text
+itself; a mutation that inlines span text instead of offsets is exactly
+what turns this guard's own test red. The `style-sampler` agent reads this
+outline, picks the heading it judges equivalent, and reads that span
+itself from the real file — `packet` never resolves a span and never calls
+`paper_style.resolve_style_set`, so there is exactly one resolution path
+for a styled draft, not a second one this verb could drift from.
+
+**An unclassified or empty `guidance/` tree is not a refusal.** A
+`style-reference` root with no ingested papers under it, and a root the
+registry classes as anything other than `style-reference`, both contribute
+nothing to `references` — over the shipped corpus, where no category
+folder is classified yet, `packet` against a real block returns
+`references: []`; that is the honest, expected answer to "nothing has been
+classified," not an error.
+
 ## The writer may assert only what it was given: `write`
 
 Three channels feed one block's draft: **contract** (the block's own prose,
@@ -405,7 +544,21 @@ anything itself.**
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Reconciles an already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute` | `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP` |
+| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute` | `PHASE_NOT_READY`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP` |
+
+**The phase gate stops the write path, it does not merely report it.**
+Unit 6 wired `PHASE_NOT_READY` onto the read-only `phases` verb alone;
+`write` never consulted the same wave computation, so a later wave could be
+written before an earlier one existed. `write` now resolves this exact
+block's own wave via the SAME gate `phases` uses and refuses
+`PHASE_NOT_READY` before `--draft`/`--audit` are even read off disk and
+before `write_block`'s own attempt ledger is touched — a block never burns
+a judge-cycle attempt on a refusal that has nothing to do with its draft.
+Immediately after that gate, still before `--draft`/`--audit` are read,
+`write` runs `assemble_packet` for this exact block (`packet`'s own
+assembly, above) as a gate in its own right: a `style-reference` root whose
+ingested markdown cannot be read refuses `GUIDANCE_MARKDOWN_UNREADABLE`
+here, before the draft/audit stage is ever reached.
 
 ### The shuttle procedure — this CLI never invokes an agent
 

@@ -50,7 +50,7 @@ unmentioned.
 | 6b | **Correction to unit 6.** `PHASE_NOT_READY` gated the read-only `phases` verb only; `cmd_write` never consulted `derive_waves`, so nothing stopped a later wave being written before an earlier one existed — the gate reported, it did not gate. Wires the SAME gate computation into `cmd_write`, RED-first through the real `write` verb | `paper_cli.py`, `design.md`, `tasks.md`, `tests/test_paper_writing.py` | none (`PHASE_NOT_READY` already registered; second raise site only) | ~140 | Low | 6 | [x] |
 | 7 | `skeleton` + disk inference + `ingested_papers` | `paper_declarations.py`, `paper_guidance.py`, `paper_cli.py`, `specs/skeleton-startup/spec.md`, `tests/test_paper_writing.py`, `tests/test_paper_decisions.py` | `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT` | ~520 | High | 2, 3, 6 | [x] |
 | 8 | `packet` + `segment_markdown` | `paper_guidance.py`, `paper_style.py`, `paper_leak.py`, `paper_cli.py`, `specs/redactor-packet/spec.md`, `tests/test_paper_writing.py` | `GUIDANCE_MARKDOWN_UNREADABLE` | ~390 | Med–High | 7 | [x] |
-| 9 | Docs / agent / docstring corrections | `SKILL.md`, `paper_cli.py` (docstring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [ ] |
+| 9 | Docs / agent / docstring corrections (includes 9b: wire `optional` into the real `verify` call) | `SKILL.md`, `paper_cli.py` (docstring + `cmd_verify` wiring), `.claude/agents/insumos-observer.md`, `.claude/agents/style-sampler.md`, `tests/test_paper_writing.py` | none | ~120 | Low | all | [x] |
 
 ## Work-Unit Evidence
 
@@ -903,8 +903,8 @@ matters reads as protection while protecting nothing.
 - [x] 8.14 Read-only proof: before/after content-manifest for `packet` — writes nothing under every input, including refusal paths.
 - [x] 8.15 Run `.venv/bin/python -m unittest tests.test_paper_writing -v`.
 
-- [ ] 9.6 **OUR regression, not pre-existing noise.** `tests/test_skill_audit.py:8951` hardcodes `("paper-writing", 17)` and the skill now ships 20 verbs — units 6, 7 and 8 added `phases`, `skeleton` and `packet` and none updated it. The failure is `AssertionError: 20 != 17`. Unit 8's executor correctly declined to touch a file outside its edit roots and reported it, but framed it as predating the branch: it predates unit 8, not this change. Update the expected count to the measured one and re-run `tests.test_skill_audit.NewlyCoveredSubjectRosterTests`.
-- [ ] 9.7 Sweep the class rather than the instance: find every OTHER hardcoded expectation about `paper-writing`'s shape anywhere under `tests/` (verb counts, refusal counts, module lists, asset rosters) and confirm each is either derived or updated. A count that lives in one file and describes another is exactly the coupling this change exists to close, and we just proved the repo has at least one.
+- [x] 9.6 **OUR regression, not pre-existing noise.** `tests/test_skill_audit.py:8951` hardcodes `("paper-writing", 17)` and the skill now ships 20 verbs — units 6, 7 and 8 added `phases`, `skeleton` and `packet` and none updated it. The failure is `AssertionError: 20 != 17`. Unit 8's executor correctly declined to touch a file outside its edit roots and reported it, but framed it as predating the branch: it predates unit 8, not this change. Update the expected count to the measured one and re-run `tests.test_skill_audit.NewlyCoveredSubjectRosterTests`.
+- [x] 9.7 Sweep the class rather than the instance: find every OTHER hardcoded expectation about `paper-writing`'s shape anywhere under `tests/` (verb counts, refusal counts, module lists, asset rosters) and confirm each is either derived or updated. A count that lives in one file and describes another is exactly the coupling this change exists to close, and we just proved the repo has at least one. **Confirmed (this session):** `rg -n "paper-writing" tests/*.py` shows exactly one hardcoded numeric expectation about `paper-writing`'s shape living outside its own suite — `test_skill_audit.py:8951`, already fixed above; every other `paper-writing` mention in `tests/test_paper_citation.py`, `test_paper_figure.py`, `test_paper_contract.py`, `test_paper_evidence.py`, `test_paper_decisions.py`, `paper_mutation.py` is a path constant or marker-prefix literal, never a count that could drift.
 
 ## Phase 9b: wire `optional` into the real `verify` call
 
@@ -914,18 +914,117 @@ carries an AST-enforced import allowlist of exactly `{"re"}` (`tests/test_paper_
 `optional`. That lock is correct and stays — the module is pure and diskless by construction.
 The resolution belongs one level up, in the caller.
 
-- [ ] 9b.1 `cmd_verify` (`paper_cli.py`) resolves the optional-block id set from the corpus it already assembles, and passes it to `paper_verify.run` via the `optional_block_ids` keyword unit 3 threaded through all seven checks.
-- [ ] 9b.2 Scenario test over the SHIPPED corpus, not a fixture: a coupling whose derived block set is entirely optional-and-unopened reports `unmeasured` / `OPTIONAL_BLOCK_ABSENT` through the real `verify` verb, not only through a direct call to the check function.
-- [ ] 9b.3 RED-first mutation: pass an empty `optional_block_ids` from `cmd_verify` and confirm the same coupling reports something other than `unmeasured` — the wiring must be observably load-bearing, not merely present. Unit 3's own tests pass the set in directly, so they cannot see this wire at all.
-- [ ] 9b.4 Confirm `paper_verify.py`'s import allowlist is UNCHANGED and its AST lock still green; the fix must not widen it.
-- [ ] 9b.5 Confirm `verify` still writes nothing, under every input including every refusal path — the before/after content manifest and the AST write-lock both stay green.
+- [x] 9b.1 `cmd_verify` (`paper_cli.py`) resolves the optional-block id set from the corpus it already assembles, and passes it to `paper_verify.run` via the `optional_block_ids` keyword unit 3 threaded through all seven checks.
+- [x] 9b.2 Scenario test over the SHIPPED corpus, not a fixture: a coupling whose derived block set is entirely optional-and-unopened reports `unmeasured` / `OPTIONAL_BLOCK_ABSENT` through the real `verify` verb, not only through a direct call to the check function.
+- [x] 9b.3 RED-first mutation: pass an empty `optional_block_ids` from `cmd_verify` and confirm the same coupling reports something other than `unmeasured` — the wiring must be observably load-bearing, not merely present. Unit 3's own tests pass the set in directly, so they cannot see this wire at all.
+- [x] 9b.4 Confirm `paper_verify.py`'s import allowlist is UNCHANGED and its AST lock still green; the fix must not widen it.
+- [x] 9b.5 Confirm `verify` still writes nothing, under every input including every refusal path — the before/after content manifest and the AST write-lock both stay green.
 
 ## Phase 9: Docs / agent / docstring corrections
 
-- [ ] 9.1 `SKILL.md`: 17 → 20 verbs; add `phases`, `skeleton`, `packet` to the verb tables and Refuses columns; fix the stale `readiness` row to document the `--paper`/basis behavior.
-- [ ] 9.2 `paper_cli.py` module docstring: "thirteen verbs" → "twenty verbs" (also corrects the pre-existing 13-vs-17 drift, not only the three new verbs).
-- [ ] 9.3 Fix `.claude/agents/insumos-observer.md`'s write-tool/shuttle mismatch; confirm its declared tool list matches the shuttle-file contract `observe` actually reads.
-- [ ] 9.4 Confirm `.claude/agents/style-sampler.md`'s frontmatter/tool list matches consuming the packet's outline (offsets), not inline reference text.
-- [ ] 9.5 Confirm the final `reachable_paper_refusal_codes()` count is exactly **105** (96 baseline + `INPUT_PARTITION_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`, `READINESS_BASIS_REQUIRED`, `PHASE_NOT_READY`, `SKELETON_ANSWER_REQUIRED`, `SKELETON_ALREADY_DECIDED`, `DATASET_PLACEMENT_CONFLICT`, `GUIDANCE_MARKDOWN_UNREADABLE`) — not design's own 104 forecast, which omitted `INPUT_PARTITION_ABSENT`.
-- [ ] 9.6 Full-suite run: `npm test && .venv/bin/python -m unittest discover -s tests -p 'test_*.py'` green.
-- [ ] 9.7 Walk `proposal.md`'s Success Criteria checklist and tick every box against what actually shipped; note any item that did not close and why.
+- [x] 9.1 `SKILL.md`: 17 → 20 verbs; add `phases`, `skeleton`, `packet` to the verb tables and Refuses columns; fix the stale `readiness` row to document the `--paper`/basis behavior.
+- [x] 9.2 `paper_cli.py` module docstring: "thirteen verbs" → "twenty verbs" (also corrects the pre-existing 13-vs-17 drift, not only the three new verbs).
+- [x] 9.3 Fix `.claude/agents/insumos-observer.md`'s write-tool/shuttle mismatch; confirm its declared tool list matches the shuttle-file contract `observe` actually reads.
+- [x] 9.4 Confirm `.claude/agents/style-sampler.md`'s frontmatter/tool list matches consuming the packet's outline (offsets), not inline reference text.
+- [x] 9.5 **This task's own forecast is stale by 2, the same drift class flagged for units 4/6/7/8 above.** Measured (this session): `reachable_paper_refusal_codes()` is **107**, not the 105 this task's own arithmetic states — it omits `BLOCK_SUBUNIT_UNDECLARED` and `UNIT_HEADING_AMBIGUOUS` (unit 4's own +4 move, 97→101, landed two codes this task's nine-item list never named), and unit 8's own task 8.13 note already recorded the real baseline entering unit 8 as 106, not 104. Confirmed directly: `.venv/bin/python -c "import sys; sys.path[:0]=['.claude/skills/paper-writing/scripts','tests']; import test_paper_writing as t; print(len(t.reachable_paper_refusal_codes()))"` → `107`.
+- [x] 9.6 Full-suite run (this session): `npm test` → 640/640 pass. `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` → 3865 tests, 3 failures / 3 errors / 3 skipped, all in `test_skill_audit.FirstDamageReportTests`/`HistoricalReportRecordTests` (an archived-vs-non-archived path mismatch for an unrelated skill's audit report). Confirmed pre-existing and untouched by this unit: identical failures reproduce with this unit's own `SKILL.md` edit stashed out (`git stash`), against the same `40d8af8` tree. The two suites this change actually owns are green: `tests.test_paper_writing` (269 tests) and `tests.test_skill_audit.NewlyCoveredSubjectRosterTests` (2 tests).
+- [x] 9.7 Walked `proposal.md`'s Success Criteria checklist against what shipped (reviewed only — `proposal.md` itself is outside this unit's assigned edit scope, so its checkboxes are left for a maintainer/archive pass; the per-item verdicts are recorded in this unit's own Notes below). All nine bullets close against the real corpus/suite; two are worded imprecisely relative to what shipped, noted rather than silently ticked as literally true.
+
+---
+
+## Unit 9 — Notes / Deviations
+
+- **`SKILL.md:166`'s own "nothing here reads it for meaning" was the load-
+  bearing correction, made first.** By the time this unit ran, three
+  verifiers (`_verify_input_partition`, `_verify_internal_chain`,
+  `_verify_block_subunits`) already read the prose body for meaning and
+  refuse on it. Reproducing that exact sentence in the documentation of the
+  change that closes it would have been the same defect class this change
+  exists to close — corrected in the "Reading the section contract"
+  section, not merely appended to.
+- **The `readiness` row was rewritten, not merely annotated**, per the
+  launch brief's own framing: it now states the real three-way basis
+  dispatch (`--paper`, at-least-one-flag, neither) and names
+  `READINESS_BASIS_REQUIRED` by name, plus a dedicated callout that
+  `phases`, not `readiness`, is the real answer to "what can I write now."
+- **A claim in the launch brief did not survive verification against the
+  real source, and was not transcribed.** "`order`'s output gained a
+  `phases` key alongside `order` and `danglingEdges`" is false: `cmd_order`
+  (`paper_cli.py:463-468`) returns exactly `{"order": ..., "danglingEdges":
+  ...}`, unchanged; no test anywhere asserts a `phases` key on `order`'s
+  output. `SKILL.md` documents the real shape instead, and states plainly
+  that `order`'s sequence and `phases`'s wave-flattened sequence are not
+  the same ordering in general — a true statement regardless of the false
+  premise.
+- **Task 9.5's own arithmetic is stale by the same drift class the
+  Reconciliation Ledger already tracks for `INPUT_PARTITION_ABSENT`.** Its
+  nine-code list never named `BLOCK_SUBUNIT_UNDECLARED` /
+  `UNIT_HEADING_AMBIGUOUS` (unit 4's own measured +4 move, 97→101).
+  Measured directly this session: **107**, not the stated 105 — consistent
+  with unit 8's own task 8.13 note, which already recorded the real
+  baseline entering unit 8 as 106. `SKILL.md`'s own roster section states
+  no absolute count (it only describes the derivation method), so no
+  documentation edit was needed there; the correction lives on this task
+  instead.
+- **`proposal.md`'s Success Criteria bullet "`optional` changes at least
+  one observable outcome in each of order, readiness and verify" is
+  imprecise, not false.** `order`'s own graph derivation
+  (`paper_graph.derive_order`/`derive_waves`) reads no block's `optional`
+  flag at all — confirmed by grep (`optional` appears in `paper_graph.py`
+  only in `BlockRecord`'s own field definition and its one assignment from
+  the parsed header, never in `_build_graph`/`derive_order`/`derive_waves`)
+  and by there being no `OptionalOrder*` test class alongside the real
+  `OptionalReadinessTests`/`OptionalVerifyTests`/`OptionalVerifyWiringTests`.
+  The third observable surface is `contract`'s parsed header (task 2.4's
+  own scenario), not `order`. `SKILL.md` documents the real three surfaces
+  by name.
+- **`proposal.md`'s Success Criteria bullet "same-section reference
+  extracts" is also imprecise.** `assemble_packet` is not scoped to the
+  block's own section — it iterates every `style-reference`-classed
+  `guidance/` root regardless of which section a block belongs to — and it
+  never carries extracted text at all, only heading outlines
+  (`{title, level, byte_start, byte_end}`), per design D5's own corrective
+  rejection of "the packet inlines each extracted section's text."
+  `SKILL.md`'s `packet` section documents outlines-only, unscoped-by-
+  section, exactly as shipped.
+- **`proposal.md`'s nine Success Criteria bullets, walked against what
+  shipped (task 9.7; `proposal.md` itself left unedited — outside this
+  unit's scope).** (1) All ten contracts carry `### External inputs` /
+  `### Internal chain` — CLOSED, unit 1/1b. (2) Every internal-chain row
+  has a quote-anchored `after` edge; an unresolved/unbacked row refuses —
+  CLOSED, unit 4 (`CHAIN_ROW_UNRESOLVED`/`CHAIN_ROW_UNBACKED`). (3) Editing
+  a transcribed quote makes the skill refuse, proven by mutation — CLOSED,
+  unit 4's mutation tests. (4) `readiness` resolves `paper_dir` and its
+  answer changes after `declare` — CLOSED, unit 6. (5) A phase plan lists
+  waves 1..N; phase N refused while N-1 incomplete — CLOSED, units 5/6/6b
+  (`phases`, `PHASE_NOT_READY` on both `phases` and `write`). (6) Both
+  startup decisions recoverable from opened block ids alone, skeleton
+  present, no re-ask — CLOSED, unit 7. (7) `optional` changes at least one
+  observable outcome in each of order, readiness and verify — CLOSES ONLY
+  PARTLY AS WORDED: readiness and verify, yes; `order`'s own graph
+  derivation reads no block's `optional` flag, so the real third surface
+  is `contract`'s parsed header, not `order` (see the dedicated note
+  above). (8) The packet for one block carries contract prose plus
+  same-section reference extracts and passes the leak tripwires — CLOSES
+  ONLY PARTLY AS WORDED: `packet` carries contract prose and passes every
+  leak tripwire, but its `references` are outlines only (never extracted
+  text) and are never scoped to "same section" — every `style-reference`
+  root contributes regardless of section (see the dedicated note above).
+  (9) `npm test && python -m unittest discover` green, refusal roster
+  count updated — CLOSED for the two suites this change owns
+  (`test_paper_writing`, `NewlyCoveredSubjectRosterTests`); the full
+  repository-wide discover run carries 3 pre-existing, unrelated failures
+  (see task 9.6); roster count is 107, corrected from this task's own
+  stale 105 (see task 9.5).
+- **Verification, run this session, not narrated from an earlier unit.**
+  `tests.test_paper_writing` (269 tests, OK) and
+  `tests.test_skill_audit.NewlyCoveredSubjectRosterTests` (2 tests, OK) —
+  the two commands this unit's own launch brief names. `npm test` (640/640
+  pass) and `.venv/bin/python -m unittest discover -s tests -p
+  'test_*.py'` (3865 tests; 3 failures / 3 errors / 3 skipped, all in
+  `test_skill_audit.FirstDamageReportTests`/`HistoricalReportRecordTests`,
+  an archived-vs-non-archived path mismatch for an unrelated skill's audit
+  report) were also run per task 9.6's own instruction. Confirmed
+  pre-existing and unrelated to this unit's own `SKILL.md`-only diff: `git
+  stash` (removing this unit's entire change) reproduces the identical 2
+  failures / 3 errors against the same `40d8af8` base.
