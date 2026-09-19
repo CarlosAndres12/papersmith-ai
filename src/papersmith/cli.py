@@ -21,6 +21,7 @@ from .core import status as status_command
 from .core import target as target_command
 from .core import upgrade as upgrade_command
 from .errors import PapersmithError
+from .mcp import cli as mcp_command
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,6 +48,7 @@ _REGISTRY: list = [
     remote_command.register,
     target_command.register,
     audit_command.register,
+    mcp_command.register,
 ]
 
 
