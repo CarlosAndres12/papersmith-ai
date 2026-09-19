@@ -116,7 +116,7 @@ Contract data changes: `es-dataset` added to `02-experimental-setup.md` (`option
 | `.../scripts/paper_cli.py` | Modify | `phases`, `skeleton`, `packet`; `readiness` basis; 8 roster entries; docstring `thirteen` → 20; unit 6b: `cmd_write` gains the same `PHASE_NOT_READY` gate `phases` uses, via a shared `_refuse_on_incomplete_waves` |
 | `.claude/skills/paper-writing/SKILL.md` | Modify | 17 → 20 verbs; `readiness` row; new verb tables and decision gates |
 | `.claude/agents/insumos-observer.md`, `style-sampler.md` | Modify | Write-tool/shuttle mismatch; sampler consumes the packet's outline |
-| `tests/test_paper*.py` | Modify | Roster count 96 → 104; new scenarios and mutations |
+| `tests/test_paper*.py` | Modify | Roster count 96 → 107 (measured); new scenarios and mutations |
 
 ## Interfaces / Contracts
 
@@ -137,7 +137,7 @@ Normalized row shape (parsed by leading backticked token only):
 | `introduction.block-4b` | `introduction.block-2` — read backwards as the deficiency it resolves |
 ```
 
-New refusal codes, classified for `REFUSAL_CLASSIFICATION` (bidirectional roster; `reachable_paper_refusal_codes()` moves 96 → **105**):
+New refusal codes, classified for `REFUSAL_CLASSIFICATION` (bidirectional roster; `reachable_paper_refusal_codes()` moves 96 → **107**, MEASURED at unit 9's close, not forecast — this table's own arithmetic drifted stale four separate times during the change and the measured count is always authoritative):
 
 | Code | Class |
 |---|---|
@@ -150,6 +150,8 @@ New refusal codes, classified for `REFUSAL_CLASSIFICATION` (bidirectional roster
 | `SKELETON_ALREADY_DECIDED` | work-state |
 | `DATASET_PLACEMENT_CONFLICT` | work-state |
 | `GUIDANCE_MARKDOWN_UNREADABLE` | work-state |
+| `BLOCK_SUBUNIT_UNDECLARED` | work-state |
+| `UNIT_HEADING_AMBIGUOUS` | work-state |
 
 `OPTIONAL_BLOCK_ABSENT` is an `UNMEASURED_REASONS` member, not a `Refused` — it moves no count.
 
@@ -196,11 +198,10 @@ No data migration — nothing derived is persisted. Eleven chained PRs; waves ar
 
 | # | Unit | Depends on | Budget risk |
 |---|---|---|---|
-| 1a | Normalize `01`, `02`, `05` | — | Med |
-| 1b | Normalize `03`, `04`, `07` | — | Med |
-| 1c | Normalize `08`, `09`, `10` (`06` already normalized) | — | Med |
-| 2 | `es-dataset`, `rw-*` optional, `mm-proposal` facts | 1a–1c | Low |
-| 4 | Chain → `after` transcription + both refusals | 1a–1c, 2 | High |
+| 1 | Normalize all ten contracts + `_verify_input_partition` | — | Low |
+| 1b | CORRECTION: six contracts asserted a FALSE "None" internal chain; replaced with 14 quote-backed rows | 1 | Low |
+| 2 | `es-dataset`, `rw-*` optional, `mm-proposal` facts | 1, 1b | Low |
+| 4 | Chain → `after` transcription + both refusals + the PROSE→HEADER guard | 1, 1b, 2 | High |
 | 3 | `optional` across order / readiness / verify | 2 | Med |
 | 5 | `derive_waves` | 4, 3 | Med |
 | 6 | `readiness` basis + `phases` | 5 | Med |
