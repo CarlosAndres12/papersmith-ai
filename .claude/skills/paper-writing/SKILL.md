@@ -13,7 +13,7 @@ it — before a single byte reaches disk.
 
 ## What this skill ships today
 
-Twenty verbs, wired into one front door (`scripts/paper_cli.py`):
+Twenty-four verbs, wired into one front door (`scripts/paper_cli.py`):
 `scaffold`, `status`, `open`, `substitute` (the block-substitution engine),
 `contract`, `readiness`, `order` (the section contract reader —
 `the-contract-is-data-not-code`), `phases` (the read-only "what can I write
@@ -32,7 +32,15 @@ data-figure boundary — `a-diagram-that-compiles-or-says-why`), `verify`
 (read-only coupling verification, citation integrity and contract currency —
 `the-couplings-hold-or-they-do-not`), and `packet` (the redactor's own
 context: a block's contract prose plus reference heading outlines, never
-reference prose — `the-phases-are-derived-not-remembered`). To the
+reference prose — `the-phases-are-derived-not-remembered`), `couplings` (validates and
+writes `paper/couplings.json` whole -- the producer declaration record
+`verify` never had), `full_text` (fetches one already-resolved
+identifier's own PDF, keyless, from its cached metadata's measured
+full-text URL, and places it loose under `guidance/<section>/`), `reuse`
+(read-only: for one block's open claims, which already-ingested,
+evidence-classed papers carry no verdict yet), and `exhaustion`
+(read-only, corpus-wide: every evidence-classed ingested paper's
+exhaustion state -- lists only, never deletes). To the
 substitution engine, block ids
 stay opaque strings — shape only (`[A-Za-z0-9._-]+`), no meaning. The
 contract reader is what says which ids exist, what each requires, and where
