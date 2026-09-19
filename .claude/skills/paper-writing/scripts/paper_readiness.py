@@ -33,6 +33,7 @@ def compute_block_readiness(
     opened: bool | None = None,
     basis: str = "supposed-only",
     declined_facts: dict | None = None,
+    produced_by: dict | None = None,
 ) -> dict:
     """Given one `BlockRecord`, report `writable`/`blocked`/`not-applicable`
     naming each still-missing fact and declaration separately. A block whose
@@ -86,8 +87,22 @@ def compute_block_readiness(
     default) behaves exactly as an empty dict: no block can ever report
     `"declined"` and neither key is ever added, matching every existing
     caller's behavior unchanged.
+
+    `produced_by`, when given, maps a fact id whose producer is one or more
+    blocks (`fact-production` spec) to the tuple of those blocks' own
+    qualified ids (`paper_graph.producers_by_fact`) — a plain, static,
+    caller-supplied mapping, the same pure-input pattern `declined_facts`
+    already uses (design.md, Decision E). For every fact still in
+    `missing_facts` that is also a key of `produced_by`, the result gains a
+    `blocked_on_produced` entry naming both the fact and every one of its
+    producers — so a `blocked` report tells the operator to WRITE the
+    producer, never to `declare` it (`writing-readiness` spec, `Requirement:
+    Per-Block Readiness`). `produced_by=None` (the default) behaves exactly
+    as an empty dict: `blocked_on_produced` is never added, reproducing
+    today's behaviour byte for byte.
     """
     declined_facts = declined_facts or {}
+    produced_by = produced_by or {}
     missing_facts = [fact for fact in block.requires_facts if fact not in satisfied_facts]
     missing_declarations = [
         declaration for declaration in block.requires_declarations
@@ -133,6 +148,12 @@ def compute_block_readiness(
             }
             for fact in stale_missing
         ]
+    blocked_on_produced = [
+        {"fact": fact, "producers": list(produced_by[fact])}
+        for fact in missing_facts if fact in produced_by
+    ]
+    if blocked_on_produced:
+        result["blocked_on_produced"] = blocked_on_produced
     return result
 
 
@@ -144,6 +165,7 @@ def compute_readiness(
     opened_blocks: set | None = None,
     basis: str = "supposed-only",
     declined_facts: dict | None = None,
+    produced_by: dict | None = None,
 ) -> list:
     """Every block of every section, in a stable declared order (see
     `_iter_blocks_in_declared_order`).
@@ -152,13 +174,18 @@ def compute_readiness(
     be opened in `main.tex` — a pure set the caller resolved, never read
     here. `opened_blocks=None` (the default) means openness is unknown for
     every block, which `compute_block_readiness` treats as `opened=None`
-    and therefore never reports `not-applicable`, regardless of `basis`."""
+    and therefore never reports `not-applicable`, regardless of `basis`.
+
+    `produced_by`, when given, is threaded unchanged into every block's own
+    `compute_block_readiness` call — the same global, fact-keyed mapping
+    every block consults (`declined_facts`'s own pattern)."""
     return [
         compute_block_readiness(
             block, satisfied_facts, satisfied_declarations,
             opened=(None if opened_blocks is None else block.qualified_id in opened_blocks),
             basis=basis,
             declined_facts=declined_facts,
+            produced_by=produced_by,
         )
         for block in _iter_blocks_in_declared_order(corpus)
     ]

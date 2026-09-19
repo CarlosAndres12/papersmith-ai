@@ -776,15 +776,23 @@ class CLIWiringTests(unittest.TestCase):
         )
         return sections_dir
 
-    def _declare_fact(self, fact_id: str, value: list) -> None:
-        proc = self._run(
-            "declare", "--paper", str(self.paper_dir), "--fact", fact_id, "--value", json.dumps(value),
-        )
+    def _declare_fact(self, fact_id: str, value: list, *, sections: Path | None = None) -> None:
+        args = ["declare", "--paper", str(self.paper_dir), "--fact", fact_id, "--value", json.dumps(value)]
+        if sections is not None:
+            args += ["--sections", str(sections)]
+        proc = self._run(*args)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
     def test_render_with_section_and_block_runs_obligation_checks(self) -> None:
         self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
-        self._declare_fact("contributions", ["encoder", "decoder"])
+        sections_dir = self._demo_sections_dir("sections")
+        # `--sections sections_dir` (`a-fact-is-declared-or-it-is-produced`,
+        # tasks.md Unit 3): `declare` now resolves `produced_by` from an
+        # assembled corpus and, without an explicit override, defaults to
+        # the REAL shipped `sections/`, where `contributions` IS produced.
+        # This minimal demo corpus declares no producer for it at all, so
+        # `declare` here stays on the pre-existing declared-fact route.
+        self._declare_fact("contributions", ["encoder", "decoder"], sections=sections_dir)
         (self.paper_dir / "Figures" / "diagO.tex").write_text(
             "% node: encoder\n% node: decoder\n", encoding="utf-8",
         )
@@ -795,7 +803,6 @@ class CLIWiringTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        sections_dir = self._demo_sections_dir("sections")
         record_path = Path(self._tmp.name) / "record.jsonl"
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO",
@@ -809,13 +816,13 @@ class CLIWiringTests(unittest.TestCase):
 
     def test_render_with_section_and_block_mismatched_components_refuses(self) -> None:
         self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
-        self._declare_fact("contributions", ["encoder", "decoder"])
+        sections_dir = self._demo_sections_dir("sections2")
+        self._declare_fact("contributions", ["encoder", "decoder"], sections=sections_dir)
         (self.paper_dir / "Figures" / "diagO2.tex").write_text("% node: encoder\n", encoding="utf-8")
         (self.paper_dir / "Figures" / "diagO2.diagram.json").write_text(
             json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
             encoding="utf-8",
         )
-        sections_dir = self._demo_sections_dir("sections2")
         record_path = Path(self._tmp.name) / "record2.jsonl"
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO2",
@@ -857,9 +864,10 @@ class CLIWiringTests(unittest.TestCase):
         name instead of being silently treated as an empty or one-item
         list."""
         self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
+        sections_dir = self._demo_sections_dir("sections4")
         proc = self._run(
             "declare", "--paper", str(self.paper_dir), "--fact", "contributions",
-            "--value", "this paper contributes three things",
+            "--value", "this paper contributes three things", "--sections", str(sections_dir),
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         (self.paper_dir / "Figures" / "diagO4.tex").write_text("% node: encoder\n", encoding="utf-8")
@@ -867,7 +875,6 @@ class CLIWiringTests(unittest.TestCase):
             json.dumps({"components": ["encoder"], "encodings": [], "caption": "Figure 1. encoder."}),
             encoding="utf-8",
         )
-        sections_dir = self._demo_sections_dir("sections4")
         record_path = Path(self._tmp.name) / "record4.jsonl"
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO4",
@@ -888,8 +895,9 @@ class CLIWiringTests(unittest.TestCase):
         (declared to match the manifest) to `dataset` (declared NOT to
         match it)."""
         self.assertEqual(self._run("scaffold", "--paper", str(self.paper_dir)).returncode, 0)
-        self._declare_fact("contributions", ["encoder", "decoder"])
-        self._declare_fact("dataset", ["Dataset A", "Dataset B"])
+        sections_a = self._demo_sections_dir("sections5a", components_from="contributions")
+        self._declare_fact("contributions", ["encoder", "decoder"], sections=sections_a)
+        self._declare_fact("dataset", ["Dataset A", "Dataset B"], sections=sections_a)
         (self.paper_dir / "Figures" / "diagO5.tex").write_text(
             "% node: encoder\n% node: decoder\n", encoding="utf-8",
         )
@@ -901,7 +909,6 @@ class CLIWiringTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        sections_a = self._demo_sections_dir("sections5a", components_from="contributions")
         record_a = Path(self._tmp.name) / "record5a.jsonl"
         proc_a = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagO5",

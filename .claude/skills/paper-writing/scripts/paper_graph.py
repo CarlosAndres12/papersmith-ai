@@ -396,6 +396,26 @@ def _producers_by_fact(declarations: list) -> dict:
     return producers_by_fact
 
 
+def producers_by_fact(corpus: Corpus) -> dict:
+    """Public counterpart to `_producers_by_fact`, for a caller outside this
+    module that already holds an assembled `Corpus` and needs `fact_id ->
+    (qualified_producer_id, ...)` without re-deriving the scan itself —
+    `a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3: `paper_
+    readiness`/`paper_cli` resolve `produced_by` for `readiness`/`phases`/
+    `declare`/the Components Check through this one function, the same
+    derivation `_verify_producer_duplication`/`_verify_fact_totality`/
+    `_verify_producer_reachability` already share above. Every id here is
+    QUALIFIED (`<section>.<block>`, or a bare section id for a section-level
+    `produces_facts` entry) — the same vocabulary `corpus.blocks` and
+    `opened_blocks` (qualified block ids opened in `main.tex`) already
+    speak. `paper_coupling_evidence.py`'s OWN `producers_by_fact` is a
+    separate, RAW-id derivation for `evidence.block_bodies`'s own
+    vocabulary — never this function, so `check_chain`'s `zip(block_ids,
+    links)` alignment is never at risk of a qualified/raw id mismatch."""
+    raw = _producers_by_fact(_produces_facts_declarations(corpus))
+    return {fact_id: tuple(ids) for fact_id, ids in raw.items()}
+
+
 def _verify_fact_totality(corpus: Corpus, declarations: list) -> None:
     """Refuses `FACT_PRODUCER_ABSENT` (work-state) naming a fact some block
     REQUIRES (`requires_facts`, excluding the structural `skeleton` fact,

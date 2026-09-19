@@ -3197,11 +3197,13 @@ def _coupling_requirement(fact: str, filename: str) -> dict:
 
 def _coupling_production(fact: str, filename: str) -> dict:
     """One rich `produces_facts` entry, the `_coupling_requirement`
-    counterpart — `00-produced-facts.md`'s own four blocks are this
-    fixture's producers (`a-fact-is-declared-or-it-is-produced`,
-    `fact-production` spec), so `contributions`/`gap`/`problem-statement`/
-    `limitations` each resolve to a producer and `FACT_PRODUCER_ABSENT`
-    never fires here."""
+    counterpart (`a-fact-is-declared-or-it-is-produced`, `fact-production`
+    spec). `00-produced-facts.md`'s own three blocks produce `contributions`
+    /`problem-statement`/`limitations`; `gap` is produced instead by
+    `intro-gap` and `related-work-gap` themselves (its two CORROBORATED
+    producers, `paper_verify.CHECKS`'s own carve-out) — every one of the
+    four facts resolves to a producer and `FACT_PRODUCER_ABSENT` never
+    fires here."""
     return {
         "value": fact,
         "source": {
@@ -3235,7 +3237,7 @@ _COUPLING_SECTIONS = {
             {"id": f"pf-{fact}",
              "requires_facts": [], "requires_declarations": [], "citations": "none",
              "produces_facts": [_coupling_production(fact, "00-produced-facts.md")]}
-            for fact in ("contributions", "gap", "problem-statement", "limitations")
+            for fact in ("contributions", "problem-statement", "limitations")
         ],
     },
     "01-introduction.md": {
@@ -3245,10 +3247,14 @@ _COUPLING_SECTIONS = {
              "requires_facts": [_coupling_requirement("contributions", "01-introduction.md")],
              "requires_declarations": [], "citations": "none",
              "after": _coupling_after("contributions", "01-introduction.md")},
+            # `gap`'s two CORROBORATED producers (`a-fact-is-declared-or-
+            # it-is-produced`, design.md Decision F: `gap` is the one fact
+            # `paper_verify.CHECKS` corroborates, so exactly two producers
+            # are legal) -- `intro-gap` is one of them, never a consumer,
+            # matching the real corpus's own `introduction.block-3` shape.
             {"id": "intro-gap",
-             "requires_facts": [_coupling_requirement("gap", "01-introduction.md")],
-             "requires_declarations": [], "citations": "none",
-             "after": _coupling_after("gap", "01-introduction.md")},
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production("gap", "01-introduction.md")]},
         ],
     },
     "02-methods.md": {
@@ -3267,10 +3273,11 @@ _COUPLING_SECTIONS = {
     "03-related-work.md": {
         "section": "related-work", "position": 3,
         "blocks": [
+            # `gap`'s other corroborated producer -- matches the real
+            # corpus's own `related-work.rw-closing` shape.
             {"id": "related-work-gap",
-             "requires_facts": [_coupling_requirement("gap", "03-related-work.md")],
-             "requires_declarations": [], "citations": "none",
-             "after": _coupling_after("gap", "03-related-work.md")},
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production("gap", "03-related-work.md")]},
         ],
     },
     "04-abstract.md": {
@@ -3964,6 +3971,87 @@ class GapTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "unmeasured")
         self.assertFalse(result["evidence"]["mechanical"]["front_counts_equal"])
         self.assertFalse(result["evidence"]["mechanical"]["fronts_equal"])
+
+
+class RealCorpusGapPairingTests(unittest.TestCase):
+    """`a-fact-is-declared-or-it-is-produced`, design.md Decision F / tasks.md
+    Unit 3, 3.7: against the REAL shipped corpus, `check_gap`'s pair is the
+    two PRODUCERS of `gap` -- `related-work.rw-closing` and `introduction.
+    block-3` -- never `experimental-setup.es-assessment`, which requires
+    `gap` in its own `requires_facts` for an unrelated reason and must never
+    be read as this coupling's counterpart (`coupling-verification` spec,
+    `Requirement: Coupling 3 — The Gap Is Assisted`, 'Pairing resolves to
+    the two corroborated producers of gap')."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        (self.paper_dir / "couplings.json").write_text(
+            json.dumps({"blocks": {"placeholder": True}}), encoding="utf-8",
+        )
+
+    def test_producers_by_fact_resolves_gaps_two_producers_from_the_real_corpus(self) -> None:
+        evidence = paper_coupling_evidence.gather(self.paper_dir, SECTIONS_DIR)
+
+        block_ids, reason = evidence.producers_by_fact["gap"]
+
+        self.assertIsNone(reason)
+        self.assertEqual(set(block_ids), {"rw-closing", "block-3"})
+
+    def test_the_published_pair_is_the_two_producers_never_es_assessment(self) -> None:
+        evidence = paper_coupling_evidence.gather(self.paper_dir, SECTIONS_DIR)
+
+        result = paper_verify.check_gap(evidence)
+
+        published_ids = set(result["evidence"]["closings"])
+        self.assertEqual(published_ids, {"rw-closing", "block-3"})
+        self.assertNotIn("es-assessment", published_ids)
+
+    def test_mutation_reverting_to_consumer_scan_pairing_is_caught(self) -> None:
+        """tasks.md 3.8: revert `check_gap` to `evidence.blocks_by_fact`
+        (the consumer-scan mapping) and confirm the real-corpus pairing
+        proof above fails, since the real corpus's ONLY `requires_facts`
+        consumer of `gap` is `experimental-setup.es-assessment` alone --
+        never the two producers."""
+        proc = _run_against_mutant(
+            'block_ids, reason = evidence.producers_by_fact.get('
+            '"gap", ((), "SECTION_CONTRACTS_UNREADABLE"))',
+            'block_ids, reason = evidence.blocks_by_fact.get('
+            '"gap", ((), "SECTION_CONTRACTS_UNREADABLE"))',
+            "tests.test_paper_writing.RealCorpusGapPairingTests"
+            ".test_the_published_pair_is_the_two_producers_never_es_assessment",
+            source_path=SKILL_SCRIPTS / "paper_verify.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class CheckGapProducerPairingRegressionTests(unittest.TestCase):
+    """tasks.md 3.9: `check_chain`/`check_contribution_list`/`check_future_
+    work` must keep reading `evidence.blocks_by_fact` -- the consumer-scan
+    mapping `check_chain`'s own `zip(block_ids, links)` depends on for
+    link/block alignment (design.md, Decision F) -- and must never be
+    repointed at the new `producers_by_fact` mapping only `check_gap`
+    reads."""
+
+    def test_the_three_untouched_checks_still_read_blocks_by_fact_only(self) -> None:
+        for fn in (
+            paper_verify.check_chain,
+            paper_verify.check_contribution_list,
+            paper_verify.check_future_work,
+        ):
+            with self.subTest(check=fn.__name__):
+                source = inspect.getsource(fn)
+                self.assertIn("evidence.blocks_by_fact", source)
+                self.assertNotIn("producers_by_fact", source)
+
+    def test_check_gap_reads_producers_by_fact_not_blocks_by_fact(self) -> None:
+        source = inspect.getsource(paper_verify.check_gap)
+        self.assertIn("evidence.producers_by_fact", source)
+        self.assertNotIn("evidence.blocks_by_fact", source)
 
 
 class ArtefactsTests(unittest.TestCase):
@@ -4969,8 +5057,16 @@ class RefusalRosterTests(unittest.TestCase):
         import needed, since the corpus edits landing in the same commit
         (`sections/*.md`) are exactly what makes each condition
         exercisable against the real, shipped corpus. Measured directly
-        against `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 132)
+        against `reachable_paper_refusal_codes()`, never forecast. Moved
+        from 132 to 133 in the same change's unit 3: `paper_declarations.py`
+        gains one new raise site, `_refuse_if_produced` (shared by
+        `set_fact`/`decline_fact`) -- `PRODUCED_FACT_UNDECLARABLE` (`declare
+        --fact`/`--decline` targets a fact a corpus block produces).
+        Reachable the instant `paper_cli.cmd_declare` resolves a non-empty
+        `produced_by` tuple for the given fact id, which the shipped corpus
+        already does for four facts. Measured directly against
+        `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 133)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -5831,6 +5927,119 @@ class ReadinessBasisTests(unittest.TestCase):
         report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
 
         self.assertEqual(self._status_of(report, "optional-basis.maybe"), "not-applicable")
+
+
+class ReadinessProducedFactsTests(unittest.TestCase):
+    """`a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3, 3.1/3.4:
+    `compute_block_readiness`/`compute_readiness` gain `produced_by` and
+    `blocked_on_produced`; `compute_readiness_report`/`compute_phases`
+    resolve it from the assembled corpus and derive a produced fact's
+    satisfaction from its producer's own written status -- never from the
+    `declarations` region (`paper-declarations` spec's carve-out) and never
+    from a `declare` call, which this fixture never makes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+        header = json.dumps({
+            "section": "produced-readiness",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "producer", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{
+                        "value": "limitations",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block produces the limitations.",
+                        },
+                    }],
+                },
+                {
+                    "id": "consumer",
+                    "requires_facts": [{
+                        "value": "limitations",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block requires the limitations.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                    "after": [{
+                        "target": "produced-readiness.producer",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block requires the limitations.",
+                        },
+                    }],
+                },
+            ],
+        })
+        (self.sections_dir / "01-produced-readiness.md").write_text(
+            f"---\n{header}\n---\n\nProse. This block produces the limitations. "
+            "This block requires the limitations.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _readiness_block(self, block_id: str) -> dict:
+        report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+        return next(b for b in report["blocks"] if b["block"] == block_id)
+
+    def _phases_block(self, block_id: str) -> dict:
+        phases = paper_cli.compute_phases(self.paper_dir, self.sections_dir)
+        for wave in phases["waves"]:
+            for block in wave["blocks"]:
+                if block["block"] == block_id:
+                    return block
+        raise AssertionError(f"{block_id!r} not found in any wave")
+
+    def test_consumer_is_blocked_naming_the_producer_before_it_is_written(self) -> None:
+        block = self._readiness_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "blocked")
+        self.assertEqual(block["missing_facts"], ["limitations"])
+        self.assertEqual(
+            block["blocked_on_produced"],
+            [{"fact": "limitations", "producers": ["produced-readiness.producer"]}],
+        )
+
+    def test_consumer_becomes_writable_once_the_producer_is_opened_with_no_declare_call(
+        self,
+    ) -> None:
+        """Spec scenario 'A produced fact becomes satisfied once its
+        producer is written' -- no `declarations` region entry for
+        `limitations` is ever created, and readiness still flips."""
+        paper_block.open_block(self.paper_dir, "produced-readiness.producer", at_end=True)
+
+        block = self._readiness_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "writable")
+        self.assertEqual(block["missing_facts"], [])
+        self.assertNotIn("blocked_on_produced", block)
+        satisfied_facts, _declarations = paper_declarations.read_satisfied(self.paper_dir)
+        self.assertNotIn("limitations", satisfied_facts)
+
+    def test_phases_agrees_the_consumer_is_writable_once_the_producer_is_opened(self) -> None:
+        paper_block.open_block(self.paper_dir, "produced-readiness.producer", at_end=True)
+
+        block = self._phases_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "writable")
+
+    def test_phases_agrees_the_consumer_is_blocked_before_the_producer_is_opened(self) -> None:
+        block = self._phases_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "blocked")
+        self.assertEqual(block["missing_facts"], ["limitations"])
 
 
 class ReadinessPhasesEndToEndTests(unittest.TestCase):
