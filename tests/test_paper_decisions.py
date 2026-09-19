@@ -34,6 +34,8 @@ import paper_vocabulary  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_provenance  # noqa: E402
+import paper_couplings  # noqa: E402
+import paper_coupling_evidence  # noqa: E402
 import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
@@ -1915,6 +1917,225 @@ class ReadinessDeclinedFactsMutationTests(unittest.TestCase):
             "tests.test_paper_decisions.ReadinessDeclinedFactsTests"
             ".test_readiness_reports_a_lapsed_decline_as_blocked_with_stale_declines",
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class CouplingsShapeValidationTests(unittest.TestCase):
+    """`the-skill-stops-trusting-memory`, item 4: `paper_couplings.
+    validate_couplings_shape` -- the floor every real `paper_verify.py`
+    check reads, checked at WRITE time rather than surfacing later as a
+    confusing `unmeasured`."""
+
+    def test_a_non_object_record_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape([1, 2, 3])
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_record_with_no_blocks_key_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape({"facts": {}})
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_record_with_an_empty_blocks_object_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape({"blocks": {}})
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_minimal_valid_record_is_accepted(self) -> None:
+        paper_couplings.validate_couplings_shape({"blocks": {"a": {}}})
+
+    def test_contributions_that_is_not_a_list_of_strings_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape(
+                {"blocks": {"a": {}}, "facts": {"contributions": "not-a-list"}}
+            )
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_chain_link_missing_word_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape(
+                {"blocks": {"a": {}}, "chain": {"links": [{"not_word": "x"}]}}
+            )
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_artefact_cells_that_are_not_strings_refuse(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape(
+                {"blocks": {"a": {}}, "artefacts": {"setup_cells": [1, 2]}}
+            )
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_future_work_direction_missing_a_required_key_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.validate_couplings_shape(
+                {
+                    "blocks": {"a": {}},
+                    "future_work": {"directions": [{"id": "d1", "limitation": "L1"}]},
+                }
+            )
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+
+    def test_a_fully_populated_record_is_accepted(self) -> None:
+        paper_couplings.validate_couplings_shape({
+            "blocks": {"a": {}, "b": {}},
+            "facts": {"contributions": ["x", "y"], "limitations": ["L1"]},
+            "chain": {"links": [{"word": "x"}]},
+            "artefacts": {"setup_cells": ["c1"], "results_artefacts": ["c1"]},
+            "future_work": {
+                "directions": [{"id": "d1", "limitation": "L1", "cite_key": "smith2024"}],
+            },
+        })
+
+
+class CouplingsProducerTests(unittest.TestCase):
+    """`couplings` writes `paper/couplings.json` whole, atomically -- the
+    producer `verify` never had. `DECLARATION_RECORD_ABSENT` refuses before
+    this change; it must stop refusing once `couplings` has written a
+    minimally valid record, with no other change to `verify` itself."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def test_write_couplings_creates_the_file_with_the_given_content(self) -> None:
+        result = paper_couplings.write_couplings(self.paper_dir, {"blocks": {"intro.b1": {}}})
+
+        path = self.paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME
+        self.assertTrue(path.is_file())
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"blocks": {"intro.b1": {}}})
+        self.assertEqual(result["blocks"], ["intro.b1"])
+
+    def test_write_couplings_rejects_a_malformed_record_and_writes_nothing(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_couplings.write_couplings(self.paper_dir, {"blocks": {}})
+
+        self.assertEqual(ctx.exception.code, "COUPLINGS_RECORD_MALFORMED")
+        self.assertFalse((self.paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME).exists())
+
+    def test_write_couplings_rebuilds_whole_never_merges_with_a_prior_write(self) -> None:
+        paper_couplings.write_couplings(self.paper_dir, {"blocks": {"a": {}}, "facts": {"contributions": ["x"]}})
+
+        paper_couplings.write_couplings(self.paper_dir, {"blocks": {"b": {}}})
+
+        path = self.paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"blocks": {"b": {}}})
+
+    def test_verify_refuses_declaration_record_absent_before_couplings_runs(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+        self.assertEqual(ctx.exception.code, "DECLARATION_RECORD_ABSENT")
+
+    def test_verify_stops_refusing_declaration_record_absent_once_couplings_has_run(self) -> None:
+        """The end-to-end proof item 4 exists for: `verify`, a shipped verb
+        with seven checks, could not be run at all on a real paper before
+        this change. It can now, with zero changes to `verify`/`paper_
+        coupling_evidence.py` themselves."""
+        paper_couplings.write_couplings(self.paper_dir, {"blocks": {"intro.b1": {}}})
+
+        evidence = paper_coupling_evidence.gather(self.paper_dir, self.sections_dir)
+
+        self.assertEqual(evidence.record, {"blocks": {"intro.b1": {}}})
+
+
+class CouplingsCliTests(unittest.TestCase):
+    """`paper_cli.cmd_couplings`: the `--file <path|->` front door, and its
+    own path-containment/JSON-readability refusals."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-couplings-cli-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _write_input(self, text: str) -> Path:
+        path = self.test_root / "couplings-input.json"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_a_valid_file_is_written_to_paper_couplings_json(self) -> None:
+        input_path = self._write_input(json.dumps({"blocks": {"a": {}}}))
+        args = argparse.Namespace(paper=str(self.paper_dir), file=str(input_path))
+
+        result = paper_cli.cmd_couplings(args)
+
+        self.assertEqual(result["blocks"], ["a"])
+        written = self.paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME
+        self.assertEqual(json.loads(written.read_text(encoding="utf-8")), {"blocks": {"a": {}}})
+
+    def test_invalid_json_refuses_input_unreadable_and_writes_nothing(self) -> None:
+        input_path = self._write_input("{not-json")
+        args = argparse.Namespace(paper=str(self.paper_dir), file=str(input_path))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_couplings(args)
+
+        self.assertEqual(ctx.exception.code, "COUPLINGS_INPUT_UNREADABLE")
+        self.assertFalse((self.paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME).exists())
+
+    def test_a_missing_file_refuses_input_unreadable(self) -> None:
+        args = argparse.Namespace(
+            paper=str(self.paper_dir), file=str(self.test_root / "does-not-exist.json"),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_couplings(args)
+
+        self.assertEqual(ctx.exception.code, "COUPLINGS_INPUT_UNREADABLE")
+
+    def test_a_file_outside_the_repository_refuses_path_containment(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-couplings-outside-{os.getpid()}.json"
+        outside.write_text(json.dumps({"blocks": {"a": {}}}), encoding="utf-8")
+        self.addCleanup(outside.unlink, missing_ok=True)
+        args = argparse.Namespace(paper=str(self.paper_dir), file=str(outside))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_couplings(args)
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+
+class CouplingsMutationTests(unittest.TestCase):
+    """Proves the write-before-validate ordering and the malformed-shape
+    guard are both load-bearing."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def test_mutation_skipping_validation_before_write_lets_a_malformed_record_through(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "    validate_couplings_shape(record)\n"
+            "    path = paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME",
+            "    path = paper_dir / paper_coupling_evidence.COUPLINGS_RECORD_NAME",
+            "tests.test_paper_decisions.CouplingsProducerTests"
+            ".test_write_couplings_rejects_a_malformed_record_and_writes_nothing",
+            source_path=SKILL_SCRIPTS / "paper_couplings.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_accepting_an_empty_blocks_object_breaks_the_shape_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if not isinstance(blocks, dict) or not blocks:',
+            'if not isinstance(blocks, dict):',
+            "tests.test_paper_decisions.CouplingsShapeValidationTests"
+            ".test_a_record_with_an_empty_blocks_object_refuses",
+            source_path=SKILL_SCRIPTS / "paper_couplings.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 

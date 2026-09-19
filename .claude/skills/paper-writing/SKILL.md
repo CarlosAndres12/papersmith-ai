@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), see which writing phase is unlocked and which blocks still gate the next one, open the empty section/block skeleton once from two structural decisions inferred off disk thereafter, assemble a block's own redactor packet (contract prose plus reference heading outlines, never reference prose), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, phases, skeleton, order, declare, observe, plan, resolve, bib build, validate, write, render, place, verify, packet. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), see which writing phase is unlocked and which blocks still gate the next one, open the empty section/block skeleton once from two structural decisions inferred off disk thereafter, assemble a block's own redactor packet (contract prose plus reference heading outlines, never reference prose), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, phases, skeleton, order, declare, observe, plan, resolve, bib build, validate, write, render, place, couplings, verify, packet. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -802,11 +802,13 @@ never writes a byte, under any input, including every refusal path, and it
 never repairs anything it finds — `skill-audit`'s own shape, reused here.
 
 ```bash
+.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py couplings --file couplings.json
 .venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py verify
 ```
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
+| `couplings --file <path\|->` | Validates a JSON couplings record's shape and writes it WHOLE, atomically, to `paper/couplings.json` — never merged with what was there before | `COUPLINGS_INPUT_UNREADABLE`, `COUPLINGS_RECORD_MALFORMED` |
 | `verify [--sections <dir>]` | Read-only report: `contribution-list`, `chain`, `gap`, `artefacts`, `future-work`, `citations`, `contract-currency` | `DECLARATION_RECORD_ABSENT` |
 
 **Three values, never two.** Every check's own `verdict` is `pass`, `fail`
@@ -819,8 +821,17 @@ they assemble; an AST lock and an executed before/after content manifest
 both hold it, and `paper_coupling_evidence.py`, to writing nothing).
 
 **`verify` reads its own declaration record, `paper/couplings.json` —
-read-only, untracked like `main.tex` itself, and written by nobody this
-skill ships today.** An entirely absent or empty record refuses
+read-only, untracked like `main.tex` itself.** `couplings` is its producer:
+`{"blocks": {...}, "facts": {"contributions": [...], "limitations": [...]},
+"chain": {"links": [{"word": ...}, ...]}, "artefacts": {"setup_cells":
+[...], "results_artefacts": [...]}, "future_work": {"directions": [{"id":
+..., "limitation": ..., "cite_key": ...}, ...]}}` — every field but
+`blocks` optional, `paper_couplings.validate_couplings_shape` checked
+BEFORE a byte is written, so a malformed shape is diagnosed at write time
+rather than surfacing later as a confusing `unmeasured`. Unlike `refs.bib`
+(never hand-typed, above), this content is legitimately hand-authored: the
+operator's own judgment about the paper's structure, not something a
+connector resolves. An entirely absent or empty record refuses
 `DECLARATION_RECORD_ABSENT` for the whole run: nothing is known about any
 coupling, so per-check `unmeasured` across the board would bury the fact
 that nothing was checked at all. One block missing its own entry inside an
@@ -857,7 +868,8 @@ themselves.
 
 | Situation | Action |
 | --- | --- |
-| `verify` refuses `DECLARATION_RECORD_ABSENT` | `paper/couplings.json` is missing or empty — nothing has been declared yet; declare the couplings before running `verify` again |
+| `verify` refuses `DECLARATION_RECORD_ABSENT` | `paper/couplings.json` is missing or empty — run `couplings --file <path>` with a record naming at least `blocks`, then run `verify` again |
+| `couplings` refuses `COUPLINGS_RECORD_MALFORMED` | The given record's shape does not match what `verify`'s checks read (`blocks` empty/absent, or a known field wrong-typed) — fix the record and resubmit; nothing was written |
 | A check reports `unmeasured`, reason `BLOCK_NOT_DECLARED` | Only the block(s) that check depends on have no entry in the record; every other check still ran |
 | A check reports `unmeasured`, reason `SECTION_CONTRACTS_UNREADABLE` | The `sections/` corpus itself could not be read — `contract`/`order` first, then re-run `verify` |
 | Coupling `gap` reports `unmeasured` | This is unconditional, not a defect — read the published closings and front lists yourself; `verify` never closes this one |

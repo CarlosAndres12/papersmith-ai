@@ -75,6 +75,7 @@ import paper_figure  # noqa: E402 -- a-diagram-that-compiles-or-says-why: source
 import paper_obligation  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: components/separation/caption/mandatory checks over the contract's `figure:` declaration; imported ahead of any verb calling it directly (the same shape `paper_region.py`/`paper_guidance.py` already established) so its refusals are reachable the moment the import lands
 import paper_coupling_evidence  # noqa: E402 -- the-couplings-hold-or-they-do-not: every disk read `verify` needs (named to avoid colliding with `paper_evidence.py`, WU1's own claim<->source module)
 import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`)
+import paper_couplings  # noqa: E402 -- the-skill-stops-trusting-memory, item 4: the producer `paper/couplings.json` never had; `couplings` verb
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -326,6 +327,10 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # corpus) is an `unmeasured_reason` string in the report payload, never
     # a `Refused` -- only the whole-record-absent tier refuses the run -----
     "DECLARATION_RECORD_ABSENT": WORK_STATE,
+    # --- the-skill-stops-trusting-memory, item 4: `couplings` is the
+    # producer `paper/couplings.json` never had (paper_couplings.py) -------
+    "COUPLINGS_INPUT_UNREADABLE": INVOCATION_DEFECT,
+    "COUPLINGS_RECORD_MALFORMED": WORK_STATE,
 }
 
 
@@ -1423,6 +1428,40 @@ def _resolve_optional_block_ids(sections_dir: Path) -> frozenset:
     return frozenset(record.block_id for record in corpus.blocks.values() if record.optional)
 
 
+def cmd_couplings(args: argparse.Namespace) -> dict:
+    """`couplings`: the producer `verify` never had
+    (`the-skill-stops-trusting-memory`, item 4). Reads a JSON object from
+    `--file <path|->`, validates its shape
+    (`paper_couplings.validate_couplings_shape`), and writes it WHOLE and
+    atomically to `paper/couplings.json` -- the same "rebuild, never
+    append" shape `bib build` already uses for its own sibling untracked
+    file.
+
+    Refuses `COUPLINGS_INPUT_UNREADABLE` (invocation-defect) when `--file`
+    cannot be read or does not parse as JSON. Refuses `COUPLINGS_RECORD_
+    MALFORMED` (work-state) when it parses but does not carry the shape
+    `verify`'s own checks read (`paper_couplings.validate_couplings_shape`)
+    -- checked BEFORE a single byte is written, so a malformed record never
+    reaches disk half-applied.
+    """
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    if args.file == "-":
+        raw = sys.stdin.read()
+        source = "<stdin>"
+    else:
+        file_path = _resolve_repo_path(args.file)
+        try:
+            raw = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise Refused("COUPLINGS_INPUT_UNREADABLE", f"{file_path}: {exc}")
+        source = str(file_path)
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise Refused("COUPLINGS_INPUT_UNREADABLE", f"{source}: invalid JSON: {exc.msg}")
+    return paper_couplings.write_couplings(paper_dir, record)
+
+
 def cmd_verify(args: argparse.Namespace) -> dict:
     """`verify`: a pure, read-only report over the five cross-section
     couplings, citation integrity, and contract currency
@@ -1765,6 +1804,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="override sections/ location; must resolve inside the repository root",
     )
 
+    p_couplings = sub.add_parser(
+        "couplings",
+        help="validate and write paper/couplings.json whole -- the producer verify's own "
+             "declaration record never had",
+    )
+    p_couplings.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_couplings.add_argument(
+        "--file", required=True,
+        help="path to the JSON couplings record to validate and write, or - for stdin; "
+             "a file path must resolve inside the repository root",
+    )
+
     p_verify = sub.add_parser(
         "verify",
         help="read-only report over the couplings, citation integrity and contract currency",
@@ -1813,8 +1867,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "verify",
-    "packet",
+    "declare", "observe", "plan", "resolve", "bib", "validate", "write", "render", "place", "couplings",
+    "verify", "packet",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -1835,6 +1889,7 @@ _COMMANDS = {
     "write": cmd_write,
     "render": cmd_render,
     "place": cmd_place,
+    "couplings": cmd_couplings,
     "verify": cmd_verify,
     "packet": cmd_packet,
 }
