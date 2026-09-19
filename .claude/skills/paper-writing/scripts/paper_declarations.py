@@ -22,8 +22,8 @@ Public surface:
         partitioned (design.md, `A fact the agent may observe is a
         partition, not a guideline`)
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
-    set_fact(paper_dir, id, resolution, *, clock=...)    -> dict
-    decline_fact(paper_dir, id, reason, condition, *, clock=...) -> dict
+    set_fact(paper_dir, id, resolution, *, clock=..., produced_by=()) -> dict
+    decline_fact(paper_dir, id, reason, condition, *, clock=..., produced_by=()) -> dict
     read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
     read_declined(paper_dir) -> dict[str, dict]  (read-only;
         {fact_id: {"reason", "condition", "holds", "detail"}}, condition
@@ -224,8 +224,27 @@ def set_declaration(
     )
 
 
+def _refuse_if_produced(fact_id: str, produced_by: tuple) -> None:
+    """Refuses `PRODUCED_FACT_UNDECLARABLE` (work-state) naming `fact_id`
+    and its producing block(s), when `produced_by` is non-empty
+    (`fact-production` spec: a fact whose producer is a block is never
+    declared through this region — its satisfaction is read from that
+    producer's own written status, never authored twice). Shared by
+    `set_fact`/`decline_fact` so the refusal is enforced IN THE MODULE
+    (design.md, Decision E) — the same precedent `decline_fact`'s own
+    `DECLINE_REASON_REQUIRED` set, so no caller of either function can ever
+    escape it by skipping a CLI-layer check."""
+    if produced_by:
+        raise Refused(
+            "PRODUCED_FACT_UNDECLARABLE",
+            f"{fact_id!r} is produced by {list(produced_by)!r}; its satisfaction is read "
+            "from that producer's own written status, never declared",
+        )
+
+
 def set_fact(
     paper_dir: Path, fact_id: str, resolution: str, *, clock=paper_region.default_clock,
+    produced_by: tuple = (),
 ) -> dict:
     """Records `fact_id` as a `fact` record, field `resolution`.
 
@@ -233,8 +252,18 @@ def set_fact(
     `paper_vocabulary.validate_fact`) when `fact_id` is a declaration id
     rather than one of the ten declared facts. Refuses `DECLARATION_FIXED`
     when it was already recorded and `--reopen` was not run first.
+
+    `produced_by` (`a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3,
+    3.2): a tuple of qualified block ids naming `fact_id`'s producer(s)
+    (`paper_graph.producers_by_fact`, resolved by the caller — this module
+    never assembles a corpus itself). Non-empty refuses
+    `PRODUCED_FACT_UNDECLARABLE` via `_refuse_if_produced`, before the
+    record is ever read or written. Defaults to `()`, so every existing
+    caller — declaring one of the five externally-sourced observable facts
+    — is unaffected.
     """
     paper_vocabulary.validate_fact(fact_id)
+    _refuse_if_produced(fact_id, produced_by)
     return _set_record(
         paper_dir, kind="fact", id_=fact_id, value_field="resolution", value=resolution,
         clock=clock,
@@ -288,7 +317,7 @@ def _evaluate_condition(root: Path, condition: dict) -> tuple:
 
 def decline_fact(
     paper_dir: Path, fact_id: str, reason: str, condition: dict | None,
-    *, clock=paper_region.default_clock,
+    *, clock=paper_region.default_clock, produced_by: tuple = (),
 ) -> dict:
     """Records `fact_id` as DECLINED — the operator has decided this fact does
     not enter the paper for now (e.g. no measurement protocol exists yet),
@@ -328,6 +357,12 @@ def decline_fact(
     `UNKNOWN_CONDITION_TYPE` (work-state) when `condition["type"]` is
     outside the closed vocabulary.
 
+    `produced_by` (`a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3,
+    3.2): the same producer tuple `set_fact` accepts, checked FIRST — a
+    produced fact can never be declined either, regardless of whether
+    `reason`/`condition` would otherwise be valid (`_refuse_if_produced`).
+    Defaults to `()`, unaffecting every existing caller.
+
     No new `forge_root` parameter anywhere — `condition["path"]` is
     resolved relative to `paper_dir.parent`, which is the repository root
     under this skill's own default layout (`<repo>/paper`) and under every
@@ -338,6 +373,7 @@ def decline_fact(
     extra plumbing.
     """
     paper_vocabulary.validate_fact(fact_id)
+    _refuse_if_produced(fact_id, produced_by)
     if not reason or not reason.strip():
         raise Refused(
             "DECLINE_REASON_REQUIRED",

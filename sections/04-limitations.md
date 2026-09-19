@@ -36,7 +36,16 @@
         }
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "produces_facts": [
+        {
+          "value": "limitations",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "Sweep the mathematical section for gaps in the proposal:"
+          }
+        }
+      ]
     },
     {
       "id": "lim-validation-items",

@@ -30,6 +30,12 @@ Public surface:
 
     CHECKS               -> the seven check ids, in report order
     UNMEASURED_REASONS   -> every reason a check can report `unmeasured` for
+    item_lines(body: bytes) -> list[str]  -- every `\\item ...` line's text,
+                             stripped, in document order (`a-fact-is-
+                             declared-or-it-is-produced`: shared by
+                             `check_gap`'s own front extraction and
+                             `paper_cli._resolve_expected_components`'s
+                             produced-fact route)
     run(evidence) -> dict  {"checks": [...], "clean": bool,
                              "holds": int, "fails": int, "unmeasured": int}
 """
@@ -179,9 +185,21 @@ def _parse_chain_roles(body: bytes) -> dict:
     return roles
 
 
+def item_lines(body: bytes) -> list[str]:
+    """Public promotion of the `\\item` extraction `_gap_shape` used
+    privately before this — `a-fact-is-declared-or-it-is-produced`,
+    design.md Decision A: `paper_cli._resolve_expected_components`'s
+    produced-fact route and `check_gap`'s own front extraction share this
+    ONE definition, never a second parser. Every `\\item ...` line's text,
+    stripped, in document order. Allowlist stays `{"re"}`; this reads only
+    the bytes it is given, never disk (`ReadOnlyTests`)."""
+    text = body.decode("utf-8", errors="replace")
+    return [match.group(1).strip() for match in _ITEM_RE.finditer(text)]
+
+
 def _gap_shape(body: bytes) -> dict:
     text = body.decode("utf-8", errors="replace")
-    items = [match.group(1).strip() for match in _ITEM_RE.finditer(text)]
+    items = item_lines(body)
     closing_match = _CLOSING_RE.search(text)
     closing = closing_match.group(1).strip() if closing_match else None
     offset = closing_match.start(1) if closing_match else None
@@ -314,8 +332,19 @@ def check_gap(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     ahead of the `len(block_ids) != 2` gate — even the "wrong number of gap
     blocks" reading is less precise than "the gap's optional half was never
     opened" when that is what actually happened.
+
+    `a-fact-is-declared-or-it-is-produced` (design.md, Decision F): the pair
+    is derived from `evidence.producers_by_fact` — the two blocks that
+    PRODUCE `gap` (`related-work.rw-closing`, `introduction.block-3`) —
+    never from the sibling consumer-scan mapping every OTHER check in this
+    module still reads (every block that merely `requires_facts: [gap]`,
+    which today also includes `experimental-setup.es-assessment` for an
+    unrelated reason). Widening that sibling mapping instead of adding this
+    separate one would silently misalign `check_chain`'s own
+    `zip(block_ids, links)` (design.md: "a separate mapping was the only
+    non-corrupting route").
     """
-    block_ids, reason = evidence.blocks_by_fact.get("gap", ((), "SECTION_CONTRACTS_UNREADABLE"))
+    block_ids, reason = evidence.producers_by_fact.get("gap", ((), "SECTION_CONTRACTS_UNREADABLE"))
     if reason is not None:
         return _unmeasured("gap", "assisted", reason)
     optional_reason = _optional_block_absence_reason(evidence, block_ids, optional_block_ids)

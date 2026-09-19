@@ -18,6 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_contract  # noqa: E402
+import paper_declarations  # noqa: E402
+import paper_verify  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -94,6 +96,12 @@ class BlockRecord:
     requires_declarations: tuple
     citations: str
     optional: bool
+    #: `fact-production` spec, `Requirement: produces_facts Field Grammar`
+    #: (design.md, Decision B) — defaulted so every existing construction
+    #: site (this file's own `assemble_corpus` loop AND
+    #: `tests/test_paper_decisions.py`'s own direct `BlockRecord(...)`
+    #: fixture) stays green without passing it.
+    produces_facts: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -165,6 +173,7 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                 ),
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
+                produces_facts=paper_contract.requirement_values(raw_block["produces_facts"]),
             )
             order_by_section[section_id].append(qualified_id)
 
@@ -174,6 +183,13 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
+    declarations = _produces_facts_declarations(corpus)
+    _verify_route_exclusivity(declarations)
+    _verify_producer_duplication(declarations)
+    _verify_self_reference(corpus)
+    _verify_fact_totality(corpus, declarations)
+    _verify_producer_reachability(corpus, declarations)
+    _verify_producer_chain_rows(corpus, declarations, section_bodies)
     return corpus
 
 
@@ -254,11 +270,32 @@ def _verify_requirement_transcription(corpus: Corpus, bodies: dict) -> None:
     dangling-target case, there is no legitimate reason to skip an entry
     here. Reads the SAME `bodies` dict its siblings already hold — zero
     extra disk passes.
+
+    `a-fact-is-declared-or-it-is-produced` (`fact-production` spec,
+    `Requirement: Transcribed produces_facts Entries Only`; design.md,
+    Decision B) widens the block-level tuple with `produces_facts` — the
+    entry shape is byte-identical to `requires_facts`, so no second check
+    is written, only one more field name walked. The section-level half
+    (`header.produces_facts`) is walked SEPARATELY, the same way
+    `paper_contract._verify_mode_transcription` already walks `header.mode`
+    apart from block-level `mode` entries — `requires_facts` /
+    `requires_declarations` have no section-level counterpart, so only
+    `produces_facts` needs this extra loop.
     """
     for section_id, header in corpus.sections.items():
+        for entry in header.produces_facts:
+            source = entry["source"]
+            body = bodies.get(source["file"])
+            if body is None or not paper_contract.quote_in_body(body, source["quote"]):
+                raise Refused(
+                    "SPAN_NOT_IN_SOURCE",
+                    f"{section_id}: produces_facts quote {source['quote']!r} for "
+                    f"{entry['value']!r} not found verbatim (whitespace-collapsed, "
+                    f"markdown-emphasis-stripped) in {source['file']}'s prose body",
+                )
         for raw_block in header.blocks:
             block_id = raw_block["id"]
-            for field in ("requires_facts", "requires_declarations"):
+            for field in ("requires_facts", "requires_declarations", "produces_facts"):
                 for entry in raw_block[field]:
                     source = entry["source"]
                     body = bodies.get(source["file"])
@@ -269,6 +306,256 @@ def _verify_requirement_transcription(corpus: Corpus, bodies: dict) -> None:
                             f"{entry['value']!r} not found verbatim (whitespace-collapsed, "
                             f"markdown-emphasis-stripped) in {source['file']}'s prose body",
                         )
+
+
+def _produces_facts_declarations(corpus: Corpus) -> list:
+    """Every `(fact_id, producer_qualified_id)` pair a `produces_facts`
+    entry declares, section- and block-level alike — the producer id is the
+    qualified SECTION id for a section-level entry, the qualified BLOCK id
+    for a block-level one. Shared by `_verify_route_exclusivity` and
+    `_verify_producer_duplication` below so both read the same scan
+    (`fact-production` spec, `Requirement: produces_facts Field Grammar` /
+    `Requirement: Every Producer Is Either Sole Or Corroborated`)."""
+    declarations: list = []
+    for section_id, header in corpus.sections.items():
+        for entry in header.produces_facts:
+            declarations.append((entry["value"], section_id))
+        for raw_block in header.blocks:
+            qualified_id = f"{section_id}.{raw_block['id']}"
+            for entry in raw_block["produces_facts"]:
+                declarations.append((entry["value"], qualified_id))
+    return declarations
+
+
+#: `fact-production` spec, `Requirement: Every Producer Is Either Sole Or
+#: Corroborated`: the facts declarable through `paper_declarations` (never
+#: written by a block) — a `produces_facts` entry naming one of these is a
+#: route conflict, not a legitimate production claim.
+_DECLARABLE_ROUTE_FACTS = frozenset(
+    paper_declarations.OBSERVABLE_FACTS
+) | frozenset(paper_declarations.STRUCTURAL_FACTS)
+
+
+def _verify_route_exclusivity(declarations: list) -> None:
+    """Refuses `FACT_ROUTE_AMBIGUOUS` (work-state) naming the producer and
+    the fact, when a `produces_facts` entry names a fact that only
+    resolves through the declarable route (`paper_declarations.
+    OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`) — design.md, Refusal Codes #4."""
+    for fact_id, producer_id in declarations:
+        if fact_id in _DECLARABLE_ROUTE_FACTS:
+            raise Refused(
+                "FACT_ROUTE_AMBIGUOUS",
+                f"{producer_id}: 'produces_facts' names {fact_id!r}, which is only "
+                f"ever declared or structurally resolved, never produced by a block",
+            )
+
+
+def _verify_producer_duplication(declarations: list) -> None:
+    """Refuses `FACT_PRODUCER_DUPLICATE` (work-state) naming the fact and
+    every competing producer, for a fact named by two or more blocks'
+    `produces_facts` — UNLESS it is named by EXACTLY two, and an existing
+    coupling-verification check names that fact (`paper_verify.CHECKS`,
+    e.g. `gap` / Coupling 3): corroboration is checked structurally, by
+    asking the real, existing coupling roster, never by a hand-listed
+    exception list of fact ids here (`fact-production` spec, `Requirement:
+    Every Producer Is Either Sole Or Corroborated`; design.md, Decision F)."""
+    producers_by_fact = _producers_by_fact(declarations)
+    for fact_id, producer_ids in producers_by_fact.items():
+        if len(producer_ids) < 2:
+            continue
+        if len(producer_ids) == 2 and fact_id in paper_verify.CHECKS:
+            continue
+        raise Refused(
+            "FACT_PRODUCER_DUPLICATE",
+            f"{fact_id!r} is produced by {sorted(producer_ids)!r}",
+        )
+
+
+def _verify_self_reference(corpus: Corpus) -> None:
+    """Refuses `FACT_SELF_REQUIRED` (work-state) naming the block and the
+    fact, when a block's `produces_facts` and `requires_facts` name the
+    same fact id (`fact-production` spec, `Requirement: A Block MUST NOT
+    Require What It Produces`)."""
+    for qualified_id, record in corpus.blocks.items():
+        overlap = set(record.requires_facts) & set(record.produces_facts)
+        if overlap:
+            fact_id = sorted(overlap)[0]
+            raise Refused(
+                "FACT_SELF_REQUIRED",
+                f"{qualified_id}: requires and produces {fact_id!r}",
+            )
+
+
+def _producers_by_fact(declarations: list) -> dict:
+    """`fact_id -> [producer_id, ...]`, the same grouping
+    `_verify_producer_duplication` derives inline — factored out so
+    `_verify_fact_totality` and `_verify_producer_reachability` share one
+    derivation rather than each re-scanning `declarations` its own way."""
+    producers_by_fact: dict = {}
+    for fact_id, producer_id in declarations:
+        producers_by_fact.setdefault(fact_id, []).append(producer_id)
+    return producers_by_fact
+
+
+def producers_by_fact(corpus: Corpus) -> dict:
+    """Public counterpart to `_producers_by_fact`, for a caller outside this
+    module that already holds an assembled `Corpus` and needs `fact_id ->
+    (qualified_producer_id, ...)` without re-deriving the scan itself —
+    `a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3: `paper_
+    readiness`/`paper_cli` resolve `produced_by` for `readiness`/`phases`/
+    `declare`/the Components Check through this one function, the same
+    derivation `_verify_producer_duplication`/`_verify_fact_totality`/
+    `_verify_producer_reachability` already share above. Every id here is
+    QUALIFIED (`<section>.<block>`, or a bare section id for a section-level
+    `produces_facts` entry) — the same vocabulary `corpus.blocks` and
+    `opened_blocks` (qualified block ids opened in `main.tex`) already
+    speak. `paper_coupling_evidence.py`'s OWN `producers_by_fact` is a
+    separate, RAW-id derivation for `evidence.block_bodies`'s own
+    vocabulary — never this function, so `check_chain`'s `zip(block_ids,
+    links)` alignment is never at risk of a qualified/raw id mismatch."""
+    raw = _producers_by_fact(_produces_facts_declarations(corpus))
+    return {fact_id: tuple(ids) for fact_id, ids in raw.items()}
+
+
+def _verify_fact_totality(corpus: Corpus, declarations: list) -> None:
+    """Refuses `FACT_PRODUCER_ABSENT` (work-state) naming a fact some block
+    REQUIRES (`requires_facts`, excluding the structural `skeleton` fact,
+    resolved by the existing skeleton-startup mechanism) that resolves
+    through neither `paper_declarations.FACT_SOURCE_ROOT` (the five
+    observable facts, always externally available) nor any block's
+    `produces_facts` (`fact-production` spec, `Requirement: Every Producer
+    Is Either Sole Or Corroborated`; design.md, Decision D:
+    'Totality is relative to consumption'). A produced-class fact that no
+    block requires needs no producer — it is simply absent from this paper,
+    legally; an unconditional (never-required) totality invariant is
+    precisely what broke every raw-header fixture in the previous change."""
+    producers_by_fact = _producers_by_fact(declarations)
+    required_facts = {
+        fact_id for record in corpus.blocks.values() for fact_id in record.requires_facts
+    }
+    for fact_id in sorted(required_facts):
+        if fact_id in paper_declarations.STRUCTURAL_FACTS:
+            continue
+        if fact_id in paper_declarations.FACT_SOURCE_ROOT:
+            continue
+        if fact_id in producers_by_fact:
+            continue
+        raise Refused(
+            "FACT_PRODUCER_ABSENT",
+            f"{fact_id!r} is required but has no producer: absent from "
+            f"FACT_SOURCE_ROOT and named by no block's produces_facts",
+        )
+
+
+def _verify_producer_reachability(corpus: Corpus, declarations: list) -> None:
+    """Refuses `PRODUCER_CHAIN_ABSENT` (work-state) naming the consumer, the
+    fact, and the producer, when a block requiring a produced-class fact is
+    not reachable, in the `after`-edge block graph (`collect_edges` /
+    `_build_graph` — the SAME graph `derive_order`/`derive_waves` consume),
+    from every one of that fact's producer block(s) (`internal-chain-edges`
+    spec / `contract-input-partition` spec; design.md, Decision C: refuse
+    unless the producer reaches every consumer, never a derived edge and
+    never a required DIRECT edge — a cycle can only ever come from the
+    hand-written corpus, and an indirect, transitively-backed chain is
+    legal). `gap`'s corroborated pair (design.md, Decision F) means BOTH
+    producers must reach a `gap` consumer — satisfaction requires every
+    producer opened (Decision E), so the writing order must guarantee both
+    precede it."""
+    producers_by_fact = _producers_by_fact(declarations)
+    if not producers_by_fact:
+        return
+    successors, _indegree = _build_graph(corpus, collect_edges(corpus))
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id in record.requires_facts:
+            producer_ids = producers_by_fact.get(fact_id)
+            if not producer_ids:
+                continue
+            for producer_id in producer_ids:
+                if producer_id == qualified_id:
+                    continue  # FACT_SELF_REQUIRED already refuses this shape
+                if not _reaches(successors, producer_id, qualified_id):
+                    raise Refused(
+                        "PRODUCER_CHAIN_ABSENT",
+                        f"{qualified_id}: requires {fact_id!r}, produced by "
+                        f"{producer_id!r}, but {producer_id!r} does not reach "
+                        f"{qualified_id!r} in the writing order",
+                    )
+
+
+def _reaches(successors: dict, source: str, target: str) -> bool:
+    """Iterative, cycle-tolerant DFS (a visited set, never unbounded
+    recursion) over `successors` — `True` when `target` is reachable from
+    `source`, `False` when `source` names no node in the graph at all (a
+    section-level producer id, never measured in the shipped corpus, whose
+    every block would need to be checked individually instead)."""
+    if source not in successors:
+        return False
+    visited = {source}
+    stack = [source]
+    while stack:
+        node = stack.pop()
+        for successor in successors.get(node, ()):
+            if successor == target:
+                return True
+            if successor not in visited:
+                visited.add(successor)
+                stack.append(successor)
+    return False
+
+
+def _verify_producer_chain_rows(corpus: Corpus, declarations: list, section_bodies: dict) -> None:
+    """`contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row`. `_verify_producer_reachability`
+    above proves the producer reaches the consumer somewhere in the
+    `after`-edge graph, transitively or not (Decision C); this is its
+    mirror in the DOCUMENTATION direction, the same way `_verify_internal_
+    chain` (ROW -> edge) and this function (EDGE -> row) are mirrors of
+    each other rather than one check re-derived twice: a reachable producer
+    is not enough on its own — the consumer's OWN `### Internal chain`
+    table, in its OWN section's prose body, must carry a row whose
+    dependency cell resolves to that exact producer's qualified id. Refuses
+    `PRODUCER_CHAIN_ABSENT` (work-state, the SAME code the reachability
+    check raises — both are two ways the identical guarantee, 'the reader
+    can find in prose why this producer must precede this consumer', can be
+    missing) naming the consumer, the fact, and the producer.
+
+    Reads `section_bodies` (section id -> its own body, the same dict
+    `_verify_block_subunits` already holds from `assemble_corpus`'s single
+    read loop) rather than the file-keyed `bodies` dict `_verify_internal_
+    chain` reads — a row lives in the CONSUMER's own section file, and
+    `record.section` is a semantic section id, not a filename, so this
+    reuses the one dict that is already keyed the way this lookup needs,
+    costing zero extra disk passes.
+    """
+    producers_by_fact = _producers_by_fact(declarations)
+    if not producers_by_fact:
+        return
+    rows_by_section: dict = {}
+    for section_id, body in section_bodies.items():
+        pairs = set()
+        for holder_cell, dependency_cell in _internal_chain_rows(body.decode("utf-8")):
+            holder_id = _chain_row_id(holder_cell)
+            dependency_id = _chain_row_id(dependency_cell)
+            if holder_id is not None and dependency_id is not None:
+                pairs.add((holder_id, dependency_id))
+        rows_by_section[section_id] = pairs
+
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id in record.requires_facts:
+            producer_ids = producers_by_fact.get(fact_id)
+            if not producer_ids:
+                continue
+            for producer_id in producer_ids:
+                if producer_id == qualified_id:
+                    continue  # FACT_SELF_REQUIRED already refuses this shape
+                pairs = rows_by_section.get(record.section, set())
+                if (qualified_id, producer_id) not in pairs:
+                    raise Refused(
+                        "PRODUCER_CHAIN_ABSENT",
+                        f"{qualified_id}: requires {fact_id!r}, produced by "
+                        f"{producer_id!r}, but no '### Internal chain' row in "
+                        f"{record.section!r} names {producer_id!r} as a dependency",
+                    )
 
 
 def _internal_chain_rows(text: str) -> list:

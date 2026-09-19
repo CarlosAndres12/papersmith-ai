@@ -23,7 +23,16 @@
       ],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The list of specific problems — to announce the blocks and their order"
+          }
+        }
+      ]
     },
     {
       "id": "rw-panorama",
@@ -38,7 +47,16 @@
       ],
       "requires_declarations": [],
       "citations": "discovery",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The general problem of the problem statement"
+          }
+        }
+      ]
     },
     {
       "id": "rw-problem-blocks",
@@ -53,22 +71,32 @@
       ],
       "requires_declarations": [],
       "citations": "discovery",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The specific problems, one block each"
+          }
+        }
+      ]
     },
     {
       "id": "rw-closing",
-      "requires_facts": [
+      "requires_facts": [],
+      "requires_declarations": [],
+      "citations": "none",
+      "optional": true,
+      "produces_facts": [
         {
           "value": "gap",
           "source": {
             "file": "sections/05-related-work.md",
-            "quote": "The gap, which is also stated in the introduction and must agree"
+            "quote": "The gap is stated in two places — the closing of this section and the closing of the introduction's state-of-the-art block — and they must say the same thing at different depths."
           }
         }
       ],
-      "requires_declarations": [],
-      "citations": "none",
-      "optional": true,
       "after": [
         {
           "target": "related-work.rw-problem-blocks",
@@ -93,6 +121,15 @@
       "requires_declarations": [],
       "citations": "none",
       "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The properties (contributions) the proposal declares"
+          }
+        }
+      ],
       "figure": {
         "components_from": "contributions",
         "ordered": false,
@@ -294,17 +331,16 @@ this section is the formulation.
 
 | Input | Unblocks |
 |---|---|
-| The list of **specific problems** — to announce the blocks and their order | `rw-preamble` |
-| The **general problem** of the problem statement | `rw-panorama` |
-| The **specific problems**, one block each | `rw-problem-blocks` |
-| The **gap**, which is also stated in the introduction and must agree | `rw-closing` |
-| The **properties** (contributions) the proposal declares | `rw-synthesis-artefact` |
 
 ### Internal chain
 
 | Block | Depends on |
 |---|---|
+| `related-work.rw-preamble` — The list of specific problems — to announce the blocks and their order | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `related-work.rw-panorama` — The general problem of the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `related-work.rw-problem-blocks` — The specific problems, one block each | `introduction.block-2` — the problem statement, general and specific, decomposed there |
 | `related-work.rw-closing` — names the fronts left open, as many as there are blocks | `related-work.rw-problem-blocks` — the specific-problem blocks whose unresolved limitation each becomes a named front |
+| `related-work.rw-synthesis-artefact` — The properties (contributions) the proposal declares | `introduction.block-4b` — the enumerated contributions the synthesis artefact tabulates |
 
 **Cross-obligation.** The gap is stated in two places — the closing of this section
 and the closing of the introduction's state-of-the-art block — and they must say the

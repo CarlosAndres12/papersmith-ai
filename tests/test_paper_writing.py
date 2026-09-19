@@ -1382,6 +1382,84 @@ class RequirementTranscriptionGateTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
 
+    def test_a_produces_facts_entry_verifies(self) -> None:
+        """`fact-production` spec, `Requirement: Transcribed produces_facts
+        Entries Only`: the block-level half of the widened tuple
+        (design.md, Decision B: 'adding one member to its own tuple')."""
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                    "produces_facts": [{
+                        "value": "gap",
+                        "source": {"file": "sections/01-a.md", "quote": "The gap itself, written here."},
+                    }],
+                }],
+            },
+            "The gap itself, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("gap",))
+
+    def test_an_unbacked_produces_facts_quote_refuses_span_not_in_source(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                    "produces_facts": [{
+                        "value": "gap",
+                        "source": {"file": "sections/01-a.md", "quote": "Never written anywhere."},
+                    }],
+                }],
+            },
+            "Prose that never mentions the gap at all.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_an_unbacked_section_level_produces_facts_quote_refuses_span_not_in_source(self) -> None:
+        """The section-level half of `produces_facts` (`ContractHeader.
+        produces_facts`, design.md Decision B: 'the section-level list the
+        same way') — walked separately from the block-level tuple, the same
+        shape `_verify_mode_transcription` already walks `header.mode`
+        apart from block `mode` entries."""
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "produces_facts": [{
+                    "value": "limitations",
+                    "source": {"file": "sections/01-a.md", "quote": "Never written anywhere."},
+                }],
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose that never mentions the limits at all.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
+        self.assertIn("a", ctx.exception.detail)
+
 
 class RequirementTranscriptionMutationTests(unittest.TestCase):
     """Mutation proof the gate is load-bearing (design.md, Testing
@@ -1396,6 +1474,42 @@ class RequirementTranscriptionMutationTests(unittest.TestCase):
             "",
             "tests.test_paper_writing.RequirementTranscriptionGateTests"
             ".test_an_unbacked_quote_refuses_span_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_narrowing_the_block_level_tuple_flips_the_produces_facts_test_from_green_to_red(
+        self,
+    ) -> None:
+        """`fact-production` spec, `Requirement: Transcribed produces_facts
+        Entries Only`; design.md Decision B: 'adding one member to its own
+        tuple' — proves that member is load-bearing, not decorative."""
+        proc = _run_against_mutant(
+            '    for field in ("requires_facts", "requires_declarations", "produces_facts"):\n',
+            '    for field in ("requires_facts", "requires_declarations"):\n',
+            "tests.test_paper_writing.RequirementTranscriptionGateTests"
+            ".test_an_unbacked_produces_facts_quote_refuses_span_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_removing_the_section_level_walk_flips_its_own_test_from_green_to_red(self) -> None:
+        """The section-level half (`header.produces_facts`, walked apart
+        from the block-level tuple the same way `_verify_mode_transcription`
+        already walks `header.mode` apart from block `mode` entries) is its
+        own load-bearing statement, not a no-op that happens to pass because
+        the block-level tuple already covers it."""
+        proc = _run_against_mutant(
+            "        for entry in header.produces_facts:\n"
+            "            source = entry[\"source\"]\n",
+            "        for entry in []:\n"
+            "            source = entry[\"source\"]\n",
+            "tests.test_paper_writing.RequirementTranscriptionGateTests"
+            ".test_an_unbacked_section_level_produces_facts_quote_refuses_span_not_in_source",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         output = proc.stdout + proc.stderr
@@ -1421,6 +1535,726 @@ class RequirementTranscriptionMutationTests(unittest.TestCase):
             "the verifier call must be a direct statement of assemble_corpus's own "
             "body, never nested inside an 'if' or 'try'",
         )
+
+
+def _produces_facts_section(
+    section: str, block_id: str, *, requires=(), produces=(), file: str,
+) -> dict:
+    """A minimal, partition-honoring, single-block header naming `file` as
+    the self-source for every rich entry it declares — the shared shape
+    `FactSelfReferenceTests` / `FactRouteExclusivityTests` /
+    `FactProducerDuplicationTests` below all build on, one block per
+    concern under test."""
+    return {
+        "section": section, "position": 1,
+        "blocks": [{
+            "id": block_id,
+            "requires_facts": [
+                {"value": v, "source": {"file": file, "quote": f"This block requires the {v}."}}
+                for v in requires
+            ],
+            "requires_declarations": [], "citations": "none",
+            "produces_facts": [
+                {"value": v, "source": {"file": file, "quote": f"This block produces the {v}."}}
+                for v in produces
+            ],
+        }],
+    }
+
+
+def _produces_facts_body(*, requires=(), produces=(), chain_rows=()) -> str:
+    """`chain_rows`: `[(holder_qualified_id, dependency_qualified_id), ...]`
+    -- `contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row`. Every caller whose fixture puts a
+    genuinely SEPARATE producer block behind a `requires_facts` entry must
+    pass the row naming that producer, or `paper_graph._verify_producer_
+    chain_rows` refuses `PRODUCER_CHAIN_ABSENT` -- empty (the default)
+    reproduces the prior `None.` body byte for byte, for every caller whose
+    `requires`/`produces` never cross two different blocks."""
+    sentences = "\n\n".join(
+        [f"This block requires the {v}." for v in requires]
+        + [f"This block produces the {v}." for v in produces]
+    ) or "Prose."
+    if chain_rows:
+        table_rows = "\n".join(f"| `{holder}` | `{dependency}` |" for holder, dependency in chain_rows)
+        internal_chain = f"### Internal chain\n\n| Block | Depends on |\n|---|---|\n{table_rows}\n"
+    else:
+        internal_chain = "### Internal chain\n\nNone.\n"
+    return sentences + "\n\n### External inputs\n\nNone.\n\n" + internal_chain
+
+
+class FactSelfReferenceTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: A Block MUST NOT Require What
+    It Produces`; design.md, File Changes ('self-reference... checks')."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_block_requiring_and_producing_the_same_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "related-work", "rw-closing", requires=["gap"], produces=["gap"],
+            file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["gap"], produces=["gap"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_SELF_REQUIRED")
+        self.assertIn("related-work.rw-closing", ctx.exception.detail)
+        self.assertIn("gap", ctx.exception.detail)
+
+    def test_the_corrected_shape_parses_clean(self) -> None:
+        """`related-work.rw-closing` producing `gap` and no longer
+        requiring it (the corpus-edit unit 2 will make real) is exactly the
+        shape this check must NOT refuse."""
+        header = _produces_facts_section(
+            "related-work", "rw-closing", requires=[], produces=["gap"],
+            file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["gap"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["related-work.rw-closing"].produces_facts, ("gap",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_self_reference(corpus)\n",
+            "",
+            "tests.test_paper_writing.FactSelfReferenceTests"
+            ".test_a_block_requiring_and_producing_the_same_fact_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class FactRouteExclusivityTests(unittest.TestCase):
+    """`fact-production` spec is silent on the exact name; design.md,
+    Refusal Codes #4 ('a `produces_facts` entry names a declarable
+    fact'); `tasks.md` unit 0.4 finalizes `FACT_ROUTE_AMBIGUOUS`. A
+    `produces_facts` entry naming a fact in `paper_declarations.
+    OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS` refuses — those facts are only
+    ever declared or structurally resolved, never written by a block."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_produces_facts_entry_naming_an_observable_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["dataset"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["dataset"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_ROUTE_AMBIGUOUS")
+        self.assertIn("dataset", ctx.exception.detail)
+
+    def test_a_produces_facts_entry_naming_the_structural_fact_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["skeleton"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["skeleton"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_ROUTE_AMBIGUOUS")
+        self.assertIn("skeleton", ctx.exception.detail)
+
+    def test_a_produces_facts_entry_naming_a_derived_fact_is_unaffected(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_route_exclusivity(declarations)\n",
+            "",
+            "tests.test_paper_writing.FactRouteExclusivityTests"
+            ".test_a_produces_facts_entry_naming_an_observable_fact_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class FactProducerDuplicationTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: Every Producer Is Either Sole
+    Or Corroborated`; `coupling-verification` spec, Coupling 3. Two
+    uncorroborated producers of one fact refuse `FACT_PRODUCER_DUPLICATE`;
+    the one corroborated pair an existing coupling-verification check names
+    (`gap`, `paper_verify.CHECKS`) is legal — checked structurally (is the
+    fact id itself a member of the existing coupling roster?), never by a
+    hand-listed exception list of fact ids (design.md, Decision F)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_two_uncorroborated_producers_of_one_fact_refuse(self) -> None:
+        """`limitations` has no coupling-verification check named after it
+        (`"limitations" not in paper_verify.CHECKS`) — an uncorroborated
+        duplicate."""
+        self.assertNotIn("limitations", paper_verify.CHECKS)
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", produces=["limitations"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_DUPLICATE")
+        self.assertIn("limitations", ctx.exception.detail)
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("b.only", ctx.exception.detail)
+
+    def test_the_corroborated_pair_of_gap_producers_is_legal(self) -> None:
+        """`gap` has an existing coupling-verification check named after it
+        (`"gap" in paper_verify.CHECKS`, Coupling 3) — the one corroborated
+        duplicate `fact-production`'s carve-out allows."""
+        self.assertIn("gap", paper_verify.CHECKS)
+        header_a = _produces_facts_section(
+            "related-work", "rw-closing", produces=["gap"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "introduction", "block-3", produces=["gap"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["gap"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["gap"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["related-work.rw-closing"].produces_facts, ("gap",))
+        self.assertEqual(corpus.blocks["introduction.block-3"].produces_facts, ("gap",))
+
+    def test_three_producers_of_the_corroborated_fact_still_refuse(self) -> None:
+        """Corroboration legalizes exactly the PAIR — a third producer of
+        `gap` is still a duplicate, never silently absorbed."""
+        header_a = _produces_facts_section(
+            "related-work", "rw-closing", produces=["gap"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "introduction", "block-3", produces=["gap"], file="sections/02-b.md",
+        )
+        header_c = _produces_facts_section(
+            "c", "only", produces=["gap"], file="sections/03-c.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["gap"]))
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["gap"]))
+        self._write("03-c.md", header_c, _produces_facts_body(produces=["gap"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_DUPLICATE")
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_producer_duplication(declarations)\n",
+            "",
+            "tests.test_paper_writing.FactProducerDuplicationTests"
+            ".test_two_uncorroborated_producers_of_one_fact_refuse",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_removing_the_corroboration_carve_out_flips_the_legal_pair_test_from_green_to_red(
+        self,
+    ) -> None:
+        """Proves the carve-out is a real branch, not vacuous: without it,
+        `gap`'s own corroborated pair would refuse too."""
+        proc = _run_against_mutant(
+            'len(producer_ids) == 2 and fact_id in paper_verify.CHECKS',
+            "False",
+            "tests.test_paper_writing.FactProducerDuplicationTests"
+            ".test_the_corroborated_pair_of_gap_producers_is_legal",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class FactTotalityTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: Every Producer Is Either Sole
+    Or Corroborated`; design.md, Decision D ('Totality is relative to
+    consumption'); tasks.md 2.6. Consumption-relative: a fact SOME BLOCK
+    REQUIRES (excluding the structural `skeleton` fact) must resolve
+    through `paper_declarations.FACT_SOURCE_ROOT` (the five observable
+    facts) or a block's `produces_facts`, else refuses
+    `FACT_PRODUCER_ABSENT` naming the fact; a produced-class fact nobody
+    requires needs no producer at all — an unconditional totality
+    invariant is precisely what broke every raw-header fixture in the
+    previous change."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_required_fact_with_no_producer_anywhere_refuses(self) -> None:
+        header = _produces_facts_section(
+            "a", "only", requires=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_ABSENT")
+        self.assertIn("limitations", ctx.exception.detail)
+
+    def test_a_required_observable_fact_needs_no_block_producer(self) -> None:
+        """`dataset` resolves externally (`FACT_SOURCE_ROOT`) — requiring
+        it with no `produces_facts` anywhere must not refuse."""
+        header = _produces_facts_section(
+            "a", "only", requires=["dataset"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(requires=["dataset"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].requires_facts, ("dataset",))
+
+    def test_a_required_fact_with_a_producer_elsewhere_is_accepted(self) -> None:
+        header_a = _produces_facts_section(
+            "a", "only", requires=["limitations"], file="sections/01-a.md",
+        )
+        header_a["blocks"][0]["after"] = [
+            {
+                "target": "b.only",
+                "source": {
+                    "file": "sections/01-a.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        header_b = _produces_facts_section(
+            "b", "only", produces=["limitations"], file="sections/02-b.md",
+        )
+        self._write(
+            "01-a.md", header_a,
+            _produces_facts_body(requires=["limitations"], chain_rows=[("a.only", "b.only")]),
+        )
+        self._write("02-b.md", header_b, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].requires_facts, ("limitations",))
+
+    def test_an_unrequired_produced_fact_needs_no_producer_check(self) -> None:
+        """Decision D: a produced-class fact nobody requires is simply
+        absent from this paper, legally — `produces_facts` alone, with no
+        consumer anywhere, must not refuse."""
+        header = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        self._write("01-a.md", header, _produces_facts_body(produces=["limitations"]))
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["a.only"].produces_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_fact_totality(corpus, declarations)\n",
+            "",
+            "tests.test_paper_writing.FactTotalityTests"
+            ".test_a_required_fact_with_no_producer_anywhere_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class ProducerReachabilityTests(unittest.TestCase):
+    """`contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row`; design.md, Decision C ('Ordering
+    is VERIFIED, never derived'); tasks.md 2.7. Every one of a produced
+    fact's producer(s) must reach the requiring consumer in the
+    `after`-edge graph (`collect_edges`/`_build_graph` — the SAME graph
+    `derive_order`/`derive_waves` consume); an indirect, transitively
+    backed chain is legal, a required DIRECT edge is not."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_consumer_reachable_from_its_producer_is_accepted(self) -> None:
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", requires=["limitations"], file="sections/02-b.md",
+        )
+        header_b["blocks"][0]["after"] = [
+            {
+                "target": "a.only",
+                "source": {
+                    "file": "sections/02-b.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write(
+            "02-b.md", header_b,
+            _produces_facts_body(requires=["limitations"], chain_rows=[("b.only", "a.only")]),
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["b.only"].requires_facts, ("limitations",))
+
+    def test_a_consumer_not_reachable_from_its_producer_refuses(self) -> None:
+        """Same shape as the accepted case above, minus the `after` edge —
+        the producer never reaches the consumer."""
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", requires=["limitations"], file="sections/02-b.md",
+        )
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write("02-b.md", header_b, _produces_facts_body(requires=["limitations"]))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+        self.assertIn("b.only", ctx.exception.detail)
+        self.assertIn("limitations", ctx.exception.detail)
+
+    def test_unreachable_refuses_at_the_reachability_layer_in_isolation(self) -> None:
+        """Unit 4 CRITICAL closure: once `_verify_producer_chain_rows`
+        exists, a row can never be present without its backing edge also
+        making the consumer trivially (single-hop) reachable -- so on any
+        input that reaches `_verify_producer_reachability` at all, the row
+        check would independently refuse the SAME totally-unreachable
+        input too (mutating out reachability's own call no longer flips
+        `test_a_consumer_not_reachable_from_its_producer_refuses`, since
+        the row check backstops it). This isolates the reachability
+        function itself, on a hand-built `Corpus` with no `after` edges
+        anywhere, so its own guard stays independently mutation-provable
+        regardless of that overlap."""
+        record = paper_graph.BlockRecord(
+            section="a", block_id="only", qualified_id="a.only", block_index=0,
+            position=1, requires_facts=(), requires_declarations=(),
+            citations="none", optional=False, produces_facts=("limitations",),
+        )
+        consumer = paper_graph.BlockRecord(
+            section="b", block_id="only", qualified_id="b.only", block_index=0,
+            position=2, requires_facts=("limitations",), requires_declarations=(),
+            citations="none", optional=False, produces_facts=(),
+        )
+        corpus = paper_graph.Corpus(
+            sections={
+                "a": paper_contract.ContractHeader(section="a", position=1, after=[], blocks=[]),
+                "b": paper_contract.ContractHeader(section="b", position=2, after=[], blocks=[]),
+            },
+            blocks={"a.only": record, "b.only": consumer},
+            order_by_section={"a": ["a.only"], "b": ["b.only"]},
+        )
+        declarations = [("limitations", "a.only")]
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph._verify_producer_reachability(corpus, declarations)
+
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_transitive_reachability_through_an_intermediate_block_is_accepted(self) -> None:
+        """Design.md Decision C: an indirect chain is legal at the
+        REACHABILITY layer — the producer need not directly precede the
+        consumer in the `after`-edge graph, only reach it. Calls
+        `_verify_producer_reachability` directly against a hand-built
+        `Corpus` (this file's own direct-`BlockRecord` construction
+        precedent, matching `test_paper_decisions.py`'s), rather than
+        through `assemble_corpus`: the full pipeline also runs
+        `_verify_producer_chain_rows` (Unit 4, CRITICAL closure —
+        `contract-input-partition` spec's added row-presence requirement),
+        which DOES demand a direct row backed by a direct edge for every
+        produced-fact dependency — an orthogonal, stricter DOCUMENTATION
+        discipline this test does not exercise, and one a transitively-
+        reached-only chain with no row never satisfies (see
+        `ProducerChainRowsTests` for that discipline's own coverage)."""
+        def _record(section: str, block_id: str, position: int, *, requires=(), produces=()):
+            return paper_graph.BlockRecord(
+                section=section, block_id=block_id, qualified_id=f"{section}.{block_id}",
+                block_index=0, position=position, requires_facts=tuple(requires),
+                requires_declarations=(), citations="none", optional=False,
+                produces_facts=tuple(produces),
+            )
+
+        source = {"file": "sections/x.md", "quote": "x"}
+        corpus = paper_graph.Corpus(
+            sections={
+                "a": paper_contract.ContractHeader(section="a", position=1, after=[], blocks=[]),
+                "mid": paper_contract.ContractHeader(
+                    section="mid", position=2, after=[],
+                    blocks=[{"id": "only", "after": [{"target": "a.only", "source": source}]}],
+                ),
+                "c": paper_contract.ContractHeader(
+                    section="c", position=3, after=[],
+                    blocks=[{"id": "only", "after": [{"target": "mid.only", "source": source}]}],
+                ),
+            },
+            blocks={
+                "a.only": _record("a", "only", 1, produces=["limitations"]),
+                "mid.only": _record("mid", "only", 2),
+                "c.only": _record("c", "only", 3, requires=["limitations"]),
+            },
+            order_by_section={"a": ["a.only"], "mid": ["mid.only"], "c": ["c.only"]},
+        )
+        declarations = [("limitations", "a.only")]
+
+        paper_graph._verify_producer_reachability(corpus, declarations)  # raises nothing
+
+        self.assertEqual(corpus.blocks["c.only"].requires_facts, ("limitations",))
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        """Mutates the `_reaches(...)` CONDITION inside the function body,
+        not the `assemble_corpus` call site: targets the isolated
+        `test_unreachable_refuses_at_the_reachability_layer_in_isolation`
+        above, which calls `_verify_producer_reachability` directly and so
+        is blind to a call-site mutation. `test_a_consumer_not_reachable_
+        from_its_producer_refuses` (through the full `assemble_corpus`
+        pipeline) is no longer usable as the target here: `_verify_
+        producer_chain_rows` (Unit 4 CRITICAL closure) independently
+        refuses the same totally-unreachable input even with this
+        function's own guard defeated, since a row can never exist without
+        its backing edge also making the consumer reachable."""
+        proc = _run_against_mutant(
+            "                if not _reaches(successors, producer_id, qualified_id):\n",
+            "                if False and not _reaches(successors, producer_id, qualified_id):\n",
+            "tests.test_paper_writing.ProducerReachabilityTests"
+            ".test_unreachable_refuses_at_the_reachability_layer_in_isolation",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_cyclic_corpus_still_surfaces_order_cycle_at_derive_order(self) -> None:
+        """tasks.md 2.8: reachability (cycle-tolerant by construction, a
+        visited set never unbounded recursion) must not hang and must not
+        misreport a cycle as `PRODUCER_CHAIN_ABSENT` here — the cycle
+        itself only ever surfaces at `derive_order`/`derive_waves`."""
+        header_a = _produces_facts_section(
+            "a", "cyc-a", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_a["blocks"][0]["after"] = [
+            {
+                "target": "b.cyc-b",
+                "source": {"file": "sections/01-a.md", "quote": "This block produces the limitations."},
+            }
+        ]
+        header_b = _produces_facts_section(
+            "b", "cyc-b", requires=["limitations"], file="sections/02-b.md",
+        )
+        header_b["blocks"][0]["after"] = [
+            {
+                "target": "a.cyc-a",
+                "source": {"file": "sections/02-b.md", "quote": "This block requires the limitations."},
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write(
+            "02-b.md", header_b,
+            _produces_facts_body(requires=["limitations"], chain_rows=[("b.cyc-b", "a.cyc-a")]),
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing here
+
+        edges = paper_graph.collect_edges(corpus)
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.derive_order(corpus, edges)
+        self.assertEqual(ctx.exception.code, "ORDER_CYCLE")
+
+
+class ProducerChainRowsTests(unittest.TestCase):
+    """`contract-input-partition` spec, `Requirement: A Produced-Fact
+    Dependency Is An Internal-Chain Row` (`sdd-verify` FAIL, CRITICAL,
+    `a-fact-is-declared-or-it-is-produced` Unit 4): `_verify_producer_
+    reachability` alone proved a producer reaches its consumer somewhere in
+    the `after`-edge graph, but never checked that the consumer's OWN
+    `### Internal chain` table actually SAYS so in prose — a real `after`
+    edge with the row absent assembled clean before this unit, the exact
+    defect class this whole change exists to close. `_verify_producer_
+    chain_rows` is the mirror `_verify_internal_chain` was always missing:
+    that function proves ROW -> edge; this proves EDGE (fact-requirement) ->
+    row."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _write_pair(self, *, chain_rows=()) -> None:
+        """A producer (`a.only`) and a consumer (`b.only`) joined by a REAL,
+        DIRECT `after` edge -- reachability always holds here. `chain_rows`
+        controls only whether the consumer's own `### Internal chain` table
+        names the producer."""
+        header_a = _produces_facts_section(
+            "a", "only", produces=["limitations"], file="sections/01-a.md",
+        )
+        header_b = _produces_facts_section(
+            "b", "only", requires=["limitations"], file="sections/02-b.md",
+        )
+        header_b["blocks"][0]["after"] = [
+            {
+                "target": "a.only",
+                "source": {
+                    "file": "sections/02-b.md",
+                    "quote": "This block requires the limitations.",
+                },
+            }
+        ]
+        self._write("01-a.md", header_a, _produces_facts_body(produces=["limitations"]))
+        self._write(
+            "02-b.md", header_b,
+            _produces_facts_body(requires=["limitations"], chain_rows=chain_rows),
+        )
+
+    def test_a_direct_edge_with_the_row_present_is_accepted(self) -> None:
+        """`contract-input-partition` spec, `Scenario: A producer->consumer
+        row is accepted`."""
+        self._write_pair(chain_rows=[("b.only", "a.only")])
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.blocks["b.only"].requires_facts, ("limitations",))
+
+    def test_a_direct_edge_with_the_row_absent_refuses(self) -> None:
+        """The decisive case: a REAL `after` edge reaches the consumer from
+        its producer (`_verify_producer_reachability` alone would accept
+        this corpus with no refusal), yet no `### Internal chain` row names
+        the producer -- `contract-input-partition` spec, `Scenario: A
+        missing producer row refuses`. This is the exact shape that
+        assembled CLEAN before this unit: `_verify_producer_reachability`
+        was satisfied by the edge alone, and nothing else ever read the
+        row."""
+        self._write_pair(chain_rows=())
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+        self.assertIn("b.only", ctx.exception.detail)
+        self.assertIn("limitations", ctx.exception.detail)
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_mutation_removing_the_row_after_it_existed_is_caught(self) -> None:
+        """`contract-input-partition` spec, `Scenario: Mutation — removing
+        the row after it existed is caught`: the row set is read live off
+        the current prose body on every assembly, never cached from a prior
+        pass, even though `requires_facts` for the fact never changes."""
+        self._write_pair(chain_rows=[("b.only", "a.only")])
+        paper_graph.assemble_corpus(self.sections_dir)  # raises nothing, row present
+
+        self._write_pair(chain_rows=())  # same requires_facts, row deleted
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+
+    def test_a_self_producing_block_needs_no_row_on_itself(self) -> None:
+        """`FACT_SELF_REQUIRED` (`_verify_self_reference`, run earlier in
+        `assemble_corpus`) already refuses a block that both requires and
+        produces the same fact, so `_verify_producer_chain_rows` can never
+        reach that shape through the real pipeline — this calls it
+        directly, on a hand-built `Corpus` bypassing that earlier check, to
+        prove its own `producer_id == qualified_id` skip (mirroring `_
+        verify_producer_reachability`'s identical skip) never asks a
+        producer to carry a row naming itself, rather than merely being
+        unreachable by construction."""
+        record = paper_graph.BlockRecord(
+            section="a", block_id="only", qualified_id="a.only", block_index=0,
+            position=1, requires_facts=("limitations",), requires_declarations=(),
+            citations="none", optional=False, produces_facts=("limitations",),
+        )
+        corpus = paper_graph.Corpus(
+            sections={"a": paper_contract.ContractHeader(section="a", position=1, after=[], blocks=[])},
+            blocks={"a.only": record},
+            order_by_section={"a": ["a.only"]},
+        )
+        declarations = [("limitations", "a.only")]
+
+        paper_graph._verify_producer_chain_rows(corpus, declarations, {"a": b"Prose.\n"})  # raises nothing
+
+    def test_removing_the_check_flips_the_refusal_test_from_green_to_red(self) -> None:
+        proc = _run_against_mutant(
+            "    _verify_producer_chain_rows(corpus, declarations, section_bodies)\n",
+            "",
+            "tests.test_paper_writing.ProducerChainRowsTests"
+            ".test_a_direct_edge_with_the_row_absent_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
@@ -1483,7 +2317,7 @@ class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
         "materials-and-methods.mm-dataset": ("dataset",),
         "materials-and-methods.mm-preamble": (),
         "materials-and-methods.mm-proposal": ("formulation",),
-        "related-work.rw-closing": ("gap",),
+        "related-work.rw-closing": (),
         "related-work.rw-panorama": ("problem-statement",),
         "related-work.rw-preamble": ("problem-statement",),
         "related-work.rw-problem-blocks": ("problem-statement",),
@@ -2575,16 +3409,66 @@ def _coupling_requirement(fact: str, filename: str) -> dict:
     }
 
 
+def _coupling_production(fact: str, filename: str) -> dict:
+    """One rich `produces_facts` entry, the `_coupling_requirement`
+    counterpart (`a-fact-is-declared-or-it-is-produced`, `fact-production`
+    spec). `00-produced-facts.md`'s own three blocks produce `contributions`
+    /`problem-statement`/`limitations`; `gap` is produced instead by
+    `intro-gap` and `related-work-gap` themselves (its two CORROBORATED
+    producers, `paper_verify.CHECKS`'s own carve-out) — every one of the
+    four facts resolves to a producer and `FACT_PRODUCER_ABSENT` never
+    fires here."""
+    return {
+        "value": fact,
+        "source": {
+            "file": f"sections/{filename}",
+            "quote": f"This block produces the {fact}.",
+        },
+    }
+
+
+def _coupling_after(fact: str, filename: str) -> list:
+    """The `after` edge every requiring block in this fixture carries to
+    its fact's producer in `00-produced-facts.md`, position 0 — always
+    the earliest section, so this edge alone backs reachability for
+    every consumer (`fact-production` spec, `Requirement: Every Producer
+    Is Either Sole Or Corroborated`; design.md, Decision C). Reuses the
+    SAME `requires_facts` quote already anchored in `filename`'s own
+    prose — no second sentence needed."""
+    return [{
+        "target": f"produced-facts.pf-{fact}",
+        "source": {
+            "file": f"sections/{filename}",
+            "quote": f"This block requires the {fact}.",
+        },
+    }]
+
+
 _COUPLING_SECTIONS = {
+    "00-produced-facts.md": {
+        "section": "produced-facts", "position": 0,
+        "blocks": [
+            {"id": f"pf-{fact}",
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production(fact, "00-produced-facts.md")]}
+            for fact in ("contributions", "problem-statement", "limitations")
+        ],
+    },
     "01-introduction.md": {
         "section": "introduction", "position": 1,
         "blocks": [
             {"id": "intro-contrib",
              "requires_facts": [_coupling_requirement("contributions", "01-introduction.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "01-introduction.md")},
+            # `gap`'s two CORROBORATED producers (`a-fact-is-declared-or-
+            # it-is-produced`, design.md Decision F: `gap` is the one fact
+            # `paper_verify.CHECKS` corroborates, so exactly two producers
+            # are legal) -- `intro-gap` is one of them, never a consumer,
+            # matching the real corpus's own `introduction.block-3` shape.
             {"id": "intro-gap",
-             "requires_facts": [_coupling_requirement("gap", "01-introduction.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production("gap", "01-introduction.md")]},
         ],
     },
     "02-methods.md": {
@@ -2592,18 +3476,22 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "methods-contrib",
              "requires_facts": [_coupling_requirement("contributions", "02-methods.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "02-methods.md")},
             {"id": "methods-chain",
              "requires_facts": [_coupling_requirement("problem-statement", "02-methods.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("problem-statement", "02-methods.md")},
         ],
     },
     "03-related-work.md": {
         "section": "related-work", "position": 3,
         "blocks": [
+            # `gap`'s other corroborated producer -- matches the real
+            # corpus's own `related-work.rw-closing` shape.
             {"id": "related-work-gap",
-             "requires_facts": [_coupling_requirement("gap", "03-related-work.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_facts": [], "requires_declarations": [], "citations": "none",
+             "produces_facts": [_coupling_production("gap", "03-related-work.md")]},
         ],
     },
     "04-abstract.md": {
@@ -2611,7 +3499,8 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "abstract-contrib",
              "requires_facts": [_coupling_requirement("contributions", "04-abstract.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "04-abstract.md")},
         ],
     },
     "05-conclusions.md": {
@@ -2619,10 +3508,12 @@ _COUPLING_SECTIONS = {
         "blocks": [
             {"id": "conclusions-contrib",
              "requires_facts": [_coupling_requirement("contributions", "05-conclusions.md")],
-             "requires_declarations": [], "citations": "none"},
+             "requires_declarations": [], "citations": "none",
+             "after": _coupling_after("contributions", "05-conclusions.md")},
             {"id": "conclusions-future",
              "requires_facts": [_coupling_requirement("limitations", "05-conclusions.md")],
-             "requires_declarations": [], "citations": "discovery"},
+             "requires_declarations": [], "citations": "discovery",
+             "after": _coupling_after("limitations", "05-conclusions.md")},
         ],
     },
 }
@@ -2630,9 +3521,20 @@ _COUPLING_SECTIONS = {
 #: Every fact this fixture's blocks require, in file declaration order —
 #: `_write_coupling_sections` appends one `This block requires the
 #: <fact>.` sentence per fact to that file's own prose, matching
-#: `_coupling_requirement`'s quote exactly.
+#: `_coupling_requirement`'s quote exactly. `00-produced-facts.md`'s own
+#: blocks require nothing, so they contribute no entry here.
 _COUPLING_FACTS_BY_FILE = {
-    name: [entry["requires_facts"][0]["value"] for entry in header["blocks"]]
+    name: [entry["requires_facts"][0]["value"] for entry in header["blocks"] if entry["requires_facts"]]
+    for name, header in _COUPLING_SECTIONS.items()
+}
+
+#: The `produces_facts` mirror of `_COUPLING_FACTS_BY_FILE` — only
+#: `00-produced-facts.md` carries any.
+_COUPLING_PRODUCES_BY_FILE = {
+    name: [
+        entry["produces_facts"][0]["value"]
+        for entry in header["blocks"] if entry.get("produces_facts")
+    ]
     for name, header in _COUPLING_SECTIONS.items()
 }
 
@@ -2688,21 +3590,55 @@ _COUPLING_BODIES = {
 _COUPLING_PROVENANCE_BLOCKS = ("methods-contrib", "methods-chain")
 
 
+#: `contract-input-partition` spec, `Requirement: A Produced-Fact Dependency
+#: Is An Internal-Chain Row`: the three facts `00-produced-facts.md`
+#: produces for a SEPARATE consumer to require -- `gap` is excluded, its two
+#: corroborated producers (`intro-gap`/`related-work-gap`) never require it
+#: themselves, so no row is ever needed for it in this fixture.
+_COUPLING_PRODUCED_FACTS = frozenset({"contributions", "problem-statement", "limitations"})
+
+
+def _coupling_internal_chain_rows(section_id: str, header: dict) -> list:
+    """Every `(holder, dependency)` internal-chain row this fixture's own
+    producer/consumer edges need -- one row per block requiring a fact
+    `00-produced-facts.md` produces, naming that fact's producer block
+    directly, so `paper_graph._verify_producer_chain_rows` finds it."""
+    rows = []
+    for block in header["blocks"]:
+        for entry in block.get("requires_facts", []):
+            fact = entry["value"]
+            if fact in _COUPLING_PRODUCED_FACTS:
+                rows.append((f"{section_id}.{block['id']}", f"produced-facts.pf-{fact}"))
+    return rows
+
+
 def _write_coupling_sections(sections_dir: Path) -> None:
     """`contract-input-partition` spec, `Requirement: Two-Heading
     Partition`: every assembled contract must carry `### External inputs`
     and `### Internal chain`, or `paper_graph.assemble_corpus` refuses
     `INPUT_PARTITION_ABSENT` -- this fixture's own concern
     (`the-couplings-hold-or-they-do-not`) is unrelated to that partition, so
-    both headings are added empty, never populated with invented content."""
+    `### External inputs` is added empty, never populated with invented
+    content. `### Internal chain` carries a real row for every block
+    requiring a fact `00-produced-facts.md` produces (`fact-production`
+    spec; `contract-input-partition` spec's own added row-presence
+    requirement) -- `None.` only for a file with no such block."""
     sections_dir.mkdir(parents=True, exist_ok=True)
     for name, header in _COUPLING_SECTIONS.items():
         anchors = "".join(
             f" This block requires the {fact}." for fact in _COUPLING_FACTS_BY_FILE[name]
+        ) + "".join(
+            f" This block produces the {fact}." for fact in _COUPLING_PRODUCES_BY_FILE[name]
         )
+        rows = _coupling_internal_chain_rows(header["section"], header)
+        if rows:
+            table_rows = "\n".join(f"| `{holder}` | `{dependency}` |" for holder, dependency in rows)
+            internal_chain = f"### Internal chain\n\n| Block | Depends on |\n|---|---|\n{table_rows}\n"
+        else:
+            internal_chain = "### Internal chain\n\nNone.\n"
         text = (
             "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse." + anchors + "\n\n"
-            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+            "### External inputs\n\nNone.\n\n" + internal_chain
         )
         (sections_dir / name).write_text(text, encoding="utf-8")
 
@@ -3281,6 +4217,87 @@ class GapTests(unittest.TestCase):
         self.assertEqual(result["verdict"], "unmeasured")
         self.assertFalse(result["evidence"]["mechanical"]["front_counts_equal"])
         self.assertFalse(result["evidence"]["mechanical"]["fronts_equal"])
+
+
+class RealCorpusGapPairingTests(unittest.TestCase):
+    """`a-fact-is-declared-or-it-is-produced`, design.md Decision F / tasks.md
+    Unit 3, 3.7: against the REAL shipped corpus, `check_gap`'s pair is the
+    two PRODUCERS of `gap` -- `related-work.rw-closing` and `introduction.
+    block-3` -- never `experimental-setup.es-assessment`, which requires
+    `gap` in its own `requires_facts` for an unrelated reason and must never
+    be read as this coupling's counterpart (`coupling-verification` spec,
+    `Requirement: Coupling 3 — The Gap Is Assisted`, 'Pairing resolves to
+    the two corroborated producers of gap')."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        (self.paper_dir / "couplings.json").write_text(
+            json.dumps({"blocks": {"placeholder": True}}), encoding="utf-8",
+        )
+
+    def test_producers_by_fact_resolves_gaps_two_producers_from_the_real_corpus(self) -> None:
+        evidence = paper_coupling_evidence.gather(self.paper_dir, SECTIONS_DIR)
+
+        block_ids, reason = evidence.producers_by_fact["gap"]
+
+        self.assertIsNone(reason)
+        self.assertEqual(set(block_ids), {"rw-closing", "block-3"})
+
+    def test_the_published_pair_is_the_two_producers_never_es_assessment(self) -> None:
+        evidence = paper_coupling_evidence.gather(self.paper_dir, SECTIONS_DIR)
+
+        result = paper_verify.check_gap(evidence)
+
+        published_ids = set(result["evidence"]["closings"])
+        self.assertEqual(published_ids, {"rw-closing", "block-3"})
+        self.assertNotIn("es-assessment", published_ids)
+
+    def test_mutation_reverting_to_consumer_scan_pairing_is_caught(self) -> None:
+        """tasks.md 3.8: revert `check_gap` to `evidence.blocks_by_fact`
+        (the consumer-scan mapping) and confirm the real-corpus pairing
+        proof above fails, since the real corpus's ONLY `requires_facts`
+        consumer of `gap` is `experimental-setup.es-assessment` alone --
+        never the two producers."""
+        proc = _run_against_mutant(
+            'block_ids, reason = evidence.producers_by_fact.get('
+            '"gap", ((), "SECTION_CONTRACTS_UNREADABLE"))',
+            'block_ids, reason = evidence.blocks_by_fact.get('
+            '"gap", ((), "SECTION_CONTRACTS_UNREADABLE"))',
+            "tests.test_paper_writing.RealCorpusGapPairingTests"
+            ".test_the_published_pair_is_the_two_producers_never_es_assessment",
+            source_path=SKILL_SCRIPTS / "paper_verify.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class CheckGapProducerPairingRegressionTests(unittest.TestCase):
+    """tasks.md 3.9: `check_chain`/`check_contribution_list`/`check_future_
+    work` must keep reading `evidence.blocks_by_fact` -- the consumer-scan
+    mapping `check_chain`'s own `zip(block_ids, links)` depends on for
+    link/block alignment (design.md, Decision F) -- and must never be
+    repointed at the new `producers_by_fact` mapping only `check_gap`
+    reads."""
+
+    def test_the_three_untouched_checks_still_read_blocks_by_fact_only(self) -> None:
+        for fn in (
+            paper_verify.check_chain,
+            paper_verify.check_contribution_list,
+            paper_verify.check_future_work,
+        ):
+            with self.subTest(check=fn.__name__):
+                source = inspect.getsource(fn)
+                self.assertIn("evidence.blocks_by_fact", source)
+                self.assertNotIn("producers_by_fact", source)
+
+    def test_check_gap_reads_producers_by_fact_not_blocks_by_fact(self) -> None:
+        source = inspect.getsource(paper_verify.check_gap)
+        self.assertIn("evidence.producers_by_fact", source)
+        self.assertNotIn("evidence.blocks_by_fact", source)
 
 
 class ArtefactsTests(unittest.TestCase):
@@ -4262,8 +5279,40 @@ class RefusalRosterTests(unittest.TestCase):
         adds no new code at all: it changes what `EVIDENCE_EXHAUSTED`'s
         detail says and what `finalize_block` returns, never what it can
         raise. Measured directly against `reachable_paper_refusal_codes()`,
-        never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 127)
+        never forecast. Moved from 127 to 130 in
+        `a-fact-is-declared-or-it-is-produced`, unit 1: `paper_graph.py`
+        gains three new raise sites, reachable the instant `produces_facts`
+        entries exist anywhere in the parsed corpus (today: nowhere, since
+        this unit touches no `sections/*.md` file) --
+        `FACT_SELF_REQUIRED` (a block requiring what it produces),
+        `FACT_ROUTE_AMBIGUOUS` (a `produces_facts` entry naming a
+        declarable fact), and `FACT_PRODUCER_DUPLICATE` (an uncorroborated
+        duplicate producer; a corroborated pair, e.g. `gap` via Coupling 3,
+        is legal and raises nothing). `paper_contract.py`'s own grammar
+        widening adds no new code: `MALFORMED_HEADER`/`UNKNOWN_FACT` are
+        reused verbatim, the identical `requires_facts` schema check.
+        Measured directly against `reachable_paper_refusal_codes()`, never
+        forecast. Moved from 130 to 132 in the same change's unit 2:
+        `paper_graph.py` gains two new raise sites, called from
+        `assemble_corpus` (an already-imported module) --
+        `FACT_PRODUCER_ABSENT` (a fact some block requires, excluding
+        `skeleton`, resolves via neither `FACT_SOURCE_ROOT` nor any
+        block's `produces_facts`) and `PRODUCER_CHAIN_ABSENT` (a producer
+        does not reach one of its consumers in the `after`-edge graph).
+        Both are reachable the instant their raise sites exist -- no new
+        import needed, since the corpus edits landing in the same commit
+        (`sections/*.md`) are exactly what makes each condition
+        exercisable against the real, shipped corpus. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast. Moved
+        from 132 to 133 in the same change's unit 3: `paper_declarations.py`
+        gains one new raise site, `_refuse_if_produced` (shared by
+        `set_fact`/`decline_fact`) -- `PRODUCED_FACT_UNDECLARABLE` (`declare
+        --fact`/`--decline` targets a fact a corpus block produces).
+        Reachable the instant `paper_cli.cmd_declare` resolves a non-empty
+        `produced_by` tuple for the given fact id, which the shipped corpus
+        already does for four facts. Measured directly against
+        `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 133)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -4364,8 +5413,36 @@ def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) 
     minimal enough that `check_contribution_list`'s derived block set for
     this corpus is exactly this one block, so "entirely optional-and-
     unopened" is trivially the whole set (`optional-block-semantics` spec,
-    tasks.md Work Unit 3, 3.6/3.7)."""
+    tasks.md Work Unit 3, 3.6/3.7). A second file supplies `contributions`'
+    own producer (`a-fact-is-declared-or-it-is-produced`, `fact-production`
+    spec, `Requirement: Every Producer Is Either Sole Or Corroborated`) --
+    non-optional and never itself required, so it neither enters
+    `check_contribution_list`'s own derived block set nor `optional_ids`."""
     sections_dir.mkdir(parents=True, exist_ok=True)
+    source_header = {
+        "section": "front-matter", "position": 0,
+        "blocks": [
+            {
+                "id": "contrib-source",
+                "requires_facts": [], "requires_declarations": [], "citations": "none",
+                "produces_facts": [
+                    {
+                        "value": "contributions",
+                        "source": {
+                            "file": "sections/00-front-matter.md",
+                            "quote": "This block produces the contributions.",
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+    source_text = (
+        "---\n" + json.dumps(source_header, indent=2) + "\n---\n\nProse. This block produces the "
+        "contributions.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+    (sections_dir / "00-front-matter.md").write_text(source_text, encoding="utf-8")
+
     header = {
         "section": "results", "position": 1,
         "blocks": [
@@ -4381,12 +5458,23 @@ def _write_optional_contribution_section(sections_dir: Path, *, optional: bool) 
                     }
                 ],
                 "requires_declarations": [], "citations": "none", "optional": optional,
+                "after": [
+                    {
+                        "target": "front-matter.contrib-source",
+                        "source": {
+                            "file": "sections/01-results.md",
+                            "quote": "This block requires the contributions.",
+                        },
+                    }
+                ],
             },
         ],
     }
     text = (
         "---\n" + json.dumps(header, indent=2) + "\n---\n\nProse. This block requires the "
-        "contributions.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        "contributions.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\n"
+        "| Block | Depends on |\n|---|---|\n"
+        "| `results.res-contrib` | `front-matter.contrib-source` |\n"
     )
     (sections_dir / "01-results.md").write_text(text, encoding="utf-8")
 
@@ -5087,6 +6175,138 @@ class ReadinessBasisTests(unittest.TestCase):
         report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
 
         self.assertEqual(self._status_of(report, "optional-basis.maybe"), "not-applicable")
+
+
+class ReadinessProducedFactsTests(unittest.TestCase):
+    """`a-fact-is-declared-or-it-is-produced`, tasks.md Unit 3, 3.1/3.4:
+    `compute_block_readiness`/`compute_readiness` gain `produced_by` and
+    `blocked_on_produced`; `compute_readiness_report`/`compute_phases`
+    resolve it from the assembled corpus and derive a produced fact's
+    satisfaction from its producer's own written status -- never from the
+    `declarations` region (`paper-declarations` spec's carve-out) and never
+    from a `declare` call, which this fixture never makes."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+        header = json.dumps({
+            "section": "produced-readiness",
+            "position": 1,
+            "blocks": [
+                {
+                    "id": "producer", "requires_facts": [], "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{
+                        "value": "limitations",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block produces the limitations.",
+                        },
+                    }],
+                },
+                {
+                    "id": "consumer",
+                    "requires_facts": [{
+                        "value": "limitations",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block requires the limitations.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                    "after": [{
+                        "target": "produced-readiness.producer",
+                        "source": {
+                            "file": "sections/01-produced-readiness.md",
+                            "quote": "This block requires the limitations.",
+                        },
+                    }],
+                },
+            ],
+        })
+        (self.sections_dir / "01-produced-readiness.md").write_text(
+            f"---\n{header}\n---\n\nProse. This block produces the limitations. "
+            "This block requires the limitations.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\n"
+            "| Block | Depends on |\n|---|---|\n"
+            "| `produced-readiness.consumer` | `produced-readiness.producer` |\n",
+            encoding="utf-8",
+        )
+
+    def _readiness_block(self, block_id: str) -> dict:
+        report = paper_cli.compute_readiness_report(self.sections_dir, paper_dir=self.paper_dir)
+        return next(b for b in report["blocks"] if b["block"] == block_id)
+
+    def _phases_block(self, block_id: str) -> dict:
+        phases = paper_cli.compute_phases(self.paper_dir, self.sections_dir)
+        for wave in phases["waves"]:
+            for block in wave["blocks"]:
+                if block["block"] == block_id:
+                    return block
+        raise AssertionError(f"{block_id!r} not found in any wave")
+
+    def test_consumer_is_blocked_naming_the_producer_before_it_is_written(self) -> None:
+        block = self._readiness_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "blocked")
+        self.assertEqual(block["missing_facts"], ["limitations"])
+        self.assertEqual(
+            block["blocked_on_produced"],
+            [{"fact": "limitations", "producers": ["produced-readiness.producer"]}],
+        )
+
+    def test_consumer_becomes_writable_once_the_producer_is_opened_with_no_declare_call(
+        self,
+    ) -> None:
+        """Spec scenario 'A produced fact becomes satisfied once its
+        producer is written' -- no `declarations` region entry for
+        `limitations` is ever created, and readiness still flips."""
+        paper_block.open_block(self.paper_dir, "produced-readiness.producer", at_end=True)
+
+        block = self._readiness_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "writable")
+        self.assertEqual(block["missing_facts"], [])
+        self.assertNotIn("blocked_on_produced", block)
+        satisfied_facts, _declarations = paper_declarations.read_satisfied(self.paper_dir)
+        self.assertNotIn("limitations", satisfied_facts)
+
+    def test_phases_agrees_the_consumer_is_writable_once_the_producer_is_opened(self) -> None:
+        paper_block.open_block(self.paper_dir, "produced-readiness.producer", at_end=True)
+
+        block = self._phases_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "writable")
+        self.assertEqual(block["blocked_on_produced"], [])
+
+    def test_phases_agrees_the_consumer_is_blocked_before_the_producer_is_opened(self) -> None:
+        block = self._phases_block("produced-readiness.consumer")
+
+        self.assertEqual(block["status"], "blocked")
+        self.assertEqual(block["missing_facts"], ["limitations"])
+
+    def test_phases_carries_blocked_on_produced_wave_verify_finding_warning_1(self) -> None:
+        """`sdd-verify` FAIL, WARNING 1: `cmd_phases`'s wave-block dict
+        literal enumerated a fixed key set that never forwarded `blocked_
+        on_produced`, even though `compute_phases` already resolves it
+        through the SAME `paper_readiness.compute_readiness` call `cmd_
+        readiness` uses — an operator following `SKILL.md`'s own "what can
+        I write now" verb never saw which block to WRITE. No test asserted
+        its presence in `phases` output in either direction before this
+        one."""
+        block = self._phases_block("produced-readiness.consumer")
+
+        self.assertEqual(
+            block["blocked_on_produced"],
+            [{"fact": "limitations", "producers": ["produced-readiness.producer"]}],
+        )
 
 
 class ReadinessPhasesEndToEndTests(unittest.TestCase):

@@ -26,7 +26,11 @@ implementation of the same digest comparison.
 
 Public surface:
 
-    Evidence                         -> the dataclass every check reads
+    Evidence                         -> the dataclass every check reads,
+                                         including `producers_by_fact`
+                                         (`a-fact-is-declared-or-it-is-
+                                         produced`: `check_gap` alone reads
+                                         it; `blocks_by_fact` is untouched)
     gather(paper_dir, sections_dir) -> Evidence   (raises
                                                      DECLARATION_RECORD_ABSENT)
 """
@@ -82,6 +86,15 @@ class Evidence:
     the recorded contract file itself could not be re-read. Computed via
     `paper_provenance.drift`, which this module is the only caller of, so
     `paper_verify.py`'s check B never opens a contract file itself.
+
+    `producers_by_fact`: fact id -> `(producer_block_ids, unmeasured_
+    reason)`, the PRODUCER counterpart to `blocks_by_fact` above
+    (`a-fact-is-declared-or-it-is-produced`, design.md Decision F) —
+    `producer_block_ids` are raw (unqualified) ids naming every block whose
+    `produces_facts` names that fact, same `SECTION_CONTRACTS_UNREADABLE`
+    fallback shape as `blocks_by_fact`. `check_gap` alone reads this field;
+    `blocks_by_fact` itself is untouched, so `check_chain`'s own
+    `zip(block_ids, links)` alignment is never at risk.
     """
 
     paper_dir: Path
@@ -93,6 +106,7 @@ class Evidence:
     contract_drift: dict = field(default_factory=dict)
     block_bodies: dict = field(default_factory=dict)
     blocks_by_fact: dict = field(default_factory=dict)
+    producers_by_fact: dict = field(default_factory=dict)
 
 
 def _read_declaration_record(paper_dir: Path) -> dict:
@@ -151,6 +165,46 @@ def _blocks_by_fact(sections_dir: Path) -> dict:
     }
 
 
+def _producers_by_fact(sections_dir: Path) -> dict:
+    """Every fact in `paper_vocabulary.FACTS` mapped to the raw block ids
+    whose `produces_facts` names it, in corpus order — the PRODUCER
+    counterpart to `_blocks_by_fact` above (`a-fact-is-declared-or-it-is-
+    produced`, `fact-production` spec). Deliberately its OWN
+    `assemble_corpus` call rather than sharing state with `_blocks_by_fact`
+    — this module's read-only contract is provable independently of that
+    sibling function's own shape, and the two never need to agree on
+    anything beyond which corpus they each re-derive from.
+
+    Scans only BLOCK-level `produces_facts` (`corpus.blocks`), mirroring
+    `_blocks_by_fact`'s own scope (`requires_facts` has no section-level
+    counterpart at all) — the real corpus's two `gap` producers, `related-
+    work.rw-closing` and `introduction.block-3`, are both block-level, and
+    no live check needs a section-level producer id today.
+
+    `SECTION_CONTRACTS_UNREADABLE` when the corpus cannot be assembled at
+    all, the same fallback `_blocks_by_fact` uses. Unlike `_blocks_by_fact`,
+    a fact named by zero producers is reported as `((), None)` rather than a
+    distinct reason — `check_gap`'s own `len(block_ids) != 2` gate already
+    reports an empty or wrong-count producer set as `BLOCK_NOT_DECLARED`,
+    so a second reason string for the same "wrong count" condition would
+    only duplicate that gate, never add a distinct one.
+    """
+    try:
+        corpus = paper_graph.assemble_corpus(sections_dir)
+    except Refused:
+        corpus = None
+    if corpus is None or not corpus.blocks:
+        return {fact: ((), "SECTION_CONTRACTS_UNREADABLE") for fact in paper_vocabulary.FACTS}
+
+    by_fact: dict = {fact: [] for fact in paper_vocabulary.FACTS}
+    for qualified_id in sorted(corpus.blocks):
+        record = corpus.blocks[qualified_id]
+        for fact in record.produces_facts:
+            if fact in by_fact:
+                by_fact[fact].append(record.block_id)
+    return {fact: (tuple(block_ids), None) for fact, block_ids in by_fact.items()}
+
+
 def _compute_contract_drift(main_tex_bytes: bytes, provenance: dict | None) -> dict:
     if provenance is None:
         return {}
@@ -195,6 +249,7 @@ def gather(paper_dir: Path, sections_dir: Path) -> Evidence:
     }
 
     blocks_by_fact = _blocks_by_fact(sections_dir)
+    producers_by_fact = _producers_by_fact(sections_dir)
 
     return Evidence(
         paper_dir=paper_dir,
@@ -206,4 +261,5 @@ def gather(paper_dir: Path, sections_dir: Path) -> Evidence:
         contract_drift=contract_drift,
         block_bodies=block_bodies,
         blocks_by_fact=blocks_by_fact,
+        producers_by_fact=producers_by_fact,
     )

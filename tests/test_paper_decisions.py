@@ -917,6 +917,142 @@ class DeclarationsTests(unittest.TestCase):
         self.assertEqual(tex_path.read_bytes(), corrupted, "a refused write must leave disk untouched")
 
 
+class ProducedFactUndeclarableTests(unittest.TestCase):
+    """`a-fact-is-declared-or-it-is-produced`, `paper-declarations` spec,
+    `Requirement: declare Refuses A Produced Fact` (tasks.md Unit 3, 3.2):
+    `set_fact`/`decline_fact` refuse `PRODUCED_FACT_UNDECLARABLE` when
+    `produced_by` is non-empty, enforced IN THE MODULE so no caller can
+    escape it."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_setting_a_produced_fact_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.set_fact(
+                self.paper_dir, "gap", "some value", clock=self._clock,
+                produced_by=("related-work.rw-closing", "introduction.block-3"),
+            )
+        self.assertEqual(ctx.exception.code, "PRODUCED_FACT_UNDECLARABLE")
+        self.assertIn("gap", ctx.exception.detail)
+        self.assertIn("related-work.rw-closing", ctx.exception.detail)
+
+    def test_declining_a_produced_fact_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.decline_fact(
+                self.paper_dir, "gap", "reason",
+                {"type": "directory-empty-except", "path": "experiments"},
+                clock=self._clock, produced_by=("related-work.rw-closing",),
+            )
+        self.assertEqual(ctx.exception.code, "PRODUCED_FACT_UNDECLARABLE")
+
+    def test_setting_a_fact_with_no_producer_is_unaffected(self) -> None:
+        """Spec scenario 'Declaring an external fact is unaffected':
+        `formulation` resolves from `FACT_SOURCE_ROOT`, with no producing
+        block -- `produced_by` defaults to `()`."""
+        result = paper_declarations.set_fact(
+            self.paper_dir, "formulation", "x", clock=self._clock,
+        )
+        self.assertEqual(result["resolution"], "x")
+
+    def test_setting_a_produced_fact_writes_nothing(self) -> None:
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        with self.assertRaises(Refused):
+            paper_declarations.set_fact(
+                self.paper_dir, "gap", "some value", clock=self._clock,
+                produced_by=("related-work.rw-closing",),
+            )
+        self.assertEqual(tex_path.read_bytes(), pre, "a refused declare must leave disk untouched")
+
+
+class DeclareCliProducedFactTests(unittest.TestCase):
+    """`paper_cli.cmd_declare` resolves `produced_by` from the assembled
+    corpus (tasks.md, Unit 3, 3.4) -- the CLI front door for `PRODUCED_
+    FACT_UNDECLARABLE`."""
+
+    def setUp(self) -> None:
+        # `cmd_declare` resolves `--paper`/`--sections` against the REAL
+        # repository root (`paper_scaffold.resolve_paper_dir(args.paper)`,
+        # no `forge_root` override) -- the same containment reason
+        # `CouplingsCliTests` above roots its own fixture under
+        # `implementations/` (gitignored) rather than an unrelated
+        # `tempfile.TemporaryDirectory`.
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-declare-cli-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir()
+        header = json.dumps({
+            "section": "declare-cli", "position": 1,
+            "blocks": [{
+                "id": "producer", "requires_facts": [], "requires_declarations": [],
+                "citations": "none",
+                "produces_facts": [{
+                    "value": "limitations",
+                    "source": {
+                        "file": "sections/01-declare-cli.md",
+                        "quote": "This block produces the limitations.",
+                    },
+                }],
+            }],
+        })
+        (self.sections_dir / "01-declare-cli.md").write_text(
+            f"---\n{header}\n---\n\nProse. This block produces the limitations.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _args(self, **overrides) -> argparse.Namespace:
+        base = dict(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            declaration=None, fact=None, reopen=None, value=None,
+            decline=None, reason=None, condition=None,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_declaring_a_produced_fact_through_the_cli_refuses(self) -> None:
+        args = self._args(fact="limitations", value="x")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_declare(args)
+
+        self.assertEqual(ctx.exception.code, "PRODUCED_FACT_UNDECLARABLE")
+        self.assertIn("limitations", ctx.exception.detail)
+        self.assertIn("declare-cli.producer", ctx.exception.detail)
+
+    def test_declaring_an_unproduced_fact_through_the_cli_is_unaffected(self) -> None:
+        args = self._args(fact="formulation", value="x")
+
+        result = paper_cli.cmd_declare(args)
+
+        self.assertEqual(result["resolution"], "x")
+
+    def test_declining_a_produced_fact_through_the_cli_refuses(self) -> None:
+        args = self._args(
+            decline="limitations", reason="no protocol yet",
+            condition=json.dumps({"type": "directory-empty-except", "path": "experiments"}),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_declare(args)
+
+        self.assertEqual(ctx.exception.code, "PRODUCED_FACT_UNDECLARABLE")
+
+
 class DeclinedFactTests(unittest.TestCase):
     """`a-declined-fact-has-somewhere-to-live`: a fact the operator has
     DECLINED — decided it does not enter the paper for now — is distinct

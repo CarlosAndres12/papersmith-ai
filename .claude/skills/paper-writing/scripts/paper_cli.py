@@ -373,6 +373,27 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # producer `paper/couplings.json` never had (paper_couplings.py) -------
     "COUPLINGS_INPUT_UNREADABLE": INVOCATION_DEFECT,
     "COUPLINGS_RECORD_MALFORMED": WORK_STATE,
+    # --- a-fact-is-declared-or-it-is-produced, unit 1: `produces_facts`
+    # joins the header grammar (`paper_contract.py`) and three assemble-
+    # time checks land in `paper_graph.py` -- self-reference, route
+    # exclusivity against the declarable route
+    # (`paper_declarations.OBSERVABLE_FACTS ∪ STRUCTURAL_FACTS`), and
+    # duplicate-producer (corroborated pairs an existing
+    # coupling-verification check names, e.g. `gap` / Coupling 3, are
+    # legal; every other duplicate still refuses). Unit 2 adds
+    # `FACT_PRODUCER_ABSENT` (consumption-relative totality: a fact some
+    # block requires resolves via `FACT_SOURCE_ROOT` or a producer, else
+    # refuses) and `PRODUCER_CHAIN_ABSENT` (every one of a fact's
+    # producer(s) must reach the consumer in the `after`-edge graph). Unit
+    # 3 adds `PRODUCED_FACT_UNDECLARABLE`: `declare --fact`/`--decline`
+    # targeting a fact whose producer is a block refuses, enforced in
+    # `paper_declarations.set_fact`/`decline_fact` themselves --------------
+    "FACT_SELF_REQUIRED": WORK_STATE,
+    "FACT_ROUTE_AMBIGUOUS": WORK_STATE,
+    "FACT_PRODUCER_DUPLICATE": WORK_STATE,
+    "FACT_PRODUCER_ABSENT": WORK_STATE,
+    "PRODUCER_CHAIN_ABSENT": WORK_STATE,
+    "PRODUCED_FACT_UNDECLARABLE": WORK_STATE,
 }
 
 
@@ -441,6 +462,35 @@ def cmd_contract(args: argparse.Namespace) -> dict:
     }
 
 
+def _produced_satisfied_facts(produced_by: dict, opened_blocks: set) -> set:
+    """A produced fact counts satisfied exactly when EVERY one of its
+    producer blocks is a member of `opened_blocks` (`fact-production` spec,
+    `Requirement: Produced-Fact Satisfaction Derived From the Producer's
+    Written Status` — the same 'opened is written' rule the wave gate
+    already uses). A fact with zero producers (nothing in this corpus
+    produces it — legal when nothing requires it either, design.md
+    Decision D) never counts satisfied by this route."""
+    return {
+        fact for fact, producer_ids in produced_by.items()
+        if producer_ids and all(producer_id in opened_blocks for producer_id in producer_ids)
+    }
+
+
+def _resolve_produced_by(sections_dir: Path, fact_id: str) -> tuple:
+    """`declare`'s own corpus-derived lookup (tasks.md, Unit 3, 3.4): the
+    tuple of qualified producer ids `fact_id` resolves to, or `()` when the
+    corpus cannot even be assembled (mirrors `paper_coupling_evidence.
+    _blocks_by_fact`'s own defensive `try/except Refused` fallback — a
+    `declare` call against an unassemblable corpus degrades to the
+    pre-existing declarable-route behaviour rather than refusing on an
+    unrelated corpus defect)."""
+    try:
+        corpus = paper_graph.assemble_corpus(sections_dir)
+    except Refused:
+        return ()
+    return paper_graph.producers_by_fact(corpus).get(fact_id, ())
+
+
 def compute_readiness_report(
     sections_dir: Path,
     *,
@@ -470,8 +520,21 @@ def compute_readiness_report(
     Neither given -> refuses `READINESS_BASIS_REQUIRED`: the stale-number
     path (computing an answer from flags alone while silently ignoring an
     existing `declarations` region) is removed, never defaulted.
+
+    `produced_by` (`a-fact-is-declared-or-it-is-produced`, `fact-production`
+    spec, `Requirement: Produced-Fact Satisfaction Derived From the
+    Producer's Written Status`) is resolved from the SAME assembled
+    `corpus` via `paper_graph.producers_by_fact`, in both branches. A
+    produced fact is NEVER read from `declared_facts` (the `declarations`
+    region carve-out, `paper-declarations` spec) — its satisfaction is
+    derived exclusively from whether every one of its producer blocks is
+    opened in `main.tex`. `blocked_on_produced` is threaded into every
+    block's own report unconditionally, so a hypothetical `--fact` call
+    still names the producer of anything still missing.
     """
     corpus = paper_graph.assemble_corpus(sections_dir)
+    produced_by = paper_graph.producers_by_fact(corpus)
+    produced_fact_ids = set(produced_by)
     flag_facts = set(flag_facts)
     flag_declarations = set(flag_declarations)
 
@@ -479,7 +542,8 @@ def compute_readiness_report(
         declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
         declined_facts = paper_declarations.read_declined(paper_dir)
         opened_blocks = {block["id"] for block in paper_block.read_status(paper_dir)["blocks"]}
-        satisfied_facts = declared_facts | flag_facts
+        produced_satisfied = _produced_satisfied_facts(produced_by, opened_blocks)
+        satisfied_facts = (declared_facts - produced_fact_ids) | flag_facts | produced_satisfied
         satisfied_declarations = declared_declarations | flag_declarations
         basis = "declaration-backed"
     elif flag_facts or flag_declarations:
@@ -505,6 +569,7 @@ def compute_readiness_report(
         opened_blocks=opened_blocks,
         basis=basis,
         declined_facts=declined_facts,
+        produced_by=produced_by,
     )
     result = {"basis": basis, "blocks": report}
     if basis == "declaration-backed":
@@ -649,6 +714,7 @@ def cmd_skeleton(args: argparse.Namespace) -> dict:
 
 def cmd_declare(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
     modes_given = [
         flag for flag in ("declaration", "fact", "reopen", "decline") if getattr(args, flag, None)
     ]
@@ -671,7 +737,10 @@ def cmd_declare(args: argparse.Namespace) -> dict:
                 condition = json.loads(args.condition)
             except json.JSONDecodeError as exc:
                 raise Refused("CONDITION_MALFORMED", f"--condition is not valid JSON: {exc.msg}")
-        return paper_declarations.decline_fact(paper_dir, args.decline, args.reason, condition)
+        produced_by = _resolve_produced_by(sections_dir, args.decline)
+        return paper_declarations.decline_fact(
+            paper_dir, args.decline, args.reason, condition, produced_by=produced_by,
+        )
     if args.value is None:
         raise Refused(
             "DECLARE_VALUE_REQUIRED",
@@ -679,7 +748,8 @@ def cmd_declare(args: argparse.Namespace) -> dict:
         )
     if args.declaration:
         return paper_declarations.set_declaration(paper_dir, args.declaration, args.value)
-    return paper_declarations.set_fact(paper_dir, args.fact, args.value)
+    produced_by = _resolve_produced_by(sections_dir, args.fact)
+    return paper_declarations.set_fact(paper_dir, args.fact, args.value, produced_by=produced_by)
 
 
 def compute_observation(
@@ -1178,9 +1248,13 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
 
     declared_facts, declared_declarations = paper_declarations.read_satisfied(paper_dir)
     declined_facts = paper_declarations.read_declined(paper_dir)
+    produced_by = paper_graph.producers_by_fact(corpus)
+    produced_satisfied = _produced_satisfied_facts(produced_by, opened_blocks)
+    satisfied_facts = (declared_facts - set(produced_by)) | produced_satisfied
     readiness_report = paper_readiness.compute_readiness(
-        corpus, satisfied_facts=declared_facts, satisfied_declarations=declared_declarations,
+        corpus, satisfied_facts=satisfied_facts, satisfied_declarations=declared_declarations,
         opened_blocks=opened_blocks, basis="declaration-backed", declined_facts=declined_facts,
+        produced_by=produced_by,
     )
     readiness_by_block = {entry["block"]: entry for entry in readiness_report}
 
@@ -1212,6 +1286,9 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
                     "missing_declarations": readiness_by_block[qualified_id]["missing_declarations"],
                     "declined_facts": readiness_by_block[qualified_id].get("declined_facts", []),
                     "stale_declines": readiness_by_block[qualified_id].get("stale_declines", []),
+                    "blocked_on_produced": readiness_by_block[qualified_id].get(
+                        "blocked_on_produced", []
+                    ),
                     "optional": readiness_by_block[qualified_id]["optional"],
                     "opened": qualified_id in opened_blocks,
                     "provenance": provenance_by_block.get(qualified_id),
@@ -1482,23 +1559,72 @@ def cmd_render(args: argparse.Namespace) -> dict:
     return result
 
 
-def _resolve_expected_components(paper_dir: Path, fact_id: str) -> list:
+def _resolve_expected_components(paper_dir: Path, sections_dir: Path, fact_id: str) -> list:
     """Derives the Components Check's expected list from `components_from`'s
-    named fact's own declared resolution — never an operator-supplied CLI
-    flag (corrective amendment, `a-diagram-that-compiles-or-says-why`'s own
-    verify FAIL: `--expected-components` let a wrong list be supplied for a
-    block whose diagram was never that one fact's own list, silently
-    inverting the check; removed rather than left reachable). Reads through
+    named fact — never an operator-supplied CLI flag (corrective amendment,
+    `a-diagram-that-compiles-or-says-why`'s own verify FAIL:
+    `--expected-components` let a wrong list be supplied for a block whose
+    diagram was never that one fact's own list, silently inverting the
+    check; removed rather than left reachable).
+
+    `a-fact-is-declared-or-it-is-produced` (design.md, Decision A / `fact-
+    production` spec, `Requirement: A Produced Fact's Value Is Its
+    Producer's Own Rendered Text`): when `fact_id` resolves to one or more
+    corpus producers (`paper_graph.producers_by_fact`), the expected list is
+    read from the producer's OWN rendered `main.tex` body — never a second,
+    separately-declared copy — through `paper_verify.item_lines`'s `\\item`
+    extraction (the exact slice `paper_coupling_evidence.gather` already
+    builds for `check_gap`; `check_contribution_list` and `paper_declarations
+    .read_fact` are both bypassed for a produced fact). The deterministic
+    first (lowest qualified id) producer is used when more than one exists
+    — no live corpus consumer resolves a corroborated pair's value this way
+    today (design.md: 'no live consumer resolves gap's text this way
+    today'). When the corpus cannot even be assembled (`Refused`), this
+    falls back to the pre-existing declared-fact route below — mirroring
+    `paper_coupling_evidence._blocks_by_fact`'s own defensive fallback,
+    since a minimal/synthetic `sections_dir` never declares a producer at
+    all and must keep behaving exactly as it did before this fact had a
+    produced-class route.
+
+    For every other fact (or when no producer resolves), reads through
     `paper_declarations.read_fact` — the SAME `declarations` region
     `declare --fact` writes.
 
     Refuses `COMPONENTS_FACT_UNRESOLVED` (work-state) when the fact was
-    never declared, or was reopened and not yet redeclared.  Refuses
-    `COMPONENTS_FACT_NOT_A_LIST` (work-state) when its resolution does not
-    parse as a JSON array of strings — the declared resolution for a fact
-    a `figure:` object names via `components_from` MUST be exactly that
-    array, in the order the diagram must show it when `ordered: true`.
+    never declared (or, for a produced fact, its producer is not yet
+    written). Refuses `COMPONENTS_FACT_NOT_A_LIST` (work-state) when the
+    resolved value does not parse as a JSON array of strings (declared
+    route) or yields no `\\item` lines (produced route) — the resolved
+    value for a fact a `figure:` object names via `components_from` MUST be
+    exactly that list, in the order the diagram must show it when
+    `ordered: true`.
     """
+    try:
+        corpus = paper_graph.assemble_corpus(sections_dir)
+    except Refused:
+        corpus = None
+    producer_ids = paper_graph.producers_by_fact(corpus).get(fact_id, ()) if corpus is not None else ()
+    if producer_ids:
+        producer_id = sorted(producer_ids)[0]
+        tex_path = paper_block.resolve_main_tex(paper_dir)
+        main_tex_bytes = tex_path.read_bytes()
+        parsed_blocks = paper_block.parse(main_tex_bytes)
+        if producer_id not in parsed_blocks.pairs:
+            raise Refused(
+                "COMPONENTS_FACT_UNRESOLVED",
+                f"figure.components_from names {fact_id!r}, produced by {producer_id!r}, "
+                "which has not been written yet — open and substitute it first",
+            )
+        begin, end = parsed_blocks.pairs[producer_id]
+        body = main_tex_bytes[begin["end"]:end["start"]]
+        items = paper_verify.item_lines(body)
+        if not items:
+            raise Refused(
+                "COMPONENTS_FACT_NOT_A_LIST",
+                f"{fact_id!r}'s producer {producer_id!r} yields no \\item lines to resolve as a list",
+            )
+        return items
+
     resolution = paper_declarations.read_fact(paper_dir, fact_id)
     if resolution is None:
         raise Refused(
@@ -1559,7 +1685,7 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     manifest_components = manifest.get("components", [])
 
     if figure["components_from"] is not None:
-        expected = _resolve_expected_components(paper_dir, figure["components_from"])
+        expected = _resolve_expected_components(paper_dir, sections_dir, figure["components_from"])
         paper_obligation.check_components(figure, manifest_components, expected)
     paper_obligation.check_excluded(figure, manifest_components)
     paper_obligation.check_caption(
@@ -1837,6 +1963,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_declare.add_argument(
         "--paper", default=None,
         help="override paper/ location; must resolve inside the repository root",
+    )
+    p_declare.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root -- "
+             "resolves whether --fact/--decline names a produced fact",
     )
     p_declare.add_argument("--declaration", default=None, help="a declaration id to record")
     p_declare.add_argument("--fact", default=None, help="a fact id to record a resolution for")

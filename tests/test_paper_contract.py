@@ -399,6 +399,139 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
 
 
+class ProducesFactsSchemaTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: produces_facts Field Grammar`:
+    a block (and, symmetrically, a section) MAY declare `produces_facts`,
+    parsed through the identical `_normalize_requirement_entry` shape
+    `requires_facts` already uses (design.md, Decision B). Shape-only here —
+    the corpus-wide quote-transcription gate lives in
+    `paper_graph.assemble_corpus` (`tests/test_paper_writing.py`), the same
+    split `SchemaTests.test_valid_header_parses_with_no_refusal` already
+    documents for `requires_facts`."""
+
+    def test_a_valid_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "gap",
+            "source": {"file": "related-work.md", "quote": "The gap itself."},
+        }
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "rw-closing",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [rich_entry],
+                }
+            ]
+        )
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [rich_entry])
+
+    def test_produces_facts_defaults_to_an_empty_list_when_absent(self) -> None:
+        header = _minimal_header()
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [])
+        self.assertEqual(
+            parsed.produces_facts, [],
+            "the section-level field must default the same way `after` does, "
+            "so every existing fixture and construction site stays green",
+        )
+
+    def test_a_valid_section_level_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "limitations",
+            "source": {"file": "limitations.md", "quote": "The limits themselves."},
+        }
+        header = _minimal_header(produces_facts=[rich_entry])
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.produces_facts, [rich_entry])
+
+    def test_produces_facts_entry_missing_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap"}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_produces_facts_entry_with_null_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap", "source": None}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_block_declaring_produces_facts_with_an_unknown_fact_refuses_unknown_fact(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [
+                        {
+                            "value": "discussion",
+                            "source": {"file": "b.md", "quote": "The discussion."},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertIn("discussion", ctx.exception.detail)
+
+    def test_produces_facts_that_is_not_a_list_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": "gap",
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("produces_facts", ctx.exception.detail)
+
+
 #: The ten shipped contracts' body digests as committed at HEAD **before**
 #: this change (578d117f9008062c08bc3a4bd93f2e7245b4ce9b), when every file
 #: was headerless prose end to end. Captured once, by running
@@ -460,16 +593,36 @@ class SchemaTests(unittest.TestCase):
 #: the requirement entries have something real to anchor to — a genuine,
 #: ruling-sanctioned PROSE change, the only one this file has had since
 #: header insertion.
+#:
+#: `02`, `03`, `05`, `06`, `07`, `09` were re-captured a further time in
+#: `a-fact-is-declared-or-it-is-produced` unit 2: `gap`, `contributions`,
+#: `problem-statement` and `limitations` became produced-class facts, so
+#: every consumer row naming one of them moved from `### External inputs`
+#: to `### Internal chain`, pointing at its producer — a genuine,
+#: task-2.5-sanctioned PROSE change (row moves and one `after`-edge note in
+#: `06`'s own `### Structural decisions`), never a meaning change to any
+#: quote an `after`/`requires_facts`/`produces_facts` entry depends on.
+#: `04` and `10` and `01` are untouched by unit 2 and keep their prior
+#: digest. `08` was re-captured a further time in
+#: `a-fact-is-declared-or-it-is-produced` UNIT 4 (`sdd-verify` FAIL,
+#: CRITICAL): `abstract.slot-2` requires `contributions` but carried no
+#: `### Internal chain` row naming its producer, `introduction.block-4b` —
+#: `paper_graph._verify_producer_chain_rows`'s own new check (the
+#: `contract-input-partition` spec's added row-presence requirement) refused
+#: `PRODUCER_CHAIN_ABSENT` against the real corpus until one row (and the
+#: `after` edge it names) was added — a genuine, ruling-sanctioned PROSE
+#: change, never a meaning change to any quote an existing `after`/
+#: `requires_facts`/`produces_facts` entry depends on.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
     "01-materials-and-methods.md": "960aa095b0ec2cac2c665d5835b50e70a8e030ee926feb025d1408d53139e387"[:64],
-    "02-experimental-setup.md": "ef85cb81ec686bdd0cab857afcb66a9d223eab2690da5bf57403ef705d094f1c"[:64],
-    "03-results-and-discussion.md": "a580e2bd4cb0c5f1515af9bfa6ca2e641c6281a5d5f1009b23c3cab86336477e"[:64],
+    "02-experimental-setup.md": "3efae2a8c6b7e537c3022a3d6e987b2c7103325aa26bd3e08c2e9e624bbe50de"[:64],
+    "03-results-and-discussion.md": "6d14d073151e633ce9eb95ca85b0dbe852d7792fcb7af13562df871d0bc4ac37"[:64],
     "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
-    "05-related-work.md": "6c3f1394264bd4b7526057ae8f3a23005515ddb0fc2c75ee0c7cbd839a59c0d1"[:64],
-    "06-introduction.md": "73b398f6f62c10f41a31cc6e88c319f10ab846dd531686bbf7cb2522edc2f236"[:64],
-    "07-conclusions.md": "1c2a19e968de470cedd616edde05209625801ca30f7ebf11f68aa1c4640e44fe"[:64],
-    "08-abstract.md": "76718d841121bcf18922621efa89d000037dd56087526683ae4339422fd7aef6"[:64],
-    "09-title-and-keywords.md": "5ff3fa0257b4f6b37aacb6685dbc7d9af6fb87ea45f4616ab654f85d31f30b6a"[:64],
+    "05-related-work.md": "0651548457eecb4ee6278ec77e9ab58dcc2e435eeb5a6d46968ae52c1f5f7739"[:64],
+    "06-introduction.md": "c9ba4cd596f0ce015844950d883a8e92f6ca401a230b598378f2a0b022414095"[:64],
+    "07-conclusions.md": "bfd0c4131473cf2e9781660d6481608d0ffd486cb03bb29feff659186a0dcb83"[:64],
+    "08-abstract.md": "bf715972413369a52c04911e86b67201fdfbaf151adfb80e5497a60dca00a8b5"[:64],
+    "09-title-and-keywords.md": "e6dfc40199df511f56a031833f3e3bc1da05df746f9f0b82503b7aea22d72a3d"[:64],
     "10-back-matter.md": "b1cd44fe7c00d8eca92d979be5780a97a6cd815faba9ab3890442f2286316cbb"[:64],
 }
 
@@ -1218,15 +1371,16 @@ class InputPartitionTests(unittest.TestCase):
             corpus.blocks["introduction.block-4b"].requires_facts, ("formulation", "results"))
 
     def test_the_internal_chain_of_the_introduction_is_acyclic(self) -> None:
-        """The three normalized chain rows form 4b -> 2 -> 4a (plus 4b -> 4a
-        for the announced count), a DAG. This is the regression for the
-        cycle the collapsed `block-4` produced."""
+        """The four normalized chain rows form 4b -> 2 -> 4a (plus 4b -> 4a
+        for the announced count, and 2 -> 3 for the problem statement
+        `a-fact-is-declared-or-it-is-produced` unit 2 adds), a DAG. This is
+        the regression for the cycle the collapsed `block-4` produced."""
         _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
         text = body.decode("utf-8")
         chain = text.split("### Internal chain", 1)[1].split("###", 1)[0]
 
         rows = [line for line in chain.splitlines() if line.startswith("| `introduction.")]
-        self.assertEqual(len(rows), 3, chain)
+        self.assertEqual(len(rows), 4, chain)
 
         def ends(row: str) -> tuple:
             subject, dependency = row.split("|")[1], row.split("|")[2]
@@ -1237,6 +1391,7 @@ class InputPartitionTests(unittest.TestCase):
             edges,
             {
                 ("introduction.block-2", "introduction.block-4b"),
+                ("introduction.block-3", "introduction.block-2"),
                 ("introduction.block-4a", "introduction.block-2"),
                 ("introduction.block-4a", "introduction.block-4b"),
             },
@@ -2232,7 +2387,11 @@ class MutationTests(unittest.TestCase):
         used_graph_shapes = {_section_graph_shape(corpus, sid) for sid in corpus.sections}
 
         eleventh_facts = frozenset({"skeleton", "gap"})
-        eleventh_graph_shape = (False, True)  # a block whose `after` targets an EARLIER section
+        # Both a section-level and a block-level `after`, at least one
+        # targeting an EARLIER section -- `(False, True)` alone stopped
+        # being novel once `a-fact-is-declared-or-it-is-produced` unit 2
+        # gave several real sections a backward producer-reachability edge.
+        eleventh_graph_shape = (True, True)
 
         self.assertNotIn(
             eleventh_facts, used_fact_shapes,
@@ -2252,25 +2411,70 @@ class MutationTests(unittest.TestCase):
 
         eleventh_body = (
             b"This appendix is written after the title is fixed, because its examples quote it. "
+            b"This appendix also follows the abstract, because it elaborates a claim made there. "
             b"This block requires the skeleton. This block requires the gap.\n\n"
-            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\n"
+            b"| Block | Depends on |\n|---|---|\n"
+            b"| `supplementary-notes.only` \xe2\x80\x94 requires the gap | "
+            b"`related-work.rw-closing` \xe2\x80\x94 the joint gap, one of its two corroborated producers |\n"
+            b"| `supplementary-notes.only` \xe2\x80\x94 requires the gap | "
+            b"`introduction.block-3` \xe2\x80\x94 the joint gap, its other corroborated producer |\n"
         )
         _write_section(
             temp_sections, "11-supplementary-notes.md",
             {
                 "section": "supplementary-notes", "position": 11,
+                # Section-level AND block-level `after`, both targeting an
+                # earlier section -- `_section_graph_shape`'s (True, True)
+                # shape, novel against the shipped corpus even after
+                # `a-fact-is-declared-or-it-is-produced` unit 2 introduced
+                # several (False, True) sections (a producer-reachability
+                # edge to an earlier-positioned section, e.g.
+                # `experimental-setup` -> `introduction.block-3`).
+                "after": [{
+                    "target": "abstract",
+                    "source": {
+                        "file": "sections/11-supplementary-notes.md",
+                        "quote": "This appendix also follows the abstract, because it elaborates a claim made there.",
+                    },
+                }],
                 "blocks": [_block(
                     "only", facts=[
                         _fact_entry("skeleton", "sections/11-supplementary-notes.md"),
                         _fact_entry("gap", "sections/11-supplementary-notes.md"),
                     ],
-                    after=[{
-                        "target": "title-and-keywords",
-                        "source": {
-                            "file": "sections/11-supplementary-notes.md",
-                            "quote": "This appendix is written after the title is fixed, because its examples quote it.",
+                    after=[
+                        {
+                            "target": "title-and-keywords",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This appendix is written after the title is fixed, because its examples quote it.",
+                            },
                         },
-                    }],
+                        # `contract-input-partition` spec, `Requirement: A
+                        # Produced-Fact Dependency Is An Internal-Chain
+                        # Row`: `gap`'s two corroborated producers
+                        # (`related-work.rw-closing`, `introduction.block-3`)
+                        # both need a direct edge here, backing the two
+                        # rows this fixture's own `### Internal chain` adds
+                        # below -- reusing the same requires_facts quote,
+                        # the same pattern the real corpus's own added
+                        # edges (tasks.md 2.4) use.
+                        {
+                            "target": "related-work.rw-closing",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This block requires the gap.",
+                            },
+                        },
+                        {
+                            "target": "introduction.block-3",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This block requires the gap.",
+                            },
+                        },
+                    ],
                 )],
             },
             body=eleventh_body,

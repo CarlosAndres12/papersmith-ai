@@ -169,7 +169,8 @@ Four more verbs, from `the-contract-is-data-not-code` and
 `phases`. Each `sections/*.md` file now opens with a `---`-fenced JSON
 header — `section`, `position`, optional `after`, and a `blocks` list, each
 block declaring `id`, `requires_facts`, `requires_declarations`,
-`citations`, `optional`.
+`citations`, `optional`, and optionally `produces_facts` (see "A fact is
+declared, or it is produced" below).
 
 **The prose body is no longer merely read by a human.** Every contract's
 prose now carries a `### External inputs` / `### Internal chain` partition
@@ -189,10 +190,10 @@ more than one refuses `UNIT_HEADING_AMBIGUOUS`. All four are wired into
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `contract [--file <path>]` | Validates the whole `sections/` corpus (flat id namespace, every `after` target resolved or reported dangling, the prose partition and its chain rows), or shows one file's parsed header with `--file` | `MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`, `ID_COLLISION`, `SECTIONS_OUTSIDE_REPOSITORY`, `INPUT_PARTITION_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`, `BLOCK_SUBUNIT_UNDECLARED`, `UNIT_HEADING_AMBIGUOUS` |
-| `readiness (--paper <dir> \| --fact <id>... \| --declaration <id>...)` | Per-block `writable`/`blocked`/`not-applicable`, naming every still-missing fact and declaration separately. `--paper <dir>` reads the `declarations` region for basis `declaration-backed` (any flag also given is reported separately under `supposed`); at least one bare `--fact`/`--declaration` flag with no `--paper` is basis `supposed-only`, an explicit hypothetical what-if | adds `READINESS_BASIS_REQUIRED` |
+| `contract [--file <path>]` | Validates the whole `sections/` corpus (flat id namespace, every `after` target resolved or reported dangling, the prose partition and its chain rows, and every `produces_facts` declaration — see "A fact is declared, or it is produced" below), or shows one file's parsed header with `--file` | `MALFORMED_HEADER`, `UNKNOWN_FACT`, `UNKNOWN_DECLARATION`, `UNKNOWN_CITATIONS_REGIME`, `ID_COLLISION`, `SECTIONS_OUTSIDE_REPOSITORY`, `INPUT_PARTITION_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`, `BLOCK_SUBUNIT_UNDECLARED`, `UNIT_HEADING_AMBIGUOUS`, `FACT_SELF_REQUIRED`, `FACT_ROUTE_AMBIGUOUS`, `FACT_PRODUCER_DUPLICATE`, `FACT_PRODUCER_ABSENT`, `PRODUCER_CHAIN_ABSENT` |
+| `readiness (--paper <dir> \| --fact <id>... \| --declaration <id>...)` | Per-block `writable`/`blocked`/`not-applicable`, naming every still-missing fact and declaration separately; a still-missing PRODUCED fact also carries `blocked_on_produced` naming it and every one of its producer blocks. `--paper <dir>` reads the `declarations` region for basis `declaration-backed` (any flag also given is reported separately under `supposed`); at least one bare `--fact`/`--declaration` flag with no `--paper` is basis `supposed-only`, an explicit hypothetical what-if | adds `READINESS_BASIS_REQUIRED` |
 | `order` | Derives the writing order from the block graph — `position`, declared block order, and every transcribed `after` edge; never the filename | adds `ORDER_CYCLE` |
-| `phases [--phase N]` | Read-only "what can I write now": Kahn-wave decomposition of the block graph, each block's own readiness (basis `declaration-backed`), `opened` and provenance state, and the facts/declarations already on record. `--phase N` reports only waves `1..N` | adds `PHASE_NOT_READY` |
+| `phases [--phase N]` | Read-only "what can I write now": Kahn-wave decomposition of the block graph, each block's own readiness (basis `declaration-backed`, including `blocked_on_produced`), `opened` and provenance state, and the facts/declarations already on record. `--phase N` reports only waves `1..N` | adds `PHASE_NOT_READY` |
 
 `--sections <dir>` overrides the default `sections/` at the repository root
 on all four (`--paper <dir>` on `readiness`/`phases` overrides `paper/` the
@@ -206,8 +207,11 @@ answer never change after a `declare`, because it never opened `main.tex`
 at all. `phases` is the read-only report that actually answers "what can I
 write now": it resolves readiness from disk itself, orders it into waves,
 and gates a requested `--phase N` on every earlier wave being complete.
-Over the shipped corpus (47 blocks) `phases` reports five waves shaped
-**28 / 11 / 5 / 2 / 1**.
+Over the shipped corpus (47 blocks) `phases` reports **eight** waves shaped
+**22 / 7 / 11 / 2 / 2 / 1 / 1 / 1** — measured directly (`paper_cli.py
+phases`), not copied from an earlier count: the shape moved from five
+waves as `a-fact-is-declared-or-it-is-produced` added the ordering edges a
+fact's producer needs to reach every one of its consumers.
 
 **The three closed vocabularies** a header may draw from: ten
 `requires_facts` ids (`formulation`, `contributions`, `problem-statement`,
@@ -217,6 +221,39 @@ Over the shipped corpus (47 blocks) `phases` reports five waves shaped
 `classification-line`), and three `citations` regimes (`discovery`,
 `resolution`, `none`). A value outside any of the three refuses
 immediately — this is deliberately closed, not a convention.
+
+### A fact is declared, or it is produced
+
+Every one of the ten `requires_facts` ids resolves through exactly one of
+two routes, never both: the five OBSERVABLE facts (`dataset`,
+`experimental-design`, `implementation`, `results`, `formulation`) and the
+structural `skeleton` fact stay `declare`-only, resolved from an operator
+measurement or the skeleton-startup mechanism; the remaining four —
+`contributions`, `problem-statement`, `gap`, `limitations` — are PRODUCED:
+some block's own `produces_facts` header entry names them, and satisfaction
+is read from that producer block's own written status in `main.tex`, never
+from a `declare` call or the `declarations` region. `gap` is the one
+corroborated exception with two legal producers at once (`related-work.rw-
+closing` and `introduction.block-3` — a coupling-verification check
+verifies they agree); every other fact resolves to exactly one producer or
+refuses `FACT_PRODUCER_DUPLICATE`.
+
+A `produces_facts` entry is the same rich `{value, source: {file, quote}}`
+shape `requires_facts` already uses. A block whose `produces_facts` and
+`requires_facts` name the same fact refuses `FACT_SELF_REQUIRED`; a
+`produces_facts` entry naming a fact that only resolves through `declare`
+(one of the five observable facts, or `skeleton`) refuses
+`FACT_ROUTE_AMBIGUOUS`; a required fact resolving to no producer anywhere
+and absent from the declarable route refuses `FACT_PRODUCER_ABSENT`; and a
+block requiring a produced fact whose own `### Internal chain` table
+carries no row naming that fact's producer refuses `PRODUCER_CHAIN_ABSENT`
+— the same code `order`'s own graph-reachability check raises when the
+producer never reaches the consumer at all. `readiness`/`phases` both gain
+a `blocked_on_produced` entry (alongside `declined_facts`/`stale_declines`)
+naming the still-missing fact and every one of its producers, so a
+`blocked` report tells the operator to WRITE the producer, never to
+`declare` it; `declare` itself refuses `PRODUCED_FACT_UNDECLARABLE` on any
+attempt to declare a produced fact directly.
 
 **The block graph is authoritative; `position` is rendering order, not
 writing order.** Two edges are transcribed in the shipped contracts' own
@@ -367,7 +404,7 @@ a decline never masks a real gap.
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `declare (--declaration <id> \| --fact <id> \| --reopen <id> \| --decline <fact-id> --reason <text> --condition <json>) [--value <v>]` | Records a declaration or fact resolution, clears one id's fixed state, or declines a fact with a disk condition re-checked on every later read | `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`, `DECLARE_VALUE_REQUIRED`, `DECLINE_REASON_REQUIRED`, `CONDITION_REQUIRED`, `CONDITION_MALFORMED`, `UNKNOWN_CONDITION_TYPE`, `UNKNOWN_DECLARATION`, `UNKNOWN_FACT`, `DECLARATION_FIXED`, `DECLARATIONS_HAND_EDITED` |
+| `declare (--declaration <id> \| --fact <id> \| --reopen <id> \| --decline <fact-id> --reason <text> --condition <json>) [--value <v>]` | Records a declaration or fact resolution, clears one id's fixed state, or declines a fact with a disk condition re-checked on every later read. A PRODUCED fact (`contributions`, `problem-statement`, `gap`, `limitations`) can never be declared or declined directly — its satisfaction comes only from writing its producer block | `DECLARE_MODE_REQUIRED`, `DECLARE_MODE_CONFLICT`, `DECLARE_VALUE_REQUIRED`, `DECLINE_REASON_REQUIRED`, `CONDITION_REQUIRED`, `CONDITION_MALFORMED`, `UNKNOWN_CONDITION_TYPE`, `UNKNOWN_DECLARATION`, `UNKNOWN_FACT`, `DECLARATION_FIXED`, `DECLARATIONS_HAND_EDITED`, `PRODUCED_FACT_UNDECLARABLE` |
 
 `substitute` also accepts an optional `--contract <path>`: it changes no
 byte of what gets written to the block, only records — in the `provenance`
