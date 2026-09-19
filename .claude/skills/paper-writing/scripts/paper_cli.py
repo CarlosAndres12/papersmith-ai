@@ -6,7 +6,7 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires twenty-two verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires twenty-four verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
@@ -47,8 +47,17 @@ non-excluded block id in derived order, once, never re-asking,
 `SKELETON_ANSWER_REQUIRED`/`SKELETON_ALREADY_DECIDED`; `packet` assembles
 one block's own contract prose plus, per `style-reference` guidance folder,
 a heading OUTLINE only — offsets, never inlined span text — ahead of
-`write`'s draft stage). Left extensible on purpose; nothing here assumes it
-is the last verb this file will ever grow.
+`write`'s draft stage); and `reuse`, `exhaustion` (from
+`a-leftover-paper-is-offered-before-it-is-lost` — two read-only reports
+over the ingested-papers lifecycle: `reuse` names, for one block's own
+still-open claims, which already-ingested `evidence`-classed papers carry
+no verdict yet; `exhaustion` is the corpus-wide report of which papers now
+carry a `does-not-hold` against every open claim in the whole corpus —
+`paper_lifecycle.py` does every real read; this file only resolves paths
+and threads `--min-sources` through. Neither verb ever deletes anything —
+the operator deletes by hand, per the operator's own ruling). Left
+extensible on purpose; nothing here assumes it is the last verb this file
+will ever grow.
 """
 from __future__ import annotations
 
@@ -85,6 +94,7 @@ import paper_coupling_evidence  # noqa: E402 -- the-couplings-hold-or-they-do-no
 import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seven pure coupling checks and the report they assemble; raises no `Refused` of its own (every refusal a `verify` run can report is `DECLARATION_RECORD_ABSENT`, from `paper_coupling_evidence.py`)
 import paper_couplings  # noqa: E402 -- the-skill-stops-trusting-memory, item 4: the producer `paper/couplings.json` never had; `couplings` verb
 import paper_full_text  # noqa: E402 -- the-pdf-arrives-or-the-operator-is-told: fills the full-text role; `full_text` verb
+import paper_lifecycle  # noqa: E402 -- a-leftover-paper-is-offered-before-it-is-lost: the reuse and exhaustion reports over the ingested-papers lifecycle; `reuse`/`exhaustion` verbs; raises no `Refused` of its own
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -1656,6 +1666,40 @@ def cmd_verify(args: argparse.Namespace) -> dict:
     return paper_verify.run(evidence, optional_block_ids=optional_block_ids)
 
 
+def cmd_reuse(args: argparse.Namespace) -> dict:
+    """`reuse`: `SKILL.md` capability A, read-only. For `--block`'s own
+    open claims, names which already-ingested, `evidence`-classed papers
+    carry no verdict yet for each one -- what stops the operator
+    re-downloading a paper already on disk (`paper_lifecycle.reuse_report`,
+    which does every real read; this wrapper only resolves `--paper`/
+    `--guidance` and threads `--min-sources` through, the same shape
+    `cmd_validate` already uses for `min_sources`)."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    min_sources = (
+        args.min_sources if args.min_sources is not None
+        else paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM
+    )
+    return paper_lifecycle.reuse_report(paper_dir, guidance_dir, args.block, min_sources=min_sources)
+
+
+def cmd_exhaustion(args: argparse.Namespace) -> dict:
+    """`exhaustion`: `SKILL.md` capability B, read-only and corpus-wide --
+    never scoped to one section, since a paper ingested under any
+    `evidence`-classed root is already citable from any block
+    (`paper_lifecycle.exhaustion_report`). Lists the exhausted set and,
+    for every other paper, the corpus-wide open claims it still carries no
+    verdict for. Builds NO deletion of any kind -- the operator deletes by
+    hand, per the operator's own 2026-09-19 ruling."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    min_sources = (
+        args.min_sources if args.min_sources is not None
+        else paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM
+    )
+    return paper_lifecycle.exhaustion_report(paper_dir, guidance_dir, min_sources=min_sources)
+
+
 def cmd_place(args: argparse.Namespace) -> dict:
     """`place`: places an already-measured figure's PDF — compiles nothing,
     requires provenance naming the run (`authored-diagram` spec,
@@ -2089,13 +2133,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="override guidance/ location; must resolve inside the repository root",
     )
 
+    p_reuse = sub.add_parser(
+        "reuse",
+        help="read-only: for one block's open claims, which already-ingested, "
+             "evidence-classed papers carry no verdict yet",
+    )
+    p_reuse.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_reuse.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_reuse.add_argument("--block", required=True, help="the block id whose open claims to report")
+    p_reuse.add_argument(
+        "--min-sources", type=int, default=None, dest="min_sources",
+        help="distinct holds sources a claim needs before it is no longer open "
+             "(default paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM)",
+    )
+
+    p_exhaustion = sub.add_parser(
+        "exhaustion",
+        help="read-only, corpus-wide: every evidence-classed ingested paper's exhaustion "
+             "state -- lists only, never deletes",
+    )
+    p_exhaustion.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_exhaustion.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_exhaustion.add_argument(
+        "--min-sources", type=int, default=None, dest="min_sources",
+        help="distinct holds sources a claim needs before it is no longer open "
+             "(default paper_validate.DEFAULT_MIN_SOURCES_PER_CLAIM)",
+    )
+
     return parser
 
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
     "declare", "observe", "plan", "resolve", "full_text", "bib", "validate", "write", "render", "place",
-    "couplings", "verify", "packet",
+    "couplings", "verify", "packet", "reuse", "exhaustion",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2120,6 +2203,8 @@ _COMMANDS = {
     "couplings": cmd_couplings,
     "verify": cmd_verify,
     "packet": cmd_packet,
+    "reuse": cmd_reuse,
+    "exhaustion": cmd_exhaustion,
 }
 
 
