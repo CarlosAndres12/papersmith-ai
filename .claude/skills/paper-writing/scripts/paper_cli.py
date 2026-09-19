@@ -264,6 +264,9 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "ENTRY_UNSOURCED": WORK_STATE,
     "CITE_WITHOUT_ENTRY": WORK_STATE,
     "ENTRY_WITHOUT_CITE": WORK_STATE,
+    # --- no-citation-before-its-paper-is-ingested, item 2: resolved is not
+    # ingested (paper_bib._require_ingested) -------------------------------
+    "ENTRY_NOT_INGESTED": WORK_STATE,
     # --- the validator and the bounded loop (paper_validate.py; WU3) -----
     "EVIDENCE_EXHAUSTED": WORK_STATE,
     "CITATION_MULTI_CLAIM_SENTENCE": WORK_STATE,
@@ -748,8 +751,9 @@ def cmd_resolve(args: argparse.Namespace) -> dict:
 
 def cmd_bib(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
     records = paper_evidence.read_all_records(paper_dir)
-    result = paper_bib.build_refs_bib(paper_dir, records)
+    result = paper_bib.build_refs_bib(paper_dir, records, guidance_dir=guidance_dir)
     tex_path = paper_block.resolve_main_tex(paper_dir)
     reciprocal = paper_bib.check_reciprocal(
         tex_path.read_bytes(), (paper_dir / "refs.bib").read_bytes(),
@@ -1775,6 +1779,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_bib_build.add_argument(
         "--paper", default=None,
         help="override paper/ location; must resolve inside the repository root",
+    )
+    p_bib_build.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
     )
 
     p_validate = sub.add_parser(

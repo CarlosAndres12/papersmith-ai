@@ -344,3 +344,26 @@ def classify_source_md(source_md: Path, guidance_dir: Path) -> str | None:
     root_name = relative.parts[0]
     registry = read_registry(guidance_dir)
     return registry.get(root_name, "unclassified")
+
+
+def is_ingested_source(source_md: Path | str, guidance_dir: Path) -> bool:
+    """Does `source_md` resolve to a REAL, currently-present ingested
+    paper -- `guidance/<root>/<paper>/<paper>.md`, the exact two-level
+    shape `ingested_papers` above walks? The one structural definition of
+    "ingested" every caller shares (`paper_bib._require_ingested`, item 2
+    of `no-citation-before-its-paper-is-ingested`): never a second,
+    independently drifting notion of the same shape.
+
+    Never a guess from an identifier or a folder name -- `source_md` is
+    expected to be the exact path an evidence span was already located
+    against (`paper_evidence.EvidenceSpan.locate`), so this only confirms
+    that path still resolves to a real ingested file; it resolves no
+    other correspondence and refuses nothing itself.
+    """
+    try:
+        resolved = Path(source_md).resolve()
+        relative = resolved.relative_to(guidance_dir.resolve())
+    except (OSError, ValueError):
+        return False
+    parts = relative.parts
+    return len(parts) == 3 and parts[-1] == f"{parts[-2]}.md" and resolved.is_file()

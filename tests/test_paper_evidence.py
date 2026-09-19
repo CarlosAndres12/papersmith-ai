@@ -604,18 +604,27 @@ class LiteratureSearchAbsenceTests(unittest.TestCase):
         self.assertEqual(clean_offenders, [])
 
 
-def _cite_record(cite_key: str, *, resolver: str = "", metadata_digest: str = "") -> dict:
+def _cite_record(cite_key: str, *, resolver: str = "", metadata_digest: str = "", source_md: str = "") -> dict:
     return {
         "block_id": "b", "regime": "discovery", "claim": "c", "cite_key": cite_key,
         "identifier": "10.1/x", "resolver": resolver, "metadata_digest": metadata_digest,
-        "source_md": "", "quote": "", "locator": {}, "verdict": "holds", "round": 1,
+        "source_md": source_md, "quote": "", "locator": {}, "verdict": "holds", "round": 1,
     }
 
 
 class BibProducerTests(unittest.TestCase):
     """WU2: `sourced-bibliography`, Requirement: Every Entry Originates From
     Resolved Metadata. `entry_from_record` is the sole producer; every check
-    here runs with the raising `OPENER` installed and no network access."""
+    here runs with the raising `OPENER` installed and no network access.
+
+    `no-citation-before-its-paper-is-ingested`, item 2: resolved is no
+    longer sufficient on its own -- `_ingested_source_md` below places a
+    REAL ingested paper (`guidance/<root>/<paper>/<paper>.md`) for every
+    fixture that must be accepted, the same two-level shape
+    `paper_guidance.ingested_papers` walks; a record that must still be
+    refused (never resolved at all) keeps `source_md=""` unchanged, since
+    `ENTRY_UNSOURCED` fires first regardless.
+    """
 
     def setUp(self) -> None:
         self._real_opener = paper_resolve.OPENER
@@ -625,6 +634,8 @@ class BibProducerTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.paper_dir = Path(self._tmp.name) / "paper"
         self.paper_dir.mkdir()
+        self.guidance_dir = Path(self._tmp.name) / "guidance"
+        self.guidance_dir.mkdir()
 
     def _restore_opener(self) -> None:
         paper_resolve.OPENER = self._real_opener
@@ -639,37 +650,90 @@ class BibProducerTests(unittest.TestCase):
         paper_resolve.cache_metadata(self.paper_dir, result)
         return result
 
+    def _ingested_source_md(self, cite_key: str) -> str:
+        """Places `guidance/citations/<cite_key>/<cite_key>.md` -- a REAL
+        ingested paper, exactly the shape `paper_guidance.ingested_papers`
+        walks -- and returns its path for `_cite_record`'s own `source_md`.
+        """
+        paper_dir = self.guidance_dir / "citations" / cite_key
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        md_path = paper_dir / f"{cite_key}.md"
+        md_path.write_text(f"# {cite_key}\n\nBody.\n", encoding="utf-8")
+        return str(md_path)
+
     def test_a_hand_composed_entry_refuses_entry_unsourced_offline(self) -> None:
         # No cache, no resolver, no digest -- and the OPENER is a
         # _RaisingOpener the whole test class refuses to ever call. This
         # check needs no network (sourced-bibliography, Scenario: A
         # hand-typed entry is refused offline).
         with self.assertRaises(Refused) as ctx:
-            paper_bib.entry_from_record(self.paper_dir, _cite_record("hand-typed"))
+            paper_bib.entry_from_record(
+                self.paper_dir, _cite_record("hand-typed"), guidance_dir=self.guidance_dir,
+            )
         self.assertEqual(ctx.exception.code, "ENTRY_UNSOURCED")
 
     def test_a_digest_with_no_matching_cache_blob_refuses(self) -> None:
         with self.assertRaises(Refused) as ctx:
             paper_bib.entry_from_record(
                 self.paper_dir, _cite_record("ghost", resolver="openalex", metadata_digest="deadbeef"),
+                guidance_dir=self.guidance_dir,
             )
         self.assertEqual(ctx.exception.code, "ENTRY_UNSOURCED")
 
     def test_a_resolved_entry_is_accepted(self) -> None:
         result = self._resolved_result("smith2024")
-        record = _cite_record("smith2024", resolver="openalex", metadata_digest=result["metadata_digest"])
-        entry = paper_bib.entry_from_record(self.paper_dir, record)
+        record = _cite_record(
+            "smith2024", resolver="openalex", metadata_digest=result["metadata_digest"],
+            source_md=self._ingested_source_md("smith2024"),
+        )
+        entry = paper_bib.entry_from_record(self.paper_dir, record, guidance_dir=self.guidance_dir)
         self.assertEqual(entry["cite_key"], "smith2024")
         self.assertEqual(entry["title"], "Paper smith2024")
+
+    def test_a_resolved_but_not_ingested_entry_refuses_entry_not_ingested(self) -> None:
+        """The decisive proof for item 2: resolution alone is no longer
+        enough. `metadata_digest`/`resolver` are both real and cached --
+        exactly `test_a_resolved_entry_is_accepted`'s own fixture -- but
+        `source_md` is empty, so no evidence span was ever located against
+        an ingested paper."""
+        result = self._resolved_result("unread2024")
+        record = _cite_record(
+            "unread2024", resolver="openalex", metadata_digest=result["metadata_digest"],
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.entry_from_record(self.paper_dir, record, guidance_dir=self.guidance_dir)
+        self.assertEqual(ctx.exception.code, "ENTRY_NOT_INGESTED")
+        self.assertIn("unread2024", ctx.exception.detail)
+
+    def test_a_source_md_outside_guidance_refuses_entry_not_ingested(self) -> None:
+        """A `source_md` naming a real file that simply does not sit under
+        `guidance_dir` at all is not a free pass -- reliability requires
+        the SAME ingested-paper shape, not merely "some file exists"."""
+        result = self._resolved_result("elsewhere2024")
+        outside = Path(self._tmp.name) / "elsewhere.md"
+        outside.write_text("# Elsewhere\n", encoding="utf-8")
+        record = _cite_record(
+            "elsewhere2024", resolver="openalex", metadata_digest=result["metadata_digest"],
+            source_md=str(outside),
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.entry_from_record(self.paper_dir, record, guidance_dir=self.guidance_dir)
+        self.assertEqual(ctx.exception.code, "ENTRY_NOT_INGESTED")
 
     def test_build_refs_bib_rebuilds_whole_and_sorted(self) -> None:
         result_b = self._resolved_result("bkey")
         result_a = self._resolved_result("akey")
         records = [
-            _cite_record("bkey", resolver="openalex", metadata_digest=result_b["metadata_digest"]),
-            _cite_record("akey", resolver="openalex", metadata_digest=result_a["metadata_digest"]),
+            _cite_record(
+                "bkey", resolver="openalex", metadata_digest=result_b["metadata_digest"],
+                source_md=self._ingested_source_md("bkey"),
+            ),
+            _cite_record(
+                "akey", resolver="openalex", metadata_digest=result_a["metadata_digest"],
+                source_md=self._ingested_source_md("akey"),
+            ),
         ]
-        built = paper_bib.build_refs_bib(self.paper_dir, records)
+        built = paper_bib.build_refs_bib(self.paper_dir, records, guidance_dir=self.guidance_dir)
         self.assertEqual(built["entries"], ["akey", "bkey"])
         text = (self.paper_dir / "refs.bib").read_text(encoding="utf-8")
         self.assertLess(text.index("akey"), text.index("bkey"))
@@ -678,8 +742,11 @@ class BibProducerTests(unittest.TestCase):
         refs_path = self.paper_dir / "refs.bib"
         refs_path.write_text("@misc{stale,\n  title = {Should Be Gone},\n}\n", encoding="utf-8")
         result = self._resolved_result("fresh")
-        record = _cite_record("fresh", resolver="openalex", metadata_digest=result["metadata_digest"])
-        paper_bib.build_refs_bib(self.paper_dir, [record])
+        record = _cite_record(
+            "fresh", resolver="openalex", metadata_digest=result["metadata_digest"],
+            source_md=self._ingested_source_md("fresh"),
+        )
+        paper_bib.build_refs_bib(self.paper_dir, [record], guidance_dir=self.guidance_dir)
         text = refs_path.read_text(encoding="utf-8")
         self.assertNotIn("stale", text)
         self.assertIn("fresh", text)
@@ -689,8 +756,55 @@ class BibProducerTests(unittest.TestCase):
         refs_path.write_text("@misc{untouched,\n}\n", encoding="utf-8")
         pre = refs_path.read_bytes()
         with self.assertRaises(Refused):
-            paper_bib.build_refs_bib(self.paper_dir, [_cite_record("no-provenance")])
+            paper_bib.build_refs_bib(
+                self.paper_dir, [_cite_record("no-provenance")], guidance_dir=self.guidance_dir,
+            )
         self.assertEqual(refs_path.read_bytes(), pre)
+
+    def test_one_not_ingested_record_refuses_the_whole_rebuild_before_any_byte_written(self) -> None:
+        """The same all-or-nothing property `test_one_unsourced_record_
+        refuses_the_whole_rebuild_before_any_byte_written` proves for
+        `ENTRY_UNSOURCED` also holds for `ENTRY_NOT_INGESTED`: one
+        resolved-but-not-ingested record among several refuses the WHOLE
+        rebuild, never a partial `refs.bib`."""
+        refs_path = self.paper_dir / "refs.bib"
+        refs_path.write_text("@misc{untouched,\n}\n", encoding="utf-8")
+        pre = refs_path.read_bytes()
+        ok_result = self._resolved_result("ready2024")
+        ok_record = _cite_record(
+            "ready2024", resolver="openalex", metadata_digest=ok_result["metadata_digest"],
+            source_md=self._ingested_source_md("ready2024"),
+        )
+        not_ingested_result = self._resolved_result("notyet2024")
+        not_ingested_record = _cite_record(
+            "notyet2024", resolver="openalex", metadata_digest=not_ingested_result["metadata_digest"],
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_bib.build_refs_bib(
+                self.paper_dir, [ok_record, not_ingested_record], guidance_dir=self.guidance_dir,
+            )
+        self.assertEqual(ctx.exception.code, "ENTRY_NOT_INGESTED")
+        self.assertEqual(refs_path.read_bytes(), pre)
+
+
+class BibIngestionGateMutationTests(unittest.TestCase):
+    """The decisive mutation proof for item 2: dropping `entry_from_record`'s
+    own call to `_require_ingested` must fail
+    `BibProducerTests.test_a_resolved_but_not_ingested_entry_refuses_
+    entry_not_ingested` -- a passing test beside an unexercised guard is
+    not a mutation that ran."""
+
+    def test_mutation_removing_the_ingestion_check_fails_the_not_ingested_refusal(self) -> None:
+        proc = _run_against_mutant(
+            "    _require_ingested(record, guidance_dir)\n    return {",
+            "    return {",
+            "tests.test_paper_evidence.BibProducerTests"
+            ".test_a_resolved_but_not_ingested_entry_refuses_entry_not_ingested",
+            source_path=SKILL_SCRIPTS / "paper_bib.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class ReciprocalCheckTests(unittest.TestCase):

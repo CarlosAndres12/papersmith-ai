@@ -499,11 +499,30 @@ cached resolved metadata — never appended, never hand-typed:
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `bib build` | Rebuilds `refs.bib` from every block's cached, resolved evidence records; checks both `\cite{}`/entry directions | `ENTRY_UNSOURCED`, `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE` |
+| `bib build [--guidance <dir>]` | Rebuilds `refs.bib` from every block's cached, resolved AND ingested evidence records; checks both `\cite{}`/entry directions | `ENTRY_UNSOURCED`, `ENTRY_NOT_INGESTED`, `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE` |
 
 A hand-typed entry (no `resolver`/`metadata_digest` provenance) refuses
 `ENTRY_UNSOURCED` before a single byte of `refs.bib` is rewritten — checked
 entirely offline, since the provenance is either cached already or it is not.
+
+**Resolved is not ingested.** `no-citation-before-its-paper-is-ingested`
+(item 2) adds a second, independent requirement: a citation's cached
+metadata may not reach `refs.bib` until the paper it cites has actually
+been ingested — a DOI can resolve against OpenAlex while the PDF itself
+still sits unread. `entry_from_record` checks both, and a record that
+resolved but was never ingested refuses `ENTRY_NOT_INGESTED` by name,
+naming the record's own cite key. **The match is never a guess**: a
+resolved DOI/arXiv id and a `guidance/<root>/<paper>/` folder name have no
+free correspondence, and pairing them by similarity risks silently citing
+the wrong paper's metadata against the right paper's text. Instead this
+reuses the one link that is already exact — `record["source_md"]`, the
+literal path `EvidenceSpan.locate` verified a real quote against when
+`validate --quote ... --source-md ...` built the evidence record — and
+confirms that path still resolves to a real `guidance/<root>/<paper>/
+<paper>.md` (`paper_guidance.is_ingested_source`, the same two-level shape
+`ingested_papers` walks). A record whose evidence span was never located
+(`insufficient`, or hand-built with no `source_md`) carries no such link
+and refuses the same way.
 
 `validate` is the single gate: submit one judged verdict for one claim
 (the agent's own reading of a located span decides `holds` vs

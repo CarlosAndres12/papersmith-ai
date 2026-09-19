@@ -3695,8 +3695,14 @@ class RefusalRosterTests(unittest.TestCase):
         declarations.py` were already scanned. Measured directly against
         `reachable_paper_refusal_codes()` rather than forecast, per this
         file's own repeated warning that the forecast arithmetic has
-        drifted stale before."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 118)
+        drifted stale before. Moved from 118 to 119 in
+        `no-citation-before-its-paper-is-ingested`, item 2: `paper_bib.py`
+        (already-imported) gains `_require_ingested`, raising
+        `ENTRY_NOT_INGESTED` when a resolved citation was never ingested --
+        one new code, reachable the instant that raise site exists, no new
+        import needed. Measured directly against
+        `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 119)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
