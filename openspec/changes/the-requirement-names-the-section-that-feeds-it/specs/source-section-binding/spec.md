@@ -9,9 +9,11 @@ that second half: an optional `document: {lineage, section}` binding
 (`section-contract`) naming a document's lineage and the title of the
 section within it that feeds one entry. It owns which facts a binding may
 name (derived, never listed), lineage resolution to the current revision on
-disk, section existence and ambiguity by title, the report an unmeasured
-root produces, and the property that a version bump whose bound titles
-survive costs no edit anywhere.
+disk off a per-root `.paper-writing.json` marker's own declared revision
+grammar, section existence and ambiguity by title, the report an unmeasured
+root produces versus the refusal a document-rooted but undeclared or
+malformed marker produces, and the property that a version bump whose bound
+titles survive costs no edit anywhere.
 
 ## Requirements
 
@@ -67,8 +69,11 @@ fact id.
 `document.lineage` MUST resolve to the current revision file under
 `FACT_SOURCE_ROOT[fact]`'s own root, matched by a revision pattern read from
 an on-disk declaration — never a pattern literal written into the engine. A
-lineage matching no file under its root MUST refuse
-`SOURCE_LINEAGE_UNRESOLVED` naming the lineage and the root.
+lineage that resolves to anything other than **exactly one** matching file
+under its root MUST refuse `SOURCE_LINEAGE_UNRESOLVED` naming the lineage,
+the root, and every candidate found: zero matches, and two or more matches
+(a tie between two spellings of one ordinal, e.g. `r21.md` alongside
+`r021.md`) both refuse under this one code, never a seventh.
 
 #### Scenario: A lineage resolves to the latest revision
 
@@ -82,6 +87,105 @@ lineage matching no file under its root MUST refuse
   its root
 - WHEN resolution runs
 - THEN it refuses `SOURCE_LINEAGE_UNRESOLVED` naming the lineage and the root
+
+#### Scenario: A tie between two spellings of one ordinal refuses
+
+- GIVEN `proposals/` holding both `research-concept-r21.md` and
+  `research-concept-r021.md` — two spellings of the same ordinal
+- WHEN lineage `research-concept` is resolved
+- THEN it refuses `SOURCE_LINEAGE_UNRESOLVED` naming the lineage and both
+  candidates, rather than silently picking either one
+
+### Requirement: A Document-Rooted Source With No Marker Refuses
+
+A root is **document-rooted** when it resolves to a directory under the
+source base that contains at least one `*.md` file — a property computed on
+disk, never keyed by a fact id. A document-rooted root that carries no
+`<root>/.paper-writing.json` marker MUST refuse `SOURCE_REVISIONS_UNDECLARED`
+naming the root. A document-rooted root MUST NOT degrade to the `unmeasured`
+report for a missing marker: deleting a marker MUST NOT silently switch the
+existence guard off.
+
+#### Scenario: A document-rooted root without a marker refuses
+
+- GIVEN `proposals/` holding one or more `*.md` files and no
+  `.paper-writing.json` marker
+- WHEN a binding under `proposals` is resolved
+- THEN it refuses `SOURCE_REVISIONS_UNDECLARED` naming `proposals`
+
+#### Scenario: Deleting the marker does not degrade to unmeasured
+
+- GIVEN `proposals/` already document-rooted and marked, with a binding that
+  resolves cleanly
+- WHEN the marker file is deleted and the same binding is resolved again
+- THEN it refuses `SOURCE_REVISIONS_UNDECLARED`, never a silent `unmeasured`
+  report — an unmeasured report is reserved for a root that is not
+  document-rooted at all
+
+### Requirement: The Marker Grammar Is Validated, And Disjoint From `guidance/`'s
+
+A `<root>/.paper-writing.json` marker MUST parse as UTF-8 JSON holding
+exactly one top-level key, `revisions`, an object holding exactly
+`revision_prefix` (string) and `ordinal_digits` (integer) — both required,
+no other key admitted at either level. Content that is not valid UTF-8, not
+valid JSON, not an object, missing either required key, carrying an unknown
+key at either level, or carrying a wrong-typed value for either key MUST
+refuse `MALFORMED_SOURCE_MARKER` naming the offending file and the missing,
+unknown, or wrong-typed key. The source-root marker reader MUST NOT accept
+`guidance/`'s own `class` key, and the `guidance/` marker reader MUST NOT
+accept `revisions`: the two markers share a filename but carry disjoint key
+sets, and each reader refuses loudly on the other's shape rather than
+silently reusing it.
+
+#### Scenario: A valid marker parses
+
+- GIVEN `proposals/.paper-writing.json` holding `{"revisions":
+  {"revision_prefix": "r", "ordinal_digits": 2}}`
+- WHEN the marker is read
+- THEN it parses with no refusal
+
+#### Scenario: A non-JSON marker refuses
+
+- GIVEN a `.paper-writing.json` file whose content is not valid JSON
+- WHEN the marker is read
+- THEN it refuses `MALFORMED_SOURCE_MARKER` naming the file
+
+#### Scenario: A marker missing a required key refuses
+
+- GIVEN a marker's `revisions` object carrying `revision_prefix` but no
+  `ordinal_digits`
+- WHEN the marker is read
+- THEN it refuses `MALFORMED_SOURCE_MARKER` naming `ordinal_digits`
+
+#### Scenario: A marker carrying an unknown key refuses
+
+- GIVEN a marker's `revisions` object carrying a third key beside
+  `revision_prefix` and `ordinal_digits`
+- WHEN the marker is read
+- THEN it refuses `MALFORMED_SOURCE_MARKER` naming the unknown key
+
+#### Scenario: A marker with a wrong-typed value refuses
+
+- GIVEN a marker declaring `ordinal_digits: "2"` (a string, not an integer)
+- WHEN the marker is read
+- THEN it refuses `MALFORMED_SOURCE_MARKER` naming `ordinal_digits`
+
+#### Scenario: The source-root reader refuses a `guidance/`-shaped marker
+
+- GIVEN a `.paper-writing.json` under a source root carrying `{"class":
+  "style-reference"}` — `guidance/`'s own shape — instead of `revisions`
+- WHEN the source-root marker is read
+- THEN it refuses `MALFORMED_SOURCE_MARKER` naming `revisions` as missing,
+  rather than silently accepting `class`
+
+#### Scenario: The marker's declared prefix and digits drive resolution, never a literal
+
+- GIVEN a marker declaring `{"revisions": {"revision_prefix": "v",
+  "ordinal_digits": 3}}` and a root holding `lineage-v007.md`
+- WHEN lineage `lineage` is resolved
+- THEN it resolves to `lineage-v007.md`, off the marker's own declared
+  prefix and digit count — proving no revision-pattern literal governs
+  resolution
 
 ### Requirement: Section Existence And Ambiguity, By Title
 

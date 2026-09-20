@@ -4,9 +4,11 @@
 
 ### Requirement: Section Binding Resolution Gates `write`, Not Only A Read-Only Verb
 
-When `write` assembles the corpus for the block it is about to draft, any
-`SECTION_NOT_IN_SOURCE`, `SECTION_TITLE_AMBIGUOUS`, `SECTION_BINDING_ABSENT`,
-or `SOURCE_LINEAGE_UNRESOLVED` refusal raised by that assembly
+When `write` assembles the corpus for the block it is about to draft, ANY
+refusal this change introduces — `SECTION_NOT_IN_SOURCE`,
+`SECTION_TITLE_AMBIGUOUS`, `SECTION_BINDING_ABSENT`,
+`SOURCE_LINEAGE_UNRESOLVED`, `SOURCE_REVISIONS_UNDECLARED` or
+`MALFORMED_SOURCE_MARKER` — raised by that assembly
 (`source-section-binding`) MUST stop `write` before the readiness stage
 begins: no draft, evidence-audit, or contract-audit byte MUST be read for
 that block, and the block MUST remain absent from `main.tex`. A read-only
@@ -23,6 +25,16 @@ read-only verb produced earlier.
 - THEN it refuses `SECTION_NOT_IN_SOURCE` naming the binding, before the
   draft stage runs, and `main.tex` is byte-identical to its state before
   `write` ran
+
+#### Scenario: `write` refuses on a source root whose revision rule is undeclared
+
+- GIVEN a block whose bindable requirement names a lineage under a
+  document-rooted source root that carries no `.paper-writing.json` marker
+- WHEN `write` is invoked for that block
+- THEN it refuses `SOURCE_REVISIONS_UNDECLARED` naming the root, before the
+  draft stage runs — the marker codes reach `write` through the same corpus
+  assembly as the binding codes, and MUST NOT be reachable only from a
+  read-only verb
 
 #### Scenario: A read-only verb's prior report does not excuse `write`'s own check
 
