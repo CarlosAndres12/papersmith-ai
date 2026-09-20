@@ -1154,6 +1154,646 @@ class BindingRecordTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
 
 
+class SeparationRoundRecordTests(unittest.TestCase):
+    """`the-whole-cut-is-argued-before-any-section-is-claimed`, U3
+    (design.md Decision A): a FOURTH `declarations`-region record kind,
+    `separation`, keyed by round -- `record_separation_round`/
+    `read_separation_rounds`, through the SAME `_set_record`/`_find_
+    record`/`_verify_not_hand_edited` path `binding` and `fact`/
+    `declaration` already go through. All example names invented
+    (design.md's own worked example: lineage `field-survey`, revision
+    `field-survey-r07.md`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def _round_1_assignments(self) -> list:
+        return [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+        ]
+
+    def test_the_id_shape_carries_root_lineage_revision_and_a_derived_round(self) -> None:
+        result = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        self.assertEqual(
+            result["id"], "separation::proposals::field-survey::field-survey-r07.md::round-1",
+        )
+        self.assertEqual(result["round"], 1)
+
+    def test_a_recorded_round_is_read_back_by_root_lineage_and_revision(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0]["round"], 1)
+        self.assertEqual(rounds[0]["score"], 4)
+        self.assertEqual(rounds[0]["document_digest"], "deadbeef" * 8)
+        self.assertEqual(rounds[0]["assignments"], self._round_1_assignments())
+
+    def test_the_round_number_is_derived_never_a_caller_supplied_argument(self) -> None:
+        """A caller cannot name its own round -- the function signature
+        carries no `round`/`round_number` parameter at all, and a SECOND
+        submission for the identical `(root, lineage, revision)` derives
+        round 2 regardless of what the caller's own bookkeeping thinks the
+        next number should be."""
+        import inspect
+        signature = inspect.signature(paper_declarations.record_separation_round)
+        self.assertNotIn("round", signature.parameters)
+        self.assertNotIn("round_number", signature.parameters)
+
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "cafebabe" * 8,
+            [{"block": "overview.block-a", "fact": "formulation",
+              "sections": ["1. Background on widget metrics", "2. Alignment estimators"]}],
+            0, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], 2)
+        self.assertIn("round-2", second["id"])
+
+    def test_a_new_revision_restarts_numbering_at_round_one(self) -> None:
+        """Decision A, refinement 1: the revision is part of the id, so a
+        mid-negotiation publish restarts the count -- staleness is
+        structurally impossible, never a code that has to catch it."""
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        under_new_revision = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r08.md",
+            "cafebabe" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        self.assertEqual(under_new_revision["round"], 1)
+        self.assertIn("field-survey-r08.md", under_new_revision["id"])
+
+    def test_rounds_are_append_only_no_reopen_function_exists(self) -> None:
+        """Decision A, refinement 3: reopening a round would let an
+        argument be rewritten after its successor was scored against it,
+        so no such function exists at all -- not merely undocumented."""
+        self.assertFalse(hasattr(paper_declarations, "reopen_separation"))
+
+    def test_read_separation_rounds_reports_empty_before_paper_is_scaffolded(self) -> None:
+        unscaffolded = self.forge_root / "no-such-paper"
+
+        self.assertEqual(
+            paper_declarations.read_separation_rounds(
+                unscaffolded, "proposals", "field-survey", "field-survey-r07.md",
+            ),
+            (),
+        )
+
+    def test_two_different_lineages_under_the_same_root_stay_independent(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "other-survey", "other-survey-r01.md",
+            "cafebabe" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        field_rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        other_rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "other-survey", "other-survey-r01.md",
+        )
+
+        self.assertEqual(len(field_rounds), 1)
+        self.assertEqual(len(other_rounds), 1)
+
+    def test_a_hand_edited_declarations_region_still_refuses_a_new_round(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"field", b"filed", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.record_separation_round(
+                self.paper_dir, "proposals", "field-survey", "field-survey-r08.md",
+                "cafebabe" * 8, self._round_1_assignments(), 0, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_separation_rounds(
+                self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+
+class SeparationRoundReplayTests(unittest.TestCase):
+    """Task 3.4/3.5: a byte-identical, canonicalized cut resubmitted
+    against the latest recorded round for that id prefix records nothing
+    new and returns that same round -- a retried invocation must not
+    inflate the round count."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_an_identical_resubmission_records_nothing_new(self) -> None:
+        assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+        ]
+        first = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, assignments, 4, clock=self._clock,
+        )
+
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, assignments, 4, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], first["round"])
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        self.assertEqual(len(rounds), 1)
+
+    def test_a_canonicalized_reordering_is_still_recognized_as_a_replay(self) -> None:
+        """The same cut, its assignments and each assignment's own
+        `sections` in a different order, is still the SAME cut -- never a
+        spurious new round (`score_cut` itself treats both as sets)."""
+        first_assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background", "2. Estimators"]},
+            {"block": "methods.block-b", "fact": "formulation", "sections": ["3. Objective"]},
+        ]
+        reordered_assignments = [
+            {"block": "methods.block-b", "fact": "formulation", "sections": ["3. Objective"]},
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["2. Estimators", "1. Background"]},
+        ]
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, first_assignments, 1, clock=self._clock,
+        )
+
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, reordered_assignments, 1, clock=self._clock,
+        )
+
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        self.assertEqual(len(rounds), 1)
+
+    def test_a_genuinely_different_cut_records_a_new_round(self) -> None:
+        first_assignments = [
+            {"block": "overview.block-a", "fact": "formulation", "sections": ["1. Background"]},
+        ]
+        second_assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background", "2. Estimators"]},
+        ]
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, first_assignments, 4, clock=self._clock,
+        )
+
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, second_assignments, 0, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], 2)
+
+
+class BindingLicenseTests(unittest.TestCase):
+    """`the-whole-cut-is-argued-before-any-section-is-claimed`, owner
+    amendment (design.md Decisions I/J): `settled_round_licensing`'s four
+    checks and `bind_section`'s own `BINDING_UNARGUED` guard, gated on
+    them -- a binding for a MEASURED, document-rooted fact is refused
+    unless a settled `separate` round licenses this EXACT `(block, fact)`
+    claim with this EXACT title set, against the document resolved and
+    digested RIGHT NOW. All example names invented, matching this file's
+    own worked example (lineage `field-survey`, revision
+    `field-survey-r07.md`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.proposals = self.forge_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        self.revision_path = self.proposals / "field-survey-r07.md"
+        self.revision_path.write_text("# 1. Background\n\n# 2. Estimators\n", encoding="utf-8")
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def _digest(self, path: Path | None = None) -> str:
+        return hashlib.sha256((path or self.revision_path).read_bytes()).hexdigest()
+
+    def _settle(
+        self, *, block: str = "overview.block-a", fact: str = "formulation",
+        sections=("1. Background", "2. Estimators"), revision: str | None = None,
+        digest: str | None = None, score: int = 0,
+    ) -> dict:
+        revision = revision if revision is not None else self.revision_path.name
+        digest = digest if digest is not None else self._digest()
+        return paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", revision, digest,
+            [{"block": block, "fact": fact, "sections": list(sections)}], score,
+            clock=self._clock,
+        )
+
+    def _bind(
+        self, *, block: str = "overview.block-a", fact: str = "formulation",
+        lineage: str = "field-survey", sections=("1. Background", "2. Estimators"),
+    ) -> dict:
+        return paper_declarations.bind_section(
+            self.paper_dir, block, fact, lineage, sections,
+            source_base=self.forge_root, clock=self._clock,
+        )
+
+    # -- settled_round_licensing, the four checks, unit level (task 5.1) --
+
+    def test_settled_round_licensing_licenses_when_all_four_checks_match(self) -> None:
+        self._settle()
+
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "licensed")
+        self.assertEqual(result["round"], 1)
+        self.assertIsNone(result["failed_check"])
+
+    def test_check_1_identity_fails_with_no_round_recorded_at_all(self) -> None:
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "refused")
+        self.assertEqual(result["failed_check"], "identity")
+        self.assertIn("no separation round is recorded", result["reason"])
+
+    def test_check_1_identity_fails_when_only_an_older_revision_was_argued(self) -> None:
+        self._settle(revision="field-survey-r06.md", digest="deadbeef" * 8)
+
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "refused")
+        self.assertEqual(result["failed_check"], "identity")
+        self.assertIn("field-survey-r06.md", result["reason"])
+        self.assertIn(self.revision_path.name, result["reason"])
+
+    def test_check_2_digest_fails_on_a_digest_mismatch(self) -> None:
+        self._settle(digest="deadbeef" * 8)
+
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "refused")
+        self.assertEqual(result["failed_check"], "digest")
+        self.assertIn("deadbeef" * 8, result["reason"])
+
+    def test_check_3_score_fails_when_no_round_settles_at_zero(self) -> None:
+        self._settle(score=4)
+
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "refused")
+        self.assertEqual(result["failed_check"], "score")
+
+    def test_check_4_scope_fails_on_a_title_set_mismatch(self) -> None:
+        self._settle(sections=("1. Background",))
+
+        result = paper_declarations.settled_round_licensing(
+            self.paper_dir, "proposals", "field-survey", self.revision_path.name, self._digest(),
+            "overview.block-a", "formulation", ("1. Background", "2. Estimators"),
+        )
+
+        self.assertEqual(result["state"], "refused")
+        self.assertEqual(result["failed_check"], "scope")
+        self.assertEqual(result["argued_sections"], ("1. Background",))
+
+    # -- bind_section itself, gated on the same four checks -- the no-round
+    #    fixture (task 5.3), happy path (5.7), scope mismatches (5.8/5.9) --
+
+    def test_bind_with_no_settled_round_at_all_refuses_binding_unargued(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            self._bind()
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        detail = ctx.exception.detail
+        self.assertIn("overview.block-a", detail)
+        self.assertIn("formulation", detail)
+        self.assertIn("proposals", detail)
+        self.assertIn(self.revision_path.name, detail)
+        self.assertIn("failed_check='identity'", detail)
+        self.assertIn("separate --proposal", detail)
+
+    def test_a_settled_round_naming_the_exact_pair_and_titles_licenses_the_bind(self) -> None:
+        self._settle()
+
+        result = self._bind()
+
+        self.assertEqual(result["block"], "overview.block-a")
+        self.assertTrue(result["separation"].startswith("licensed(round="))
+
+    def test_title_order_does_not_matter_set_equality_not_sequence(self) -> None:
+        self._settle(sections=("1. Background", "2. Estimators"))
+
+        result = self._bind(sections=("2. Estimators", "1. Background"))
+
+        self.assertTrue(result["separation"].startswith("licensed(round="))
+
+    def test_a_settled_round_naming_a_different_block_refuses(self) -> None:
+        self._settle(block="overview.block-a")
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind(block="overview.block-z")
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        self.assertIn("overview.block-z", ctx.exception.detail)
+        self.assertIn("no settled round names", ctx.exception.detail)
+
+    def test_binding_a_subset_of_the_argued_titles_refuses(self) -> None:
+        self._settle(sections=("1. Background", "2. Estimators"))
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind(sections=("1. Background",))
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        detail = ctx.exception.detail
+        self.assertIn("1. Background", detail)
+        self.assertIn("2. Estimators", detail)
+
+    def test_binding_a_superset_of_the_argued_titles_refuses(self) -> None:
+        self._settle(sections=("1. Background",))
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind(sections=("1. Background", "2. Estimators"))
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+
+    def test_mutation_weakening_check_4_to_nonemptiness_reddens_the_subset_fixture(self) -> None:
+        proc = _run_against_mutant(
+            "            if recorded == argued:\n",
+            "            if recorded:\n",
+            "tests.test_paper_decisions.BindingLicenseTests"
+            ".test_binding_a_subset_of_the_argued_titles_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_weakening_check_4_to_nonemptiness_reddens_the_superset_fixture(self) -> None:
+        proc = _run_against_mutant(
+            "            if recorded == argued:\n",
+            "            if recorded:\n",
+            "tests.test_paper_decisions.BindingLicenseTests"
+            ".test_binding_a_superset_of_the_argued_titles_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_the_wrong_block_fixture_is_unaffected_by_the_check_4_weakening(self) -> None:
+        """Documented, not silently assumed: a round naming a DIFFERENT
+        block never reaches check 4's title comparison at all --
+        `settled_round_licensing`'s inner loop only compares titles once
+        `(block, fact)` already matched, so weakening THAT comparison
+        cannot move this fixture. Proven directly rather than by mutation,
+        since no mutation of check 4 alone could ever redden it."""
+        self._settle(block="overview.block-a")
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind(block="overview.block-z")
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+
+    # -- licence expiry, both root kinds (task 5.11/5.12), and the two
+    #    mutations proving checks 1 and 2 are each independently load-
+    #    bearing (task 5.13/5.14) --
+
+    def test_a_new_revision_voids_the_licence_even_with_identical_bytes(self) -> None:
+        """The revision is part of the licence's own identity (Decision A):
+        `field-survey-r08.md` republishes the IDENTICAL bytes as r07 (a
+        pure version bump, `test_publishing_a_survived_revision_costs_no_
+        edit`'s own precedent), yet the licence still voids -- proving
+        check 1 fires on the revision STRING alone, never merely as a
+        side effect of the digest also changing."""
+        self._settle()
+        (self.proposals / "field-survey-r08.md").write_bytes(self.revision_path.read_bytes())
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind()
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        detail = ctx.exception.detail
+        self.assertIn("failed_check='identity'", detail)
+        self.assertIn("field-survey-r07.md", detail)
+        self.assertIn("field-survey-r08.md", detail)
+
+    def test_an_in_place_rewrite_voids_the_licence_even_at_the_same_revision(self) -> None:
+        self._settle()
+        self.revision_path.write_text(
+            "# 1. Background\n\n# 2. Estimators\n\n# rewritten in place\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            self._bind()
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        self.assertIn("failed_check='digest'", ctx.exception.detail)
+
+    def test_an_ingested_documents_licence_expires_only_by_digest_never_by_revision(self) -> None:
+        guidance = self.forge_root / "guidance"
+        evidence = guidance / "source-manuscript"
+        evidence.mkdir(parents=True)
+        (evidence / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+        paper_id = "a-fixture-paper-id"
+        doc_dir = evidence / paper_id
+        doc_dir.mkdir()
+        doc_path = doc_dir / f"{paper_id}.md"
+        doc_path.write_text("Just prose about the dataset.\n", encoding="utf-8")
+        digest = hashlib.sha256(doc_path.read_bytes()).hexdigest()
+        paper_declarations.record_separation_round(
+            self.paper_dir, "evidence", paper_id, f"{paper_id}.md", digest,
+            [{"block": "overview.block-a", "fact": "dataset", "sections": ["Dataset"]}], 0,
+            clock=self._clock,
+        )
+
+        result = paper_declarations.bind_section(
+            self.paper_dir, "overview.block-a", "dataset", paper_id, ("Dataset",),
+            source_base=self.forge_root, clock=self._clock,
+        )
+        self.assertTrue(result["separation"].startswith("licensed(round="))
+        paper_declarations.reopen_binding(self.paper_dir, "overview.block-a", "dataset")
+
+        # Re-ingested with DIFFERENT content under the SAME identity -- the
+        # revision string never changes at all (an ingested paper gets no
+        # `r22`), so only the digest can void this licence.
+        doc_path.write_text("Different prose entirely.\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "overview.block-a", "dataset", paper_id, ("Dataset",),
+                source_base=self.forge_root, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        self.assertIn("failed_check='digest'", ctx.exception.detail)
+        self.assertIn(f"{paper_id}.md", ctx.exception.detail)
+
+    def test_mutation_dropping_check_2_digest_reddens_the_in_place_rewrite_fixture(self) -> None:
+        proc = _run_against_mutant(
+            '    digest_current = [entry for entry in current if entry["document_digest"] == '
+            'document_digest]\n',
+            "    digest_current = current\n",
+            "tests.test_paper_decisions.BindingLicenseTests"
+            ".test_an_in_place_rewrite_voids_the_licence_even_at_the_same_revision",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_dropping_check_1_identity_reddens_the_new_revision_fixture(self) -> None:
+        proc = _run_against_mutant(
+            "    current = read_separation_rounds(paper_dir, root, lineage, revision)\n",
+            "    current = _read_separation_rounds_any_revision(paper_dir, root, lineage)\n",
+            "tests.test_paper_decisions.BindingLicenseTests"
+            ".test_a_new_revision_voids_the_licence_even_with_identical_bytes",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    # -- the guard lives in `bind_section` itself (task 5.15/5.16) --
+
+    def test_bind_section_called_directly_bypassing_the_cli_still_refuses(self) -> None:
+        """The same direct-call shape every fixture in this class already
+        uses: `bind_section` is called here with no `cmd_bind`/CLI layer
+        anywhere in the call stack, and it still refuses on its own."""
+        with self.assertRaises(Refused) as ctx:
+            self._bind()
+
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+
+    def test_mutation_moving_the_guard_out_of_bind_section_reddens_the_direct_call_fixture(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            '    separation_report = _binding_separation_report(\n'
+            '        paper_dir, qualified_block_id, fact_id, lineage, sections, source_base,\n'
+            '    )\n',
+            '    separation_report = "licensed(round=0)"  # mutated: guard moved elsewhere\n',
+            "tests.test_paper_decisions.BindingLicenseTests"
+            ".test_bind_section_called_directly_bypassing_the_cli_still_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    # -- an unmeasured root bypasses the precondition entirely (5.17), and
+    #    `--reopen` is never blocked by it, in every state (5.18) --
+
+    def test_an_unmeasured_root_bypasses_the_precondition_entirely(self) -> None:
+        """No `experiments/` directory exists at all under `self.forge_root`
+        -- `experimental-design`'s own root reports unmeasured, so the
+        precondition never applies at all (`source-section-binding` spec,
+        `Requirement: An Unmeasured Root Is Reported, Never Silently
+        Passed`)."""
+        result = paper_declarations.bind_section(
+            self.paper_dir, "overview.block-a", "experimental-design", "field-log",
+            ("1. Setup Notes",), source_base=self.forge_root, clock=self._clock,
+        )
+
+        self.assertTrue(result["separation"].startswith("unmeasured("))
+
+    def test_reopen_succeeds_with_no_settled_round_at_all_on_a_measured_root(self) -> None:
+        result = paper_declarations.reopen_binding(
+            self.paper_dir, "overview.block-a", "formulation", clock=self._clock,
+        )
+        self.assertEqual(result["block"], "overview.block-a")
+
+    def test_reopen_succeeds_with_no_settled_round_at_all_on_an_unmeasured_root(self) -> None:
+        result = paper_declarations.reopen_binding(
+            self.paper_dir, "overview.block-a", "experimental-design", clock=self._clock,
+        )
+        self.assertEqual(result["block"], "overview.block-a")
+
+    # -- the shortcut-closed e2e (5.19/5.20), module level; the CLI-level
+    #    counterpart lives in `test_paper_writing.BindCliEndToEndTests` --
+
+    def test_the_shortcut_is_closed_bind_refuses_then_a_settled_separate_licenses_it(
+        self,
+    ) -> None:
+        with self.assertRaises(Refused) as ctx:
+            self._bind()
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+
+        self._settle()
+        result = self._bind()
+        self.assertTrue(result["separation"].startswith("licensed(round="))
+
+        reopened = paper_declarations.reopen_binding(
+            self.paper_dir, "overview.block-a", "formulation", clock=self._clock,
+        )
+        self.assertEqual(reopened["block"], "overview.block-a")
+
+
 class DescribeBindingCandidatesTests(unittest.TestCase):
     """`the-requirement-names-the-section-that-feeds-it`, U3e: what `write`'s
     own improved `SECTION_BINDING_ABSENT` refusal shows an operator --
