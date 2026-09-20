@@ -6819,6 +6819,42 @@ class SourceSectionVerbatimTests(unittest.TestCase):
         self.assertIn("2. Widget Calibration", ctx.exception.detail)
         self.assertIn("willow", ctx.exception.detail)
 
+    def test_the_detail_message_names_all_five_fields_at_once(self) -> None:
+        """Item 6, `limpieza-de-pendientes-chicos`: the detail string names
+        FIVE fields -- `block_id`, the run length, the bound fact, the
+        lineage and the section title -- but no single scenario had ever
+        asserted all five together; `test_a_verbatim_paste_refuses_before_
+        substitute_and_main_tex_stays_unchanged` (above, through
+        `write_block`) checks block/fact/lineage and never title or
+        length, `test_a_verbatim_paste_beyond_the_backstop_refuses` (above,
+        calling this function directly with no `block_id`) checks fact/
+        lineage/title and never block or length -- either alone would
+        still pass a change that silently dropped one of the two fields
+        neither covers. This scenario supplies `block_id` explicitly and
+        checks all five in the same assertion set."""
+        section_text = (
+            "Some opening sentence about the widget calibration procedure. "
+            f"{_n_token_run(17)} A closing sentence about something else."
+        )
+        contract_prose = "The block's own contract prose shares almost nothing with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Opening sentence of the draft. {_n_token_run(17)} Closing sentence of the draft."
+
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_source_section_verbatim(
+                draft_latex, contract_prose, [section], block_id="mm-proposal",
+            )
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("17", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+
     def test_the_same_claim_in_different_words_passes(self) -> None:
         """Scenario "The same claim in the paper's own register passes": no
         normalized run longer than a handful of tokens is shared."""
@@ -7252,7 +7288,13 @@ def reachable_paper_refusal_codes() -> set[str]:
     tree = ast.parse(CLI.read_text(encoding="utf-8"))
     definitions = {node.name: node for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    roots = [f"cmd_{command}" for command in paper_cli.COMMANDS]
+    # `main` is a root beside every `cmd_*` verb, never called by one and
+    # never calling one back: it is the CLI's own front door
+    # (`_require_supported_python`, item 4, `limpieza-de-pendientes-
+    # chicos`) and raises a refusal of its own before any command is even
+    # dispatched. Omitting it would leave that refusal permanently
+    # "reachable per a human reading `main()`" but invisible to this walk.
+    roots = ["main"] + [f"cmd_{command}" for command in paper_cli.COMMANDS]
     for root in roots:
         if root not in definitions:
             raise AssertionError(f"paper_cli.py defines no {root}")
@@ -7639,8 +7681,16 @@ class RefusalRosterTests(unittest.TestCase):
         SOURCE_RUN_BACKSTOP)` threshold. Reachable through the
         whole-module scan the moment the new raise site lands in an
         already-imported module; no new import needed. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast.
+
+        Moved from 153 to 154 in item 4 of `limpieza-de-pendientes-chicos`:
+        `main` itself gains one raise site, `_require_supported_python`'s
+        own `PYTHON_VERSION_UNSUPPORTED` -- the CLI's declared Python
+        floor, refused by name ahead of every command rather than a bare
+        traceback. Reachable only once `main` joins `cmd_*` as a root this
+        walk follows (above); no new import needed. Measured directly
         against `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 153)
+        self.assertEqual(len(reachable_paper_refusal_codes()), 154)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -11718,6 +11768,80 @@ class BlockContractSourceSectionsDefaultTests(unittest.TestCase):
         contract = _write_contract(citations_regime="none")
 
         self.assertEqual(contract.source_sections, ())
+
+
+class PythonFloorGuardTests(unittest.TestCase):
+    """Item 4, `limpieza-de-pendientes-chicos`: this skill claimed
+    stdlib-only and gave no floor anywhere -- a user on an older
+    interpreter got whatever bare traceback the first unavailable feature
+    happened to raise, naming a module they never asked about. `main`'s
+    own front door now refuses `PYTHON_VERSION_UNSUPPORTED` by name before
+    any command runs.
+
+    `SKILL_PYTHON_FLOOR = (3, 7)` is MEASURED, not picked: every one of the
+    31 shipped `paper_*.py` modules (and the shared `impl_refusals.py`)
+    opens with `from __future__ import annotations` (PEP 563, 3.7+), the
+    highest-versioned feature any of them use -- no walrus operator, no
+    `match`/`case`, no PEP 604 `X | Y` outside an annotation, no dict-union
+    `|`, no `str.removeprefix`/`removesuffix`, scanned for across every
+    shipped script and found nowhere.
+
+    A pre-3.7 interpreter cannot even PARSE `paper_cli.py` to reach this
+    check (`from __future__ import annotations` is itself the 3.7+ syntax
+    feature), so the comparison can only be proven by telling a real,
+    fully-capable interpreter that it is older -- `sys.version_info`
+    patched for the duration of one call, restored immediately after.
+    """
+
+    def test_an_interpreter_at_the_floor_is_accepted(self) -> None:
+        with unittest.mock.patch.object(
+            paper_cli.sys, "version_info", paper_cli.SKILL_PYTHON_FLOOR,
+        ):
+            paper_cli._require_supported_python()  # must not raise
+
+    def test_an_interpreter_above_the_floor_is_accepted(self) -> None:
+        above = (paper_cli.SKILL_PYTHON_FLOOR[0], paper_cli.SKILL_PYTHON_FLOOR[1] + 5)
+        with unittest.mock.patch.object(paper_cli.sys, "version_info", above):
+            paper_cli._require_supported_python()  # must not raise
+
+    def test_an_interpreter_below_the_floor_refuses_by_name(self) -> None:
+        below = (paper_cli.SKILL_PYTHON_FLOOR[0], paper_cli.SKILL_PYTHON_FLOOR[1] - 1)
+        with unittest.mock.patch.object(paper_cli.sys, "version_info", below):
+            with self.assertRaises(paper_cli.Refused) as ctx:
+                paper_cli._require_supported_python()
+        self.assertEqual(ctx.exception.code, "PYTHON_VERSION_UNSUPPORTED")
+        self.assertIn("3.6", ctx.exception.detail)
+        self.assertIn("3.7", ctx.exception.detail)
+
+    def test_main_itself_refuses_before_dispatching_any_command(self) -> None:
+        """The check runs inside `main()`, ahead of argument parsing and
+        every `cmd_*` dispatch -- proven by an invocation (`status` with no
+        `--paper`) that would otherwise run to a different, unrelated
+        refusal or a real read, never reaching this one unless the version
+        check truly sits first."""
+        below = (paper_cli.SKILL_PYTHON_FLOOR[0], paper_cli.SKILL_PYTHON_FLOOR[1] - 1)
+        with unittest.mock.patch.object(paper_cli.sys, "version_info", below):
+            exit_code = paper_cli.main(["status"])
+        self.assertEqual(exit_code, 2)
+
+
+class PythonFloorGuardMutationTests(unittest.TestCase):
+    """RED-first proof the comparison is load-bearing: disabling it must
+    fail `PythonFloorGuardTests.test_an_interpreter_below_the_floor_
+    refuses_by_name` -- a passing test beside an unexercised guard is not a
+    mutation that ran."""
+
+    def test_mutation_disabling_the_comparison_fails_the_refusal_test(self) -> None:
+        proc = _run_against_mutant(
+            "    if current < SKILL_PYTHON_FLOOR:\n",
+            "    if False:\n",
+            "tests.test_paper_writing.PythonFloorGuardTests"
+            ".test_an_interpreter_below_the_floor_refuses_by_name",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 if __name__ == "__main__":

@@ -628,14 +628,16 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
 
     def test_against_the_real_shipped_guidance_tree(self) -> None:
         """The PROPERTY, not this checkout's own particular counts (U3d
-        left this test pinned to `len(registry["data-paper"]) == 1` /
-        `total_papers == 8`, measured against ONE machine's ambient,
+        left this test pinned to one root's own paper count and to a
+        whole-corpus total, measured against ONE machine's ambient,
         gitignored content on ONE day -- `git ls-files guidance/` shows
         only five `.gitkeep` files travel, so a fresh clone reports every
         root empty and every one of those counts was false on that
-        checkout). The four ROOT FOLDERS themselves ARE tracked
-        (`guidance/<root>/.gitkeep`), so their names are the one part of
-        this assertion that never depends on ambient local content.
+        checkout; never repeated by name in this docstring, the same
+        reason `ForgeVocabularyDerivedGuardTests` scans this suite's own
+        commentary). The ROOT FOLDERS themselves ARE tracked
+        (`guidance/<root>/.gitkeep`), so which roots exist is read off
+        disk here too, never hand-listed.
 
         The property this test exists to hold: `ingested_papers` must
         report the SAME papers a gitignore-blind walk (`Path.iterdir()`,
@@ -652,9 +654,10 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         )
         registry = paper_guidance.ingested_papers(real_guidance_dir)
 
-        self.assertEqual(
-            set(registry), {"data-paper", "paper-guide", "reference-papers", "area-benchmark"},
-        )
+        expected_roots = {
+            entry.name for entry in real_guidance_dir.iterdir() if entry.is_dir()
+        }
+        self.assertEqual(set(registry), expected_roots)
         for root_name, papers in registry.items():
             root_dir = real_guidance_dir / root_name
             expected = sorted(

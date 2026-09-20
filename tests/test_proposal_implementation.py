@@ -14176,6 +14176,13 @@ FORGE_LEXICON: dict[str, str] = {
                "note in the kit's benchmark module",
     "local": "ordinary English for a remedy or a path that stays on this "
              "machine, used throughout the doctrine and the checker",
+    "mechanisms": "ordinary English for the means by which something is "
+                  "done, used of what the migration remedy in SKILL.md "
+                  "reuses ('the remedy uses mechanisms that already exist, "
+                  "once, by hand') and of what the acid-test transition "
+                  "composes from two behaviors this skill already ships -- "
+                  "a target repository happening to own the word is not "
+                  "what makes it a product name",
     "noise": "ordinary English for what a measurement carries besides its "
              "signal: the kit's own sentence about why one seed is not a "
              "result, and the doctrine paragraph about a verdict that names a "

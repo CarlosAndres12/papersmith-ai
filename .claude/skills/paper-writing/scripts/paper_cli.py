@@ -113,6 +113,47 @@ from impl_refusals import Refused  # noqa: E402
 #: bare relative name.
 CLI_PATH = Path(__file__).resolve()
 
+#: The floor this skill's own scripts need, MEASURED rather than picked:
+#: every one of the 31 shipped `paper_*.py` modules (and the shared
+#: `impl_refusals.py` under `_core/implementation/`) opens with `from
+#: __future__ import annotations` (PEP 563, 3.7+) -- the highest-versioned
+#: feature any of them uses. Scanned for and found nowhere in this skill's
+#: own scripts: the walrus operator, `match`/`case`, a PEP 604 `X | Y`
+#: outside an annotation, the dict-union `|` operator, `str.removeprefix`/
+#: `removesuffix`, `pathlib.Path.is_relative_to`. A future change that adds
+#: any of those moves this number; nothing here should be read as a
+#: forecast of what this skill will always need. This is the same
+#: `SKILL_PYTHON_FLOOR` shape `implementation_engine.py` already carries
+#: for its own layout templates, applied here to this skill's own
+#: interpreter instead of a target's.
+SKILL_PYTHON_FLOOR: tuple[int, int] = (3, 7)
+
+
+def _require_supported_python() -> None:
+    """Refuses by name instead of a bare traceback naming a module the
+    caller never asked about -- exactly the gap this skill shipped with no
+    declared floor at all until now. A pre-3.7 interpreter cannot even
+    PARSE this file to reach this call (`from __future__ import
+    annotations` is itself the 3.7+ syntax feature that makes every other
+    module's annotations safe to write), so this comparison can only ever
+    be exercised by an interpreter capable enough to load the file but
+    told, at runtime, that it is older (`PythonFloorGuardTests`,
+    `tests/test_paper_writing.py` -- there is no other way to prove the
+    comparison itself without an old interpreter actually installed). It
+    still earns its place: it is the one enforcement point a later change
+    that raises the real floor with a runtime-only stdlib addition (an
+    `AttributeError`, never a `SyntaxError`) reaches for, instead of
+    leaving the gap this item closed to reopen silently.
+    """
+    current = sys.version_info[:2]
+    if current < SKILL_PYTHON_FLOOR:
+        raise Refused(
+            "PYTHON_VERSION_UNSUPPORTED",
+            f"this skill needs Python {SKILL_PYTHON_FLOOR[0]}.{SKILL_PYTHON_FLOOR[1]}+; "
+            f"the running interpreter is {current[0]}.{current[1]}",
+        )
+
+
 #: The two classes every refusal below is sorted into, matching
 #: `implementation_cli.py`'s own vocabulary: can the caller clear this by
 #: changing the invocation alone (`INVOCATION_DEFECT`), or does clearing it
@@ -128,13 +169,18 @@ WORK_STATE = "work-state"
 #: raises, directly or through a module this file imports
 #: (`paper_block.py`, `paper_scaffold.py`, `paper_vocabulary.py`,
 #: `paper_contract.py`, `paper_graph.py`, `paper_region.py`,
-#: `paper_guidance.py`; `paper_readiness.py` raises none of its own).
+#: `paper_guidance.py`; `paper_readiness.py` raises none of its own) --
+#: or through `main()`'s own front door, ahead of every command
+#: (`_require_supported_python`, above), which is why `main` sits beside
+#: every `cmd_*` verb as a root `reachable_paper_refusal_codes()` walks.
 #: `paper_region.py` and `paper_guidance.py` are imported ahead of their own
 #: verb wiring (`the-paper-carries-its-own-decisions`, Slice A) -- their
 #: refusals are reachable the moment the import lands, so they are
 #: classified here immediately rather than left dangling until `declare`/
 #: `plan` exist.
 REFUSAL_CLASSIFICATION: dict[str, str] = {
+    # --- main's own front door, ahead of every verb ---------------------
+    "PYTHON_VERSION_UNSUPPORTED": WORK_STATE,
     # --- scaffold ------------------------------------------------------
     "PAPER_OUTSIDE_REPOSITORY": INVOCATION_DEFECT,
     "PAPER_NOT_A_DIRECTORY": WORK_STATE,
@@ -2919,9 +2965,10 @@ _COMMANDS = {
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        _require_supported_python()
+        parser = build_parser()
+        args = parser.parse_args(argv)
         result = _COMMANDS[args.command](args)
     except Refused as exc:
         print(json.dumps({"status": "refused", "code": exc.code, "detail": exc.detail}))
