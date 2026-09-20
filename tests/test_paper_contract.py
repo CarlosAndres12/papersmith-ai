@@ -416,10 +416,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "source": {"file": "b.md", "quote": "The formulation."},
             "document": {
                 "lineage": "research-concept",
-                "section": (
-                    "3. Formulación MIL-CREDA y kernel de bolsas "
-                    "ponderado por relevancia"
-                ),
+                "section": "3. Formulación del método y su fundamento teórico",
             },
         }
         header = _minimal_header(
