@@ -1505,7 +1505,7 @@ class SourceBindingsFieldTests(unittest.TestCase):
                             "quote": "The formulation, written here.",
                         },
                         "document": {
-                            "lineage": "research-concept", "section": "3. Something",
+                            "lineage": "lumen-thesis", "section": "3. Something",
                         },
                     }],
                     "requires_declarations": [], "citations": "none",
@@ -1519,7 +1519,7 @@ class SourceBindingsFieldTests(unittest.TestCase):
 
         self.assertEqual(
             corpus.blocks["a.only"].source_bindings,
-            (("formulation", "research-concept", "3. Something"),),
+            (("formulation", "lumen-thesis", "3. Something"),),
         )
 
     def test_an_unbound_entry_leaves_source_bindings_empty(self) -> None:
@@ -1747,7 +1747,7 @@ class SourceRootStatusTests(unittest.TestCase):
     def test_a_root_holding_a_markdown_document_is_document_rooted(self) -> None:
         root = self.base / "proposals"
         root.mkdir()
-        (root / "research-concept-r21.md").write_text("# Title\n", encoding="utf-8")
+        (root / "lumen-thesis-r21.md").write_text("# Title\n", encoding="utf-8")
 
         status = paper_declarations.source_root_status(
             self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
@@ -1851,7 +1851,7 @@ class IngestedSourceRootTests(unittest.TestCase):
         """A paper that has not ingested its evidence document yet is a
         paper at an earlier stage, never a fault -- the same reading
         `experiments/` holding only `.gitkeep` already gets."""
-        self._classify("data-paper", "evidence")
+        self._classify("source-manuscript", "evidence")
 
         status = paper_declarations.source_root_status(self.base, self.root)
 
@@ -1860,7 +1860,7 @@ class IngestedSourceRootTests(unittest.TestCase):
     def test_exactly_one_evidence_folder_holding_an_ingested_paper_is_document_rooted(
         self,
     ) -> None:
-        folder = self._classify("data-paper", "evidence")
+        folder = self._classify("source-manuscript", "evidence")
         self._ingest(folder, "a-fixture-paper-id")
 
         status = paper_declarations.source_root_status(self.base, self.root)
@@ -1870,14 +1870,14 @@ class IngestedSourceRootTests(unittest.TestCase):
         self.assertEqual(status["documents"], 1)
 
     def test_two_folders_classed_evidence_refuses_ambiguous(self) -> None:
-        self._classify("data-paper", "evidence")
+        self._classify("source-manuscript", "evidence")
         self._classify("second-paper", "evidence")
 
         with self.assertRaises(Refused) as ctx:
             paper_declarations.source_root_status(self.base, self.root)
 
         self.assertEqual(ctx.exception.code, "EVIDENCE_ROOT_AMBIGUOUS")
-        self.assertIn("data-paper", ctx.exception.detail)
+        self.assertIn("source-manuscript", ctx.exception.detail)
         self.assertIn("second-paper", ctx.exception.detail)
 
     def test_no_folder_name_literal_governs_which_folder_is_the_root(self) -> None:
@@ -1885,7 +1885,7 @@ class IngestedSourceRootTests(unittest.TestCase):
         name finds nothing -- the folder is discovered by classification,
         never spelled anywhere in the engine."""
         source = (SKILL_SCRIPTS / "paper_declarations.py").read_text(encoding="utf-8")
-        self.assertNotIn("data-paper", source)
+        self.assertNotIn("source-manuscript", source)
 
     def test_mutation_skipping_the_ambiguity_count_lets_the_first_match_win(self) -> None:
         proc = _run_against_mutant(
@@ -1910,7 +1910,7 @@ class ResolveIngestedDocumentTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.guidance = Path(self._tmp.name) / "guidance"
-        self.evidence_dir = self.guidance / "data-paper"
+        self.evidence_dir = self.guidance / "source-manuscript"
         self.evidence_dir.mkdir(parents=True)
 
     def _ingest(self, paper_id: str) -> Path:
@@ -1948,7 +1948,7 @@ class ResolveIngestedDocumentTests(unittest.TestCase):
             {"folder": "a-fixture-paper-id", "markdown": str(markdown)},
         ]
         with unittest.mock.patch.object(
-            paper_guidance, "ingested_papers", return_value={"data-paper": duplicate}
+            paper_guidance, "ingested_papers", return_value={"source-manuscript": duplicate}
         ):
             with self.assertRaises(Refused) as ctx:
                 paper_declarations.resolve_ingested_document(
@@ -1991,39 +1991,39 @@ class SourceLineageResolutionTests(unittest.TestCase):
 
     def test_resolves_to_the_highest_ordinal(self) -> None:
         for ordinal in (14, 15, 21):
-            self._revision(f"research-concept-r{ordinal:02d}.md")
+            self._revision(f"lumen-thesis-r{ordinal:02d}.md")
 
-        resolved = paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+        resolved = paper_declarations.resolve_lineage(self.root, "lumen-thesis", self.marker)
 
-        self.assertEqual(resolved.name, "research-concept-r21.md")
+        self.assertEqual(resolved.name, "lumen-thesis-r21.md")
 
     def test_gaps_between_ordinals_are_irrelevant(self) -> None:
         for ordinal in (1, 21):
-            self._revision(f"research-concept-r{ordinal:02d}.md")
+            self._revision(f"lumen-thesis-r{ordinal:02d}.md")
 
-        resolved = paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+        resolved = paper_declarations.resolve_lineage(self.root, "lumen-thesis", self.marker)
 
-        self.assertEqual(resolved.name, "research-concept-r21.md")
+        self.assertEqual(resolved.name, "lumen-thesis-r21.md")
 
     def test_a_foreign_lineage_with_zero_candidates_refuses(self) -> None:
         self._revision("other-concept-r21.md")
 
         with self.assertRaises(Refused) as ctx:
-            paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+            paper_declarations.resolve_lineage(self.root, "lumen-thesis", self.marker)
 
         self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
-        self.assertIn("research-concept", ctx.exception.detail)
+        self.assertIn("lumen-thesis", ctx.exception.detail)
 
     def test_a_tie_between_two_spellings_of_one_ordinal_refuses_naming_both(self) -> None:
-        self._revision("research-concept-r21.md")
-        self._revision("research-concept-r021.md")
+        self._revision("lumen-thesis-r21.md")
+        self._revision("lumen-thesis-r021.md")
 
         with self.assertRaises(Refused) as ctx:
-            paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+            paper_declarations.resolve_lineage(self.root, "lumen-thesis", self.marker)
 
         self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
-        self.assertIn("research-concept-r21.md", ctx.exception.detail)
-        self.assertIn("research-concept-r021.md", ctx.exception.detail)
+        self.assertIn("lumen-thesis-r21.md", ctx.exception.detail)
+        self.assertIn("lumen-thesis-r021.md", ctx.exception.detail)
 
     def test_the_markers_own_declared_prefix_and_digits_drive_resolution_never_a_literal(
         self,
@@ -2104,7 +2104,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
             }],
         }
 
-    def _bound_header(self, section_title: str, *, lineage: str = "research-concept") -> dict:
+    def _bound_header(self, section_title: str, *, lineage: str = "lumen-thesis") -> dict:
         return {
             "section": "a", "position": 1,
             "blocks": [{
@@ -2144,7 +2144,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         proposals.mkdir()
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
         with self.assertRaises(Refused) as ctx:
             paper_graph.assemble_corpus(self.sections_dir)
@@ -2156,7 +2156,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
         paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- resolves cleanly
 
@@ -2203,7 +2203,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n\n# 5. Closing\n", encoding="utf-8",
         )
 
@@ -2215,7 +2215,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("9. Missing"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
         )
 
@@ -2230,7 +2230,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 3. Something\n\n# 3. Something\n", encoding="utf-8",
         )
 
@@ -2255,7 +2255,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         proposals.mkdir()
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
         (proposals / ".paper-writing.json").write_text('{"class": "style-reference"}', encoding="utf-8")
 
         with self.assertRaises(Refused) as ctx:
@@ -2288,7 +2288,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
         corpus = paper_graph.assemble_corpus(self.sections_dir)  # no source_base passed
 
@@ -2300,7 +2300,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, other_base, ignore_errors=True)
         proposals = other_base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
         corpus = paper_graph.assemble_corpus(self.sections_dir, source_base=other_base)
 
@@ -2313,14 +2313,14 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
         )
 
         first = paper_graph.assemble_corpus(self.sections_dir)
         self.assertIn("a.only", first.blocks)
 
-        (proposals / "research-concept-r22.md").write_text(
+        (proposals / "lumen-thesis-r22.md").write_text(
             "# 1. Intro\n\n# 3. Something\n\n# 7. New appendix\n", encoding="utf-8",
         )
 
@@ -2332,12 +2332,12 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
         )
         paper_graph.assemble_corpus(self.sections_dir)  # raises nothing at r21
 
-        (proposals / "research-concept-r22.md").write_text(
+        (proposals / "lumen-thesis-r22.md").write_text(
             "# 1. Intro\n\n# 3.1 Something Split\n\n# 3.2 Something Else\n", encoding="utf-8",
         )
 
@@ -2447,7 +2447,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section("01-a.md", self._unbound_header("formulation"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
         corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
 
@@ -2539,7 +2539,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         )
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
         )
 
@@ -2555,7 +2555,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         )
         proposals = self.base / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
         )
 
@@ -2939,7 +2939,7 @@ class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
             "01-a.md", self._dataset_header("3. Something", lineage="a-fixture-paper-id"),
             self._BODY,
         )
-        evidence = self._classify("data-paper", "evidence")
+        evidence = self._classify("source-manuscript", "evidence")
         self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
 
         corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
@@ -2956,7 +2956,7 @@ class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
         self._write_section(
             "01-a.md", self._dataset_header("3. Something", lineage="wrong-id"), self._BODY,
         )
-        evidence = self._classify("data-paper", "evidence")
+        evidence = self._classify("source-manuscript", "evidence")
         self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
 
         with self.assertRaises(Refused) as ctx:
@@ -2967,7 +2967,7 @@ class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
     def test_mutation_resolving_an_ingested_root_by_max_ordinal_breaks_the_guard(self) -> None:
         """The task's own required mutation: dispatch the `INGESTED`
         branch through the PROSE (marker + max-ordinal) route instead --
-        `guidance/data-paper/` carries only the CLASSIFICATION marker
+        `guidance/source-manuscript/` carries only the CLASSIFICATION marker
         (`{"class": "evidence"}`), which the PROSE-kind revision-marker
         reader refuses as malformed (missing `revisions`), proving the
         kind dispatch itself is load-bearing."""
@@ -2975,7 +2975,7 @@ class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
             "01-a.md", self._dataset_header("3. Something", lineage="a-fixture-paper-id"),
             self._BODY,
         )
-        evidence = self._classify("data-paper", "evidence")
+        evidence = self._classify("source-manuscript", "evidence")
         self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
 
         proc = _run_against_mutant(
@@ -7947,7 +7947,7 @@ class ReadinessPhasesEndToEndTests(unittest.TestCase):
 
         code, payload, stderr = self._run(
             "declare", "--paper", str(self.paper_dir),
-            "--fact", "formulation", "--value", "research-concept-r21.md",
+            "--fact", "formulation", "--value", "lumen-thesis-r21.md",
         )
         self.assertEqual(code, 0, stderr or payload)
 
@@ -7963,7 +7963,7 @@ class ReadinessPhasesEndToEndTests(unittest.TestCase):
         self.assertEqual(code, 0, stderr or payload)
         code, payload, stderr = self._run(
             "declare", "--paper", str(self.paper_dir),
-            "--fact", "formulation", "--value", "research-concept-r21.md",
+            "--fact", "formulation", "--value", "lumen-thesis-r21.md",
         )
         self.assertEqual(code, 0, stderr or payload)
 
@@ -8289,11 +8289,11 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "9. Missing"},
+            "document": {"lineage": "lumen-thesis", "section": "9. Missing"},
         })
         proposals = self.test_root / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
 
         self._assert_refuses_before_drafting("SECTION_NOT_IN_SOURCE")
 
@@ -8301,11 +8301,11 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "1. Intro"},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
         })
         proposals = self.test_root / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text(
+        (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 1. Intro\n", encoding="utf-8",
         )
 
@@ -8318,7 +8318,7 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         })
         proposals = self.test_root / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
 
         self._assert_refuses_before_drafting("SECTION_BINDING_ABSENT")
 
@@ -8326,7 +8326,7 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "1. Intro"},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
         })
         proposals = self.test_root / "proposals"
         self._marker(proposals)
@@ -8341,11 +8341,11 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "1. Intro"},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
         })
         proposals = self.test_root / "proposals"
         proposals.mkdir()
-        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
 
         self._assert_refuses_before_drafting("SOURCE_REVISIONS_UNDECLARED")
 
@@ -8353,11 +8353,11 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "1. Intro"},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
         })
         proposals = self.test_root / "proposals"
         proposals.mkdir()
-        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
         (proposals / ".paper-writing.json").write_text(
             json.dumps({"class": "style-reference"}), encoding="utf-8",
         )
@@ -8372,11 +8372,11 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._write_bound_section({
             "value": "formulation",
             "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
-            "document": {"lineage": "research-concept", "section": "1. Intro"},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
         })
         proposals = self.test_root / "proposals"
         self._marker(proposals)
-        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
         guidance = self.test_root / "guidance"
         for name in ("evidence-a", "evidence-b"):
             folder = guidance / name

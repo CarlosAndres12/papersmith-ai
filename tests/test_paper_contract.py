@@ -415,7 +415,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
             "document": {
-                "lineage": "research-concept",
+                "lineage": "lumen-thesis",
                 "section": "3. Formulación del método y su fundamento teórico",
             },
         }
@@ -451,7 +451,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
-            "document": {"lineage": "research-concept"},
+            "document": {"lineage": "lumen-thesis"},
         }
         header = _minimal_header(
             blocks=[{
@@ -509,7 +509,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
             "document": {
-                "lineage": "research-concept", "section": "3. Something", "revision": "r21",
+                "lineage": "lumen-thesis", "section": "3. Something", "revision": "r21",
             },
         }
         header = _minimal_header(
@@ -529,7 +529,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "author-roles",
             "source": {"file": "b.md", "quote": "Author roles."},
-            "document": {"lineage": "research-concept", "section": "3. Something"},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
         }
         header = _minimal_header(
             blocks=[{
@@ -551,7 +551,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "gap",
             "source": {"file": "b.md", "quote": "The gap."},
-            "document": {"lineage": "research-concept", "section": "3. Something"},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
         }
         header = _minimal_header(
             blocks=[{
@@ -570,13 +570,13 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         bound = {
             "value": "formulation",
             "source": {"file": "b.md", "quote": "x"},
-            "document": {"lineage": "research-concept", "section": "3. Something"},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
         }
         unbound = {"value": "dataset", "source": {"file": "b.md", "quote": "y"}}
 
         self.assertEqual(
             paper_contract.requirement_documents([bound, unbound]),
-            (("formulation", "research-concept", "3. Something"),),
+            (("formulation", "lumen-thesis", "3. Something"),),
         )
 
     def test_requirement_documents_is_empty_when_no_entry_carries_one(self) -> None:
@@ -593,7 +593,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
             "document": {
-                "lineage": "research-concept",
+                "lineage": "lumen-thesis",
                 "section": ["1. Fundamentos", "2. Estimación de la entropía"],
             },
         }
@@ -612,7 +612,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
-            "document": {"lineage": "research-concept", "section": []},
+            "document": {"lineage": "lumen-thesis", "section": []},
         }
         header = _minimal_header(
             blocks=[{
@@ -632,7 +632,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
             "document": {
-                "lineage": "research-concept",
+                "lineage": "lumen-thesis",
                 "section": ["3. Something", "3. Something"],
             },
         }
@@ -653,7 +653,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
-            "document": {"lineage": "research-concept", "section": ["3. Something", 7]},
+            "document": {"lineage": "lumen-thesis", "section": ["3. Something", 7]},
         }
         header = _minimal_header(
             blocks=[{
@@ -672,7 +672,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         entry = {
             "value": "formulation",
             "source": {"file": "b.md", "quote": "The formulation."},
-            "document": {"lineage": "research-concept", "section": {"nested": True}},
+            "document": {"lineage": "lumen-thesis", "section": {"nested": True}},
         }
         header = _minimal_header(
             blocks=[{
@@ -692,7 +692,7 @@ class DocumentBindingSchemaTests(unittest.TestCase):
             "value": "formulation",
             "source": {"file": "b.md", "quote": "x"},
             "document": {
-                "lineage": "research-concept",
+                "lineage": "lumen-thesis",
                 "section": ["1. First", "2. Second", "3. Third"],
             },
         }
@@ -700,9 +700,9 @@ class DocumentBindingSchemaTests(unittest.TestCase):
         self.assertEqual(
             paper_contract.requirement_documents([bound]),
             (
-                ("formulation", "research-concept", "1. First"),
-                ("formulation", "research-concept", "2. Second"),
-                ("formulation", "research-concept", "3. Third"),
+                ("formulation", "lumen-thesis", "1. First"),
+                ("formulation", "lumen-thesis", "2. Second"),
+                ("formulation", "lumen-thesis", "3. Third"),
             ),
         )
 

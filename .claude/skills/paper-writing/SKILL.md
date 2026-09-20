@@ -476,7 +476,7 @@ EVIDENCE` from `validate` — correct, and the operator's own pending
 decision, not a defect.
 
 **Two kinds of guidance folder coexist, ADDITIVELY.** A function-named
-folder (`reference-papers`, `paper-guide`, `data-paper`, `area-benchmark`,
+folder (`reference-papers`, `paper-guide`, `evidence-source`, `area-benchmark`,
 …) is whatever the operator has always used it for — style references, a
 general paper guide, a benchmark's own data paper — and every one of those
 keeps flowing through `read_registry`/`classify_source_md` exactly as

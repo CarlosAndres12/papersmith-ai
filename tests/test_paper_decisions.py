@@ -388,7 +388,7 @@ class SourceMdClassificationTests(unittest.TestCase):
         )
 
     def test_a_path_under_an_evidence_folder_classifies_evidence(self) -> None:
-        folder = self._write_marker("data-paper", "evidence")
+        folder = self._write_marker("source-manuscript", "evidence")
         paper_dir = folder / "paper1" / "paper1.md"
         paper_dir.parent.mkdir(parents=True)
         paper_dir.write_text("body", encoding="utf-8")
@@ -478,7 +478,7 @@ class ValidateSourceMdGuardTests(unittest.TestCase):
         self.assertIn(str(source_md), ctx.exception.detail)
 
     def test_a_quote_from_an_evidence_source_is_accepted(self) -> None:
-        folder = self._write_marker("data-paper", "evidence")
+        folder = self._write_marker("source-manuscript", "evidence")
         source_md = self._write_source(folder, "scientific data")
 
         result = paper_cli.cmd_validate(self._args(source_md=source_md, quote="scientific data"))
@@ -594,7 +594,7 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         must still find. `Path.iterdir()` never consults `.gitignore` at
         all, so this is true regardless; the point of the fixture is to
         make that explicit rather than assumed."""
-        self._write_paper("data-paper", "s41597-026-06758-7", extra_files=("_page_0_Picture_2.jpeg",))
+        self._write_paper("source-manuscript", "q77213-004-11029-2", extra_files=("_page_0_Picture_2.jpeg",))
         self._write_paper("paper-guide", "brainsci-16-00363")
         self._write_paper("paper-guide", "Li_2026_Prog._Biomed._Eng._8_022013")
         (self.guidance_dir / "area-benchmark").mkdir()
@@ -605,7 +605,7 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         registry = paper_guidance.ingested_papers(self.guidance_dir)
 
         self.assertEqual(
-            {folder["folder"] for folder in registry["data-paper"]}, {"s41597-026-06758-7"},
+            {folder["folder"] for folder in registry["source-manuscript"]}, {"q77213-004-11029-2"},
         )
         self.assertEqual(
             {folder["folder"] for folder in registry["paper-guide"]},
@@ -628,13 +628,14 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
 
     def test_against_the_real_shipped_guidance_tree(self) -> None:
         """The real corpus, measured 2026-09-18 (not the tasks artifact's
-        own stale forecast of 3 roots): 4 tracked root folders
-        (`data-paper`, `paper-guide`, `reference-papers`, `area-benchmark`),
-        8 ingested papers total, `area-benchmark` genuinely empty. `guidance/`
-        contents are `.gitignore`d (`guidance/*/*`); this reads the real,
-        checked-out tree directly, proving the reader is gitignore-blind
-        against real ignored bytes, not only a synthetic mirror of the
-        pattern."""
+        own stale forecast of 3 roots): 4 tracked root folders, named by
+        the assertions below rather than repeated here (`ForgeVocabulary
+        DerivedGuardTests` scans this suite's own commentary for exactly
+        this reason), 8 ingested papers total, one root genuinely empty.
+        `guidance/` contents are `.gitignore`d (`guidance/*/*`); this reads
+        the real, checked-out tree directly, proving the reader is
+        gitignore-blind against real ignored bytes, not only a synthetic
+        mirror of the pattern."""
         real_guidance_dir = paper_guidance.resolve_guidance_dir(
             None, forge_root=FORGE_ROOT,
         )
@@ -2407,7 +2408,9 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
         """Generality: the `SourceRoot.name` for `dataset` is a generic
         vocabulary word this skill already uses (`paper_guidance.CLASSES`
         holds `'evidence'`), never this paper's own guidance folder name
-        (`data-paper`) -- which root actually feeds it is DERIVED at
+        (asserted below, never repeated in this docstring -- the same
+        reason `ForgeVocabularyDerivedGuardTests` scans this suite's own
+        commentary) -- which root actually feeds it is DERIVED at
         resolution time, never named here."""
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "data-paper")
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "proposals")
