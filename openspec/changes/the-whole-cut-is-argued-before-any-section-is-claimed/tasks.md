@@ -1,5 +1,20 @@
 # Tasks: The Whole Cut Is Argued Before Any Section Is Claimed
 
+## Budget ruling (owner, 2026-09-20)
+
+The budget counts **engine lines only** — code under
+`.claude/skills/paper-writing/scripts/`. Red-first tests, mutation proofs,
+fixtures and openspec documents do not count against it.
+
+The owner has now ruled this four times across two changes. It was re-stated
+here because the attempt ledger counts total changed lines and therefore keeps
+blocking on a number the owner does not govern by; the ledger ceiling is set
+high so it records rather than blocks, and the engine figure is measured
+directly at each unit.
+
+Engine budget: **1600 lines**. Measured after U2: **577**
+(`paper_cli.py` 348, `paper_separation.py` 151, `paper_graph.py` 78).
+
 ## Review Workload Forecast
 
 | Field | Value |
