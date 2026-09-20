@@ -33,12 +33,12 @@ unchanged from design.md, which already priced the marker reader in.
 
 ## Phase 1 — U1: Entry shape, inert
 
-- [ ] 1.1 RED: add failing tests in `tests/test_paper_contract.py` for `section-contract` scenarios "A document binding parses", "A malformed document binding refuses", "A document binding on a declaration entry refuses".
-- [ ] 1.2 Add `_REQUIREMENT_OPTIONAL = ("document",)`, `_DOCUMENT_REQUIRED = ("lineage","section")` to `.claude/skills/paper-writing/scripts/paper_contract.py`; refuse `MALFORMED_HEADER` per 1.1; reject `document` on `requires_declarations` entries.
-- [ ] 1.3 Add `requirement_documents()` accessor to `.claude/skills/paper-writing/scripts/paper_contract.py`.
-- [ ] 1.4 Add `BlockRecord.source_bindings: tuple = ()` to `.claude/skills/paper-writing/scripts/paper_graph.py`; confirm every existing construction site stays green.
-- [ ] 1.5 Add bindable-fact derivation (sole test: key of `FACT_SOURCE_ROOT`) to `.claude/skills/paper-writing/scripts/paper_declarations.py`. Mutation: extend `FACT_SOURCE_ROOT` with a sixth root in a test fixture; assert bindable with zero engine edit.
-- [ ] 1.6 Run `.venv/bin/python -m unittest tests.test_paper_contract`; confirm 1.1 now green and the shipped corpus still assembles byte-identically.
+- [x] 1.1 RED: add failing tests in `tests/test_paper_contract.py` for `section-contract` scenarios "A document binding parses", "A malformed document binding refuses", "A document binding on a declaration entry refuses".
+- [x] 1.2 Add `_REQUIREMENT_OPTIONAL = ("document",)`, `_DOCUMENT_REQUIRED = ("lineage","section")` to `.claude/skills/paper-writing/scripts/paper_contract.py`; refuse `MALFORMED_HEADER` per 1.1; reject `document` on `requires_declarations` entries.
+- [x] 1.3 Add `requirement_documents()` accessor to `.claude/skills/paper-writing/scripts/paper_contract.py`.
+- [x] 1.4 Add `BlockRecord.source_bindings: tuple = ()` to `.claude/skills/paper-writing/scripts/paper_graph.py`; confirm every existing construction site stays green.
+- [x] 1.5 Add bindable-fact derivation (sole test: key of `FACT_SOURCE_ROOT`) to `.claude/skills/paper-writing/scripts/paper_declarations.py`. Mutation: extend `FACT_SOURCE_ROOT` with a sixth root in a test fixture; assert bindable with zero engine edit.
+- [x] 1.6 Run `.venv/bin/python -m unittest tests.test_paper_contract`; confirm 1.1 now green and the shipped corpus still assembles byte-identically.
 
 ## Phase 2 — U2: Resolution, inert without U3
 

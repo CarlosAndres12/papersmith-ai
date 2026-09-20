@@ -108,6 +108,17 @@ _MODE_REQUIRED = ("value", "source")
 #: entry MUST be an object carrying both keys, with a non-null `source` —
 #: see `_normalize_requirement_entry`.
 _REQUIREMENT_REQUIRED = ("value", "source")
+#: `requires_facts`-only optional half (`source-section-binding` spec,
+#: `Requirement: Bindable Facts Are Derived, Never Listed`; `section-
+#: contract` spec, `Requirement: Front Matter Schema`, MODIFIED by
+#: `the-requirement-names-the-section-that-feeds-it`): the source
+#: document's lineage and the exact title of the section within it that
+#: feeds this entry. Never admitted on `requires_declarations` or
+#: `produces_facts` — only a caller that opts in via
+#: `_normalize_requirement_entry`'s `allow_document` parameter ever widens
+#: its allowed key set to include this.
+_REQUIREMENT_OPTIONAL = ("document",)
+_DOCUMENT_REQUIRED = ("lineage", "section")
 
 #: The transcription lock's own emphasis strip — a closed, enumerated pair
 #: of markdown constructs, never a bare-character removal (corrective:
@@ -267,33 +278,81 @@ def _validate_mode_object(raw, owner: str) -> dict:
     return {"value": value, "source": dict(source)}
 
 
-def _normalize_requirement_entry(raw, validate, owner: str) -> dict:
+def _validate_document_object(raw, owner: str) -> dict:
+    """`document: {lineage, section}` — the source document's lineage and
+    the exact title of the section within it that feeds one `requires_facts`
+    entry (`source-section-binding` spec; `section-contract` spec,
+    `Requirement: Front Matter Schema`, MODIFIED). Both keys are required
+    together: an absent key or an explicit `null` for either is treated as
+    missing (named the same way `_validate_source` names a missing key),
+    and any key outside `{lineage, section}` refuses naming the unknown key
+    — the identical missing-then-unknown ordering `_validate_source` and
+    `_normalize_requirement_entry` already use, so a `guidance/`-shaped
+    marker's own precedent (name the ABSENT key first) is followed here too.
+    """
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'document' must be an object")
+    unknown = [key for key in raw if key not in _DOCUMENT_REQUIRED]
+    if unknown:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'document' carries unknown key {unknown[0]!r}"
+        )
+    missing = [key for key in _DOCUMENT_REQUIRED if raw.get(key) is None]
+    if missing:
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'document' missing {missing[0]!r}")
+    lineage = raw["lineage"]
+    if not isinstance(lineage, str) or not lineage:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'document.lineage' must be a non-empty string"
+        )
+    section = raw["section"]
+    if not isinstance(section, str) or not section:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'document.section' must be a non-empty string"
+        )
+    return {"lineage": lineage, "section": section}
+
+
+def _normalize_requirement_entry(
+    raw, validate, owner: str, *, allow_document: bool = False,
+) -> dict:
     """The single normalization point for one `requires_facts` /
-    `requires_declarations` entry (`requirement-transcription` spec,
-    `Requirement: Transcribed Requirement Entries Only`; design.md D1: "the
-    plain id list is never stored, only derived at read time through one
-    accessor"). `validate` is the caller's own closed-vocabulary check
-    (`paper_vocabulary.validate_fact` or `validate_declaration`), applied to
-    `value`.
+    `requires_declarations` / `produces_facts` entry (`requirement-
+    transcription` spec, `Requirement: Transcribed Requirement Entries
+    Only`; design.md D1: "the plain id list is never stored, only derived at
+    read time through one accessor"). `validate` is the caller's own
+    closed-vocabulary check (`paper_vocabulary.validate_fact` or
+    `validate_declaration`), applied to `value`.
 
     U3 (design.md D3): bare-string acceptance is removed. An entry MUST be
-    an object carrying exactly the two keys `value` (a string, validated
-    against the closed vocabulary) and a non-null `source` — an absent
-    `source` key or an explicit `source: null` both refuse `MALFORMED_HEADER`
-    naming `source`, exactly as an `after` entry's own `source` is required.
-    A non-null `source` goes through `_validate_source`, the same
-    `{file, quote}` shape enforced for `after` and `mode`. An unknown key or
-    a non-string `value` refuses `MALFORMED_HEADER` naming it, mirroring
-    `_validate_mode_object`. This makes the half-migrated bare-string state
-    structurally unrepresentable rather than merely detected: a fixture or a
-    contract rebuilt with a bare string now refuses at parse.
+    an object carrying `value` (a string, validated against the closed
+    vocabulary) and a non-null `source` — an absent `source` key or an
+    explicit `source: null` both refuse `MALFORMED_HEADER` naming `source`,
+    exactly as an `after` entry's own `source` is required. A non-null
+    `source` goes through `_validate_source`, the same `{file, quote}` shape
+    enforced for `after` and `mode`. An unknown key or a non-string `value`
+    refuses `MALFORMED_HEADER` naming it, mirroring `_validate_mode_object`.
+    This makes the half-migrated bare-string state structurally
+    unrepresentable rather than merely detected: a fixture or a contract
+    rebuilt with a bare string now refuses at parse.
+
+    `allow_document` (`the-requirement-names-the-section-that-feeds-it`):
+    only `requires_facts` entries pass this `True`; `requires_declarations`
+    and `produces_facts` entries never do, so a `document` key on either
+    refuses `MALFORMED_HEADER` as an unknown key — a declaration is
+    operator-supplied, never document-rooted (`section-contract` spec), and
+    a produced fact has no document-rooted source of its own either. The
+    returned dict carries a `"document"` key only when the raw entry
+    declared one — an entry with no `document` half round-trips through
+    this function with exactly the two keys it came in with, unchanged.
     """
     if not isinstance(raw, dict):
         raise Refused("MALFORMED_HEADER", f"{owner}: entry must be an object")
+    allowed = _REQUIREMENT_REQUIRED + (_REQUIREMENT_OPTIONAL if allow_document else ())
     missing = [key for key in _REQUIREMENT_REQUIRED if key not in raw]
     if missing:
         raise Refused("MALFORMED_HEADER", f"{owner}: entry missing {missing[0]!r}")
-    unknown = [key for key in raw if key not in _REQUIREMENT_REQUIRED]
+    unknown = [key for key in raw if key not in allowed]
     if unknown:
         raise Refused("MALFORMED_HEADER", f"{owner}: entry carries unknown key {unknown[0]!r}")
     value = raw["value"]
@@ -304,7 +363,10 @@ def _normalize_requirement_entry(raw, validate, owner: str) -> dict:
     if source is None:
         raise Refused("MALFORMED_HEADER", f"{owner}: entry missing 'source'")
     source = dict(_validate_source(source, owner))
-    return {"value": value, "source": source}
+    result = {"value": value, "source": source}
+    if allow_document and raw.get("document") is not None:
+        result["document"] = _validate_document_object(raw["document"], owner)
+    return result
 
 
 def requirement_values(entries) -> tuple:
@@ -318,6 +380,22 @@ def requirement_values(entries) -> tuple:
     (`tests/test_paper_writing.py`) asserts no other module subscripts a
     parsed block's `["requires_facts"]` / `["requires_declarations"]`."""
     return tuple(entry["value"] for entry in entries)
+
+
+def requirement_documents(entries) -> tuple:
+    """Mirrors `requirement_values`: derives the `(fact_id, lineage,
+    section_title)` triples from `requires_facts` entries that carry a
+    `document` half, in declaration order (`source-section-binding` spec,
+    worked example). Entries with no `document` half contribute nothing —
+    `document` is optional, and an unbound bindable fact is a corpus-level
+    concern (`SECTION_BINDING_ABSENT`, U3), never this accessor's own.
+    `paper_graph.BlockRecord.source_bindings` is built from this, the sole
+    source of that tuple."""
+    return tuple(
+        (entry["value"], entry["document"]["lineage"], entry["document"]["section"])
+        for entry in entries
+        if entry.get("document") is not None
+    )
 
 
 def _parse_figure(raw, owner: str) -> dict:
@@ -392,7 +470,8 @@ def _parse_block(raw, section: str) -> dict:
         raise Refused("MALFORMED_HEADER", f"{section}.{block_id}: 'requires_facts' must be a list")
     facts = [
         _normalize_requirement_entry(
-            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.requires_facts"
+            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.requires_facts",
+            allow_document=True,
         )
         for entry in facts_raw
     ]

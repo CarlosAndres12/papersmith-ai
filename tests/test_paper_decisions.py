@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import uuid
 from pathlib import Path
 
@@ -2303,6 +2304,32 @@ class SourceAvailableTests(unittest.TestCase):
         (target / "real-content.py").write_text("print(1)", encoding="utf-8")
 
         self.assertTrue(paper_declarations.source_available(target))
+
+
+class BindableFactDerivationTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: Bindable Facts Are
+    Derived, Never Listed`: a fact is bindable iff it is a key of
+    `FACT_SOURCE_ROOT` -- membership in the mapping is the sole test, never
+    a hand-maintained list of fact ids anywhere under `scripts/`."""
+
+    def test_a_document_rooted_fact_is_bindable(self) -> None:
+        self.assertTrue(paper_declarations.is_bindable_fact("formulation"))
+
+    def test_a_produced_fact_is_never_bindable(self) -> None:
+        self.assertFalse(paper_declarations.is_bindable_fact("gap"))
+
+    def test_the_structural_fact_is_never_bindable(self) -> None:
+        self.assertFalse(paper_declarations.is_bindable_fact("skeleton"))
+
+    def test_a_sixth_root_widens_bindability_with_zero_engine_edit(self) -> None:
+        """The spec's own mutation scenario: extending `FACT_SOURCE_ROOT`
+        with a sixth fact/root pair (via `patch.dict`, never a source
+        edit) makes that sixth fact bindable, proving the test is
+        membership in the mapping and not a second, hand-maintained list."""
+        with unittest.mock.patch.dict(
+            paper_declarations.FACT_SOURCE_ROOT, {"a-sixth-fact": "a-sixth-root"}
+        ):
+            self.assertTrue(paper_declarations.is_bindable_fact("a-sixth-fact"))
 
 
 class ReconcileObservationReportTests(unittest.TestCase):

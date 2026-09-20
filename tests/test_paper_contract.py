@@ -399,6 +399,195 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
 
 
+class DocumentBindingSchemaTests(unittest.TestCase):
+    """`section-contract` spec, `Requirement: Front Matter Schema` (MODIFIED
+    by `the-requirement-names-the-section-that-feeds-it`): a `requires_facts`
+    entry MAY additionally carry `document: {lineage, section}` -- the
+    source document's lineage and the exact title of the section within it
+    that feeds this entry (`source-section-binding` capability). Shape-only
+    here -- resolution against real disk (marker, lineage, section
+    existence/ambiguity) is `paper_graph._verify_source_section_bindings`'s
+    concern, tested in `test_paper_writing.py`, the same split
+    `ProducesFactsSchemaTests` already draws for `produces_facts`."""
+
+    def test_a_document_binding_parses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "research-concept",
+                "section": (
+                    "3. Formulación MIL-CREDA y kernel de bolsas "
+                    "ponderado por relevancia"
+                ),
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+
+    def test_a_requirement_entry_with_no_document_half_parses_unchanged(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+        self.assertNotIn("document", parsed.blocks[0]["requires_facts"][0])
+
+    def test_a_document_binding_missing_section_refuses_naming_section(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "research-concept"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_missing_lineage_refuses_naming_lineage(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("lineage", ctx.exception.detail)
+
+    def test_a_document_binding_with_null_lineage_refuses_naming_lineage(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": None, "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("lineage", ctx.exception.detail)
+
+    def test_a_document_binding_with_unknown_key_refuses_naming_it(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "research-concept", "section": "3. Something", "revision": "r21",
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("revision", ctx.exception.detail)
+
+    def test_a_document_binding_on_a_declaration_entry_refuses_naming_document(self) -> None:
+        entry = {
+            "value": "author-roles",
+            "source": {"file": "b.md", "quote": "Author roles."},
+            "document": {"lineage": "research-concept", "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [], "requires_declarations": [entry],
+                "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("document", ctx.exception.detail)
+
+    def test_a_document_binding_on_a_produces_facts_entry_refuses_naming_document(self) -> None:
+        """`document` is scoped to `requires_facts` only (design.md, File
+        Changes): `produces_facts` shares `_normalize_requirement_entry`'s
+        machinery but is never called with `allow_document=True`."""
+        entry = {
+            "value": "gap",
+            "source": {"file": "b.md", "quote": "The gap."},
+            "document": {"lineage": "research-concept", "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [], "requires_declarations": [],
+                "citations": "none", "produces_facts": [entry],
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("document", ctx.exception.detail)
+
+    def test_requirement_documents_derives_bindable_triples_in_order(self) -> None:
+        bound = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "x"},
+            "document": {"lineage": "research-concept", "section": "3. Something"},
+        }
+        unbound = {"value": "dataset", "source": {"file": "b.md", "quote": "y"}}
+
+        self.assertEqual(
+            paper_contract.requirement_documents([bound, unbound]),
+            (("formulation", "research-concept", "3. Something"),),
+        )
+
+    def test_requirement_documents_is_empty_when_no_entry_carries_one(self) -> None:
+        unbound = {"value": "dataset", "source": {"file": "b.md", "quote": "y"}}
+
+        self.assertEqual(paper_contract.requirement_documents([unbound]), ())
+
+
 class ProducesFactsSchemaTests(unittest.TestCase):
     """`fact-production` spec, `Requirement: produces_facts Field Grammar`:
     a block (and, symmetrically, a section) MAY declare `produces_facts`,

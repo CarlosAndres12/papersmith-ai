@@ -102,6 +102,15 @@ class BlockRecord:
     #: `tests/test_paper_decisions.py`'s own direct `BlockRecord(...)`
     #: fixture) stays green without passing it.
     produces_facts: tuple = ()
+    #: `source-section-binding` spec (`the-requirement-names-the-section-
+    #: that-feeds-it`, design.md Interfaces): every `(fact_id, lineage,
+    #: section_title)` triple a `requires_facts` entry's `document` half
+    #: declares, derived via `paper_contract.requirement_documents` — never
+    #: independently listed. Defaulted to `()`, the same precedent
+    #: `produces_facts` sets, so every existing construction site stays
+    #: green. Inert at U1/U2: populated from the parsed header, resolved
+    #: against real disk only by `_verify_source_section_bindings` (U2).
+    source_bindings: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -174,6 +183,7 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
                 produces_facts=paper_contract.requirement_values(raw_block["produces_facts"]),
+                source_bindings=paper_contract.requirement_documents(raw_block["requires_facts"]),
             )
             order_by_section[section_id].append(qualified_id)
 

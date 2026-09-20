@@ -647,6 +647,20 @@ FACT_SOURCE_ROOT: dict = {
 }
 
 
+def is_bindable_fact(fact_id: str) -> bool:
+    """`source-section-binding` spec, `Requirement: Bindable Facts Are
+    Derived, Never Listed`: a fact is bindable **iff** it is a key of
+    `FACT_SOURCE_ROOT` -- membership in this mapping is the sole and only
+    test. The four PRODUCED facts and the structural `skeleton` fact are
+    excluded by their absence from `FACT_SOURCE_ROOT`, not by a second,
+    hand-maintained list naming them here or anywhere under `scripts/`.
+    Extending `FACT_SOURCE_ROOT` with a new fact/root pair widens
+    bindability with zero edit to this function (proven by
+    `tests/test_paper_decisions.py::BindableFactDerivationTests
+    .test_a_sixth_root_widens_bindability_with_zero_engine_edit`)."""
+    return fact_id in FACT_SOURCE_ROOT
+
+
 def source_available(root: Path) -> bool:
     """Gitignore-blind disk measurement of one source root's real
     availability, taken by THIS process -- `Path.iterdir()`, the same

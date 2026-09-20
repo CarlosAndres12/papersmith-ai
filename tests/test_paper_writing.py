@@ -1162,21 +1162,31 @@ class RequirementEntryShapeTests(unittest.TestCase):
                 self.assertIsInstance(value, str)
 
 
+#: The legitimate derivation points a parsed block's `["requires_facts"]` /
+#: `["requires_declarations"]` may be subscripted as a direct argument to —
+#: `requirement_values` (design.md D1) and, since `the-requirement-names-
+#: the-section-that-feeds-it`, `requirement_documents` (its own mirror,
+#: `paper_graph.BlockRecord.source_bindings`'s sole construction site).
+_REQUIREMENT_SUBSCRIPT_ALLOWED_FUNCS = ("requirement_values", "requirement_documents")
+
+
 def _requirement_subscript_violations(root: Path) -> dict:
     """AST scan (design.md D1): no module OTHER than `paper_contract.py`
     may subscript `["requires_facts"]` / `["requires_declarations"]` on a
     parsed block dict except as a direct argument to
-    `paper_contract.requirement_values(...)` — the single legitimate
-    derivation point. `paper_contract.py` is exempt: it is where the dict
-    is BUILT (`_parse_block`'s own `raw["requires_facts"]`), never read
-    back through the accessor it defines.
+    `paper_contract.requirement_values(...)` or `paper_contract.
+    requirement_documents(...)` — the two legitimate derivation points.
+    `paper_contract.py` is exempt: it is where the dict is BUILT
+    (`_parse_block`'s own `raw["requires_facts"]`), never read back through
+    the accessors it defines.
 
     Every `ast.Subscript` node whose slice is a string constant equal to
     one of the two target keys is a candidate; it is excluded only when it
     sits (anywhere in its own subtree) inside the argument list of a call
-    whose `func` is an `ast.Attribute` named `requirement_values` — the
-    exact shape both real call sites (`paper_graph.py`, `paper_cli.py`)
-    use: `paper_contract.requirement_values(raw_block["requires_facts"])`.
+    whose `func` is an `ast.Attribute` named one of
+    `_REQUIREMENT_SUBSCRIPT_ALLOWED_FUNCS` — the exact shape every real
+    call site (`paper_graph.py`, `paper_cli.py`) uses:
+    `paper_contract.requirement_values(raw_block["requires_facts"])`.
     """
     target_keys = {"requires_facts", "requires_declarations"}
     violations: dict = {}
@@ -1189,7 +1199,7 @@ def _requirement_subscript_violations(root: Path) -> dict:
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "requirement_values"
+                and node.func.attr in _REQUIREMENT_SUBSCRIPT_ALLOWED_FUNCS
             ):
                 for arg in node.args:
                     for sub in ast.walk(arg):
@@ -1459,6 +1469,82 @@ class RequirementTranscriptionGateTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "SPAN_NOT_IN_SOURCE")
         self.assertIn("a", ctx.exception.detail)
+
+
+class SourceBindingsFieldTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U1 (design.md,
+    Interfaces): `BlockRecord.source_bindings` is a tuple of `(fact_id,
+    lineage, section_title)` triples, derived from `paper_contract.
+    requirement_documents` at `assemble_corpus` time -- inert at this
+    phase, since resolution against real disk (`SOURCE_LINEAGE_UNRESOLVED`,
+    `SECTION_NOT_IN_SOURCE`, etc.) is U2/U3's own concern."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _write(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def test_a_document_bound_entry_populates_source_bindings(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "formulation",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The formulation, written here.",
+                        },
+                        "document": {
+                            "lineage": "research-concept", "section": "3. Something",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- U1 is inert
+
+        self.assertEqual(
+            corpus.blocks["a.only"].source_bindings,
+            (("formulation", "research-concept", "3. Something"),),
+        )
+
+    def test_an_unbound_entry_leaves_source_bindings_empty(self) -> None:
+        self._write(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "formulation",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The formulation, written here.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(corpus.blocks["a.only"].source_bindings, ())
 
 
 class RequirementTranscriptionMutationTests(unittest.TestCase):
