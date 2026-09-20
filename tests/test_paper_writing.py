@@ -104,6 +104,34 @@ def _write_fixture(paper_dir: Path, main_tex: bytes) -> None:
     (paper_dir / "main.tex").write_bytes(main_tex)
 
 
+def _settle_separation_round(
+    paper_dir: Path, base: Path, fact_id: str, lineage: str, block: str, sections,
+) -> dict:
+    """`the-whole-cut-is-argued-before-any-section-is-claimed`, owner
+    amendment (design.md Decision I): a test-only shortcut that directly
+    RECORDS an already-settled (score 0) `separation` round naming exactly
+    `(block, fact_id)` with `sections`, scored against the document
+    `fact_id`'s own source root resolves to RIGHT NOW -- bypassing
+    `compute_separation`'s own scoring pipeline, which Phases 1-4's own
+    suite already proves independently (`test_paper_separation.py`,
+    `SeparateVerbEndToEndTests`, `SeparationRoundPersistenceTests`). Used
+    only to license a fixture's `bind_section`/`cmd_bind` call under the
+    NEW precondition this owner amendment adds; every fixture below still
+    proves `bind_section` itself, never re-proves `separate`."""
+    root = paper_declarations.FACT_SOURCE_ROOT[fact_id]
+    status = paper_declarations.source_root_status(base, root)
+    if root.kind is paper_declarations.SourceRootKind.INGESTED:
+        revision_path = paper_declarations.resolve_ingested_document(status["path"], lineage)
+    else:
+        marker = paper_declarations.read_revisions_marker(status["path"])
+        revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)
+    digest = hashlib.sha256(revision_path.read_bytes()).hexdigest()
+    return paper_declarations.record_separation_round(
+        paper_dir, root.name, lineage, revision_path.name, digest,
+        [{"block": block, "fact": fact_id, "sections": list(sections)}], 0,
+    )
+
+
 class ScaffoldTests(unittest.TestCase):
     """`paper-scaffold` spec: create/re-enter `paper/` idempotently."""
 
@@ -2624,6 +2652,10 @@ class RecordedSourceBindingCorpusTests(unittest.TestCase):
         proposals = self.base / "proposals"
         self._marker(proposals)
         (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        _settle_separation_round(
+            self.paper_dir, self.base, "formulation", "lumen-thesis", "a.only",
+            ("3. Something",),
+        )
         paper_declarations.bind_section(
             self.paper_dir, "a.only", "formulation", "lumen-thesis", "3. Something",
         )
@@ -2644,6 +2676,10 @@ class RecordedSourceBindingCorpusTests(unittest.TestCase):
         proposals = self.base / "proposals"
         self._marker(proposals)
         (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        _settle_separation_round(
+            self.paper_dir, self.base, "formulation", "lumen-thesis", "a.only",
+            ("3. Something",),
+        )
         paper_declarations.bind_section(
             self.paper_dir, "a.only", "formulation", "lumen-thesis", "3. Something",
         )
@@ -2664,6 +2700,9 @@ class RecordedSourceBindingCorpusTests(unittest.TestCase):
         self._marker(proposals)
         (proposals / "lumen-thesis-r21.md").write_text(
             "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+        _settle_separation_round(
+            self.paper_dir, self.base, "formulation", "lumen-thesis", "a.only", ("1. Intro",),
         )
         paper_declarations.bind_section(
             self.paper_dir, "a.only", "formulation", "lumen-thesis", "1. Intro",
@@ -7029,9 +7068,19 @@ class RefusalRosterTests(unittest.TestCase):
         this file) adds two new raise sites -- `SEPARATION_ROUND_ABSENT`
         (`concedes_to_round` names no recorded round) and `SEPARATION_
         CONCESSION_REGRESSED` (the conceding cut's recomputed total is
-        strictly worse than the round it abandons). U6 of this same
-        change moves this number again."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 151)
+        strictly worse than the round it abandons).
+
+        Moved from 151 to 152 in U6 of the same change (the owner
+        amendment, design.md Decisions I/J): `paper_declarations.py`
+        (already imported) gains one new raise site, `_binding_separation_
+        report`'s own `BINDING_UNARGUED` -- `bind`'s own precondition, for
+        a measured, document-rooted fact, that a settled `separate` round
+        licenses this exact `(block, fact)` claim with this exact title
+        set (`settled_round_licensing`). Reachable the instant `cmd_bind`
+        (already a root) records through `bind_section`; no new import
+        needed. Measured directly against `reachable_paper_refusal_
+        codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 152)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -8638,11 +8687,21 @@ class BindCliEndToEndTests(unittest.TestCase):
 
     def _bind_args(self, **overrides) -> argparse.Namespace:
         base = dict(
-            paper=str(self.paper_dir), block="a.only", fact="formulation",
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            block="a.only", fact="formulation",
             lineage="lumen-thesis", section=["3. Something"], reopen=False,
         )
         base.update(overrides)
         return argparse.Namespace(**base)
+
+    def _settle(self, block: str, sections) -> dict:
+        """Owner amendment (design.md Decision I): `bind` now demands a
+        settled `separate` round before it will record — this fixture's own
+        `test_root` IS `bind`'s own `source_base` (`sections_dir.parent`),
+        so this settles against the SAME document `cmd_bind` resolves."""
+        return _settle_separation_round(
+            self.paper_dir, self.test_root, "formulation", "lumen-thesis", block, sections,
+        )
 
     def test_the_full_session_refusal_bind_then_write_succeeds(self) -> None:
         # 1. `write` refuses -- the block's own bindable fact carries no
@@ -8650,6 +8709,14 @@ class BindCliEndToEndTests(unittest.TestCase):
         with self.assertRaises(Refused) as ctx:
             paper_cli.cmd_write(self._write_args())
         self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+        # 1b. Owner amendment (Decision I): `bind` also refuses until the
+        #     whole cut has been argued -- a settled `separate` round
+        #     naming this exact (block, fact) with this exact title set.
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_bind(self._bind_args())
+        self.assertEqual(ctx.exception.code, "BINDING_UNARGUED")
+        self._settle("a.only", ["3. Something"])
 
         # 2. `bind` answers it -- an operator using the skill, never a
         #    hand edit to `sections/a.md`.
@@ -8683,9 +8750,16 @@ class BindCliEndToEndTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "BINDING_LINEAGE_REQUIRED")
 
     def test_reopen_then_bind_a_different_section_through_the_cli(self) -> None:
+        self._settle("a.only", ["3. Something"])
         paper_cli.cmd_bind(self._bind_args())
 
         paper_cli.cmd_bind(self._bind_args(reopen=True, lineage=None, section=None))
+
+        # Owner amendment (Decision I): rebinding to a DIFFERENT title set
+        # for the SAME (block, fact) needs its OWN settled round naming
+        # that exact scope -- the round settling "3. Something" above does
+        # not license "1. Intro".
+        self._settle("a.only", ["1. Intro"])
         result = paper_cli.cmd_bind(self._bind_args(section=["1. Intro"]))
 
         self.assertEqual(result["sections"], ["1. Intro"])

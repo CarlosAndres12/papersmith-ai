@@ -134,28 +134,28 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 5: U6 — Owner Amendment: `BINDING_UNARGUED` Precondition on `bind`
 
-- [ ] 5.0 **Read before starting.** Landing `BINDING_UNARGUED` in `bind_section` makes EVERY existing caller of `bind`/`cmd_bind`/`bind_section` that records without a prior settled round start refusing. Audit every such call site in `tests/test_paper_writing.py` and `tests/test_paper_decisions.py` (the archived `source-section-binding` suite) before writing new tests; each MUST be updated in THIS phase to first record a settled `separate` round (or target an `unmeasured` root) before asserting a successful bind. Getting this wrong reddens the corpus mid-sequence for a reason unrelated to any real defect.
-- [ ] 5.1 RED: `settled_round_licensing` tests for all four checks (id/root/lineage/revision match; digest match; score total 0; title-set equality), for both root kinds (`PROSE` via `resolve_lineage`, `INGESTED` via `resolve_ingested_document`).
-- [ ] 5.2 Implement `settled_round_licensing(paper_dir, root, lineage, revision, document_digest, qualified_block_id, fact_id, sections)` in `paper_declarations.py`, returning `{"state", "round", "failed_check", "argued_sections", "reason"}`; run 5.1 green.
-- [ ] 5.3 RED: no-round-at-all fixture — `bind --sections` with no `separate` round ever recorded for the lineage refuses `BINDING_UNARGUED`, naming the block, fact, root, resolved revision, and the exact `separate --proposal <path>` invocation to run next.
-- [ ] 5.4 Add the keyword-only `source_base` param and the `BINDING_UNARGUED` guard to `paper_declarations.bind_section`, gated by `settled_round_licensing`; add `bind --sections` with the same default/help text every sibling subcommand carries; `source_base=None` derives the default and never means "skip the check."
-- [ ] 5.5 Run 5.3 green.
-- [ ] 5.6 Execute the 5.0 audit: retrofit every existing `bind`/`cmd_bind`/`bind_section` test fixture to first record a settled round via `separate` (or target an unmeasured root); confirm the FULL pre-existing `source-section-binding` suite is green again under the new precondition, with no fixture silently skipped.
-- [ ] 5.7 RED: happy-path fixture — a settled round naming the exact `(block, fact)` and the exact title set (order-independent, set equality) licenses the bind; run green.
-- [ ] 5.8 RED: scope-mismatch fixtures — a settled round naming a different block, a subset of the argued titles, and a superset of the argued titles each refuse `BINDING_UNARGUED`, naming both title sets verbatim.
-- [ ] 5.9 Confirm 5.8 green under the set-equality check (check 4) from 5.2/5.4.
-- [ ] 5.10 Mutation (named explicitly, must not be dropped): weaken check 4 from set **equality** to "the argued set is non-empty"; confirm the subset-bind and wrong-block fixtures from 5.8 go red — they are the only fixtures that catch this weakening.
-- [ ] 5.11 RED: licence-expiry fixtures — a new revision published under a `PROSE` root voids the licence, naming both revisions; an in-place rewrite of the same filename voids it, naming both digests; an `INGESTED` root's licence expires only by digest, never by revision.
-- [ ] 5.12 Confirm 5.11 green under checks 1 and 2.
-- [ ] 5.13 Mutation: drop check 2 (digest) from `settled_round_licensing`; confirm the in-place-rewrite fixture (same revision filename, one heading renamed) goes red.
-- [ ] 5.14 Mutation: drop check 1 (root/lineage/revision match) from `settled_round_licensing`; confirm the new-revision fixture goes red.
-- [ ] 5.15 RED (named explicitly, must not be dropped): call `bind_section` DIRECTLY, bypassing `cmd_bind`/the CLI entirely, with no round recorded; assert it still refuses `BINDING_UNARGUED`.
-- [ ] 5.16 Confirm 5.15 passes because the guard lives inside `bind_section` itself, not only in `cmd_bind`. As the mutation proof: temporarily move the check into `cmd_bind` only, confirm 5.15 goes red, then restore the guard to `bind_section`.
-- [ ] 5.17 RED: unmeasured-root fixture — a fact whose source root is `unmeasured` records as before with no `BINDING_UNARGUED` refusal, and its payload reports `separation: unmeasured(<reason>)`.
-- [ ] 5.18 Confirm 5.17 green; add a dedicated fixture confirming `--reopen` succeeds with no settled round at all, in every state.
-- [ ] 5.19 RED: shortcut-closed e2e — `bind` with no round at all refuses `BINDING_UNARGUED`; the same `bind` after a settled `separate` succeeds; `--reopen` succeeds in both states.
-- [ ] 5.20 Run 5.19 green; run the full modified `source-section-binding` suite plus the new `BINDING_UNARGUED` tests together.
-- [ ] 5.21 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green, zero new failures beyond the known pre-existing `mechanisms` baseline.
+- [x] 5.0 **Read before starting.** Landing `BINDING_UNARGUED` in `bind_section` makes EVERY existing caller of `bind`/`cmd_bind`/`bind_section` that records without a prior settled round start refusing. Audit every such call site in `tests/test_paper_writing.py` and `tests/test_paper_decisions.py` (the archived `source-section-binding` suite) before writing new tests; each MUST be updated in THIS phase to first record a settled `separate` round (or target an `unmeasured` root) before asserting a successful bind. Getting this wrong reddens the corpus mid-sequence for a reason unrelated to any real defect.
+- [x] 5.1 RED: `settled_round_licensing` tests for all four checks (id/root/lineage/revision match; digest match; score total 0; title-set equality), for both root kinds (`PROSE` via `resolve_lineage`, `INGESTED` via `resolve_ingested_document`).
+- [x] 5.2 Implement `settled_round_licensing(paper_dir, root, lineage, revision, document_digest, qualified_block_id, fact_id, sections)` in `paper_declarations.py`, returning `{"state", "round", "failed_check", "argued_sections", "reason"}`; run 5.1 green.
+- [x] 5.3 RED: no-round-at-all fixture — `bind --sections` with no `separate` round ever recorded for the lineage refuses `BINDING_UNARGUED`, naming the block, fact, root, resolved revision, and the exact `separate --proposal <path>` invocation to run next.
+- [x] 5.4 Add the keyword-only `source_base` param and the `BINDING_UNARGUED` guard to `paper_declarations.bind_section`, gated by `settled_round_licensing`; add `bind --sections` with the same default/help text every sibling subcommand carries; `source_base=None` derives the default and never means "skip the check."
+- [x] 5.5 Run 5.3 green.
+- [x] 5.6 Execute the 5.0 audit: retrofit every existing `bind`/`cmd_bind`/`bind_section` test fixture to first record a settled round via `separate` (or target an unmeasured root); confirm the FULL pre-existing `source-section-binding` suite is green again under the new precondition, with no fixture silently skipped.
+- [x] 5.7 RED: happy-path fixture — a settled round naming the exact `(block, fact)` and the exact title set (order-independent, set equality) licenses the bind; run green.
+- [x] 5.8 RED: scope-mismatch fixtures — a settled round naming a different block, a subset of the argued titles, and a superset of the argued titles each refuse `BINDING_UNARGUED`, naming both title sets verbatim.
+- [x] 5.9 Confirm 5.8 green under the set-equality check (check 4) from 5.2/5.4.
+- [x] 5.10 Mutation (named explicitly, must not be dropped): weaken check 4 from set **equality** to "the argued set is non-empty"; confirm the subset-bind and wrong-block fixtures from 5.8 go red — they are the only fixtures that catch this weakening.
+- [x] 5.11 RED: licence-expiry fixtures — a new revision published under a `PROSE` root voids the licence, naming both revisions; an in-place rewrite of the same filename voids it, naming both digests; an `INGESTED` root's licence expires only by digest, never by revision.
+- [x] 5.12 Confirm 5.11 green under checks 1 and 2.
+- [x] 5.13 Mutation: drop check 2 (digest) from `settled_round_licensing`; confirm the in-place-rewrite fixture (same revision filename, one heading renamed) goes red.
+- [x] 5.14 Mutation: drop check 1 (root/lineage/revision match) from `settled_round_licensing`; confirm the new-revision fixture goes red.
+- [x] 5.15 RED (named explicitly, must not be dropped): call `bind_section` DIRECTLY, bypassing `cmd_bind`/the CLI entirely, with no round recorded; assert it still refuses `BINDING_UNARGUED`.
+- [x] 5.16 Confirm 5.15 passes because the guard lives inside `bind_section` itself, not only in `cmd_bind`. As the mutation proof: temporarily move the check into `cmd_bind` only, confirm 5.15 goes red, then restore the guard to `bind_section`.
+- [x] 5.17 RED: unmeasured-root fixture — a fact whose source root is `unmeasured` records as before with no `BINDING_UNARGUED` refusal, and its payload reports `separation: unmeasured(<reason>)`.
+- [x] 5.18 Confirm 5.17 green; add a dedicated fixture confirming `--reopen` succeeds with no settled round at all, in every state.
+- [x] 5.19 RED: shortcut-closed e2e — `bind` with no round at all refuses `BINDING_UNARGUED`; the same `bind` after a settled `separate` succeeds; `--reopen` succeeds in both states.
+- [x] 5.20 Run 5.19 green; run the full modified `source-section-binding` suite plus the new `BINDING_UNARGUED` tests together.
+- [x] 5.21 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green, zero new failures beyond the known pre-existing `mechanisms` baseline.
 
 ## Phase 6: U5 — Docs, Roster Re-Derivation, Final Gate Re-Run
 

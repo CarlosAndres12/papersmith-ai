@@ -24,10 +24,16 @@ Public surface:
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=..., produced_by=()) -> dict
     decline_fact(paper_dir, id, reason, condition, *, clock=..., produced_by=()) -> dict
-    bind_section(paper_dir, qualified_block_id, fact_id, lineage, sections, *, clock=...)
-        -> dict  (the-requirement-names-the-section-that-feeds-it, U3e: a THIRD
-        record kind, `binding`, keyed by (block, fact) -- the verb that RECORDS
-        a `source-section-binding`, in `paper/`, never `sections/*.md`)
+    bind_section(paper_dir, qualified_block_id, fact_id, lineage, sections, *,
+        source_base=None, clock=...) -> dict  (the-requirement-names-the-
+        section-that-feeds-it, U3e: a THIRD record kind, `binding`, keyed by
+        (block, fact) -- the verb that RECORDS a `source-section-binding`, in
+        `paper/`, never `sections/*.md`. Owner amendment,
+        `the-whole-cut-is-argued-before-any-section-is-claimed`, design.md
+        Decision I: for a MEASURED, document-rooted fact, refuses
+        `BINDING_UNARGUED` unless `settled_round_licensing` below licenses
+        this exact claim; an UNMEASURED root records as before, reporting
+        `separation: unmeasured(<reason>)` in the returned payload)
     reopen_binding(paper_dir, qualified_block_id, fact_id, *, clock=...) -> dict
     read_bindings(paper_dir) -> dict  (read-only; qualified_block_id ->
         {fact_id: {"lineage": str, "sections": tuple}}; {} before paper/ exists)
@@ -37,6 +43,11 @@ Public surface:
         keyed by a DERIVED round number; append-only, no reopen)
     read_separation_rounds(paper_dir, root, lineage, revision) -> tuple  (read-only;
         ordered by round; () before paper/ exists)
+    settled_round_licensing(paper_dir, root, lineage, revision, document_digest,
+        qualified_block_id, fact_id, sections) -> dict  (owner amendment,
+        design.md Decision I: the four checks `bind_section` gates on, as ONE
+        predicate -- {"state": "licensed"|"refused", "round", "failed_check",
+        "argued_sections", "reason"})
     describe_binding_candidates(status, root) -> dict  (pure disk read; every
         lineage a document-rooted or ingested-identity root carries RIGHT NOW,
         its own current revision/paper, and the section titles read from it --
@@ -69,6 +80,7 @@ Public surface:
 from __future__ import annotations
 
 import enum
+import hashlib
 import json
 import os
 import re
@@ -528,7 +540,7 @@ def _binding_record_id(qualified_block_id: str, fact_id: str) -> str:
 
 def bind_section(
     paper_dir: Path, qualified_block_id: str, fact_id: str, lineage: str, sections,
-    *, clock=paper_region.default_clock,
+    *, source_base: Path | None = None, clock=paper_region.default_clock,
 ) -> dict:
     """Records ONE `binding` -- the `source-section-binding` half of a
     `requires_facts` entry, decided by USING the skill (`bind`), never by
@@ -565,6 +577,30 @@ def bind_section(
     (`_set_record`'s own guard, reused) when this exact (block, fact) pair
     is already recorded and `reopen_binding` was not run first.
 
+    Owner amendment (`the-whole-cut-is-argued-before-any-section-is-
+    claimed`, design.md Decision I): for a MEASURED (document-rooted)
+    `fact_id`, refuses `BINDING_UNARGUED` (new; work-state) unless
+    `settled_round_licensing` licenses this exact `(qualified_block_id,
+    fact_id)` claim against a settled `separate` round for the document
+    resolved and digested RIGHT NOW. Checked and raised HERE, before
+    `_set_record` ever runs — the same precedent `decline_fact`'s own
+    `DECLINE_REASON_REQUIRED` set, so `cmd_bind` cannot be skipped to route
+    around it. `source_base` (keyword-only, mirrors `paper_graph.
+    assemble_corpus`'s own parameter) is the directory each `PROSE`-kind
+    root resolves under; `None` derives `paper_dir.parent`, the SAME
+    default `assemble_corpus` derives from `sections_dir.parent` under this
+    skill's own shipped `<repo>/paper` + `<repo>/sections` layout —
+    `source_base=None` NEVER means "skip the check". An UNMEASURED root
+    (no document to argue a cut over at all) records exactly as before,
+    with no precondition; either way the returned payload carries a
+    `separation` key reporting `"licensed(round=N)"` or
+    `"unmeasured(<reason>)"` (`source-section-binding` spec, `Requirement:
+    An Unmeasured Root Is Reported, Never Silently Passed`). No
+    `paper_graph` import and no corpus assembly here: every resolver this
+    needs (`FACT_SOURCE_ROOT`, `source_root_status`, `read_revisions_
+    marker`, `resolve_lineage`, `resolve_ingested_document`, `read_
+    separation_rounds`) already lives in this module.
+
     Raises nothing about `qualified_block_id`'s own shape or whether
     `fact_id` is really one of that block's `requires_facts` — that cross-
     check is the CALLER's concern (`paper_cli.cmd_bind`), which holds the
@@ -592,12 +628,20 @@ def bind_section(
         raise Refused(
             "BINDING_SECTIONS_REQUIRED", "recording a binding requires at least one section title",
         )
+
+    separation_report = _binding_separation_report(
+        paper_dir, qualified_block_id, fact_id, lineage, sections, source_base,
+    )
+
     binding_id = _binding_record_id(qualified_block_id, fact_id)
-    return _set_record(
+    result = _set_record(
         paper_dir, kind="binding", id_=binding_id, value_field="lineage", value=lineage,
         clock=clock,
         extra={"block": qualified_block_id, "fact": fact_id, "sections": list(sections)},
     )
+    result = dict(result)
+    result["separation"] = separation_report
+    return result
 
 
 def reopen_binding(
@@ -794,6 +838,264 @@ def record_separation_round(
         "round": round_number, "id": id_, "root": root, "lineage": lineage, "revision": revision,
         "document_digest": document_digest, "assignments": stored_assignments, "score": score,
     }
+
+
+def _read_separation_rounds_any_revision(paper_dir: Path, root: str, lineage: str) -> tuple:
+    """Every currently-recorded `separation` round for this `(root,
+    lineage)` PAIR, across EVERY revision ever scored -- `read_separation_
+    rounds`'s own revision-UNSCOPED sibling. Consulted ONLY to report which
+    revision(s) a licence expired against (Decision I checks 1/2, owner
+    amendment); `settled_round_licensing` below never lets a round found
+    only here license a bind -- that is `read_separation_rounds`'s own
+    exact-revision job alone, unmixed. Same `{}` -> `()` tolerance and same
+    private readers every other reader of this region already goes
+    through."""
+    tex_path = paper_dir / "main.tex"
+    if not paper_dir.is_dir() or not tex_path.is_file():
+        return ()
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    rounds = []
+    for entry in body["records"]:
+        if entry["kind"] != "separation" or not entry.get("fixed"):
+            continue
+        if entry["root"] != root or entry["lineage"] != lineage:
+            continue
+        rounds.append({
+            "round": entry["round"], "id": entry["id"], "root": entry["root"],
+            "lineage": entry["lineage"], "revision": entry["revision"],
+            "document_digest": entry["document_digest"], "assignments": entry["assignments"],
+            "score": entry["score"],
+        })
+    rounds.sort(key=lambda entry: (entry["revision"], entry["round"]))
+    return tuple(rounds)
+
+
+def settled_round_licensing(
+    paper_dir: Path, root: str, lineage: str, revision: str, document_digest: str,
+    qualified_block_id: str, fact_id: str, sections,
+) -> dict:
+    """Owner amendment (`the-whole-cut-is-argued-before-any-section-is-
+    claimed`, design.md Decision I): the FOUR checks, as ONE predicate both
+    `bind_section` and its own tests go through, so the message a refusal
+    builds from this is DERIVED, never composed a second time.
+
+    `root`/`lineage`/`revision`/`document_digest` are already RESOLVED by
+    the caller (`bind_section`, over the SAME `source_root_status`/
+    `read_revisions_marker`/`resolve_lineage`/`resolve_ingested_document`
+    chain `paper_graph.resolve_section_index` runs for `separate` — never
+    re-derived here, and never by importing `paper_graph`). `sections` is
+    the title set BEING bound; `read_separation_rounds` already scopes by
+    the EXACT `(root, lineage, revision)` triple (Decision A's own id
+    shape), so check 1 (id/root/lineage/revision) is answered by that
+    scoping returning ANYTHING at all for the CURRENT revision — never by a
+    round recorded under a different, expired one.
+
+    Returns `{"state": "licensed"|"refused", "round": int|None,
+    "failed_check": "identity"|"digest"|"score"|"scope"|None,
+    "argued_sections": tuple|None, "reason": str|None}`. `failed_check`
+    names which of Decision I's four checks blocked the FIRST licensing
+    candidate this predicate could not clear, checked in the SAME 1→2→3→4
+    order the decision numbers them, so a document that fails check 1
+    never gets a check-4 message that would only confuse the operator
+    about what to fix next.
+
+    check 1 (identity): no round is recorded for the CURRENT `(root,
+    lineage, revision)` at all. `_read_separation_rounds_any_revision` is
+    consulted ONLY to distinguish "never argued" from "argued against a
+    revision that has since changed" in the `reason` text -- neither
+    outcome licenses anything.
+
+    check 2 (digest, the in-place-rewrite guard): among rounds for the
+    current `(root, lineage, revision)`, none carries a `document_digest`
+    equal to the one read from disk RIGHT NOW.
+
+    check 3 (settled, not merely recorded): among those with a matching
+    digest, none carries a stored `score` of exactly `0`.
+
+    check 4 (scope, set equality): among those settled, current-digest
+    rounds, no `assignments` entry names exactly `(qualified_block_id,
+    fact_id)` with a title set equal, AS A SET, to `sections` — covering
+    both "this round never argued this claim at all" (`argued_sections`
+    stays `None`) and "it argued a different scope" (`argued_sections`
+    carries the round's own set, so a refusal can print both sets
+    verbatim, per design.md Decision J).
+    """
+    argued = frozenset(sections)
+
+    current = read_separation_rounds(paper_dir, root, lineage, revision)
+    if not current:
+        stale = _read_separation_rounds_any_revision(paper_dir, root, lineage)
+        stale_revisions = sorted({entry["revision"] for entry in stale})
+        if not stale_revisions:
+            reason = (
+                f"no separation round is recorded for (root={root!r}, lineage={lineage!r}); "
+                f"the resolved revision right now is {revision!r}"
+            )
+        else:
+            reason = (
+                f"every separation round recorded for (root={root!r}, lineage={lineage!r}) was "
+                f"scored against revision(s) {stale_revisions!r}, not the revision resolved "
+                f"right now, {revision!r} -- the licence expired when the revision changed"
+            )
+        return {
+            "state": "refused", "round": None, "failed_check": "identity",
+            "argued_sections": None, "reason": reason,
+        }
+
+    digest_current = [entry for entry in current if entry["document_digest"] == document_digest]
+    if not digest_current:
+        stale_round = current[-1]
+        return {
+            "state": "refused", "round": stale_round["round"], "failed_check": "digest",
+            "argued_sections": None,
+            "reason": (
+                f"round {stale_round['round']} was scored against document digest "
+                f"{stale_round['document_digest']!r}; the document at revision {revision!r} "
+                f"reads as {document_digest!r} right now -- the licence expired when the "
+                "document's bytes changed"
+            ),
+        }
+
+    settled = [entry for entry in digest_current if entry["score"] == 0]
+    if not settled:
+        unsettled = digest_current[-1]
+        return {
+            "state": "refused", "round": unsettled["round"], "failed_check": "score",
+            "argued_sections": None,
+            "reason": (
+                f"round {unsettled['round']} is recorded against the current document but "
+                f"scores {unsettled['score']}, not settled -- it is history, not a licence"
+            ),
+        }
+
+    scope_mismatch = None
+    for entry in settled:
+        for assignment in entry["assignments"]:
+            if assignment["block"] != qualified_block_id or assignment["fact"] != fact_id:
+                continue
+            recorded = frozenset(assignment["sections"])
+            if recorded == argued:
+                return {
+                    "state": "licensed", "round": entry["round"], "failed_check": None,
+                    "argued_sections": tuple(sorted(recorded)), "reason": None,
+                }
+            scope_mismatch = (entry["round"], recorded)
+
+    if scope_mismatch is not None:
+        round_number, recorded = scope_mismatch
+        return {
+            "state": "refused", "round": round_number, "failed_check": "scope",
+            "argued_sections": tuple(sorted(recorded)),
+            "reason": (
+                f"round {round_number} names {sorted(recorded)!r} for "
+                f"{qualified_block_id!r}/{fact_id!r}, not {sorted(argued)!r} -- set equality, "
+                "not a subset or superset, licenses a bind"
+            ),
+        }
+
+    return {
+        "state": "refused", "round": None, "failed_check": "scope",
+        "argued_sections": None,
+        "reason": (
+            f"no settled round names {qualified_block_id!r}/{fact_id!r} at all -- an argument "
+            "over this document exists, but never for this exact claim"
+        ),
+    }
+
+
+def _resolve_bind_document(status: dict, root: SourceRoot, lineage: str) -> Path:
+    """The document `settled_round_licensing` measures against, for a
+    document-rooted (`status["state"] == "document-rooted"`) root -- the
+    SAME marker/lineage or identity resolution `paper_graph.
+    resolve_section_index` performs for `separate`, never imported here
+    (Decision I: `bind_section` assembles no corpus). `PROSE`/`REPOSITORY`
+    roots resolve by marker + max-ordinal (`read_revisions_marker` /
+    `resolve_lineage`, both already in this module); `INGESTED` roots
+    resolve by identity (`resolve_ingested_document`) -- a `REPOSITORY`
+    root is never document-rooted in practice (`source_root_status`), so
+    this branch is dead for it, matching `resolve_section_index`'s own
+    docstring.
+
+    Refuses `SOURCE_REVISIONS_UNDECLARED`/`MALFORMED_SOURCE_MARKER`
+    (`read_revisions_marker`, reused verbatim) or `SOURCE_LINEAGE_
+    UNRESOLVED` (`resolve_lineage`/`resolve_ingested_document`, reused
+    verbatim) exactly as `separate` would for the identical document --
+    never a second code for the same condition."""
+    if root.kind is SourceRootKind.INGESTED:
+        return resolve_ingested_document(status["path"], lineage)
+    marker = read_revisions_marker(status["path"])
+    if marker is None:
+        raise Refused(
+            "SOURCE_REVISIONS_UNDECLARED",
+            f"{root.name!r} is document-rooted but carries no '.paper-writing.json' marker",
+        )
+    return resolve_lineage(status["path"], lineage, marker)
+
+
+def _binding_unargued_detail(
+    qualified_block_id: str, fact_id: str, root_name: str, lineage: str, revision: str,
+    sections: tuple, licensing: dict,
+) -> str:
+    """Design.md Decision J: names the block, the fact, the root, the
+    resolved revision, WHICH of the four checks failed, both title sets
+    verbatim on a scope disagreement, and the exact `separate --proposal
+    <path>` invocation that answers it — the refusal IS the question, not
+    merely a withheld permission."""
+    parts = [
+        f"block={qualified_block_id!r} fact={fact_id!r} root={root_name!r} "
+        f"revision={revision!r} failed_check={licensing['failed_check']!r}",
+        licensing["reason"],
+    ]
+    if licensing["failed_check"] == "scope":
+        parts.append(
+            f"this bind names {sorted(sections)!r}"
+            + (
+                f"; the settled round argues {list(licensing['argued_sections'])!r}"
+                if licensing["argued_sections"] is not None else ""
+            )
+        )
+    parts.append(
+        f"run `separate --proposal <path>` naming lineage={lineage!r} and an assignment "
+        f"{{\"block\": {qualified_block_id!r}, \"fact\": {fact_id!r}, \"sections\": [...]}} "
+        "that settles at total=0"
+    )
+    return " | ".join(parts)
+
+
+def _binding_separation_report(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, lineage: str, sections: tuple,
+    source_base: Path | None,
+) -> str:
+    """`bind_section`'s own precondition dispatch (Decision I): an
+    UNMEASURED root records with no precondition at all, reporting
+    `unmeasured(<reason>)`; a document-rooted (MEASURED) root resolves the
+    document `separate` would resolve, digests it RIGHT NOW, and refuses
+    `BINDING_UNARGUED` unless `settled_round_licensing` licenses this exact
+    claim. Called BEFORE `_set_record` ever runs (`bind_section`'s own
+    ordering) — a refused claim is never partially recorded."""
+    root = FACT_SOURCE_ROOT[fact_id]
+    resolved_base = source_base if source_base is not None else paper_dir.parent
+    status = source_root_status(resolved_base, root)
+    if status["state"] != "document-rooted":
+        return f"unmeasured({status['reason']})"
+
+    revision_path = _resolve_bind_document(status, root, lineage)
+    document_digest = hashlib.sha256(revision_path.read_bytes()).hexdigest()
+    licensing = settled_round_licensing(
+        paper_dir, root.name, lineage, revision_path.name, document_digest,
+        qualified_block_id, fact_id, sections,
+    )
+    if licensing["state"] == "licensed":
+        return f"licensed(round={licensing['round']})"
+    raise Refused(
+        "BINDING_UNARGUED",
+        _binding_unargued_detail(
+            qualified_block_id, fact_id, root.name, lineage, revision_path.name, sections,
+            licensing,
+        ),
+    )
 
 
 def _heading_titles(path: Path) -> list:

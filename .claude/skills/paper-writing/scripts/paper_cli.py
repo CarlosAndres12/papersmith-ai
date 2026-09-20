@@ -465,6 +465,13 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # never trusting a stored score) -----------------------------------------
     "SEPARATION_ROUND_ABSENT": WORK_STATE,
     "SEPARATION_CONCESSION_REGRESSED": WORK_STATE,
+    # --- the-whole-cut-is-argued-before-any-section-is-claimed, U6 (owner
+    # amendment, design.md Decision I): `bind`'s own precondition -- for a
+    # measured, document-rooted fact, no settled `separate` round licenses
+    # this exact `(block, fact)` claim with this exact title set against the
+    # document resolved and digested right now (`paper_declarations.
+    # settled_round_licensing`, enforced inside `bind_section` itself) -----
+    "BINDING_UNARGUED": WORK_STATE,
 }
 
 
@@ -833,17 +840,29 @@ def cmd_bind(args: argparse.Namespace) -> dict:
     (`the-requirement-names-the-section-that-feeds-it`, U3e ruling,
     design.md Decision J). `--reopen` clears an already-recorded (block,
     fact) pair's fixed state instead of recording one (`paper_
-    declarations.reopen_binding`); every other invocation records
-    (`paper_declarations.bind_section`), which itself refuses `UNKNOWN_
-    FACT`, `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_REQUIRED`,
-    `BINDING_SECTIONS_REQUIRED` and `DECLARATION_FIXED` — enforced in that
-    module, not duplicated here.
+    declarations.reopen_binding`) -- deliberately unguarded by the owner
+    amendment below, since withdrawing a claim never creates one. Every
+    other invocation records (`paper_declarations.bind_section`), which
+    itself refuses `UNKNOWN_FACT`, `BINDING_FACT_NOT_BINDABLE`,
+    `BINDING_LINEAGE_REQUIRED`, `BINDING_SECTIONS_REQUIRED`,
+    `DECLARATION_FIXED` and, for a measured root, `BINDING_UNARGUED`
+    (`the-whole-cut-is-argued-before-any-section-is-claimed`, design.md
+    Decision I) — all enforced in that module, not duplicated here.
+
+    `--sections` (the owner amendment's own addition, same default/help
+    text every sibling subcommand carries) resolves `sections_dir`, whose
+    PARENT is `source_base` — the identical `resolved_base = source_base
+    or sections_dir.parent` derivation `paper_graph.assemble_corpus` uses,
+    so `bind`'s own precondition resolves a `PROSE`-kind root under the
+    SAME directory `separate`/`write` already resolve it under.
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     if args.reopen:
         return paper_declarations.reopen_binding(paper_dir, args.block, args.fact)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
     return paper_declarations.bind_section(
         paper_dir, args.block, args.fact, args.lineage, tuple(args.section or ()),
+        source_base=sections_dir.parent,
     )
 
 
@@ -2486,6 +2505,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_bind.add_argument(
         "--paper", default=None,
         help="override paper/ location; must resolve inside the repository root",
+    )
+    p_bind.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
     )
     p_bind.add_argument(
         "--block", required=True,
