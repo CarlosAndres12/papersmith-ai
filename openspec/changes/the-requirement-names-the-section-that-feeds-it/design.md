@@ -194,7 +194,8 @@ conflate "which document" with "which root holds documents at all".
 
 Roster is **133 today** (the pre-change baseline, before U1 started); the count after each unit
 lands is re-derived with `reachable_paper_refusal_codes()`, never forecast — measured **139** after
-U2c.
+U2c, unchanged at **139** after U2d (a shape widening, no new raise site), and **140** after U3
+(`SECTION_BINDING_ABSENT`'s own raise site, unconditional from the moment it lands).
 
 ## File Changes
 
@@ -206,8 +207,8 @@ U2c.
 | `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged |
 | `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it |
 | `proposals/.paper-writing.json` | Create | `{"revisions":{"revision_prefix":"r","ordinal_digits":2}}` |
-| `sections/01-*.md`, `sections/02-*.md` | Modify | Bindings transcribed; prose bytes untouched |
-| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture |
+| `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify | Bindings transcribed for every bindable requirement whose root is measured (`formulation`, `dataset`); prose bytes untouched below the header |
+| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests |
 
 ## Interfaces
 

@@ -33,6 +33,10 @@
           "source": {
             "file": "sections/01-materials-and-methods.md",
             "quote": "The dataset — when this section owns it"
+          },
+          "document": {
+            "lineage": "s41597-026-06758-7",
+            "section": ["Methods", "Data Records"]
           }
         }
       ],
@@ -48,6 +52,13 @@
           "source": {
             "file": "sections/01-materials-and-methods.md",
             "quote": "The mathematical formulation of the proposal"
+          },
+          "document": {
+            "lineage": "research-concept",
+            "section": [
+              "1. Fundamentos de métodos de kernel",
+              "2. Estimación de la entropía de Rényi basada en kernels"
+            ]
           }
         }
       ],
@@ -62,6 +73,14 @@
           "source": {
             "file": "sections/01-materials-and-methods.md",
             "quote": "The mathematical formulation of the proposal"
+          },
+          "document": {
+            "lineage": "research-concept",
+            "section": [
+              "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia",
+              "4. Alineación local condicionada por el sujeto objetivo",
+              "5. Normalización de los términos de adaptación"
+            ]
           }
         }
       ],

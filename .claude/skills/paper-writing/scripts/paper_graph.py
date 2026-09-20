@@ -268,7 +268,34 @@ def _verify_source_section_bindings(corpus: Corpus) -> None:
        `SECTION_NOT_IN_SOURCE`, a count above one refuses
        `SECTION_TITLE_AMBIGUOUS`, both naming the owning block and the
        title.
+
+    0. (U3, `the-requirement-names-the-section-that-feeds-it`) Before any
+       resolution runs: every `requires_facts` entry naming a BINDABLE
+       fact (`paper_declarations.is_bindable_fact`) whose own source root
+       `corpus.source_roots` reports MEASURED (`document-rooted`, never
+       `unmeasured`) MUST carry at least one `document` binding for that
+       fact id, or this refuses `SECTION_BINDING_ABSENT` naming the
+       owning block and the fact id. The obligation is UNCONDITIONAL —
+       it does not consult `BlockRecord.optional` — but it never fires
+       for a fact whose root is still `unmeasured`: an unmeasured root is
+       a paper at an earlier stage, never a fault (design.md Decision B).
     """
+    for qualified_id, record in corpus.blocks.items():
+        bound_fact_ids = {fact_id for fact_id, _lineage, _title in record.source_bindings}
+        for fact_id in record.requires_facts:
+            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root is None:
+                continue
+            status = corpus.source_roots.get(root.name)
+            if status is None or status["state"] == "unmeasured":
+                continue
+            if fact_id not in bound_fact_ids:
+                raise Refused(
+                    "SECTION_BINDING_ABSENT",
+                    f"{qualified_id}: {fact_id!r} is bindable and its source root "
+                    f"{root.name!r} is measured, but carries no 'document' binding",
+                )
+
     memo: dict = {}
     for qualified_id, record in corpus.blocks.items():
         for fact_id, lineage, section_title in record.source_bindings:

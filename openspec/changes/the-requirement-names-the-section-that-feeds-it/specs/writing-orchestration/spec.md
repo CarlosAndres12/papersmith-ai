@@ -17,6 +17,12 @@ MUST NOT be treated as sufficient: `write` MUST perform its own corpus
 assembly and raise the refusal itself, never rely on a cached report a
 read-only verb produced earlier.
 
+`EVIDENCE_ROOT_AMBIGUOUS` (`source-section-binding` spec, added by U2c) is
+computed unconditionally for every root `Corpus.source_roots` names, inside
+the SAME corpus assembly the six codes above reach `write` through — it
+MUST therefore also stop `write` before the readiness stage begins, under
+the identical rule: never reachable only from a read-only verb.
+
 #### Scenario: `write` refuses before drafting on an unresolved binding
 
 - GIVEN a block whose bindable requirement's bound section title is absent
@@ -45,6 +51,15 @@ read-only verb produced earlier.
 - THEN `write` performs its own assembly and refuses the same way, rather
   than proceeding on the assumption that only the read-only verb needs to
   check
+
+#### Scenario: `write` refuses when more than one `guidance/` folder is classed evidence
+
+- GIVEN more than one folder under `guidance/` classed `'evidence'`
+- WHEN `write` is invoked for any block, whether or not it names a
+  `dataset` binding
+- THEN it refuses `EVIDENCE_ROOT_AMBIGUOUS` naming every candidate folder,
+  before the draft stage runs, since `Corpus.source_roots` is computed for
+  every root unconditionally as part of the same corpus assembly
 
 #### Scenario: Mutation — wiring the guard only into the read-only verb is caught
 

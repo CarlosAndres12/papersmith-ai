@@ -27,6 +27,10 @@
           "source": {
             "file": "sections/08-abstract.md",
             "quote": "The dataset — the condition, population, or process it contains"
+          },
+          "document": {
+            "lineage": "s41597-026-06758-7",
+            "section": "Methods"
           }
         }
       ],
@@ -71,6 +75,10 @@
           "source": {
             "file": "sections/08-abstract.md",
             "quote": "The mathematical formulation"
+          },
+          "document": {
+            "lineage": "research-concept",
+            "section": "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia"
           }
         }
       ],
@@ -94,6 +102,14 @@
           "source": {
             "file": "sections/08-abstract.md",
             "quote": "The mathematical formulation"
+          },
+          "document": {
+            "lineage": "research-concept",
+            "section": [
+              "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia",
+              "4. Alineación local condicionada por el sujeto objetivo",
+              "5. Normalización de los términos de adaptación"
+            ]
           }
         },
         {

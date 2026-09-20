@@ -2085,6 +2085,25 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
             b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
         )
 
+    def _unbound_header(self, fact: str = "formulation") -> dict:
+        """A bindable `requires_facts` entry with NO `document` half --
+        `source-section-binding` spec, `Requirement: A Bindable Fact With
+        No Binding Refuses` (U3: the obligation is unconditional)."""
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only",
+                "requires_facts": [{
+                    "value": fact,
+                    "source": {
+                        "file": "sections/01-a.md",
+                        "quote": "The formulation, written here.",
+                    },
+                }],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
     def _bound_header(self, section_title: str, *, lineage: str = "research-concept") -> dict:
         return {
             "section": "a", "position": 1,
@@ -2407,6 +2426,92 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
             "",
             "tests.test_paper_writing.SourceSectionBindingCorpusTests"
             ".test_an_absent_title_refuses_section_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_a_bindable_fact_with_no_document_half_refuses_section_binding_absent(
+        self,
+    ) -> None:
+        """U3: the obligation is unconditional -- a bindable fact whose
+        source root is MEASURED but carries no `document` half refuses,
+        naming the owning block and the fact id."""
+        self._write_section("01-a.md", self._unbound_header("formulation"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+
+    def test_a_bindable_fact_under_an_unmeasured_root_carries_no_obligation(self) -> None:
+        """An unmeasured root is a normal state of a paper at an earlier
+        stage, never a fault: `SECTION_BINDING_ABSENT` MUST NOT fire for a
+        bindable fact whose own root is not yet document-rooted."""
+        self._write_section(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "experimental-design",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The design, written here.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The design, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        experiments = self.base / "experiments"
+        experiments.mkdir()
+        (experiments / ".gitkeep").write_text("", encoding="utf-8")
+
+        paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+    def test_a_bindable_fact_under_a_repository_root_carries_no_obligation(self) -> None:
+        """A `REPOSITORY`-kind root is always `unmeasured` BY KIND -- an
+        `implementation`-bound entry with no `document` half must never be
+        obligated, however populated the namesake directory is."""
+        self._write_section(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "implementation",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The implementation, written here.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The implementation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        implementation = self.base / "implementation"
+        implementation.mkdir()
+        (implementation / "README.md").write_text("# A target repo\n", encoding="utf-8")
+
+        paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+    def test_mutation_removing_the_absence_check_lets_an_unbound_fact_pass(self) -> None:
+        proc = _run_against_mutant(
+            "            if fact_id not in bound_fact_ids:\n",
+            "            if False:\n",
+            "tests.test_paper_writing.SourceSectionBindingCorpusTests"
+            ".test_a_bindable_fact_with_no_document_half_refuses_section_binding_absent",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         self._assert_guard_failed_under_mutation(proc)
@@ -6433,8 +6538,14 @@ class RefusalRosterTests(unittest.TestCase):
         own `EVIDENCE_ROOT_AMBIGUOUS` (more than one `guidance/` folder
         classed `'evidence'`) -- reachable the instant that raise site
         exists, no new import needed, since `paper_declarations.py` was
-        already imported by `paper_cli.py`."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 139)
+        already imported by `paper_cli.py`.
+
+        Moved from 139 to 140 in U3: `SECTION_BINDING_ABSENT`'s own raise
+        site now exists, unconditionally, in `paper_graph._verify_source_
+        section_bindings` -- the sixth code this change ships, landing with
+        the write-gate wiring rather than staying inert (design.md, Refusal
+        Codes table)."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 140)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -7767,6 +7878,228 @@ class WriteGateMutationProofTests(unittest.TestCase):
             "",
             "tests.test_paper_writing.WriteGateTests"
             ".test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class SourceSectionBindingWriteGateTests(unittest.TestCase):
+    """`writing-orchestration` spec, `Requirement: Section Binding
+    Resolution Gates write, Not Only A Read-Only Verb` (U3): every refusal
+    `source-section-binding` raises during corpus assembly MUST stop
+    `write` before the readiness stage, exercised through the REAL
+    `cmd_write` root directly -- never `paper_graph.assemble_corpus` called
+    in isolation, and never only the read-only `phases` verb. `write`
+    reaches `assemble_corpus` through `_resolve_write_gate`'s own first
+    statement, the SAME choke point `WriteGateTests` above already proves
+    load-bearing for `PHASE_NOT_READY` -- this class proves the identical
+    choke point also carries all six `source-section-binding` codes, plus
+    `EVIDENCE_ROOT_AMBIGUOUS` (U2c), never reachable only from `phases`.
+
+    Runs under a real `paper_dir`/`sections_dir` rooted under `FORGE_ROOT`
+    -- `cmd_write` resolves both through the real, non-injectable
+    `FORGE_ROOT` default, the same containment `WriteGateTests` above
+    requires. `--draft`/`--audit` name files that are NEVER created: every
+    refusal below MUST fire before either path is ever opened.
+    """
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-binding-write-gate-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+    def _write_bound_section(self, entry: dict) -> None:
+        blocks = [{
+            "id": "only", "requires_facts": [entry],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _marker(self, root: Path, prefix: str = "r", digits: int = 2) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def _args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def _assert_refuses_before_drafting(self, code: str) -> None:
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        before = tex_path.read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args())
+
+        self.assertEqual(ctx.exception.code, code)
+        self.assertFalse((self.test_root / "draft.json").exists())
+        self.assertFalse((self.test_root / "audit.json").exists())
+        self.assertEqual(tex_path.read_bytes(), before)
+
+    def test_write_refuses_section_not_in_source(self) -> None:
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "9. Missing"},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+        self._assert_refuses_before_drafting("SECTION_NOT_IN_SOURCE")
+
+    def test_write_refuses_section_title_ambiguous(self) -> None:
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 1. Intro\n", encoding="utf-8",
+        )
+
+        self._assert_refuses_before_drafting("SECTION_TITLE_AMBIGUOUS")
+
+    def test_write_refuses_section_binding_absent(self) -> None:
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+        self._assert_refuses_before_drafting("SECTION_BINDING_ABSENT")
+
+    def test_write_refuses_source_lineage_unresolved(self) -> None:
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "other-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+        self._assert_refuses_before_drafting("SOURCE_LINEAGE_UNRESOLVED")
+
+    def test_write_refuses_source_revisions_undeclared(self) -> None:
+        """The marker codes reach `write` through the SAME corpus assembly
+        as the binding codes -- invoked directly via `write`, never only
+        via `phases`."""
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        proposals.mkdir()
+        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+        self._assert_refuses_before_drafting("SOURCE_REVISIONS_UNDECLARED")
+
+    def test_write_refuses_malformed_source_marker(self) -> None:
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        proposals.mkdir()
+        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"class": "style-reference"}), encoding="utf-8",
+        )
+
+        self._assert_refuses_before_drafting("MALFORMED_SOURCE_MARKER")
+
+    def test_write_refuses_evidence_root_ambiguous(self) -> None:
+        """U2c's own amendment: `EVIDENCE_ROOT_AMBIGUOUS` is computed
+        unconditionally for every root in `Corpus.source_roots`, the same
+        corpus assembly the six named codes above reach `write` through --
+        never reachable only from the read-only `phases` verb."""
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "research-concept", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        guidance = self.test_root / "guidance"
+        for name in ("evidence-a", "evidence-b"):
+            folder = guidance / name
+            folder.mkdir(parents=True)
+            (folder / ".paper-writing.json").write_text(
+                json.dumps({"class": "evidence"}), encoding="utf-8",
+            )
+
+        self._assert_refuses_before_drafting("EVIDENCE_ROOT_AMBIGUOUS")
+
+
+class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
+    """The load-bearing proof (tasks.md 4.9): wiring the guard only into
+    the read-only `phases` verb and leaving `write` unguarded must fail
+    both the binding-code family and the marker-code family above.
+    `_resolve_write_gate`'s own first statement is `cmd_write`'s ONLY path
+    to `paper_graph.assemble_corpus` (`assemble_packet`, called later in
+    `cmd_write`, never assembles a corpus at all) -- removing that one
+    call reproduces exactly the mutation this task describes: the guard
+    stays wired into `phases` (`compute_phases` calls `assemble_corpus`
+    independently) while `write` no longer does."""
+
+    def test_mutation_removing_the_gate_call_fails_section_not_in_source(self) -> None:
+        proc = _run_against_mutant(
+            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            "",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_write_refuses_section_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_removing_the_gate_call_fails_source_revisions_undeclared(self) -> None:
+        proc = _run_against_mutant(
+            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            "",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_write_refuses_source_revisions_undeclared",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_removing_the_gate_call_fails_section_binding_absent(self) -> None:
+        proc = _run_against_mutant(
+            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            "",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_write_refuses_section_binding_absent",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
         )
         output = proc.stdout + proc.stderr

@@ -32,6 +32,14 @@
           "source": {
             "file": "sections/04-limitations.md",
             "quote": "The mathematical section — its design decisions, one by one"
+          },
+          "document": {
+            "lineage": "research-concept",
+            "section": [
+              "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia",
+              "4. Alineación local condicionada por el sujeto objetivo",
+              "5. Normalización de los términos de adaptación"
+            ]
           }
         }
       ],
