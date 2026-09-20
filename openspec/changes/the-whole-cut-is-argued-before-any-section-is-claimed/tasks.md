@@ -44,22 +44,22 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 0: GATE-0 — Vocabulary and Denylist Audit (BLOCKING, before Phase 1)
 
-- [ ] 0.1 Run `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests` against the current tree, before any new code; confirm zero leaked product names and zero hardcoded product values across `.claude/skills/` and the forge suite, comments and fixtures included. This gate blocks Phase 1 and is re-run at the end of Phase 6 (task 6.4).
+- [x] 0.1 Run `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests` against the current tree, before any new code; confirm zero leaked product names and zero hardcoded product values across `.claude/skills/` and the forge suite, comments and fixtures included. This gate blocks Phase 1 and is re-run at the end of Phase 6 (task 6.4).
 
 ## Phase 1: U1 — Pure Core (`paper_separation.py`)
 
-- [ ] 1.1 RED: create `tests/test_paper_separation.py` with `claimable_sections` fixtures — title + five siblings (title excluded); three siblings, no title (all claimable); level-3 nested under level-2 under level-1 (generality proof, no engine edit expected); headingless (unmeasured); title-only, empty remainder (unmeasured). Confirm all fail with no implementation present.
-- [ ] 1.2 Implement `claimable_sections(outline)` in `.claude/skills/paper-writing/scripts/paper_separation.py`: root-span elimination to a fixed point, then the shallowest remaining level, ordered by `byte_start`. No heading-level literal anywhere.
-- [ ] 1.3 Run 1.1 green.
-- [ ] 1.4 Generality verification (its own explicit, separately-checkable task): `rg` over `paper_separation.py` for any bare integer heading-level comparison (`level == 1`, `level <= 2`, etc.) used to decide claimability; confirm none exists — the derivation must be structural, never a hardcoded level number.
-- [ ] 1.5 Mutation: drop root-span elimination (every heading claimable); confirm BOTH the title-claim fixture and the "title is not itself claimable" fixture from 1.1 go red.
-- [ ] 1.6 RED: `score_cut` fixtures reproducing the worked example exactly — round 1 = 4 (1 overlap + 2 orphans + 1 gap), branch A = 0, branch B = 5; plus a `k=3` overlap fixture (scores 2, distinguishing `k-1` from `min(k,1)`).
-- [ ] 1.7 Implement `score_cut(claimable, claims_by_block)` in `paper_separation.py` per Decision D; an unanchored assignment's titles clear no orphan and create no overlap or gap.
-- [ ] 1.8 Run 1.6 green.
-- [ ] 1.9 Mutation: orphan set forced empty whenever any claim exists; confirm the one-orphan fixture goes red.
-- [ ] 1.10 Mutation: overlap `k − 1` → `min(k, 1)`; confirm the two-block fixture goes red, and confirm the `k=3` fixture from 1.6 already distinguishes the two forms.
-- [ ] 1.11 Mutation: gap's interior range `[min, max]` → `[min, min]`; confirm the skip-one fixture goes red.
-- [ ] 1.12 Run `.venv/bin/python -m unittest tests.test_paper_separation`; confirm green; confirm the module imports no CLI or persistence symbol.
+- [x] 1.1 RED: create `tests/test_paper_separation.py` with `claimable_sections` fixtures — title + five siblings (title excluded); three siblings, no title (all claimable); level-3 nested under level-2 under level-1 (generality proof, no engine edit expected); headingless (unmeasured); title-only, empty remainder (unmeasured). Confirm all fail with no implementation present.
+- [x] 1.2 Implement `claimable_sections(outline)` in `.claude/skills/paper-writing/scripts/paper_separation.py`: root-span elimination to a fixed point, then the shallowest remaining level, ordered by `byte_start`. No heading-level literal anywhere.
+- [x] 1.3 Run 1.1 green.
+- [x] 1.4 Generality verification (its own explicit, separately-checkable task): `rg` over `paper_separation.py` for any bare integer heading-level comparison (`level == 1`, `level <= 2`, etc.) used to decide claimability; confirm none exists — the derivation must be structural, never a hardcoded level number.
+- [x] 1.5 Mutation: drop root-span elimination (every heading claimable); confirm BOTH the title-claim fixture and the "title is not itself claimable" fixture from 1.1 go red.
+- [x] 1.6 RED: `score_cut` fixtures reproducing the worked example exactly — round 1 = 4 (1 overlap + 2 orphans + 1 gap), branch A = 0, branch B = 5; plus a `k=3` overlap fixture (scores 2, distinguishing `k-1` from `min(k,1)`).
+- [x] 1.7 Implement `score_cut(claimable, claims_by_block)` in `paper_separation.py` per Decision D; an unanchored assignment's titles clear no orphan and create no overlap or gap.
+- [x] 1.8 Run 1.6 green.
+- [x] 1.9 Mutation: orphan set forced empty whenever any claim exists; confirm the one-orphan fixture goes red.
+- [x] 1.10 Mutation: overlap `k − 1` → `min(k, 1)`; confirm the two-block fixture goes red, and confirm the `k=3` fixture from 1.6 already distinguishes the two forms. **Deviation, reported not silently forced (see report):** mathematically `k - 1 == min(k, 1)` at k=2, so the worked-example two-block fixture cannot and does not go red under this mutation — only the k=3 fixture does. Both outcomes are asserted explicitly and honestly in the suite.
+- [x] 1.11 Mutation: gap's interior range `[min, max]` → `[min, min]`; confirm the skip-one fixture goes red.
+- [x] 1.12 Run `.venv/bin/python -m unittest tests.test_paper_separation`; confirm green; confirm the module imports no CLI or persistence symbol.
 
 ## Phase 2: U2 — Proposal Shape, Resolution, Round-1 Path, Four Codes
 

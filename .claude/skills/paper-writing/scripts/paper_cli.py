@@ -100,6 +100,7 @@ import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seve
 import paper_couplings  # noqa: E402 -- the-skill-stops-trusting-memory, item 4: the producer `paper/couplings.json` never had; `couplings` verb
 import paper_full_text  # noqa: E402 -- the-pdf-arrives-or-the-operator-is-told: fills the full-text role; `full_text` verb
 import paper_lifecycle  # noqa: E402 -- a-leftover-paper-is-offered-before-it-is-lost: the reuse and exhaustion reports over the ingested-papers lifecycle; `reuse`/`exhaustion` verbs; raises no `Refused` of its own
+import paper_separation  # noqa: E402,F401 -- the-whole-cut-is-argued-before-any-section-is-claimed, U1: the pure claimable-section/score-cut core, imported here only to keep the module-completeness invariant true; it raises no `Refused` of its own and gains its `separate` verb wiring in U2
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
