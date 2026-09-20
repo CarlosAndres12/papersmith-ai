@@ -2370,7 +2370,8 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
                 root, paper_declarations.SourceRoot, f"{fact_id!r} is not a SourceRoot record"
             )
             self.assertIn(root.kind, (paper_declarations.SourceRootKind.PROSE,
-                                       paper_declarations.SourceRootKind.REPOSITORY))
+                                       paper_declarations.SourceRootKind.REPOSITORY,
+                                       paper_declarations.SourceRootKind.INGESTED))
 
     def test_implementation_and_results_are_repository_kind_not_prose(self) -> None:
         """The exact defect: `implementation`/`results` are read by
@@ -2385,12 +2386,31 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
             paper_declarations.SourceRootKind.REPOSITORY,
         )
 
-    def test_formulation_dataset_experimental_design_stay_prose(self) -> None:
-        for fact_id in ("formulation", "dataset", "experimental-design"):
+    def test_formulation_and_experimental_design_stay_prose(self) -> None:
+        for fact_id in ("formulation", "experimental-design"):
             self.assertEqual(
                 paper_declarations.FACT_SOURCE_ROOT[fact_id].kind,
                 paper_declarations.SourceRootKind.PROSE,
             )
+
+    def test_dataset_is_ingested_kind_not_prose(self) -> None:
+        """U2c ruling (`the-requirement-names-the-section-that-feeds-it`):
+        `dataset` is sourced from the ingested evidence document, never
+        from `proposals/`'s mathematics lineage -- a published paper gets
+        no `r22`, so it cannot share `formulation`'s `PROSE` root."""
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["dataset"].kind,
+            paper_declarations.SourceRootKind.INGESTED,
+        )
+
+    def test_dataset_root_name_is_never_the_paper_specific_folder(self) -> None:
+        """Generality: the `SourceRoot.name` for `dataset` is a generic
+        vocabulary word this skill already uses (`paper_guidance.CLASSES`
+        holds `'evidence'`), never this paper's own guidance folder name
+        (`data-paper`) -- which root actually feeds it is DERIVED at
+        resolution time, never named here."""
+        self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "data-paper")
+        self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "proposals")
 
 
 class ReconcileObservationReportTests(unittest.TestCase):

@@ -409,6 +409,16 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "SOURCE_LINEAGE_UNRESOLVED": WORK_STATE,
     "SECTION_NOT_IN_SOURCE": WORK_STATE,
     "SECTION_TITLE_AMBIGUOUS": WORK_STATE,
+    # --- the-requirement-names-the-section-that-feeds-it, U2c: the owner's
+    # ruling that `dataset` is sourced from the ingested EVIDENCE document
+    # under `guidance/`, never from `proposals/`'s mathematics lineage. A
+    # third `SourceRootKind`, `INGESTED` (`paper_declarations.py`), resolves
+    # its own root by DERIVING which `guidance/` folder is classed
+    # `'evidence'` (`paper_guidance.read_registry`, reused). More than one
+    # such folder is a NEW ambiguity `SOURCE_LINEAGE_UNRESOLVED` does not
+    # cover -- that code names a lineage's own candidates under an already-
+    # identified root, never which root to use in the first place -----------
+    "EVIDENCE_ROOT_AMBIGUOUS": WORK_STATE,
 }
 
 

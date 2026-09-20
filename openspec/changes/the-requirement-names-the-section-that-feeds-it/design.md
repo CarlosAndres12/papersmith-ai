@@ -8,16 +8,24 @@ A requirement entry gains one optional object, `document: {lineage, section}`, p
 `assemble_corpus` in a new `_verify_source_section_bindings`, alongside the eleven `_verify_*`
 passes already there.
 
-Resolution is three hops, each derived from disk, none from a literal:
+Resolution is three hops, each derived from disk, none from a literal, and hop 2 branches on the
+root's own **kind** (U2c ruling adds a third branch — `dataset` is sourced from the ingested
+evidence document, never `proposals/`'s mathematics lineage):
 
     fact ──FACT_SOURCE_ROOT──▶ SourceRoot(name, kind)
-         ──kind is PROSE?──▶ base/name ──▶ root dir   (REPOSITORY stops here)
-         ──marker──▶ revision regex ──max ordinal──▶ current revision file
+         ──kind is REPOSITORY?──▶ unmeasured, always — impl_layout.WORKSPACE, never resolved further
+         ──kind is PROSE?──▶ base/name ──▶ root dir
+              ──marker──▶ revision regex ──max ordinal──▶ current revision file
+         ──kind is INGESTED?──▶ guidance/'s own 'evidence'-classed folder (DERIVED — never a
+              folder name literal; more than one such folder refuses EVIDENCE_ROOT_AMBIGUOUS)
+              ──lineage IS the document, identity not max-ordinal──▶ <folder>/<lineage>/<lineage>.md
          ──segment_markdown──▶ heading titles ──▶ the bound section
 
-The owner's ruling is the whole point of hop 2: a binding names the **lineage**, never `r21`.
-Publish `r22` and every binding follows it for free; publish an `r22` that renames the bound
-heading and `SECTION_NOT_IN_SOURCE` refuses by name.
+The owner's ruling is the whole point of hop 2: for a `PROSE` root, a binding names the
+**lineage**, never `r21`. Publish `r22` and every binding follows it for free; publish an `r22`
+that renames the bound heading and `SECTION_NOT_IN_SOURCE` refuses by name. For an `INGESTED`
+root, hop 2 has no revision to search at all — a published paper gets no `r22`, so the lineage
+**is** the document, and resolution is presence, never an ordinal.
 
 ## Architecture Decisions
 
@@ -99,36 +107,71 @@ out of one structure. Every binding is then a dict lookup. Today that is one fil
 corpus, not one per binding. The memo is a local built per call, never a module-level cache: a
 stale cache would be a decision living in the process instead of on disk.
 
-## Refusal Codes — six, and why the proposal's four became six
+### F — `dataset` is sourced from the ingested evidence document, never `proposals/` (U2c ruling)
+
+`FACT_SOURCE_ROOT["dataset"]` shipped in U1/U2 as `SourceRoot("proposals", PROSE)` — wrong:
+`proposals/research-concept-*.md` is mathematics only (kernel foundations, Rényi entropy, the MIL
+formulation, local alignment, normalization) and carries no dataset section, and never will. The
+owner ruled the real source is the ingested EVIDENCE document under `guidance/` instead.
+
+An ingested paper is **not** a revisioned lineage — it has a stable id and is never superseded by an
+`r22` — so U2's "resolve to the highest-ordinal revision" does not apply. A third `SourceRootKind`,
+`INGESTED`, names this: for an `INGESTED` root, `document.lineage` names the paper's own id directly,
+and resolution is **identity** (`guidance/<evidence-folder>/<lineage>/<lineage>.md` either exists or
+it does not), never a marker-driven ordinal search.
+
+**Which `guidance/` folder is the evidence root is DERIVED, never named.** `paper_guidance.
+read_registry` (already the mechanism every other `guidance/` consumer uses) classifies each folder
+from its own `.paper-writing.json`; whichever folder that registry classes `'evidence'` is the root.
+`FACT_SOURCE_ROOT["dataset"].name` is `"evidence"` — a generic word already shared with `paper_
+guidance.CLASSES`, never this paper's own folder name (`data-paper` appears nowhere under
+`scripts/`). More than one folder classed `'evidence'` refuses `EVIDENCE_ROOT_AMBIGUOUS`, naming
+every candidate — picking the first would be exactly the silent guess this change exists to rule
+out. Zero folders classed `'evidence'` yet, or an evidence folder holding zero ingested papers, both
+report `unmeasured` — the same reading `experiments/` holding only `.gitkeep` already gets: a paper
+that has not ingested its evidence document yet is at an earlier stage, never a fault.
+
+`SourceRoot.name` still carries no default and the shape is unchanged — `SourceRoot(name, kind)`,
+two fields, `kind` mandatory. The binding entry shape (`document: {lineage, section}`) is also
+unchanged: only which root a fact resolves through, and how that root resolves a lineage, differ
+per kind.
+
+## Refusal Codes — seven, and why the proposal's four became seven
 
 | Code | Condition | Tier |
 |---|---|---|
 | `SECTION_NOT_IN_SOURCE` | Named title is no heading in the current revision | work-state |
 | `SECTION_TITLE_AMBIGUOUS` | Title matches two or more headings | work-state |
 | `SECTION_BINDING_ABSENT` | Bindable fact, document-rooted, no `document` half (U3) | work-state |
-| `SOURCE_LINEAGE_UNRESOLVED` | Lineage resolves to zero or more than one revision | work-state |
-| `SOURCE_REVISIONS_UNDECLARED` | Document-rooted root carries no marker | work-state |
+| `SOURCE_LINEAGE_UNRESOLVED` | Lineage resolves to zero or more than one revision/document | work-state |
+| `SOURCE_REVISIONS_UNDECLARED` | Document-rooted `PROSE` root carries no marker | work-state |
 | `MALFORMED_SOURCE_MARKER` | Marker not UTF-8 / not JSON / not an object / unknown or missing key / bad value | work-state |
+| `EVIDENCE_ROOT_AMBIGUOUS` | More than one `guidance/` folder is classed `'evidence'` (U2c) | work-state |
 
-The last two are an **amendment** the proposal did not forecast: the ruling "the pattern is read
+The middle five are an **amendment** the proposal did not forecast: the ruling "the pattern is read
 from an on-disk declaration" arrives with a declaration, and a declaration has an absent state and a
 malformed state. Folding either into `SOURCE_LINEAGE_UNRESOLVED` would conflate "nobody said how
 revisions are named" with "no revision is there". `MALFORMED_SOURCE_MARKER` is qualifier-led, which
 the measured roster admits for exactly this family — the three existing `MALFORMED_*` codes are all
 shape checks, and so is this. Entry-shape errors reuse `MALFORMED_HEADER`; no new code for them.
+`EVIDENCE_ROOT_AMBIGUOUS` is U2c's own amendment (Decision F): `SOURCE_LINEAGE_UNRESOLVED` names a
+lineage's own candidates under an ALREADY-IDENTIFIED root, never which root to use in the first
+place — the two conditions are disjoint, so folding root selection into lineage resolution would
+conflate "which document" with "which root holds documents at all".
 
-Roster is **133 today**; the count after this lands is re-derived with
-`reachable_paper_refusal_codes()`, never forecast.
+Roster is **133 today** (the pre-change baseline, before U1 started); the count after each unit
+lands is re-derived with `reachable_paper_refusal_codes()`, never forecast — measured **139** after
+U2c.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
 | `scripts/paper_contract.py` | Modify | `_REQUIREMENT_OPTIONAL = ("document",)`, `_DOCUMENT_REQUIRED = ("lineage","section")`, `requirement_documents()` accessor |
-| `scripts/paper_declarations.py` | Modify | `source_root_status()`, `read_revisions_marker()`, `resolve_lineage()`, `bindable_facts()` derived off `FACT_SOURCE_ROOT` |
-| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg |
-| `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged |
-| `scripts/paper_cli.py` | Modify | Six codes into `REFUSAL_CLASSIFICATION`; `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it |
+| `scripts/paper_declarations.py` | Modify | `source_root_status()`, `read_revisions_marker()`, `resolve_lineage()`, `bindable_facts()` derived off `FACT_SOURCE_ROOT`; U2c adds `SourceRootKind.INGESTED`, `_ingested_root_status()`, `resolve_ingested_document()`, and imports `paper_guidance` |
+| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg; U2c adds the per-kind dispatch inside `_verify_source_section_bindings` |
+| `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged |
+| `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it |
 | `proposals/.paper-writing.json` | Create | `{"revisions":{"revision_prefix":"r","ordinal_digits":2}}` |
 | `sections/01-*.md`, `sections/02-*.md` | Modify | Bindings transcribed; prose bytes untouched |
 | `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture |
@@ -139,9 +182,13 @@ Roster is **133 today**; the count after this lands is re-derived with
 # paper_declarations.py
 class SourceRootKind(enum.Enum):
     """PROSE -- read as revisions with headings. REPOSITORY -- measured by
-    running it; never bindable to a section, whatever is on disk."""
+    running it; never bindable to a section, whatever is on disk. INGESTED
+    -- a published paper under guidance/, identified by that folder's own
+    'evidence' classification; identity-resolved, never a revisioned
+    lineage (U2c)."""
     PROSE = "prose"
     REPOSITORY = "repository"
+    INGESTED = "ingested"
 
 
 class SourceRoot(NamedTuple):
@@ -160,11 +207,26 @@ def source_root_status(base: Path, root: SourceRoot) -> dict:
     `impl_layout.WORKSPACE` -- never a name this skill spells itself.
     Amended after U2b: the first cut resolved every root name as a
     directory under `base`, which excluded `implementation`/`results`
-    for the accidental reason that no directory bore that name."""
+    for the accidental reason that no directory bore that name.
+
+    An INGESTED-kind root delegates to `_ingested_root_status(base)`:
+    which `guidance/` folder feeds it is DERIVED from `paper_guidance.
+    read_registry`'s own classification (reused, never a second reader),
+    never from `root.name`. More than one folder classed 'evidence'
+    refuses EVIDENCE_ROOT_AMBIGUOUS, naming every candidate. Zero such
+    folders, or one holding zero ingested papers, both report
+    `unmeasured` -- an earlier stage, never a fault (U2c)."""
 
 def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
     """The single highest-ordinal revision. Refuses SOURCE_LINEAGE_UNRESOLVED
     on zero candidates and on a tie, naming what it saw."""
+
+def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
+    """The INGESTED-kind counterpart: `document.lineage` names the paper's
+    own stable id directly, resolution is PRESENCE of
+    `evidence_dir/<lineage>/<lineage>.md` -- identity, never an ordinal
+    search. Refuses the SAME SOURCE_LINEAGE_UNRESOLVED on zero or more
+    than one matching ingested document (U2c)."""
 ```
 
 `BlockRecord.source_bindings` is a tuple of `(fact_id, lineage, section_title)` triples — a tuple,
@@ -180,7 +242,7 @@ existing construction site stays green.
 | Unit | Document-rooted predicate | Root with only `.gitkeep`, root absent, root with `*.md` |
 | Integration | Version bump is free | Fixture adds `…-r22.md` preserving bound titles; assert the corpus assembles **byte-identically untouched** (success criterion 4) |
 | Integration | `write` | Existence refusal fires from `cmd_write`, not only from a read-only verb |
-| Mutation | All six codes | `tests/paper_mutation.py::_run_against_mutant`, table below |
+| Mutation | All seven codes | `tests/paper_mutation.py::_run_against_mutant`, table below |
 | Generality | No paper literal, no revision literal | `rg` over `.claude/skills/` for block ids, section titles, document filenames, and a bare revision prefix; `NoSubprocessScanTests` unchanged |
 | Roster | Bidirectional | `reachable_paper_refusal_codes()`; `npm test` **and** `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` |
 
@@ -195,6 +257,7 @@ so an untracked fixture cannot pass on a no-op edit:
 | `SOURCE_LINEAGE_UNRESOLVED` | Rename the newest revision to a foreign lineage (zero case); add `r021.md` (tie case) |
 | `SOURCE_REVISIONS_UNDECLARED` | Delete `proposals/.paper-writing.json` in the fixture root |
 | `MALFORMED_SOURCE_MARKER` | Add a sixth key to the marker; flip `ordinal_digits` to a string |
+| `EVIDENCE_ROOT_AMBIGUOUS` | Classify two `guidance/` folders `'evidence'`; skip the count guard and the first (alphabetical) match silently wins (U2c) |
 | Derivation, not a list | Add a **sixth** root to `FACT_SOURCE_ROOT` in a fixture and assert it becomes bindable with no engine edit (success criterion 6) |
 
 ## Work Units
@@ -203,6 +266,8 @@ so an untracked fixture cannot pass on a no-op edit:
 |---|---|---|---|
 | U1 | Entry shape + `document` validator, `requirement_documents`, `BlockRecord.source_bindings`, bindable derivation — both shapes accepted, nothing demanded | ~130 | yes |
 | U2 | Marker reader, lineage→revision resolver, `source_root_status`, `_verify_source_section_bindings`, `source_roots` report, existence/ambiguity refusals | ~170 | yes (inert without U3) |
+| U2b | Correctness repair: `implementation`/`results` unmeasured BY KIND (`SourceRootKind.REPOSITORY`), not by an invented directory name | ~295 | yes |
+| U2c | Owner ruling: `dataset` sourced from the ingested evidence document (`SourceRootKind.INGESTED`), never `proposals/`'s mathematics lineage | 572+/-52 measured (incl. this doc) | yes |
 | **DP** | **Owner rules on any entry that cannot be anchored** | **blocking** | — |
 | U3 | Transcribe corpus bindings, obligation unconditional (`SECTION_BINDING_ABSENT`), refusal wired at `write`, ship `proposals/.paper-writing.json`, fixtures, roster re-derived | ~170 | yes |
 

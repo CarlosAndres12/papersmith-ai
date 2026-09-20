@@ -1802,6 +1802,174 @@ class SourceRootStatusTests(unittest.TestCase):
         self.assertEqual(status["path"], impl_layout.WORKSPACE)
 
 
+class IngestedSourceRootTests(unittest.TestCase):
+    """U2c (`the-requirement-names-the-section-that-feeds-it`): an
+    `INGESTED`-kind root resolves through `guidance/`'s own per-folder
+    classification (`paper_guidance.read_registry`, reused verbatim), never
+    through a folder name literal -- `dataset`'s new root is the concrete
+    consumer this family exists for."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        # `.resolve()`: `paper_guidance.resolve_guidance_dir` resolves
+        # `forge_root` before composing `guidance/` under it, and on macOS
+        # `tempfile`'s own `/var/folders/...` is itself a symlink into
+        # `/private/var/folders/...` -- comparing against an unresolved
+        # `self.base` would spuriously fail on that symlink alone.
+        self.base = Path(self._tmp.name).resolve()
+        self.guidance = self.base / "guidance"
+        self.root = paper_declarations.SourceRoot(
+            "evidence", paper_declarations.SourceRootKind.INGESTED
+        )
+
+    def _classify(self, folder: str, klass: str) -> Path:
+        target = self.guidance / folder
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".paper-writing.json").write_text(json.dumps({"class": klass}), encoding="utf-8")
+        return target
+
+    def _ingest(self, folder: Path, paper_id: str) -> None:
+        paper_dir = folder / paper_id
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        (paper_dir / f"{paper_id}.md").write_text("# Title\n", encoding="utf-8")
+
+    def test_no_guidance_directory_at_all_is_unmeasured(self) -> None:
+        status = paper_declarations.source_root_status(self.base, self.root)
+
+        self.assertEqual(status["state"], "unmeasured")
+        self.assertIsNone(status["path"])
+
+    def test_a_guidance_tree_with_no_evidence_classed_folder_is_unmeasured(self) -> None:
+        self._classify("paper-guide", "style-reference")
+
+        status = paper_declarations.source_root_status(self.base, self.root)
+
+        self.assertEqual(status["state"], "unmeasured")
+
+    def test_an_evidence_folder_with_no_ingested_paper_yet_is_unmeasured(self) -> None:
+        """A paper that has not ingested its evidence document yet is a
+        paper at an earlier stage, never a fault -- the same reading
+        `experiments/` holding only `.gitkeep` already gets."""
+        self._classify("data-paper", "evidence")
+
+        status = paper_declarations.source_root_status(self.base, self.root)
+
+        self.assertEqual(status["state"], "unmeasured")
+
+    def test_exactly_one_evidence_folder_holding_an_ingested_paper_is_document_rooted(
+        self,
+    ) -> None:
+        folder = self._classify("data-paper", "evidence")
+        self._ingest(folder, "a-fixture-paper-id")
+
+        status = paper_declarations.source_root_status(self.base, self.root)
+
+        self.assertEqual(status["state"], "document-rooted")
+        self.assertEqual(status["path"], folder)
+        self.assertEqual(status["documents"], 1)
+
+    def test_two_folders_classed_evidence_refuses_ambiguous(self) -> None:
+        self._classify("data-paper", "evidence")
+        self._classify("second-paper", "evidence")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.source_root_status(self.base, self.root)
+
+        self.assertEqual(ctx.exception.code, "EVIDENCE_ROOT_AMBIGUOUS")
+        self.assertIn("data-paper", ctx.exception.detail)
+        self.assertIn("second-paper", ctx.exception.detail)
+
+    def test_no_folder_name_literal_governs_which_folder_is_the_root(self) -> None:
+        """Generality: `rg` under `scripts/` for this fixture's own folder
+        name finds nothing -- the folder is discovered by classification,
+        never spelled anywhere in the engine."""
+        source = (SKILL_SCRIPTS / "paper_declarations.py").read_text(encoding="utf-8")
+        self.assertNotIn("data-paper", source)
+
+    def test_mutation_skipping_the_ambiguity_count_lets_the_first_match_win(self) -> None:
+        proc = _run_against_mutant(
+            "    if len(evidence_folders) > 1:",
+            "    if False:",
+            "tests.test_paper_writing.IngestedSourceRootTests"
+            ".test_two_folders_classed_evidence_refuses_ambiguous",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class ResolveIngestedDocumentTests(unittest.TestCase):
+    """`paper_declarations.resolve_ingested_document`: identity resolution
+    for an `INGESTED`-kind root -- the lineage IS the document, never a
+    max-ordinal search (design.md, structural consequence: a published
+    paper gets no `r22`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.guidance = Path(self._tmp.name) / "guidance"
+        self.evidence_dir = self.guidance / "data-paper"
+        self.evidence_dir.mkdir(parents=True)
+
+    def _ingest(self, paper_id: str) -> Path:
+        paper_dir = self.evidence_dir / paper_id
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        markdown = paper_dir / f"{paper_id}.md"
+        markdown.write_text("# Title\n", encoding="utf-8")
+        return markdown
+
+    def test_resolves_the_exact_matching_folder(self) -> None:
+        markdown = self._ingest("a-fixture-paper-id")
+
+        resolved = paper_declarations.resolve_ingested_document(
+            self.evidence_dir, "a-fixture-paper-id"
+        )
+
+        self.assertEqual(resolved, markdown)
+
+    def test_a_lineage_naming_no_ingested_paper_refuses(self) -> None:
+        self._ingest("a-fixture-paper-id")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.resolve_ingested_document(self.evidence_dir, "another-paper-id")
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+        self.assertIn("another-paper-id", ctx.exception.detail)
+
+    def test_more_than_one_matching_candidate_refuses(self) -> None:
+        """Structurally unreachable via two real directories sharing one
+        name, but checked explicitly rather than assumed -- proven here by
+        stubbing `paper_guidance.ingested_papers` to return a duplicate."""
+        markdown = self._ingest("a-fixture-paper-id")
+        duplicate = [
+            {"folder": "a-fixture-paper-id", "markdown": str(markdown)},
+            {"folder": "a-fixture-paper-id", "markdown": str(markdown)},
+        ]
+        with unittest.mock.patch.object(
+            paper_guidance, "ingested_papers", return_value={"data-paper": duplicate}
+        ):
+            with self.assertRaises(Refused) as ctx:
+                paper_declarations.resolve_ingested_document(
+                    self.evidence_dir, "a-fixture-paper-id"
+                )
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+
+    def test_mutation_accepting_any_candidate_count_lets_a_zero_match_pass(self) -> None:
+        proc = _run_against_mutant(
+            "    if len(candidates) != 1:",
+            "    if False:",
+            "tests.test_paper_writing.ResolveIngestedDocumentTests"
+            ".test_a_lineage_naming_no_ingested_paper_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 class SourceLineageResolutionTests(unittest.TestCase):
     """`source-section-binding` spec, `Requirement: Lineage Resolves To The
     Current Revision On Disk` / design.md Decision D: highest ordinal wins,
@@ -2242,6 +2410,114 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
             source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         self._assert_guard_failed_under_mutation(proc)
+
+
+class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
+    """U2c corpus-level acceptance: a `dataset`-bound entry resolves
+    through the evidence-classed `guidance/` root, identity not
+    max-ordinal -- the owner's ruling holds at the full `assemble_corpus`
+    boundary, not merely at the unit level."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.sections_dir = self.base / "sections"
+        self.sections_dir.mkdir()
+        self.guidance = self.base / "guidance"
+
+    def _write_section(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _dataset_header(self, section_title: str, *, lineage: str) -> dict:
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only",
+                "requires_facts": [{
+                    "value": "dataset",
+                    "source": {
+                        "file": "sections/01-a.md",
+                        "quote": "The dataset, written here.",
+                    },
+                    "document": {"lineage": lineage, "section": section_title},
+                }],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
+    _BODY = (
+        "The dataset, written here.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+
+    def _classify(self, folder: str, klass: str) -> Path:
+        target = self.guidance / folder
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".paper-writing.json").write_text(json.dumps({"class": klass}), encoding="utf-8")
+        return target
+
+    def _ingest(self, folder: Path, paper_id: str, body: str) -> None:
+        paper_dir = folder / paper_id
+        paper_dir.mkdir(parents=True, exist_ok=True)
+        (paper_dir / f"{paper_id}.md").write_text(body, encoding="utf-8")
+
+    def test_a_dataset_binding_resolves_against_the_ingested_evidence_document(self) -> None:
+        self._write_section(
+            "01-a.md", self._dataset_header("3. Something", lineage="a-fixture-paper-id"),
+            self._BODY,
+        )
+        evidence = self._classify("data-paper", "evidence")
+        self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_a_lineage_naming_no_ingested_paper_refuses_source_lineage_unresolved(self) -> None:
+        """Corpus-level wiring proof, distinct from `ResolveIngestedDocument
+        Tests`'s own unit test: `_verify_source_section_bindings`'s
+        `INGESTED` branch is only reached once a real `dataset` binding
+        exists, unlike the unconditionally-computed `source_roots` report
+        (`EVIDENCE_ROOT_AMBIGUOUS`/`unmeasured` are already unit-covered by
+        `IngestedSourceRootTests` and need no corpus-level duplicate)."""
+        self._write_section(
+            "01-a.md", self._dataset_header("3. Something", lineage="wrong-id"), self._BODY,
+        )
+        evidence = self._classify("data-paper", "evidence")
+        self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+
+    def test_mutation_resolving_an_ingested_root_by_max_ordinal_breaks_the_guard(self) -> None:
+        """The task's own required mutation: dispatch the `INGESTED`
+        branch through the PROSE (marker + max-ordinal) route instead --
+        `guidance/data-paper/` carries only the CLASSIFICATION marker
+        (`{"class": "evidence"}`), which the PROSE-kind revision-marker
+        reader refuses as malformed (missing `revisions`), proving the
+        kind dispatch itself is load-bearing."""
+        self._write_section(
+            "01-a.md", self._dataset_header("3. Something", lineage="a-fixture-paper-id"),
+            self._BODY,
+        )
+        evidence = self._classify("data-paper", "evidence")
+        self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
+
+        proc = _run_against_mutant(
+            "                if root.kind is paper_declarations.SourceRootKind.INGESTED:",
+            "                if False:",
+            "tests.test_paper_writing.IngestedSourceSectionBindingCorpusTests"
+            ".test_a_dataset_binding_resolves_against_the_ingested_evidence_document",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class RequirementTranscriptionMutationTests(unittest.TestCase):
@@ -6112,8 +6388,17 @@ class RefusalRosterTests(unittest.TestCase):
         imported by `paper_cli.py`. `SECTION_BINDING_ABSENT` (the sixth
         code this change ships) is U3-only and moves this count again only
         once that unit's write-gate wiring lands. Measured directly
-        against `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 138)
+        against `reachable_paper_refusal_codes()`, never forecast.
+
+        Moved from 138 to 139 in U2c: the owner's ruling that `dataset` is
+        sourced from the ingested EVIDENCE document, never `proposals/`'s
+        mathematics lineage, adds a third `SourceRootKind` (`INGESTED`) and
+        one new raise site, `paper_declarations._ingested_root_status`'s
+        own `EVIDENCE_ROOT_AMBIGUOUS` (more than one `guidance/` folder
+        classed `'evidence'`) -- reachable the instant that raise site
+        exists, no new import needed, since `paper_declarations.py` was
+        already imported by `paper_cli.py`."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 139)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

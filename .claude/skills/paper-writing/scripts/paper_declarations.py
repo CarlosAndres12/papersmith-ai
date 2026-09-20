@@ -40,8 +40,11 @@ Public surface:
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
     FACT_SOURCE_ROOT -> dict[str, SourceRoot]  (fact id -> the root it is read from,
-        AND that root's kind -- PROSE (a document revision, section-bindable) or
-        REPOSITORY (a target code repository, measured by running it))
+        AND that root's kind -- PROSE (a document revision, section-bindable),
+        REPOSITORY (a target code repository, measured by running it), or
+        INGESTED (a published paper under guidance/, identity-resolved))
+    resolve_ingested_document(evidence_dir, lineage) -> Path  (pure disk read;
+        the INGESTED-kind counterpart to resolve_lineage above)
     source_available(root) -> bool  (pure disk measurement; gitignore-blind, `Path.iterdir()`)
     reconcile_observation_report(report, measured) -> list[dict]  (pure; every
         disagreement between the agent's account and a real disk measurement)
@@ -59,6 +62,7 @@ from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
+import paper_guidance  # noqa: E402
 import paper_region  # noqa: E402
 import paper_vocabulary  # noqa: E402
 
@@ -639,16 +643,24 @@ def affected_blocks(corpus, target_id: str) -> set:
 
 class SourceRootKind(enum.Enum):
     """Whether a `FACT_SOURCE_ROOT` root is read as PROSE (a document
-    revision with headings, resolvable for section binding) or is a
+    revision with headings, resolvable for section binding), is a
     REPOSITORY (a target code repository, measured by running it -- never
     read as prose, regardless of what happens to exist on disk under its
-    name). U2b correctness repair to `source-section-binding` spec's
-    `Requirement: An Unmeasured Root Is Reported, Never Silently Passed`:
-    a REPOSITORY-kind root is unmeasured BY KIND, not merely by the
-    document-rooted predicate that requirement already names."""
+    name), or is INGESTED (a published paper under `guidance/`, identified
+    by that folder's own `evidence` classification -- never by a folder
+    name literal). U2b correctness repair to `source-section-binding`
+    spec's `Requirement: An Unmeasured Root Is Reported, Never Silently
+    Passed`: a REPOSITORY-kind root is unmeasured BY KIND, not merely by
+    the document-rooted predicate that requirement already names. U2c
+    ruling (`the-requirement-names-the-section-that-feeds-it`): an
+    INGESTED-kind root is not a revisioned lineage at all -- a published
+    paper gets no `r22` -- so its resolution is IDENTITY (the lineage IS
+    the document), never the PROSE branch's marker-driven max-ordinal
+    search."""
 
     PROSE = "prose"
     REPOSITORY = "repository"
+    INGESTED = "ingested"
 
 
 class SourceRoot(NamedTuple):
@@ -673,14 +685,33 @@ class SourceRoot(NamedTuple):
 #: RUNNING it, never read as prose for section binding -- `impl_layout.
 #: WORKSPACE` (the forge's own canonical target-repository workspace) is
 #: the real path, never re-spelled here (U2b correctness repair, per
-#: `source_root_status`'s own docstring below). The `name` label below
-#: is used only to RECONCILE an agent's report against a measurement this
-#: process takes itself (`reconcile_observation_report` below) -- never to
-#: resolve a directory for a REPOSITORY-kind root, and never to decide a
-#: fact's value.
+#: `source_root_status`'s own docstring below).
+#:
+#: `dataset` is `INGESTED`-kind (U2c ruling,
+#: `the-requirement-names-the-section-that-feeds-it`): a proposal
+#: lineage states the mathematics and need carry no dataset section at
+#: all, so the fact is sourced from the ingested EVIDENCE
+#: document under `guidance/` instead -- whichever folder that own
+#: registry classes `'evidence'` (`paper_guidance.read_registry`,
+#: DERIVED, never a folder name literal). `name="evidence"` here is a
+#: generic vocabulary word already shared with `paper_guidance.CLASSES`,
+#: never this paper's own guidance folder name -- `source_root_status`'s
+#: INGESTED branch never resolves a directory from `root.name` at all,
+#: the same "kind gates the check, name is not resolved" precedent
+#: `REPOSITORY` already established.
+#:
+#: The `name` label is used only to RECONCILE an agent's report against a
+#: measurement this process takes itself (`reconcile_observation_report`
+#: below) -- never to resolve a directory for a REPOSITORY- or
+#: INGESTED-kind root, and never to decide a fact's value. Every root
+#: consumed by `assemble_corpus` (`paper_graph.Corpus.source_roots`, keyed
+#: by `name` alone) MUST carry a name distinct from every other root
+#: actually resolved on disk, or two different-kind roots would collide
+#: on one dict key -- this is why `dataset` could not simply keep sharing
+#: `formulation`'s `"proposals"` label once its KIND changed.
 FACT_SOURCE_ROOT: dict = {
     "formulation": SourceRoot("proposals", SourceRootKind.PROSE),
-    "dataset": SourceRoot("proposals", SourceRootKind.PROSE),
+    "dataset": SourceRoot("evidence", SourceRootKind.INGESTED),
     "experimental-design": SourceRoot("experiments", SourceRootKind.PROSE),
     "implementation": SourceRoot("implementation", SourceRootKind.REPOSITORY),
     "results": SourceRoot("implementation", SourceRootKind.REPOSITORY),
@@ -787,6 +818,10 @@ def source_root_status(base: Path, root: SourceRoot) -> dict:
     never depends on what a target repo's own `README.md`/`AGREED.md`
     happen to contain.
 
+    A `SourceRootKind.INGESTED` root (U2c ruling) delegates to
+    `_ingested_root_status` below — its path is DERIVED from `guidance/`'s
+    own per-folder classification, never resolved from `root.name`.
+
     Otherwise (`SourceRootKind.PROSE`), document-rooted iff `base /
     root.name` is a directory holding at least one `*.md` file — a
     property computed on disk, never keyed by a fact id
@@ -804,6 +839,8 @@ def source_root_status(base: Path, root: SourceRoot) -> dict:
                 "not read as prose for section binding"
             ),
         }
+    if root.kind is SourceRootKind.INGESTED:
+        return _ingested_root_status(base)
     path = base / root.name
     if not path.is_dir():
         return {
@@ -817,6 +854,60 @@ def source_root_status(base: Path, root: SourceRoot) -> dict:
             "reason": f"{path} holds no '*.md' documents",
         }
     return {"state": "document-rooted", "path": path, "documents": len(documents), "reason": None}
+
+
+def _ingested_root_status(base: Path) -> dict:
+    """`source_root_status`'s `SourceRootKind.INGESTED` branch (U2c ruling,
+    `the-requirement-names-the-section-that-feeds-it`): which `guidance/`
+    folder feeds an ingested-kind fact is DERIVED from that folder's own
+    `.paper-writing.json` classification — `paper_guidance.read_registry`,
+    reused verbatim, the SAME reader every other `guidance/` consumer
+    already goes through (`paper_cli._guard_source_md_classification`);
+    this is its first SOURCE-ROOT consumer, never a second reader.
+
+    An absent `guidance/` directory, or one carrying no folder classed
+    `'evidence'` yet, reports `unmeasured` — a paper that has not
+    classified (or ingested) its evidence document yet is a paper at an
+    EARLIER STAGE, the same reading `experiments/` holding only
+    `.gitkeep` already gets (`source-section-binding` spec, `Requirement:
+    An Unmeasured Root Is Reported, Never Silently Passed`), never a
+    fault. Exactly one folder classed `'evidence'` but holding zero
+    ingested papers is ALSO `unmeasured`, for the identical reason.
+
+    More than one folder classed `'evidence'` refuses
+    `EVIDENCE_ROOT_AMBIGUOUS` naming every candidate — deciding WHICH
+    folder is the root is this function's own job, and picking the first
+    would be exactly the silent guess this change exists to rule out.
+    """
+    guidance_dir = paper_guidance.resolve_guidance_dir(None, forge_root=base)
+    if not guidance_dir.is_dir():
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"{guidance_dir} does not exist yet",
+        }
+    registry = paper_guidance.read_registry(guidance_dir)
+    evidence_folders = sorted(name for name, klass in registry.items() if klass == "evidence")
+    if not evidence_folders:
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"no folder under {guidance_dir} is classed 'evidence' yet",
+        }
+    if len(evidence_folders) > 1:
+        raise Refused(
+            "EVIDENCE_ROOT_AMBIGUOUS",
+            f"more than one folder under {guidance_dir} is classed 'evidence': "
+            f"{evidence_folders}",
+        )
+    evidence_dir = guidance_dir / evidence_folders[0]
+    papers = paper_guidance.ingested_papers(guidance_dir).get(evidence_folders[0], [])
+    if not papers:
+        return {
+            "state": "unmeasured", "path": evidence_dir, "documents": 0,
+            "reason": f"{evidence_dir} is classed 'evidence' but carries no ingested paper yet",
+        }
+    return {
+        "state": "document-rooted", "path": evidence_dir, "documents": len(papers), "reason": None,
+    }
 
 
 def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
@@ -861,6 +952,40 @@ def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
             f"lineage {lineage!r} under {root} ties at ordinal {max_ordinal}: {winners}",
         )
     return root / winners[0]
+
+
+def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
+    """The IDENTITY resolution route for a `SourceRootKind.INGESTED` root
+    (U2c ruling, `the-requirement-names-the-section-that-feeds-it`,
+    Structural consequence): an ingested paper is not a revisioned
+    lineage — a published paper gets no `r22` — so `document.lineage`
+    names the paper's own stable id directly, and resolution is PRESENCE
+    of `evidence_dir/<lineage>/<lineage>.md`, never a marker-driven
+    ordinal search.
+
+    Reuses `paper_guidance.ingested_papers` verbatim (asked for
+    `evidence_dir`'s own PARENT registry, filtered to `evidence_dir.
+    name`'s own entries) rather than a second directory walk, then
+    matches by exact folder-name equality against `lineage`. Refuses
+    `SOURCE_LINEAGE_UNRESOLVED` — the SAME code a PROSE-kind root's
+    `resolve_lineage` raises above, never a new one — when that filter
+    yields anything other than exactly one candidate: zero (not yet
+    ingested, or a different lineage named) and more than one
+    (structurally unreachable on a real filesystem, where two
+    directories cannot share one name, but checked explicitly rather
+    than assumed) both refuse under this one shared code, covering "this
+    lineage did not resolve to exactly one document" the same way
+    `resolve_lineage`'s own docstring already generalizes its two cases.
+    """
+    papers = paper_guidance.ingested_papers(evidence_dir.parent).get(evidence_dir.name, [])
+    candidates = [Path(entry["markdown"]) for entry in papers if entry["folder"] == lineage]
+    if len(candidates) != 1:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} resolved to {len(candidates)} ingested document(s) under "
+            f"{evidence_dir} (expected exactly one)",
+        )
+    return candidates[0]
 
 
 def is_bindable_fact(fact_id: str) -> bool:

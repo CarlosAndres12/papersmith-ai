@@ -245,14 +245,22 @@ def _verify_source_section_bindings(corpus: Corpus) -> None:
     refusal) — resolution only ever runs against a `document-rooted` root.
 
     For each `(root, lineage)` pair the corpus's bindings actually name,
-    under a document-rooted root:
+    under a document-rooted root, resolution branches on the root's OWN
+    `kind` (design.md, `SourceRootKind`):
 
-    1. `paper_declarations.read_revisions_marker` — `None` (absent marker)
-       refuses `SOURCE_REVISIONS_UNDECLARED` naming the root; a malformed
-       marker propagates `MALFORMED_SOURCE_MARKER` from the reader itself.
-    2. `paper_declarations.resolve_lineage` — refuses
-       `SOURCE_LINEAGE_UNRESOLVED` on zero or tied candidates.
-    3. The resolved revision is segmented once (`paper_guidance.
+    1a. `PROSE`/`REPOSITORY` roots (a `REPOSITORY` root is never
+        document-rooted, so it never reaches this branch in practice):
+        `paper_declarations.read_revisions_marker` — `None` (absent
+        marker) refuses `SOURCE_REVISIONS_UNDECLARED` naming the root; a
+        malformed marker propagates `MALFORMED_SOURCE_MARKER` from the
+        reader itself. `paper_declarations.resolve_lineage` then refuses
+        `SOURCE_LINEAGE_UNRESOLVED` on zero or tied candidates.
+    1b. `INGESTED` roots (U2c ruling): an ingested paper is not a
+        revisioned lineage, so there is no marker to read at all —
+        `paper_declarations.resolve_ingested_document` resolves the
+        lineage by IDENTITY, refusing the SAME `SOURCE_LINEAGE_UNRESOLVED`
+        on zero or more-than-one matching ingested document.
+    2. The resolved document is segmented once (`paper_guidance.
        segment_markdown`) into a `{title: count}` memo, keyed by
        `(root, lineage)` — one file read per distinct pair for the WHOLE
        corpus (design.md Decision E), never one per binding. Every binding
@@ -273,14 +281,21 @@ def _verify_source_section_bindings(corpus: Corpus) -> None:
 
             memo_key = (root.name, lineage)
             if memo_key not in memo:
-                marker = paper_declarations.read_revisions_marker(status["path"])
-                if marker is None:
-                    raise Refused(
-                        "SOURCE_REVISIONS_UNDECLARED",
-                        f"{root.name!r} is document-rooted but carries no "
-                        f"'.paper-writing.json' marker",
+                if root.kind is paper_declarations.SourceRootKind.INGESTED:
+                    revision_path = paper_declarations.resolve_ingested_document(
+                        status["path"], lineage
                     )
-                revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)
+                else:
+                    marker = paper_declarations.read_revisions_marker(status["path"])
+                    if marker is None:
+                        raise Refused(
+                            "SOURCE_REVISIONS_UNDECLARED",
+                            f"{root.name!r} is document-rooted but carries no "
+                            f"'.paper-writing.json' marker",
+                        )
+                    revision_path = paper_declarations.resolve_lineage(
+                        status["path"], lineage, marker
+                    )
                 body = revision_path.read_text(encoding="utf-8")
                 outline = paper_guidance.segment_markdown(body)
                 counts: dict = {}
