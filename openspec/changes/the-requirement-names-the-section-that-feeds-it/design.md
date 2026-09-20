@@ -10,7 +10,8 @@ passes already there.
 
 Resolution is three hops, each derived from disk, none from a literal:
 
-    fact ──FACT_SOURCE_ROOT──▶ root name ──base/name──▶ root dir
+    fact ──FACT_SOURCE_ROOT──▶ SourceRoot(name, kind)
+         ──kind is PROSE?──▶ base/name ──▶ root dir   (REPOSITORY stops here)
          ──marker──▶ revision regex ──max ordinal──▶ current revision file
          ──segment_markdown──▶ heading titles ──▶ the bound section
 
@@ -136,9 +137,30 @@ Roster is **133 today**; the count after this lands is re-derived with
 
 ```python
 # paper_declarations.py
-def source_root_status(base: Path, root_name: str) -> dict:
+class SourceRootKind(enum.Enum):
+    """PROSE -- read as revisions with headings. REPOSITORY -- measured by
+    running it; never bindable to a section, whatever is on disk."""
+    PROSE = "prose"
+    REPOSITORY = "repository"
+
+
+class SourceRoot(NamedTuple):
+    """`kind` carries NO default: adding a sixth root cannot silently
+    inherit a species. Omitting it is a TypeError at construction."""
+    name: str
+    kind: SourceRootKind
+
+
+def source_root_status(base: Path, root: SourceRoot) -> dict:
     """{"state": "document-rooted"|"unmeasured", "path": Path|None,
-        "documents": int, "reason": str|None}"""
+        "documents": int, "reason": str|None}
+
+    A REPOSITORY-kind root is `unmeasured` BY KIND, before disk is
+    consulted at all, and its path is the forge's own canonical
+    `impl_layout.WORKSPACE` -- never a name this skill spells itself.
+    Amended after U2b: the first cut resolved every root name as a
+    directory under `base`, which excluded `implementation`/`results`
+    for the accidental reason that no directory bore that name."""
 
 def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
     """The single highest-ordinal revision. Refuses SOURCE_LINEAGE_UNRESOLVED
