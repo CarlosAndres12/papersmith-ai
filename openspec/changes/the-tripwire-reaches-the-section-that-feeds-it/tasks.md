@@ -134,52 +134,65 @@ plumbing every Requirement in that spec depends on (`source_sections` must arriv
       not edit `paper_graph.py` yourself under any circumstance — this is the applier
       instruction from design.md, Decision E, carried here verbatim so it survives
       apply-time pressure to "just fix it forward."
-- [ ] 1.2 RED: add a failing test asserting `paper_cli._resolve_write_gate` returns the
+- [x] 1.2 RED: add a failing test asserting `paper_cli._resolve_write_gate` returns the
       assembled `Corpus` rather than `None` (currently `-> None` at line ~1222, returning
       nothing after its `assemble_corpus(..., enforce_bindings=True)` call at line ~1253).
-- [ ] 1.3 Change `_resolve_write_gate`'s signature and body to return the `Corpus` it
+- [x] 1.3 Change `_resolve_write_gate`'s signature and body to return the `Corpus` it
       already builds; confirm every existing caller (`cmd_write`) still works with the
       returned value ignored where not yet consumed. Confirm 1.2 goes green.
-- [ ] 1.4 RED: add failing tests for `paper_source_span.resolve_bound_sections(corpus,
+- [x] 1.4 RED: add failing tests for `paper_source_span.resolve_bound_sections(corpus,
       qualified_block_id)` — a block's own `(fact, lineage, title)` triples resolve to
       `{"fact", "lineage", "title", "path", "byte_start", "byte_end", "text"}` entries,
       using `segment_markdown` offsets against a `bind`-recorded fixture; a block with no
       bindable measured fact returns `()`.
-- [ ] 1.5 Create `scripts/paper_source_span.py`: `resolve_bound_sections` CALLS the landed
+- [x] 1.5 Create `scripts/paper_source_span.py`: `resolve_bound_sections` CALLS the landed
       per-`(root, lineage)` memo/accessor from `paper_graph.py` (never re-resolves lineage
       or re-reads the marker itself) and slices `body.encode("utf-8")[byte_start:byte_end]`
       per matching heading. Confirm 1.4 goes green.
-- [ ] 1.6 If `paper_source_span.py` needs any import from `_core/implementation/` beyond
+- [x] 1.6 If `paper_source_span.py` needs any import from `_core/implementation/` beyond
       what is already copied by `tests/paper_mutation.py`'s hardcoded core-file list
       (currently `impl_refusals.py` and `impl_layout.py` only — see `paper_mutation.py`
       lines 77-87), add that file to the mutation-sandbox copy list in the same commit.
       This is a known trap in this repository: a new production `_core` import not added
       there crashes every mutation test on import before any mutation is exercised.
-- [ ] 1.7 Add `BlockContract.source_sections: tuple = ()` to `paper_write.py` (the
+      **Confirmed not needed**: `paper_source_span.py` imports only `paper_declarations`
+      and `paper_graph` (sibling `scripts/` modules, already copied by `paper_mutation.py`'s
+      own `SKILL_SCRIPTS.glob("*.py")` loop) and raises no `Refused` of its own, so it never
+      touches `_core/implementation/` directly.
+- [x] 1.7 Add `BlockContract.source_sections: tuple = ()` to `paper_write.py` (the
       `produces_facts`/`source_bindings` defaulting precedent). Confirm every existing
       `BlockContract(...)` construction site in tests stays green with no change.
-- [ ] 1.8 Wire `cmd_write`: call `paper_source_span.resolve_bound_sections(corpus,
+- [x] 1.8 Wire `cmd_write`: call `paper_source_span.resolve_bound_sections(corpus,
       qualified_id)` and fill `BlockContract.source_sections` from the result. Resolution
       and disk reading stay in the CLI; `write_block` still receives plain text/tuples,
       never touching disk itself.
-- [ ] 1.9 RED-then-GREEN: add a `write_block` test asserting the envelope gains a
+- [x] 1.9 RED-then-GREEN: add a `write_block` test asserting the envelope gains a
       `sourceFidelity` key reporting `{"status": "unmeasured"}` when `source_sections` is
       empty — mirroring `style_channel_report`'s own shape. No verdict logic yet (that is
       WU2); this phase only wires the plumbing and the `unmeasured` report.
       (`transposition-fidelity`, "Requirement: A Block With No Measured Bound Section
       Reports Unmeasured, Never Refused", scenario "A block with no bound section reports
       unmeasured".)
-- [ ] 1.10 Mutation: force `cmd_write` to always pass `source_sections=()` regardless of
+- [x] 1.10 Mutation: force `cmd_write` to always pass `source_sections=()` regardless of
       what `resolve_bound_sections` resolved; confirm the resolved-triple test (1.4/1.8)
       goes red, proving the resolved bindings actually have to arrive for anything to
       change. (This mutation is re-used, not duplicated, by WU2's own "resolved bindings
       really arrive" mutation once the verdict logic exists.)
-- [ ] 1.11 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` and
+- [x] 1.11 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` and
       `tests/` for any block id, section title, document filename, paper id, or subject
       word belonging to the paper being written, introduced by this phase's new code,
-      comments, or fixtures. Confirm zero matches.
-- [ ] 1.12 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract`;
+      comments, or fixtures. Confirm zero matches. Confirmed: WU1's new/changed content
+      (`paper_source_span.py`, the `paper_cli.py`/`paper_write.py` diffs, and this phase's
+      own tests) introduces zero new invented literals — every fixture name it uses
+      (`lumen-thesis`, `1. Intro`, `3. Something`, `formulation`) is a pre-existing invented
+      fixture already established by `SourceSectionBindingWriteGateTests`/
+      `BindCliEndToEndTests`, never a new one. `ForgeVocabularyDerivedGuardTests` (rule
+      B, the widened derived denylist) still shows exactly the one disclosed pre-existing
+      failure (`experimental-deliberation/SKILL.md`, "mechanisms"), unrelated to this
+      phase and unchanged by it.
+- [x] 1.12 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract`;
       confirm green, no new failures beyond the known pre-existing baseline.
+      Confirmed: `Ran 625 tests ... OK` (0 failures, 0 errors).
 
 ## Phase 2 — WU2: The threshold, the sibling check, and the wire into `write_block`
 

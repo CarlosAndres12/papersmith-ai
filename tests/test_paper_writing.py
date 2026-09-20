@@ -49,6 +49,7 @@ import paper_readiness  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
+import paper_source_span  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -4785,7 +4786,8 @@ class ContractAuditTests(unittest.TestCase):
 
 def _write_contract(
     *, block_id="mm-proposal", citations_regime="resolution", mode="transposition",
-    requires_facts=(), evidence_set=(), style_set=(), disqualifiers=(_SAMPLE_DISQUALIFIER,),
+    requires_facts=(), evidence_set=(), style_set=(), source_sections=(),
+    disqualifiers=(_SAMPLE_DISQUALIFIER,),
 ) -> "paper_write.BlockContract":
     return paper_write.BlockContract(
         block_id=block_id,
@@ -4796,6 +4798,7 @@ def _write_contract(
         requires_facts=tuple(requires_facts),
         evidence_set=tuple(evidence_set),
         style_set=tuple(style_set),
+        source_sections=tuple(source_sections),
     )
 
 
@@ -4984,6 +4987,34 @@ class WritingPipelineTests(unittest.TestCase):
         result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
         self.assertEqual(result["status"], "written")
         self.assertEqual(result["styleChannel"]["status"], "measured")
+
+    def test_a_real_write_with_no_source_sections_reports_source_fidelity_unmeasured(self) -> None:
+        """`transposition-fidelity` spec, `Requirement: A Block With No
+        Measured Bound Section Reports Unmeasured, Never Refused`, scenario
+        "A block with no bound section reports unmeasured" (tasks.md 1.9):
+        WU1's own scope, wiring and the `unmeasured` report only -- no
+        verdict logic (`check_source_section_verbatim`) exists yet, that
+        is WU2's."""
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceFidelity"], {"status": "unmeasured"})
+
+    def test_a_real_write_with_a_bound_section_reports_source_fidelity_measured(self) -> None:
+        """The reachable non-empty branch, proven minimally: WU1 adds no
+        check and no refusal (tasks.md, orchestrator instruction), so only
+        the `status` differentiates "a bound section reached the pipeline"
+        from `unmeasured` -- the per-section floor/threshold/longest_run
+        shape is WU2's own scope (`check_source_section_verbatim`,
+        tasks.md 2.11)."""
+        section = {
+            "fact": "formulation", "lineage": "lumen-thesis", "title": "1. Intro",
+            "path": "irrelevant.md", "byte_start": 0, "byte_end": 10, "text": "# 1. Intro",
+        }
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=(section,))
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceFidelity"]["status"], "measured")
 
 
 class StyleChannelReportingTests(unittest.TestCase):
@@ -8519,7 +8550,7 @@ class WriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_the_write_path_refusal(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.WriteGateTests"
             ".test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten",
@@ -8888,7 +8919,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_section_not_in_source(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_section_not_in_source",
@@ -8900,7 +8931,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_source_revisions_undeclared(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_source_revisions_undeclared",
@@ -8912,7 +8943,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_section_binding_absent(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_section_binding_absent",
@@ -11038,6 +11069,236 @@ class SeparateNeverRecordsABindingEndToEndTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+class WriteGateReturnsCorpusTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.2-1.3): `_resolve_write_gate` already builds the
+    `Corpus` its own `assemble_corpus(..., enforce_bindings=True)` call
+    returns, and until now discarded it. `cmd_write` cannot fill
+    `BlockContract.source_sections` from a corpus it was never handed back."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-write-gate-return-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [
+            {"id": "a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "phase-a", "position": 1, "blocks": blocks})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def test_resolve_write_gate_returns_the_assembled_corpus(self) -> None:
+        corpus = paper_cli._resolve_write_gate(self.paper_dir, self.sections_dir, "phase-a.a")
+
+        self.assertIsInstance(corpus, paper_graph.Corpus)
+        self.assertIn("phase-a.a", corpus.blocks)
+
+    def test_resolve_write_gate_returns_the_corpus_off_the_early_return_branch_too(self) -> None:
+        """A `qualified_id` the corpus's own waves do not contain (a
+        typo'd `--section`/`--block`, never declared anywhere) takes the
+        EARLY `return` inside `_resolve_write_gate` -- design.md Decision
+        E's own return value must hold on that branch too, not only the
+        gated one."""
+        corpus = paper_cli._resolve_write_gate(self.paper_dir, self.sections_dir, "no-such.block")
+
+        self.assertIsInstance(corpus, paper_graph.Corpus)
+
+
+class ResolveBoundSectionsTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.4-1.5): `paper_source_span.resolve_bound_
+    sections` turns a block's own `(fact, lineage, title)` triples into
+    the bound section's own bytes, via the landed `paper_graph.resolve_
+    section_index` -- never a second, independent resolution."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-resolve-bound-sections-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\nOpening prose.\n\n# 3. Something\n\nThe body of the third heading.\n",
+            encoding="utf-8",
+        )
+
+    def _corpus(self, entry: dict) -> "paper_graph.Corpus":
+        blocks = [{
+            "id": "only", "requires_facts": [entry],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        return paper_graph.assemble_corpus(self.sections_dir, paper_dir=self.paper_dir)
+
+    def test_a_bound_section_resolves_its_own_span(self) -> None:
+        corpus = self._corpus({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+        })
+
+        resolved = paper_source_span.resolve_bound_sections(corpus, "a.only")
+
+        self.assertEqual(len(resolved), 1)
+        entry = resolved[0]
+        self.assertEqual(entry["fact"], "formulation")
+        self.assertEqual(entry["lineage"], "lumen-thesis")
+        self.assertEqual(entry["title"], "3. Something")
+        self.assertEqual(entry["path"], str(self.proposals / "lumen-thesis-r21.md"))
+        self.assertIn("The body of the third heading.", entry["text"])
+        self.assertNotIn("Opening prose.", entry["text"])
+        body_bytes = (self.proposals / "lumen-thesis-r21.md").read_bytes()
+        self.assertEqual(
+            body_bytes[entry["byte_start"]:entry["byte_end"]].decode("utf-8"), entry["text"],
+        )
+
+    def test_a_block_with_no_document_binding_resolves_nothing(self) -> None:
+        corpus = self._corpus({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+        })
+
+        resolved = paper_source_span.resolve_bound_sections(corpus, "a.only")
+
+        self.assertEqual(resolved, ())
+
+
+class CmdWriteSourceSectionsWiringTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.8, 1.10): `cmd_write` must actually pass the
+    resolved bound sections into `BlockContract.source_sections`, never
+    merely resolve them and discard the result -- the exact defect this
+    change closes in `_resolve_write_gate` itself. Mocks `paper_write.
+    write_block` (never `paper_source_span.resolve_bound_sections`), so
+    the REAL corpus, REAL resolution and REAL CLI wiring all run; only the
+    drafting pipeline past that point is stubbed out."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-cmd-write-source-sections-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only",
+            "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/a.md", "quote": "The formulation, written here."},
+                "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        # `cmd_write` resolves a block's own contract file as literally
+        # `sections/<section-id>.md` (`section_path = sections_dir /
+        # f"{args.section}.md"`), unlike `assemble_corpus`'s own `*.md`
+        # glob -- named `a.md` here, matching `args.section="a"`, the same
+        # precedent `BindCliEndToEndTests` above already established.
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\nOpening prose.\n\n# 3. Something\n\nThe body of the third heading.\n",
+            encoding="utf-8",
+        )
+        (self.test_root / "draft.json").write_text(
+            json.dumps({"latex": "Draft body.", "bindings": []}), encoding="utf-8",
+        )
+        (self.test_root / "audit.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+
+    def _args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def test_cmd_write_fills_source_sections_from_the_resolved_corpus(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args())
+
+        contract = mocked_write_block.call_args[0][1]
+        self.assertEqual(len(contract.source_sections), 1)
+        section = contract.source_sections[0]
+        self.assertEqual(section["fact"], "formulation")
+        self.assertEqual(section["lineage"], "lumen-thesis")
+        self.assertEqual(section["title"], "3. Something")
+        self.assertIn("The body of the third heading.", section["text"])
+
+
+class CmdWriteSourceSectionsWiringMutationProofTests(unittest.TestCase):
+    """tasks.md 1.10: forcing `cmd_write` to always pass
+    `source_sections=()` regardless of what `resolve_bound_sections`
+    resolved must fail `CmdWriteSourceSectionsWiringTests.test_cmd_write_
+    fills_source_sections_from_the_resolved_corpus` -- proving the
+    resolved bindings actually have to arrive at `BlockContract` for
+    anything to change. Re-used, not duplicated, by WU2's own 'the
+    resolved bindings really arrive' mutation once the verdict logic
+    exists (design.md, Testing Strategy table)."""
+
+    def test_mutation_forcing_empty_source_sections_fails_the_wiring_test(self) -> None:
+        proc = _run_against_mutant(
+            "        source_sections=paper_source_span.resolve_bound_sections(corpus, qualified_id),\n",
+            "        source_sections=(),\n",
+            "tests.test_paper_writing.CmdWriteSourceSectionsWiringTests"
+            ".test_cmd_write_fills_source_sections_from_the_resolved_corpus",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class BlockContractSourceSectionsDefaultTests(unittest.TestCase):
+    """tasks.md 1.7: `BlockContract.source_sections` is defaulted, the same
+    `produces_facts`/`source_bindings` precedent, so every existing
+    `BlockContract(...)` construction site in this suite stays green with
+    no change of its own."""
+
+    def test_source_sections_defaults_to_an_empty_tuple(self) -> None:
+        contract = _write_contract(citations_regime="none")
+
+        self.assertEqual(contract.source_sections, ())
 
 
 if __name__ == "__main__":

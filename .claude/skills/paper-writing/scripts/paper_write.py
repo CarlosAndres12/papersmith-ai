@@ -48,6 +48,15 @@ class BlockContract:
     requires_facts: tuple
     evidence_set: tuple = ()
     style_set: tuple = ()
+    #: `transposition-fidelity` spec's own prerequisite plumbing (design.md
+    #: Decision E). One entry per bound source section
+    #: (`paper_source_span.resolve_bound_sections`'s own return shape:
+    #: `{"fact", "lineage", "title", "path", "byte_start", "byte_end",
+    #: "text"}`), already resolved from disk by the CLI -- this dataclass
+    #: never touches disk itself. Defaulted, the same `produces_facts`/
+    #: `source_bindings` precedent, so every construction site that
+    #: predates this field stays green unchanged.
+    source_sections: tuple = ()
 
 
 def _attempt_key(contract: BlockContract) -> str:
@@ -205,14 +214,45 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
     # makes "unmeasured" a real reported status rather than an omitted key.
     style_report = style_channel_report(contract.style_set, None, None)
 
+    # `transposition-fidelity` spec, `Requirement: A Block With No Measured
+    # Bound Section Reports Unmeasured, Never Refused` (WU1's own scope,
+    # design.md Decision E). `source_fidelity_report` below adds no
+    # comparison and no refusal -- that is `check_source_section_
+    # verbatim`'s own sibling stage, wired in by WU2 -- this call only
+    # reports whether a bound section reached the pipeline at all,
+    # mirroring `style_channel_report`'s shipped shape rather than
+    # inventing a second reporting convention.
+    source_fidelity = source_fidelity_report(contract.source_sections)
+
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {
         "status": "written",
         "block": contract.block_id,
         "verdicts": audit_result["verdicts"],
         "styleChannel": style_report,
+        "sourceFidelity": source_fidelity,
         **result,
     }
+
+
+def source_fidelity_report(source_sections: tuple) -> dict:
+    """`transposition-fidelity` spec, `Requirement: A Block With No
+    Measured Bound Section Reports Unmeasured, Never Refused` -- WU1's own
+    scope only (design.md Decision E; tasks.md 1.9). Mirrors `style_
+    channel_report`'s own shape: no bound section resolved for this block
+    -> `unmeasured`, never a silent pass and never inferred only from the
+    absence of a refusal.
+
+    A non-empty `source_sections` reports `measured` with no per-section
+    detail yet -- the floor/threshold/longest_run report per section
+    (`{"lineage", "title", "floor", "threshold", "longest_run"}`) is
+    `check_source_section_verbatim`'s own computation, WU2's scope, not
+    this phase's: this function adds no comparison and no refusal of its
+    own, only whether a bound section reached the pipeline at all.
+    """
+    if not source_sections:
+        return {"status": "unmeasured"}
+    return {"status": "measured", "sections": []}
 
 
 def style_channel_report(recorded_samples: list, register_result: dict | None, overlap_result: dict | None) -> dict:
