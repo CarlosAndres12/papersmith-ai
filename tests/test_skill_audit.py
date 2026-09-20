@@ -3777,7 +3777,7 @@ class HistoricalReportRecordTests(unittest.TestCase):
         "a3f01c3596f51126f6569b8b945e260fad0227be97c74a7bbf5893308d370719")
 
     def test_the_report_is_byte_identical_to_its_pre_falsification_content(self):
-        actual = hashlib.sha256(REPORT.read_bytes()).hexdigest()
+        actual = hashlib.sha256(frozen_report().read_bytes()).hexdigest()
         self.assertEqual(
             actual, self.PRE_FALSIFICATION_SHA256,
             "a report is a record; supersede it, do not edit it -- this "
@@ -3797,7 +3797,10 @@ class HistoricalReportRecordTests(unittest.TestCase):
             if "## Frozen" in text.splitlines() and \
                     "## Ranked findings" in text.splitlines():
                 hits.append(path)
-        self.assertEqual(hits, [REPORT])
+        self.assertEqual(
+            len(hits), 1,
+            f"exactly one file under openspec/changes/**/*.md may carry "
+            f"both '## Frozen' and '## Ranked findings'; found: {hits}")
 
 
 class ReportSchemaSelfDescriptionTests(unittest.TestCase):
@@ -3881,8 +3884,34 @@ class UsageReferenceTests(unittest.TestCase):
 # touched, and the wall between reporting and repairing is the product.
 # ==========================================================================
 
-REPORT = (FORGE / "openspec" / "changes" / "the-skill-that-audits-the-others"
-          / "audit-proposal-deliberation-operations.md")
+def frozen_report() -> Path:
+    """The one file under `openspec/changes/**` carrying both `## Frozen`
+    and `## Ranked findings` -- DERIVED on every call, never a pinned path.
+
+    A pinned path was the original shape, and archiving the change that
+    holds this report moved it under `changes/archive/<date>-<name>/`.
+    The bytes never changed -- the sha pinned in
+    `PRE_FALSIFICATION_SHA256` still matches exactly -- yet five tests in
+    this module went red and stayed red for five days, because a constant
+    described where the report USED to live rather than what makes it the
+    report. Deriving it means archiving the next audited change moves the
+    file and nothing here notices, which is correct: an archive is a move,
+    not an edit.
+
+    `test_no_other_archived_report_carries_both_frozen_and_findings` owns
+    the "exactly one" claim and sweeps independently; this raises on any
+    other count so a caller never silently reads the wrong file.
+    """
+    hits = []
+    for path in sorted((FORGE / "openspec" / "changes").rglob("*.md")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if "## Frozen" in lines and "## Ranked findings" in lines:
+            hits.append(path)
+    if len(hits) != 1:
+        raise AssertionError(
+            f"expected exactly one frozen report under openspec/changes, "
+            f"found {len(hits)}: {hits}")
+    return hits[0]
 
 #: Not a private copy. This slice deletes the one that used to live here and
 #: imports the shipped `tree_digest` instead -- the same function `structure`
@@ -3908,7 +3937,7 @@ class FirstDamageReportTests(unittest.TestCase):
         or to `tampered` (the era fact colliding with the tamper fact),
         not only if the report stops parsing.
         """
-        result = run_cli("check-report", str(REPORT))
+        result = run_cli("check-report", str(frozen_report()))
         payload = json.loads(result.stdout)
         self.assertEqual(result.returncode, 2, payload)
         self.assertEqual(payload["status"], "predates-the-schema", payload)
@@ -3918,7 +3947,7 @@ class FirstDamageReportTests(unittest.TestCase):
             "vocabulary")
 
     def test_the_report_carries_both_required_kinds_of_finding(self):
-        text = REPORT.read_text(encoding="utf-8")
+        text = frozen_report().read_text(encoding="utf-8")
         self.assertIn("- Evidence: CONFIRMED by execution", text,
                       "a report with nothing confirmed tells the reader "
                       "nothing they could not have read for themselves")
@@ -3930,7 +3959,7 @@ class FirstDamageReportTests(unittest.TestCase):
         """The executed set is the deciding evidence, and the report has to
         show where the hand-written copies live."""
         _, payload = roster_json(PD_SPEC, PD)
-        text = REPORT.read_text(encoding="utf-8")
+        text = frozen_report().read_text(encoding="utf-8")
         self.assertNotEqual(payload["duplicated"], [])
         for site in payload["duplicated"]:
             name = Path(site["path"]).name
@@ -3958,7 +3987,7 @@ class NothingWasRepairedTests(unittest.TestCase):
         for entry in ("SKILL.md", "cli.mjs", "profile.ts"):
             self.assertIn(entry, before, f"the subject tree is missing {entry}")
         roster_json(PD_SPEC, PD)
-        run_cli("check-report", str(REPORT))
+        run_cli("check-report", str(frozen_report()))
         after = tree_digest(PD)
         self.assertEqual(
             sorted(set(before) - set(after)), [], "a file was removed")
