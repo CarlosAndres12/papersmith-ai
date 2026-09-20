@@ -186,8 +186,51 @@ def _compute_undecided_bindings(blocks: dict, source_roots: dict) -> dict:
     return undecided
 
 
+def _reconcile_source_bindings(
+    qualified_id: str, header_triples: tuple, recorded_by_fact: dict,
+) -> tuple:
+    """Merges a block's header-declared bindings (`paper_contract.
+    requirement_documents`) with bindings RECORDED via `bind`
+    (`paper_declarations.read_bindings`), per fact id — `the-requirement-
+    names-the-section-that-feeds-it`, U3e ruling (design.md Decision J):
+    "the corpus reads bindings from `paper/`, not from the contract" no
+    longer means the header half is removed (U1's own shape stays valid,
+    and its tests hold it); it means `paper/`'s own recorded bindings are
+    now a SECOND, equally authoritative source this function reconciles
+    against the first, never a fallback consulted only when the header is
+    silent.
+
+    A fact bound by only ONE source (header alone, or `paper/` alone)
+    contributes exactly that source's triples, unchanged. A fact bound by
+    BOTH must name the identical lineage and the identical section-title
+    SET, or this refuses `SOURCE_BINDING_CONFLICT` naming the block, the
+    fact, and both sides verbatim — a disagreement between two sources
+    claiming to answer the SAME question is a conflict to resolve, never
+    a precedence puzzle to silently pick a winner from.
+    """
+    by_fact: dict = {}
+    for fact_id, lineage, title in header_triples:
+        by_fact.setdefault(fact_id, []).append((lineage, title))
+
+    result = list(header_triples)
+    for fact_id, info in sorted(recorded_by_fact.items()):
+        recorded_titles = [(info["lineage"], title) for title in info["sections"]]
+        if fact_id in by_fact:
+            if sorted(by_fact[fact_id]) != sorted(recorded_titles):
+                raise Refused(
+                    "SOURCE_BINDING_CONFLICT",
+                    f"{qualified_id}: {fact_id!r} is bound in the contract header as "
+                    f"{by_fact[fact_id]!r} and recorded via 'bind' as {recorded_titles!r} "
+                    "-- these must agree exactly",
+                )
+            continue  # the header already contributed identical triples
+        result.extend((fact_id, lineage, title) for lineage, title in recorded_titles)
+    return tuple(result)
+
+
 def assemble_corpus(
-    sections_dir: Path, *, source_base: Path | None = None, enforce_bindings: bool = False,
+    sections_dir: Path, *, source_base: Path | None = None, paper_dir: Path | None = None,
+    enforce_bindings: bool = False,
 ) -> Corpus:
     """Parse every `*.md` under `sections_dir`, sorted by filename for
     reproducibility only. Refuses `ID_COLLISION` (work-state) when a raw
@@ -230,6 +273,17 @@ def assemble_corpus(
     passes `True`: drafting a block without knowing which section feeds
     it is the one moment an undecided binding would otherwise force an
     invented answer, so only that moment refuses.
+
+    `paper_dir` (U3e ruling, `the-requirement-names-the-section-that-
+    feeds-it`, design.md Decision J): where `paper_declarations.
+    read_bindings` looks for bindings RECORDED via `bind` — `None`
+    derives `resolved_base / "paper"`, this skill's own shipped default
+    layout (`<repo>/paper`), the SAME convention every existing test
+    fixture already follows (`self.paper_dir = self.forge_root /
+    "paper"`). Read once, before the block loop, and merged per block
+    with that block's own header-declared bindings by
+    `_reconcile_source_bindings` — never a second, independent source of
+    truth `BlockRecord.source_bindings` could silently drift from.
     """
     sections: dict = {}
     bodies: dict = {}
@@ -240,6 +294,10 @@ def assemble_corpus(
         sections[header.section] = header
         bodies[f"{sections_dir.name}/{path.name}"] = body
         section_bodies[header.section] = body
+
+    resolved_base = source_base if source_base is not None else sections_dir.parent
+    resolved_paper_dir = paper_dir if paper_dir is not None else resolved_base / "paper"
+    recorded_bindings = paper_declarations.read_bindings(resolved_paper_dir)
 
     section_ids = set(sections)
     blocks: dict = {}
@@ -254,6 +312,10 @@ def assemble_corpus(
                     f"block id {block_id!r} in section {section_id!r} collides with a section id",
                 )
             qualified_id = f"{section_id}.{block_id}"
+            header_bindings = paper_contract.requirement_documents(raw_block["requires_facts"])
+            source_bindings = _reconcile_source_bindings(
+                qualified_id, header_bindings, recorded_bindings.get(qualified_id, {}),
+            )
             blocks[qualified_id] = BlockRecord(
                 section=section_id,
                 block_id=block_id,
@@ -267,11 +329,10 @@ def assemble_corpus(
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
                 produces_facts=paper_contract.requirement_values(raw_block["produces_facts"]),
-                source_bindings=paper_contract.requirement_documents(raw_block["requires_facts"]),
+                source_bindings=source_bindings,
             )
             order_by_section[section_id].append(qualified_id)
 
-    resolved_base = source_base if source_base is not None else sections_dir.parent
     source_roots = {
         root.name: paper_declarations.source_root_status(resolved_base, root)
         for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name)
@@ -296,6 +357,35 @@ def assemble_corpus(
     _verify_producer_reachability(corpus, declarations)
     _verify_producer_chain_rows(corpus, declarations, section_bodies)
     return corpus
+
+
+def _describe_binding_absent(corpus: Corpus, qualified_id: str, fact_id: str, info: dict) -> str:
+    """`SECTION_BINDING_ABSENT`'s own detail text (U3e ruling, `the-
+    requirement-names-the-section-that-feeds-it`: "the refusal IS the
+    question"). Names the block, the fact, the root, and — read from disk
+    at this exact moment, via `paper_declarations.describe_binding_
+    candidates` — every lineage that root currently carries, its own
+    resolved current revision (or, for an INGESTED root, its own paper),
+    and the section titles that revision actually holds right now, so a
+    person can answer the refusal without opening anything. Also spells
+    the exact `bind` invocation that answers it, naming this refusal's own
+    block and fact — never a generic "run bind" pointer.
+    """
+    root = paper_declarations.FACT_SOURCE_ROOT[fact_id]
+    status = corpus.source_roots[info["root"]]
+    candidates = paper_declarations.describe_binding_candidates(status, root)
+    detail = (
+        f"{qualified_id}: {fact_id!r} is bindable and its source root {info['root']!r} is "
+        f"measured, but carries no binding. Record one with `bind --block {qualified_id} "
+        f"--fact {fact_id} --lineage <lineage> --section <title> [--section <title> ...]`."
+    )
+    if not candidates:
+        return detail + f" No document was found on disk under {info['root']!r} yet."
+    parts = [
+        f"{lineage!r} (current: {candidate['revision']}, sections: {candidate['sections']!r})"
+        for lineage, candidate in sorted(candidates.items())
+    ]
+    return detail + " Candidates on disk right now: " + "; ".join(parts) + "."
 
 
 def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = False) -> None:
@@ -353,8 +443,7 @@ def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = 
             fact_id, info = next(iter(facts.items()))
             raise Refused(
                 "SECTION_BINDING_ABSENT",
-                f"{qualified_id}: {fact_id!r} is bindable and its source root "
-                f"{info['root']!r} is measured, but carries no 'document' binding",
+                _describe_binding_absent(corpus, qualified_id, fact_id, info),
             )
 
     memo: dict = {}

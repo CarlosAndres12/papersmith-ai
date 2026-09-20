@@ -33,6 +33,7 @@ unchanged from design.md, which already priced the marker reader in.
 | 4 (U3) | Obligation unconditional, corpus transcribed, `write` wired for all six codes | PR 2 | full suite (both, see 4.12) | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write <bound-block-id>` | `git revert` U3's single commit |
 | 5 (U3b) | Correctness repair: undecided is reported (`Corpus.undecided_bindings`), `SECTION_BINDING_ABSENT` refuses at `write` only; removes the two invented bindings U3's own apply transcribed under the unconditional-obligation trap | PR 2 (same branch, engine-only lines) | `.venv/bin/python -m unittest tests.test_paper_writing.SourceSectionBindingCorpusTests tests.test_paper_writing.SourceSectionBindingWriteGateTests tests.test_paper_writing.SourceSectionBindingWriteGateMutationProofTests` | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write --section introduction --block block-4a --draft draft.json --audit audit.json` (refuses `SECTION_BINDING_ABSENT` before either file is opened) | `git revert` U3b's own commit(s); U3's transcribed bindings and fixtures are untouched |
 | 7 (U3d) | Owner ruling (design.md Decision I): no binding is transcribed ahead of `write` asking for it. Removes all nine `document` bindings from `sections/*.md`; renames every suite fixture borrowing the proposal's own real lineage/paper-id spelling; widens `ForgeVocabularyDerivedGuardTests.derived_denylist` to derive from `proposals/`/`experiments/`/`guidance/` too | PR 2 (same branch) | `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions tests.test_forge_scaffolding` | N/A — decontamination, no new runtime path | `git revert` U3d's own commit(s); `sections/*.md` return to their U2d state, the widened guard reverts to `implementations/`-only |
+| 8 (U3e) | Owner ruling (design.md Decision J): U3d built a lock with no key. Adds the `bind` verb (`paper_declarations.bind_section`/`reopen_binding`/`read_bindings`, `paper_cli.cmd_bind`) that RECORDS a binding into `paper/`'s own `declarations` region; the corpus merges a recorded binding with any header-declared one (`paper_graph._reconcile_source_bindings`, `SOURCE_BINDING_CONFLICT` on disagreement); `SECTION_BINDING_ABSENT`'s own detail now names the block, fact, root, and every candidate lineage/revision/section-title read from disk (`describe_binding_candidates`); fixes the `guidance/` count test's machine-dependence (U3d left behind) | PR 2 (same branch); over budget as one unit, `size:exception` recommended | `.venv/bin/python -m unittest tests.test_paper_decisions.BindingRecordTests tests.test_paper_decisions.DescribeBindingCandidatesTests tests.test_paper_writing.RecordedSourceBindingCorpusTests tests.test_paper_writing.BindCliEndToEndTests tests.test_paper_writing.SourceSectionBindingWriteGateTests` | `.claude/skills/paper-writing/scripts/paper_cli.py bind --block <qualified-id> --fact <fact-id> --lineage <lineage> --section <title>` then `write` on the same block, real worked session in the apply report | `git revert` U3e's own commit(s); no `sections/*.md` byte is ever touched, `git diff main..HEAD -- sections/` stays empty |
 
 ## Phase 1 — U1: Entry shape, inert
 
@@ -246,3 +247,90 @@ derived its denylist from `implementations/` alone.
       the_forge` test as the pre-existing `mechanisms` baseline, now additionally naming the two
       reported-not-fixed collisions from 7.8 — zero failures beyond those, zero new failing test
       methods.
+
+## Phase 8 — U3e: The skill records the binding it demands
+
+U3d built a lock (`SECTION_BINDING_ABSENT`) and no key: nothing in the skill could record a
+binding once all nine transcribed ones were removed, and the only way to answer the refusal was
+still a hand edit to `sections/*.md` — exactly the act Decision I ruled out. The owner's rule: a
+binding is decided by USING the skill, never by editing a file or by an agent reading prose.
+
+- [x] 8.1 RED: added failing tests for `paper_declarations.bind_section`/`reopen_binding`/
+      `read_bindings` (`tests/test_paper_decisions.py::BindingRecordTests`, 14 tests) and
+      `describe_binding_candidates` (`DescribeBindingCandidatesTests`, 3 tests); confirmed all 14
+      of the former failed with `AttributeError: module 'paper_declarations' has no attribute
+      'bind_section'` before any production edit.
+- [x] 8.2 Added `bind_section`/`reopen_binding`/`read_bindings`/`describe_binding_candidates`/
+      `_binding_record_id`/`_heading_titles` to `.claude/skills/paper-writing/scripts/
+      paper_declarations.py` — a THIRD `declarations`-region record kind (`binding`, keyed by
+      `{block}::{fact}`), reusing `paper_region.py`'s existing region machinery, never a second
+      store. Refuses `UNKNOWN_FACT` (reused), `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_
+      REQUIRED`, `BINDING_SECTIONS_REQUIRED`, `DECLARATION_FIXED` (reused).
+- [x] 8.3 Ran 8.1's tests green (17/17).
+- [x] 8.4 RED: added failing tests asserting the corpus reads a recorded binding with no header
+      half (`tests/test_paper_writing.py::RecordedSourceBindingCorpusTests`); confirmed red before
+      any production edit (`AssertionError: ('formulation', 'lumen-thesis', '3. Something') not
+      found in ()`).
+- [x] 8.5 Added `assemble_corpus`'s `paper_dir` kwarg and `_reconcile_source_bindings` to
+      `.claude/skills/paper-writing/scripts/paper_graph.py`: merges `paper_declarations.
+      read_bindings` per block with `paper_contract.requirement_documents`'s own header triples;
+      refuses `SOURCE_BINDING_CONFLICT` naming the block, the fact, and both sides' values when
+      both name the same fact and disagree.
+- [x] 8.6 RED-then-GREEN: added a disagreement test and its mutation proof (collapsing the
+      conflict comparison to `if False:`), confirming the mutation goes red under
+      `tests.test_paper_writing.RecordedSourceBindingCorpusTests
+      .test_a_recorded_binding_disagreeing_with_the_header_refuses` and green on the unmutated
+      engine.
+- [x] 8.7 RED: added a failing test asserting `SECTION_BINDING_ABSENT`'s own detail names the
+      block, fact, root, the CURRENT (highest-ordinal) revision only, and every section title that
+      revision holds, read from disk (`SourceSectionBindingWriteGateTests
+      .test_section_binding_absent_names_the_block_fact_root_and_candidates`).
+- [x] 8.8 Added `_describe_binding_absent` (`paper_graph.py`) calling `paper_declarations.
+      describe_binding_candidates`, wired into `_verify_source_section_bindings`'s own
+      `enforce_bindings` branch; the refusal now also names the exact `bind` invocation that
+      answers it. Ran 8.7 green.
+- [x] 8.9 Mutation: reverted the refusal detail to U3's own bare message; confirmed 8.7's test
+      goes red under the mutation and green on the unmutated engine
+      (`test_mutation_reverting_the_refusal_detail_to_bare_fails_the_candidates_test`).
+- [x] 8.10 Added `paper_cli.cmd_bind`, a new `bind` argparse subparser, registered `bind` in
+      `COMMANDS`/`_COMMANDS`, and four new `REFUSAL_CLASSIFICATION` entries. `_resolve_write_gate`
+      now passes `paper_dir=paper_dir` explicitly to `assemble_corpus`.
+- [x] 8.11 RED-then-GREEN: added `tests/test_paper_writing.py::BindCliEndToEndTests` (4 tests) —
+      the full worked session (`write` refuses `SECTION_BINDING_ABSENT`, `bind` records the
+      answer, `write` no longer refuses it), plus `--reopen`, plus both invocation-defect refusals;
+      confirmed red (`AttributeError: module 'paper_cli' has no attribute 'cmd_bind'`) before the
+      CLI wiring, green after.
+- [x] 8.12 Fixed a mutation-anchor collision `describe_binding_candidates` introduced (a duplicate
+      `digits = marker["ordinal_digits"]` line broke `SecondProseRootGeneralityTests
+      .test_mutation_hardcoding_the_live_roots_default_width_breaks_this_roots_resolution`'s own
+      anchor-uniqueness assumption) by renaming the new function's local variables
+      (`marker_prefix`/`marker_digits`); confirmed no other anchor collisions across the full
+      `tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions` run (772/772
+      green).
+- [x] 8.13 Fixed the `guidance/` count test U3d left machine-dependent
+      (`tests/test_paper_decisions.py::GuidanceRegistryTests
+      .test_against_the_real_shipped_guidance_tree`): `len(registry["data-paper"]) == 1`,
+      `total_papers == 8` etc. depend on this checkout's own ambient, gitignored content — `git
+      ls-files guidance/` shows only five `.gitkeep` files travel, so those exact counts are false
+      on a fresh clone. Rewrote to assert the PROPERTY (the four tracked root folders, and that
+      `ingested_papers` matches an independently-taken, gitignore-blind `Path.iterdir()` walk of
+      the SAME real tree at test time) rather than fixed counts; confirmed the property holds both
+      against this machine's real ambient content and against a simulated fresh-clone tree (every
+      root empty except `.gitkeep`).
+- [x] 8.14 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for the proposal's
+      own lineage/paper-id/section-title literals; zero matches. `git diff main..HEAD --
+      sections/` returns empty.
+- [x] 8.15 Update `design.md` (new Decision J, Refusal Codes table, File Changes table, Interfaces,
+      Work Units table, Migration/Rollout note), `specs/source-section-binding/spec.md` (two new
+      Requirements: recording, and the header/recorded merge conflict), `specs/writing-
+      orchestration/spec.md` (one new Requirement: the refusal names its own next action), and
+      this file.
+- [x] 8.16 Re-derived the refusal roster with `reachable_paper_refusal_codes()`; measured **144**
+      (up from 140) — `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_REQUIRED`, `BINDING_SECTIONS_
+      REQUIRED` (via the new `cmd_bind` root) and `SOURCE_BINDING_CONFLICT` (via `paper_graph.py`,
+      already imported).
+- [x] 8.17 Ran `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing
+      tests.test_paper_decisions tests.test_forge_scaffolding
+      tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests` AND the full baseline
+      (`npm test`; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`); confirmed zero
+      new failures beyond the known pre-existing `mechanisms`/collision baseline.

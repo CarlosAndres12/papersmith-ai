@@ -18,7 +18,12 @@ undeclared or malformed marker produces, the property that a version
 bump whose bound titles survive costs no edit anywhere, and the report a
 bindable-but-not-yet-decided binding produces (`undecided`) versus the
 refusal that same binding produces the one time drafting actually depends
-on it (`write`).
+on it (`write`). A binding itself is answered by USING the skill — a
+dedicated recording verb, never a hand edit to a shipped section contract
+and never an agent inferring one from conversation prose — and the corpus
+resolves a fact's binding from whichever of two sources (the header's own
+shape, or a recorded one) names it, refusing when both name it and
+disagree.
 
 ## Requirements
 
@@ -91,6 +96,84 @@ obligation itself stays unconditional — it never consults a block's own
 - WHEN `write` assembles the corpus for the block that entry belongs to
 - THEN it refuses `SECTION_BINDING_ABSENT` naming the block and
   `formulation`
+
+### Requirement: A Binding Is Recorded By Using The Skill, Never By Editing A Shipped File
+
+An operator answers `SECTION_BINDING_ABSENT` by recording a binding through
+a dedicated verb (`bind`) — naming the block, the fact, the source
+document's lineage, and one or more section titles — never by hand-editing
+a shipped section contract under `sections/*.md`, and never by an agent
+inferring a binding from conversation prose. The recorded binding is
+stored where the paper's own decisions already live, never in a file that
+ships with the forge: `sections/*.md` MUST NOT carry a transcribed
+`document` binding as a mechanism for satisfying this obligation. The verb
+MUST refuse to record an empty lineage or an empty set of section titles,
+and MUST refuse to record a binding for a fact that is not bindable
+(`Requirement: Bindable Facts Are Derived, Never Listed`) — recording an
+answer to a question that was never asked is itself a defect. A binding,
+once recorded, MUST be reversible: reopening it clears its fixed state
+without touching any other recorded binding.
+
+#### Scenario: An operator records a binding through the skill
+
+- GIVEN a bindable, measured entry with no binding yet
+- WHEN an operator names the block, the fact, a lineage, and one or more
+  section titles through the recording verb
+- THEN the binding is recorded, and it is not written to any file under
+  `sections/`
+
+#### Scenario: Recording with no section title refuses
+
+- GIVEN the recording verb invoked with no section title
+- WHEN it runs
+- THEN it refuses, naming that a section title is required
+
+#### Scenario: Recording with no lineage refuses
+
+- GIVEN the recording verb invoked with no lineage
+- WHEN it runs
+- THEN it refuses, naming that a lineage is required
+
+#### Scenario: Recording a binding for a non-bindable fact refuses
+
+- GIVEN a fact absent from `FACT_SOURCE_ROOT` (e.g. a produced fact)
+- WHEN the recording verb is invoked naming that fact
+- THEN it refuses, naming that the fact is not bindable
+
+#### Scenario: Reopening one binding leaves a sibling binding untouched
+
+- GIVEN two distinct recorded bindings
+- WHEN one is reopened
+- THEN the other still resolves exactly as it did before
+
+### Requirement: A Recorded Binding And A Header-Declared Binding Must Agree
+
+The corpus resolves a `requires_facts` entry's binding from two possible
+sources: the contract header's own `document` half (`section-contract`),
+still a validated, parseable shape, and a binding recorded through the
+skill (the requirement above). A fact named by only one source uses that
+source. A fact named by BOTH sources MUST name the identical lineage and
+the identical set of section titles, or the corpus MUST refuse, naming the
+block, the fact, and both sides' own values verbatim — an agreement is
+never assumed by precedence, and a disagreement between two sources both
+claiming to answer the same question is surfaced, never silently resolved
+in favor of either one.
+
+#### Scenario: A header binding and a recorded binding that agree are not a conflict
+
+- GIVEN a `requires_facts` entry whose header names `document: {lineage,
+  section}`, and a recorded binding naming the identical lineage and
+  section for the same block and fact
+- WHEN the corpus is assembled
+- THEN it accepts the entry with no refusal
+
+#### Scenario: A header binding and a recorded binding that disagree refuse
+
+- GIVEN the same entry, but the recorded binding names a different section
+  title than the header's own `document.section`
+- WHEN the corpus is assembled
+- THEN it refuses, naming the block, the fact, and both the header's own
+  value and the recorded value
 
 ### Requirement: Lineage Resolves To The Current Revision On Disk
 

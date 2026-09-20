@@ -2568,6 +2568,128 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self.assertNotIn("1. Intro", ctx.exception.detail)
 
 
+class RecordedSourceBindingCorpusTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e ruling
+    (design.md Decision J): the corpus reads a `source-section-binding`
+    from `paper/` (`paper_declarations.read_bindings`, recorded by
+    `bind`), never only from a contract header's own `document` half.
+    Both sources may contribute; when both name the SAME (block, fact)
+    they must agree exactly, or the corpus refuses `SOURCE_BINDING_
+    CONFLICT` naming both — never a precedence rule that silently prefers
+    one."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.sections_dir = self.base / "sections"
+        self.sections_dir.mkdir()
+        self.paper_dir = self.base / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _write_section(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _header(self, *, document=None) -> dict:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+        }
+        if document is not None:
+            entry["document"] = document
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
+    _BODY = (
+        "The formulation, written here.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+
+    def _marker(self, root: Path, prefix: str = "r", digits: int = 2) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def test_a_binding_recorded_via_bind_resolves_with_no_header_binding(self) -> None:
+        self._write_section("01-a.md", self._header(), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis", "3. Something",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn(
+            ("formulation", "lumen-thesis", "3. Something"), corpus.blocks["a.only"].source_bindings,
+        )
+        self.assertNotIn("a.only", corpus.undecided_bindings)
+
+    def test_a_recorded_binding_agreeing_with_the_header_is_not_a_conflict(self) -> None:
+        self._write_section(
+            "01-a.md",
+            self._header(document={"lineage": "lumen-thesis", "section": "3. Something"}),
+            self._BODY,
+        )
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis", "3. Something",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(
+            corpus.blocks["a.only"].source_bindings, (("formulation", "lumen-thesis", "3. Something"),),
+        )
+
+    def test_a_recorded_binding_disagreeing_with_the_header_refuses(self) -> None:
+        self._write_section(
+            "01-a.md",
+            self._header(document={"lineage": "lumen-thesis", "section": "3. Something"}),
+            self._BODY,
+        )
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis", "1. Intro",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_BINDING_CONFLICT")
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("3. Something", ctx.exception.detail)
+        self.assertIn("1. Intro", ctx.exception.detail)
+
+    def test_mutation_collapsing_the_conflict_check_lets_disagreement_pass(self) -> None:
+        proc = _run_against_mutant(
+            "            if sorted(by_fact[fact_id]) != sorted(recorded_titles):\n",
+            "            if False:\n",
+            "tests.test_paper_writing.RecordedSourceBindingCorpusTests"
+            ".test_a_recorded_binding_disagreeing_with_the_header_refuses",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 class SecondProseRootGeneralityTests(unittest.TestCase):
     """U3c (design.md's own stated risk, discharged): every check
     `SourceSectionBindingCorpusTests` above proves against `proposals` --
@@ -6873,8 +6995,22 @@ class RefusalRosterTests(unittest.TestCase):
         site now exists, unconditionally, in `paper_graph._verify_source_
         section_bindings` -- the sixth code this change ships, landing with
         the write-gate wiring rather than staying inert (design.md, Refusal
-        Codes table)."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 140)
+        Codes table).
+
+        Moved from 140 to 144 in U3e (design.md Decision J): the new `bind`
+        verb (`cmd_bind`, a new root in `paper_cli.COMMANDS`) records a
+        binding through `paper_declarations.bind_section`/`reopen_binding`
+        -- `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_REQUIRED`,
+        `BINDING_SECTIONS_REQUIRED` (three new raise sites; `UNKNOWN_FACT`
+        is reused verbatim, adding nothing new). `paper_graph.py` (already
+        imported) gains one more: `_reconcile_source_bindings`'s own
+        `SOURCE_BINDING_CONFLICT`, when a header-declared binding and a
+        RECORDED one disagree for the same (block, fact). Four new codes
+        total, reachable the instant their raise sites exist -- `cmd_bind`
+        as a new root, the other three via modules `paper_cli.py` already
+        imports. Measured directly against `reachable_paper_refusal_
+        codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 144)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -8322,6 +8458,38 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
 
         self._assert_refuses_before_drafting("SECTION_BINDING_ABSENT")
 
+    def test_section_binding_absent_names_the_block_fact_root_and_candidates(self) -> None:
+        """U3e ruling: the refusal IS the question. A person reading it
+        must be able to answer it without opening anything -- the block,
+        the fact, the root, the resolved current revision (highest
+        ordinal wins over an older one), and the section titles that
+        revision actually carries RIGHT NOW, read from disk at refusal
+        time, never cached or hand-listed."""
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r20.md").write_text("# Old\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args())
+
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+        detail = ctx.exception.detail
+        self.assertIn("a.only", detail)
+        self.assertIn("formulation", detail)
+        self.assertIn("proposals", detail)
+        self.assertIn("lumen-thesis-r21.md", detail)
+        self.assertNotIn("lumen-thesis-r20.md", detail)
+        self.assertIn("1. Intro", detail)
+        self.assertIn("3. Something", detail)
+        self.assertIn("bind", detail)
+
     def test_write_refuses_source_lineage_unresolved(self) -> None:
         self._write_bound_section({
             "value": "formulation",
@@ -8388,6 +8556,120 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._assert_refuses_before_drafting("EVIDENCE_ROOT_AMBIGUOUS")
 
 
+class BindCliEndToEndTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e ruling: the
+    full worked session a `SECTION_BINDING_ABSENT` refusal exists to
+    enable -- `write` refuses, `bind` answers it (never a hand edit to
+    `sections/*.md`), `write` reaches the readiness stage. Rooted under
+    `FORGE_ROOT/implementations/`, the same containment
+    `SourceSectionBindingWriteGateTests` already requires -- `cmd_bind`
+    and `cmd_write` both resolve `--paper`/`--sections` against the real,
+    non-injectable `FORGE_ROOT` default."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-bind-cli-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only",
+            "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/a.md", "quote": "The formulation, written here."},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        # `cmd_write` resolves a block's own contract file as literally
+        # `sections/<section-id>.md` (`section_path = sections_dir /
+        # f"{args.section}.md"`) -- unlike `assemble_corpus`'s own `*.md`
+        # glob, which is filename-agnostic. Named `a.md` here, matching
+        # `args.section="a"`, so this fixture is the first to exercise
+        # `cmd_write` past its own binding gate.
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        proposals = self.test_root / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+    def _write_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def _bind_args(self, **overrides) -> argparse.Namespace:
+        base = dict(
+            paper=str(self.paper_dir), block="a.only", fact="formulation",
+            lineage="lumen-thesis", section=["3. Something"], reopen=False,
+        )
+        base.update(overrides)
+        return argparse.Namespace(**base)
+
+    def test_the_full_session_refusal_bind_then_write_succeeds(self) -> None:
+        # 1. `write` refuses -- the block's own bindable fact carries no
+        #    binding yet.
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+        # 2. `bind` answers it -- an operator using the skill, never a
+        #    hand edit to `sections/a.md`.
+        result = paper_cli.cmd_bind(self._bind_args())
+        self.assertEqual(result["block"], "a.only")
+        self.assertEqual(result["fact"], "formulation")
+        self.assertEqual(result["lineage"], "lumen-thesis")
+
+        # 3. `write` no longer refuses `SECTION_BINDING_ABSENT` -- it
+        #    proceeds past the binding gate, all the way to trying to open
+        #    `--draft` (this fixture names a `draft.json` that is never
+        #    created, so the next failure is that bare, downstream open,
+        #    never the binding gate).
+        with self.assertRaises((Refused, FileNotFoundError)) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        if isinstance(ctx.exception, Refused):
+            self.assertNotEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+        # `sections/a.md` is never touched by any of this.
+        prose = (self.sections_dir / "a.md").read_text(encoding="utf-8")
+        self.assertNotIn('"document"', prose)
+
+    def test_bind_refuses_an_empty_section_list(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_bind(self._bind_args(section=[]))
+        self.assertEqual(ctx.exception.code, "BINDING_SECTIONS_REQUIRED")
+
+    def test_bind_refuses_a_missing_lineage(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_bind(self._bind_args(lineage=None))
+        self.assertEqual(ctx.exception.code, "BINDING_LINEAGE_REQUIRED")
+
+    def test_reopen_then_bind_a_different_section_through_the_cli(self) -> None:
+        paper_cli.cmd_bind(self._bind_args())
+
+        paper_cli.cmd_bind(self._bind_args(reopen=True, lineage=None, section=None))
+        result = paper_cli.cmd_bind(self._bind_args(section=["1. Intro"]))
+
+        self.assertEqual(result["sections"], ["1. Intro"])
+
+
 class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
     """The load-bearing proof (tasks.md 4.9): wiring the guard only into
     the read-only `phases` verb and leaving `write` unguarded must fail
@@ -8430,6 +8712,28 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_section_binding_absent",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_reverting_the_refusal_detail_to_bare_fails_the_candidates_test(self) -> None:
+        """U3e ruling: "the refusal IS the question" -- reverting
+        `SECTION_BINDING_ABSENT`'s own detail to the bare U3 message
+        (naming only the block, fact and root, none of the candidates
+        `_describe_binding_absent` derives from disk) must fail
+        `test_section_binding_absent_names_the_block_fact_root_and_
+        candidates`, proving that test load-bearing on the improved
+        message, not merely on the refusal code."""
+        proc = _run_against_mutant(
+            '                _describe_binding_absent(corpus, qualified_id, fact_id, info),\n'
+            '            )',
+            "                f\"{qualified_id}: {fact_id!r} is bindable and its source root \"\n"
+            "                f\"{info['root']!r} is measured, but carries no 'document' binding\",\n"
+            "            )",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_section_binding_absent_names_the_block_fact_root_and_candidates",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)

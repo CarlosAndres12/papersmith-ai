@@ -260,6 +260,70 @@ own `SKILL.md` used the real evidence-folder name as a "for example" in an illus
 without touching `experimental-deliberation`'s own `guidance/data-paper` requirement (see Open
 Questions: two collisions this ruling does not resolve).
 
+### J — `bind` records a binding; the corpus reads it from `paper/`, not from `sections/*.md` (U3e ruling)
+
+Decision I removed every transcribed binding, and closed the door on hand-editing `sections/*.md` to
+put one back — correctly, since a binding decided by editing a shipped contract file is a binding
+decided by nobody using the skill. But U3d built a lock (`SECTION_BINDING_ABSENT`) with no key: once
+the nine bindings were gone, nothing in the skill could record a new one. The only way to answer the
+refusal was still to hand-edit `sections/*.md`, exactly the act Decision I had just ruled out. The
+owner's ruling that decides the whole shape: **a binding is decided by USING the skill, never by
+anyone editing a file or by an agent reading prose.** The skill asks at the moment of writing
+(`write`'s own `SECTION_BINDING_ABSENT` refusal); the answer is recorded by a verb (`bind`); and it
+lands where the paper's own decisions already live (`paper/`'s `declarations` region), never in what
+ships.
+
+| Option | Tradeoff | Decision |
+|---|---|---|
+| A new verb, `bind`, records a THIRD `declarations`-region record kind (`binding`, keyed by `{block}::{fact}`), reusing `paper_region.py`'s existing region machinery; the corpus's `assemble_corpus` reads it (`paper_declarations.read_bindings`) and merges it with any header-declared binding, refusing `SOURCE_BINDING_CONFLICT` on disagreement | Reuses the SAME store, the SAME hand-edit guard (`DECLARATIONS_HAND_EDITED`, no `--adopt`), and the SAME "region is a decision the machine reads back as authority" precedent `set_fact`/`set_declaration` already established; a THIRD record kind (not `fact`/`declaration`) keeps the three vocabularies' field names disjoint, the module's own founding discipline | **Chosen** |
+| Widen `set_fact`'s own resolution string to smuggle a binding inside it (e.g. a JSON-encoded resolution) | A fact's `resolution` is a free-text string an author writes into `main.tex`'s own fact machinery; a binding is a DIFFERENT kind of decision (which section feeds a block, not what the fact's value is) — conflating the two reopens exactly the "one shared field name, one shared code path" trap the module docstring exists to close | Rejected |
+| Invent a second on-disk store for bindings (e.g. `paper/bindings.json`) | `paper/` already holds the paper's own decisions in one place (`main.tex`'s regions); a second file is a second thing to keep in sync, a second hand-edit guard to write, and a second precedent for "where does a decision live" that this forge has spent several units closing, not opening | Rejected |
+| Transcribe the answer back into `sections/*.md` once `bind` records it, as a cache | Reopens the exact defect Decision I closed: `sections/*.md` ships with the forge and must stay byte-identical to `main`; a binding cached there is a binding a future clone could see without ever running `bind` | Rejected |
+
+**Where it lives, and the proof it does not ship.** `paper/` is gitignored except `.gitkeep`
+(`.gitignore`); `git ls-files paper/` names nothing but that file. A `binding` record lives inside
+`main.tex`'s own `declarations` region, alongside `fact`/`declaration` records, protected by the SAME
+digest-mismatch guard (`DECLARATIONS_HAND_EDITED`) with no `--adopt` escape — a binding, like a fact
+or a declaration, is a decision the machine reads back as authority, and adopting a hand edit would
+launder an unreviewed change into "what was decided."
+
+**Shape.** `bind_section(paper_dir, qualified_block_id, fact_id, lineage, sections, *, clock=...)`
+(`paper_declarations.py`) records one binding; `reopen_binding(paper_dir, qualified_block_id,
+fact_id, *, clock=...)` clears it (a DEDICATED function, not a widened `reopen`, because a binding's
+own id is a `(block, fact)` PAIR, never a single vocabulary member `reopen`'s own
+`FACTS`/`DECLARATIONS` dispatch already closes over); `read_bindings(paper_dir)` is the read-only
+counterpart `assemble_corpus` calls. `paper_cli.cmd_bind` is the CLI front door (`bind --block
+<qualified-id> --fact <fact-id> --lineage <lineage> --section <title> [--section <title> ...]`, or
+`--reopen` to clear). No cross-check against a real corpus block/fact happens at record time — that
+would require `paper_declarations.py` to import `paper_graph.py`, which already imports
+`paper_declarations.py`, a cycle; a binding naming a block or fact that turns out not to exist is
+simply orphaned data, the same tolerance `reopen` already extends to an id with no existing record.
+
+**The corpus reads both sources, reconciled — never the store alone.** `paper_contract`'s own
+`document: {lineage, section}` header shape (U1) is UNCHANGED and still parses: it is the validated
+shape U1's own tests hold, and nothing in this ruling removes it. What changes is that the shipped
+corpus carries none of it (Decision I), and `assemble_corpus` now ALSO reads `paper/`'s own recorded
+bindings and merges them, per `(block, fact)`, with whatever a header names
+(`_reconcile_source_bindings`, `paper_graph.py`). A fact bound by only one source uses that source
+unchanged. A fact bound by BOTH must agree exactly (identical lineage, identical section-title set),
+or the corpus refuses `SOURCE_BINDING_CONFLICT` naming the block, the fact, and both sides verbatim —
+a disagreement between two sources both claiming to answer the same question is a conflict to
+surface, never a precedence rule that silently prefers one.
+
+**The refusal names the next action — read from disk at that exact moment.** U3's own
+`SECTION_BINDING_ABSENT` message named the block, the fact and the root, and stopped there: true, and
+useless — a person reading it still had to go find out what to answer with. `paper_declarations.
+describe_binding_candidates(status, root)` derives, at refusal time, every lineage a root currently
+carries: for a `PROSE` root with a marker, every filename matching that marker's own declared
+`revision_prefix`/`ordinal_digits` grouped by its own lineage segment (never one literal lineage —
+the SAME per-root regex `resolve_lineage` composes, generalized to admit any lineage segment), kept
+at its highest ordinal per lineage; for a `PROSE` root with no marker yet, every `*.md` file by its
+own filename stem; for an `INGESTED` root, every ingested paper as its own identity-resolved lineage.
+Each candidate's own section titles are read via `paper_guidance.segment_markdown`, the same reader
+`_verify_source_section_bindings` itself uses. The refusal then names the block, the fact, the root,
+every candidate lineage's own current revision (or paper) and its section titles, and the exact
+`bind` invocation that answers it — "the refusal IS the question," never a dead end.
+
 ## Refusal Codes — seven, and why the proposal's four became seven
 
 | Code | Condition | Tier |
@@ -271,6 +335,10 @@ Questions: two collisions this ruling does not resolve).
 | `SOURCE_REVISIONS_UNDECLARED` | Document-rooted `PROSE` root carries no marker | work-state |
 | `MALFORMED_SOURCE_MARKER` | Marker not UTF-8 / not JSON / not an object / unknown or missing key / bad value | work-state |
 | `EVIDENCE_ROOT_AMBIGUOUS` | More than one `guidance/` folder is classed `'evidence'` (U2c) | work-state |
+| `SOURCE_BINDING_CONFLICT` | A header-declared binding and a `bind`-recorded one disagree for the same (block, fact) (U3e) | work-state |
+| `BINDING_FACT_NOT_BINDABLE` | `bind --fact` names a declared fact that is not a key of `FACT_SOURCE_ROOT` (U3e) | work-state |
+| `BINDING_LINEAGE_REQUIRED` | `bind` given no `--lineage` (and not `--reopen`) (U3e) | invocation-defect |
+| `BINDING_SECTIONS_REQUIRED` | `bind` given no `--section` (and not `--reopen`) (U3e) | invocation-defect |
 
 The middle five are an **amendment** the proposal did not forecast: the ruling "the pattern is read
 from an on-disk declaration" arrives with a declaration, and a declaration has an absent state and a
@@ -288,23 +356,28 @@ lands is re-derived with `reachable_paper_refusal_codes()`, never forecast — m
 U2c, unchanged at **139** after U2d (a shape widening, no new raise site), **140** after U3
 (`SECTION_BINDING_ABSENT`'s own raise site lands), and unchanged at **140** after U3b (the raise site
 is a static AST scan target regardless of the `enforce_bindings` gate around it — this repair changes
-WHEN the code fires, never WHETHER it is reachable in source).
+WHEN the code fires, never WHETHER it is reachable in source). Measured **144** after U3e: the new
+`bind` verb (`cmd_bind`, a new root) contributes `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_
+REQUIRED`, `BINDING_SECTIONS_REQUIRED` (`UNKNOWN_FACT` is reused verbatim, adding nothing new), and
+`paper_graph._reconcile_source_bindings` contributes `SOURCE_BINDING_CONFLICT` — four new codes.
 
 ## File Changes
 
 | File | Action | Description |
 |---|---|---|
 | `scripts/paper_contract.py` | Modify | `_REQUIREMENT_OPTIONAL = ("document",)`, `_DOCUMENT_REQUIRED = ("lineage","section")`, `requirement_documents()` accessor |
-| `scripts/paper_declarations.py` | Modify | `source_root_status()`, `read_revisions_marker()`, `resolve_lineage()`, `bindable_facts()` derived off `FACT_SOURCE_ROOT`; U2c adds `SourceRootKind.INGESTED`, `_ingested_root_status()`, `resolve_ingested_document()`, and imports `paper_guidance` |
-| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg; U2c adds the per-kind dispatch inside `_verify_source_section_bindings`; U3b adds `Corpus.undecided_bindings: dict`, `_compute_undecided_bindings()`, and `assemble_corpus`'s `enforce_bindings` kwarg |
-| `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged |
-| `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it; U3b passes `enforce_bindings=True` from `_resolve_write_gate` only |
+| `scripts/paper_declarations.py` | Modify | `source_root_status()`, `read_revisions_marker()`, `resolve_lineage()`, `bindable_facts()` derived off `FACT_SOURCE_ROOT`; U2c adds `SourceRootKind.INGESTED`, `_ingested_root_status()`, `resolve_ingested_document()`, and imports `paper_guidance`; U3e adds `bind_section()`, `reopen_binding()`, `read_bindings()`, `describe_binding_candidates()`, `_binding_record_id()`, `_heading_titles()` — the THIRD `declarations`-region record kind |
+| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg; U2c adds the per-kind dispatch inside `_verify_source_section_bindings`; U3b adds `Corpus.undecided_bindings: dict`, `_compute_undecided_bindings()`, and `assemble_corpus`'s `enforce_bindings` kwarg; U3e adds `assemble_corpus`'s `paper_dir` kwarg, `_reconcile_source_bindings()` (`SOURCE_BINDING_CONFLICT`), and `_describe_binding_absent()` (the richer `SECTION_BINDING_ABSENT` detail) |
+| `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged; U3e's `describe_binding_candidates` reuses both again, unchanged |
+| `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it; U3b passes `enforce_bindings=True` from `_resolve_write_gate` only; U3e adds the new `cmd_bind` root (registered in `COMMANDS`/`_COMMANDS`, its own `bind` argparse subparser), four new `REFUSAL_CLASSIFICATION` entries, and passes `paper_dir=paper_dir` explicitly from `_resolve_write_gate`'s own `assemble_corpus` call |
 | `proposals/.paper-writing.json` | Create | `{"revisions":{"revision_prefix":"r","ordinal_digits":2}}` |
 | `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify, then reverted | U3 transcribed bindings for every bindable, measured requirement; U3b removed two of the nine (`introduction.block-4a`, `abstract.slot-3`); U3d removes the remaining seven, per Decision I's ruling — all five files are byte-identical to `main` again |
 | `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests; U3b moves the assembly-time `SECTION_BINDING_ABSENT` test to an `undecided`-report assertion and retargets its mutation proof through `cmd_write`; U3d renames every fixture that had borrowed the proposal's own real lineage/paper-id spelling to an invented one |
 | `tests/test_forge_scaffolding.py` | Modify | U3d: a historical-incident docstring naming the real evidence-folder name is genericized; no assertion changed |
 | `.claude/skills/paper-writing/SKILL.md` | Modify | U3d: an illustrative folder-name list swaps the real evidence-folder name for an invented one |
 | `tests/test_proposal_implementation.py` | Modify | U3d: `ForgeVocabularyDerivedGuardTests` gains `paper_product_root_words()`, widening `derived_denylist()`'s denylist derivation from `implementations/` alone to also cover `proposals/`/`experiments/`/`guidance/`'s evidence folder, contributing only the undivided compound of a live lineage or paper id (Decision I) |
+| `tests/test_paper_decisions.py` | Modify | U3e: `BindingRecordTests`, `DescribeBindingCandidatesTests` (`bind_section`/`reopen_binding`/`read_bindings`/`describe_binding_candidates`); `GuidanceRegistryTests.test_against_the_real_shipped_guidance_tree` rewritten to assert the gitignore-blindness PROPERTY (re-derived against a fresh, independent `Path.iterdir()` walk taken at test time) rather than this checkout's own ambient counts, which a fresh clone reports as zero |
+| `tests/test_paper_writing.py` | Modify | U3e: `RecordedSourceBindingCorpusTests` (the corpus merges a `bind`-recorded binding with any header-declared one, and refuses `SOURCE_BINDING_CONFLICT` on disagreement, with its own mutation proof); `BindCliEndToEndTests` (the full refusal → `bind` → `write`-succeeds session); `SourceSectionBindingWriteGateTests` gains the richer-detail assertion and its own mutation proof; roster re-derived to **144** |
 
 ## Interfaces
 
@@ -359,9 +432,36 @@ def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
     than one matching ingested document (U2c)."""
 
 
-# paper_graph.py (U3b)
+def bind_section(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, lineage: str, sections,
+    *, clock=paper_region.default_clock,
+) -> dict:
+    """(U3e) Records ONE `binding` -- a THIRD `declarations`-region record
+    kind, keyed by `{block}::{fact}`. Refuses UNKNOWN_FACT, BINDING_
+    FACT_NOT_BINDABLE, BINDING_LINEAGE_REQUIRED, BINDING_SECTIONS_
+    REQUIRED, or DECLARATION_FIXED (reused, unless `reopen_binding` ran
+    first)."""
+
+def reopen_binding(paper_dir: Path, qualified_block_id: str, fact_id: str, *, clock=...) -> dict:
+    """(U3e) Clears exactly the `(block, fact)` binding's fixed state --
+    a dedicated function, not a widened `reopen`."""
+
+def read_bindings(paper_dir: Path) -> dict:
+    """(U3e) Read-only: qualified_block_id -> {fact_id: {"lineage": str,
+    "sections": tuple}}. Returns {} before `paper/` is scaffolded --
+    never PAPER_ABSENT, matching `Corpus.undecided_bindings`'s own
+    read-only tolerance."""
+
+def describe_binding_candidates(status: dict, root: SourceRoot) -> dict:
+    """(U3e) {lineage: {"revision": filename, "sections": [title, ...]}},
+    read from disk at call time -- what `SECTION_BINDING_ABSENT`'s own
+    detail shows an operator."""
+
+
+# paper_graph.py (U3b, U3e)
 def assemble_corpus(
-    sections_dir: Path, *, source_base: Path | None = None, enforce_bindings: bool = False,
+    sections_dir: Path, *, source_base: Path | None = None, paper_dir: Path | None = None,
+    enforce_bindings: bool = False,
 ) -> Corpus:
     """`enforce_bindings=False` (every read-only verb's own default): an
     undecided binding is reported in `Corpus.undecided_bindings`, never
@@ -370,7 +470,15 @@ def assemble_corpus(
     SECTION_BINDING_ABSENT. `Corpus.undecided_bindings` -- qualified
     block id -> {fact_id: {"state": "undecided", "root": str}} -- mirrors
     `source_roots`'s own report shape rather than inventing a second
-    reporting convention."""
+    reporting convention.
+
+    `paper_dir` (U3e): `None` derives `resolved_base / "paper"`, this
+    skill's own shipped default layout, the SAME convention every
+    existing fixture already follows. Bindings recorded there (`bind`)
+    are read once (`paper_declarations.read_bindings`) and merged, per
+    block, with any header-declared binding by `_reconcile_source_
+    bindings` -- a fact bound by both sources must agree exactly, or the
+    corpus refuses SOURCE_BINDING_CONFLICT naming both."""
 ```
 
 `BlockRecord.source_bindings` is a tuple of `(fact_id, lineage, section_title)` triples — a tuple,
@@ -422,13 +530,17 @@ so an untracked fixture cannot pass on a no-op edit:
 | U3b | Correctness repair: an undecided binding reports (`Corpus.undecided_bindings`, mirroring `source_roots`), `SECTION_BINDING_ABSENT` refuses at `write` ONLY (Decision H); removes the two invented bindings (`introduction.block-4a`, `abstract.slot-3`) U3's own apply transcribed under this same pressure | engine-only, well under budget (owner ruling: budget counts engine lines) | yes |
 | U3c | Discharges the stated `experiments/` generality risk: the full marker/lineage/section/`undecided`-`write` path proven against a SECOND `PROSE`-kind root, tests-only, zero engine edits | tests-only, well under budget | yes |
 | U3d | Owner ruling (Decision I): removes all nine `document` bindings U3/U3b left transcribed in `sections/*.md`, restoring byte-identity with `main`; renames every suite fixture that had borrowed the proposal's own real lineage/paper-id spelling; widens `ForgeVocabularyDerivedGuardTests.derived_denylist` to derive from `proposals/`/`experiments/`/`guidance/` too, not `implementations/` alone | tests + suite-fixture renames, well under budget | yes |
+| U3e | Owner ruling (Decision J): the verb that RECORDS a binding (`bind`, `paper_declarations.bind_section`/`reopen_binding`/`read_bindings`), the corpus's own merge of a recorded binding with any header-declared one (`paper_graph._reconcile_source_bindings`, `SOURCE_BINDING_CONFLICT`), the richer `SECTION_BINDING_ABSENT` detail (`describe_binding_candidates`), and the `guidance/` count test's machine-dependence fix | measured ~411 engine lines + ~634 test lines (`git diff --stat`); over budget as one cohesive unit, `size:exception` recommended — see Work Unit Evidence in the apply report | yes |
 
 Estimated total **~470 changed lines** against the 400-line budget — above the proposal's ~440
 because the marker reader and its two codes were added by the Question-1 ruling.
 `400-line budget risk: Medium`. **Two chained PRs recommended**: PR#1 `U1+U2` ≈ 300, PR#2 `U3` ≈ 170
 targeting PR#1's branch. U1 and U2 are inert without U3, so PR#1 ships green on the untouched corpus.
 U3b is a same-branch correctness repair on top of PR#2, reported and settled per the owner's own
-engine-lines-only budget ruling.
+engine-lines-only budget ruling. U3e lands on the same branch, after U3d; its own size is reported
+honestly rather than split, since STRICT TDD red-first plus the mandated mutation/generality/worked-
+session evidence for a new recording verb and a new merge-conflict code is not cleanly separable into
+smaller independently-green slices without duplicating fixture setup across them.
 
 ## Threat Matrix
 
@@ -439,10 +551,14 @@ exception is untouched. The TypeScript resolver is mirrored, never called.
 
 ## Migration / Rollout
 
-No on-disk state, region format, digest or generation counter changes; an existing `paper/main.tex`
-stays readable by the prior revision. U3 is one commit — `git revert` restores the pre-obligation
-corpus and fixtures together. The only new on-disk artifact is `proposals/.paper-writing.json`,
-which an older revision of the code ignores entirely.
+No region format, digest or generation counter changes; an existing `paper/main.tex` stays readable
+by the prior revision. U3 is one commit — `git revert` restores the pre-obligation corpus and
+fixtures together. The only new on-disk artifact is `proposals/.paper-writing.json`, which an older
+revision of the code ignores entirely. U3e (Decision J) adds a new `kind="binding"` record value
+inside the SAME `declarations` region schema — additive, not a format change: an older revision of
+the code that has never seen a `binding` record simply never writes one, and `_body_or_default`/
+`_find_record` already iterate `body["records"]` generically by `(kind, id)`, never by an exhaustive
+kind list.
 
 ## Open Questions
 

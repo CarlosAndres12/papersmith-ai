@@ -627,15 +627,26 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         self.assertEqual(registry, {})
 
     def test_against_the_real_shipped_guidance_tree(self) -> None:
-        """The real corpus, measured 2026-09-18 (not the tasks artifact's
-        own stale forecast of 3 roots): 4 tracked root folders, named by
-        the assertions below rather than repeated here (`ForgeVocabulary
-        DerivedGuardTests` scans this suite's own commentary for exactly
-        this reason), 8 ingested papers total, one root genuinely empty.
-        `guidance/` contents are `.gitignore`d (`guidance/*/*`); this reads
-        the real, checked-out tree directly, proving the reader is
-        gitignore-blind against real ignored bytes, not only a synthetic
-        mirror of the pattern."""
+        """The PROPERTY, not this checkout's own particular counts (U3d
+        left this test pinned to `len(registry["data-paper"]) == 1` /
+        `total_papers == 8`, measured against ONE machine's ambient,
+        gitignored content on ONE day -- `git ls-files guidance/` shows
+        only five `.gitkeep` files travel, so a fresh clone reports every
+        root empty and every one of those counts was false on that
+        checkout). The four ROOT FOLDERS themselves ARE tracked
+        (`guidance/<root>/.gitkeep`), so their names are the one part of
+        this assertion that never depends on ambient local content.
+
+        The property this test exists to hold: `ingested_papers` must
+        report the SAME papers a gitignore-blind walk (`Path.iterdir()`,
+        never `fd`/`rg`) finds on THIS disk right now -- independently
+        re-derived here, against the real, checked-out tree, so a
+        regression that silently traded `Path.iterdir()` for gitignore-
+        aware tooling would still be caught: it would report empty (or
+        undercounted) roots while this test's OWN gitignore-blind count
+        disagrees. True on every checkout, whether the gitignored
+        `guidance/*/*` content is fully populated or (a fresh clone)
+        entirely absent beyond its own tracked `.gitkeep`."""
         real_guidance_dir = paper_guidance.resolve_guidance_dir(
             None, forge_root=FORGE_ROOT,
         )
@@ -644,12 +655,16 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         self.assertEqual(
             set(registry), {"data-paper", "paper-guide", "reference-papers", "area-benchmark"},
         )
-        self.assertEqual(registry["area-benchmark"], [])
-        self.assertEqual(len(registry["data-paper"]), 1)
-        self.assertEqual(len(registry["paper-guide"]), 2)
-        self.assertEqual(len(registry["reference-papers"]), 5)
-        total_papers = sum(len(papers) for papers in registry.values())
-        self.assertEqual(total_papers, 8)
+        for root_name, papers in registry.items():
+            root_dir = real_guidance_dir / root_name
+            expected = sorted(
+                entry.name for entry in root_dir.iterdir()
+                if entry.is_dir() and (entry / f"{entry.name}.md").is_file()
+            )
+            self.assertEqual(
+                sorted(paper["folder"] for paper in papers), expected,
+                f"{root_name!r}: ingested_papers must match a gitignore-blind walk taken now",
+            )
 
 
 class SectionCitationStatusTests(unittest.TestCase):
@@ -936,6 +951,287 @@ class DeclarationsTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
 
         self.assertEqual(tex_path.read_bytes(), corrupted, "a refused write must leave disk untouched")
+
+
+class BindingRecordTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e ruling
+    (design.md Decision J): the verb that RECORDS a `source-section-
+    binding` -- `bind_section` -- and its own read (`read_bindings`) and
+    reopen (`reopen_binding`) counterparts, all through the SAME
+    `declarations` region `set_fact`/`set_declaration` already write, a
+    THIRD record kind (`binding`) never sharing `fact`'s or
+    `declaration`'s own field name."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_a_recorded_binding_is_read_back(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(
+            bindings["a.only"]["formulation"],
+            {"lineage": "lumen-thesis", "sections": ("1. Fundamentos",)},
+        )
+
+    def test_a_single_string_section_is_accepted_and_read_back_as_a_tuple(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            "1. Fundamentos", clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(bindings["a.only"]["formulation"]["sections"], ("1. Fundamentos",))
+
+    def test_two_facts_on_the_same_block_are_recorded_independently(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "dataset", "q77213-004-11029-2",
+            ("Dataset",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(set(bindings["a.only"]), {"formulation", "dataset"})
+
+    def test_the_same_fact_bound_on_two_blocks_is_recorded_independently(self) -> None:
+        """The worked example this whole change exists for:
+        `mm-borrowed-machinery` and `mm-proposal` both require
+        `formulation` but bind different sections."""
+        paper_declarations.bind_section(
+            self.paper_dir, "materials-and-methods.mm-borrowed-machinery", "formulation",
+            "lumen-thesis", ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "materials-and-methods.mm-proposal", "formulation",
+            "lumen-thesis", ("3. Formulacion",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(
+            bindings["materials-and-methods.mm-borrowed-machinery"]["formulation"]["sections"],
+            ("1. Fundamentos",),
+        )
+        self.assertEqual(
+            bindings["materials-and-methods.mm-proposal"]["formulation"]["sections"],
+            ("3. Formulacion",),
+        )
+
+    def test_an_empty_sections_tuple_refuses_binding_sections_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "lumen-thesis", (), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_SECTIONS_REQUIRED")
+
+    def test_an_empty_lineage_refuses_binding_lineage_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "", ("1. Intro",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_LINEAGE_REQUIRED")
+
+    def test_binding_a_produced_fact_refuses_unknown_fact(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "not-a-fact", "lumen-thesis", ("1. Intro",),
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_binding_a_non_bindable_fact_refuses_fact_not_bindable(self) -> None:
+        """`gap` is a produced fact -- absent from `FACT_SOURCE_ROOT` by
+        construction, so it can never be document-bound (`source-section-
+        binding` spec, `Requirement: Bindable Facts Are Derived, Never
+        Listed`)."""
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "gap", "lumen-thesis", ("1. Intro",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_FACT_NOT_BINDABLE")
+        self.assertIn("gap", ctx.exception.detail)
+
+    def test_rebinding_the_same_block_and_fact_without_reopen_refuses(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "lumen-thesis",
+                ("3. Formulacion",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATION_FIXED")
+
+    def test_reopen_then_bind_admits_a_new_lineage(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.reopen_binding(self.paper_dir, "a.only", "formulation", clock=self._clock)
+
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("3. Formulacion",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+        self.assertEqual(bindings["a.only"]["formulation"]["sections"], ("3. Formulacion",))
+
+    def test_reopening_a_never_bound_pair_is_harmless(self) -> None:
+        result = paper_declarations.reopen_binding(
+            self.paper_dir, "a.never", "formulation", clock=self._clock,
+        )
+        self.assertEqual(result["block"], "a.never")
+        self.assertEqual(result["fact"], "formulation")
+
+    def test_reopening_one_pair_leaves_a_sibling_binding_untouched(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "a.other", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        paper_declarations.reopen_binding(self.paper_dir, "a.only", "formulation", clock=self._clock)
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+        self.assertNotIn("a.only", bindings)
+        self.assertEqual(bindings["a.other"]["formulation"]["sections"], ("1. Fundamentos",))
+
+    def test_read_bindings_reports_empty_before_paper_is_scaffolded(self) -> None:
+        """A corpus must be assemblable, read-only, before `paper/` even
+        exists -- the SAME tolerance `Corpus.undecided_bindings` already
+        extends to a fact with no binding at all."""
+        unscaffolded = self.forge_root / "no-such-paper"
+
+        self.assertEqual(paper_declarations.read_bindings(unscaffolded), {})
+
+    def test_a_hand_edited_declarations_region_still_refuses_a_new_binding(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"lumen", b"lumin", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.other", "dataset", "q77213-004-11029-2", ("Dataset",),
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_bindings(self.paper_dir)
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+
+class DescribeBindingCandidatesTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e: what `write`'s
+    own improved `SECTION_BINDING_ABSENT` refusal shows an operator --
+    every lineage a root carries RIGHT NOW, its own current revision (or,
+    for an INGESTED root, its own paper), and the section titles read from
+    it at call time. Nothing here is cached or hand-listed."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def _marker(self, root: Path, prefix: str = "r", digits: int = 2) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def test_a_marked_root_reports_the_current_revision_per_lineage(self) -> None:
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r20.md").write_text("# Old\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+        (proposals / "other-thesis-r05.md").write_text("# Only heading\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        self.assertEqual(
+            candidates,
+            {
+                "lumen-thesis": {
+                    "revision": "lumen-thesis-r21.md",
+                    "sections": ["1. Intro", "3. Something"],
+                },
+                "other-thesis": {"revision": "other-thesis-r05.md", "sections": ["Only heading"]},
+            },
+        )
+
+    def test_a_root_with_no_marker_yet_reports_every_file_by_its_own_stem(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        self.assertEqual(
+            candidates,
+            {"lumen-thesis-r21": {"revision": "lumen-thesis-r21.md", "sections": ["1. Intro"]}},
+        )
+
+    def test_an_ingested_root_reports_every_paper_as_its_own_lineage(self) -> None:
+        guidance = self.base / "guidance" / "source-manuscript"
+        paper_dir = guidance / "q77213-004-11029-2"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "q77213-004-11029-2.md").write_text("# Dataset\n", encoding="utf-8")
+        status = {"state": "document-rooted", "path": guidance, "documents": 1, "reason": None}
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("evidence", paper_declarations.SourceRootKind.INGESTED),
+        )
+
+        self.assertEqual(
+            candidates,
+            {"q77213-004-11029-2": {"revision": "q77213-004-11029-2.md", "sections": ["Dataset"]}},
+        )
 
 
 class ProducedFactUndeclarableTests(unittest.TestCase):

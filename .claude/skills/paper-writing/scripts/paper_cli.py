@@ -6,7 +6,7 @@ Standard library only, keyless, offline, fail-closed — the shape of
 invocation. Exit 0 means the command ran; exit 2 means a guard refused
 before touching disk.
 
-Wires twenty-four verbs: `scaffold`, `open`, `status`, `substitute` (from
+Wires twenty-five verbs: `scaffold`, `open`, `status`, `substitute` (from
 `only-the-block-changes`; `substitute` grew an optional `--contract <path>`
 in Slice C1 of `the-paper-carries-its-own-decisions`, recording provenance
 without changing what bytes get written); `contract`, `readiness`, `order`
@@ -14,6 +14,11 @@ without changing what bytes get written); `contract`, `readiness`, `order`
 `declare`, `observe`, `plan` (from `the-paper-carries-its-own-decisions`,
 Slices B and C2 — `observe` validates an `insumos-observer` report against
 the observable-fact schema before a human runs `declare` against it);
+`bind` (from `the-requirement-names-the-section-that-feeds-it`, U3e ruling
+— the verb that RECORDS a `source-section-binding`, in `paper/`, never
+`sections/*.md`: the answer to `SECTION_BINDING_ABSENT` a person gives BY
+USING THE SKILL, never by a hand edit or an agent reading conversation
+prose; `--reopen` clears an already-recorded (block, fact) pair);
 `resolve`, `full_text`, `bib build`, `validate` (from `no-claim-without-a-
 source-that-holds-it`, WU1/WU2/WU3, and `the-pdf-arrives-or-the-operator-
 is-told` for `full_text` — `resolve` is the one path that makes this CLI
@@ -423,6 +428,17 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # cover -- that code names a lineage's own candidates under an already-
     # identified root, never which root to use in the first place -----------
     "EVIDENCE_ROOT_AMBIGUOUS": WORK_STATE,
+    # --- the-requirement-names-the-section-that-feeds-it, U3e ruling: the
+    # verb that RECORDS a binding (`bind`, `paper_declarations.bind_
+    # section`/`reopen_binding`) -- the answer to `SECTION_BINDING_ABSENT`
+    # a person gives BY USING THE SKILL, never by hand-editing
+    # `sections/*.md` or by an agent reading conversation prose -- and the
+    # conflict the corpus's own merge of a header-declared binding against
+    # a RECORDED one can find (`paper_graph._reconcile_source_bindings`) --
+    "BINDING_SECTIONS_REQUIRED": INVOCATION_DEFECT,
+    "BINDING_LINEAGE_REQUIRED": INVOCATION_DEFECT,
+    "BINDING_FACT_NOT_BINDABLE": WORK_STATE,
+    "SOURCE_BINDING_CONFLICT": WORK_STATE,
 }
 
 
@@ -779,6 +795,30 @@ def cmd_declare(args: argparse.Namespace) -> dict:
         return paper_declarations.set_declaration(paper_dir, args.declaration, args.value)
     produced_by = _resolve_produced_by(sections_dir, args.fact)
     return paper_declarations.set_fact(paper_dir, args.fact, args.value, produced_by=produced_by)
+
+
+def cmd_bind(args: argparse.Namespace) -> dict:
+    """`bind`: the CLI front door for `source-section-binding`'s own
+    recording verb -- the one place a genuinely undecided binding
+    (`SECTION_BINDING_ABSENT`, raised only at `write`'s own gate) gets
+    answered by an operator USING the skill, never by hand-editing
+    `sections/*.md` (which ships with the forge and must stay byte-
+    identical to `main`) and never by an agent reading conversation prose
+    (`the-requirement-names-the-section-that-feeds-it`, U3e ruling,
+    design.md Decision J). `--reopen` clears an already-recorded (block,
+    fact) pair's fixed state instead of recording one (`paper_
+    declarations.reopen_binding`); every other invocation records
+    (`paper_declarations.bind_section`), which itself refuses `UNKNOWN_
+    FACT`, `BINDING_FACT_NOT_BINDABLE`, `BINDING_LINEAGE_REQUIRED`,
+    `BINDING_SECTIONS_REQUIRED` and `DECLARATION_FIXED` — enforced in that
+    module, not duplicated here.
+    """
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    if args.reopen:
+        return paper_declarations.reopen_binding(paper_dir, args.block, args.fact)
+    return paper_declarations.bind_section(
+        paper_dir, args.block, args.fact, args.lineage, tuple(args.section or ()),
+    )
 
 
 def compute_observation(
@@ -1210,7 +1250,7 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
     undecided binding must become `SECTION_BINDING_ABSENT` instead of a
     report, so only `write`'s own gate ever turns it into one.
     """
-    corpus = paper_graph.assemble_corpus(sections_dir, enforce_bindings=True)
+    corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir, enforce_bindings=True)
     edge_set = paper_graph.collect_edges(corpus)
     waves = paper_graph.derive_waves(corpus, edge_set)
 
@@ -2031,6 +2071,33 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    p_bind = sub.add_parser(
+        "bind",
+        help="record which section(s) of a source document feed one block's own bindable "
+             "requirement, or reopen a previously recorded binding",
+    )
+    p_bind.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_bind.add_argument(
+        "--block", required=True,
+        help="the qualified block id (<section>.<block>) the binding belongs to",
+    )
+    p_bind.add_argument("--fact", required=True, help="the bindable fact id this binding answers")
+    p_bind.add_argument(
+        "--lineage", default=None, help="the source document's lineage (required unless --reopen)",
+    )
+    p_bind.add_argument(
+        "--section", action="append", default=None,
+        help="a section title the named lineage's current revision must carry; repeatable for "
+             "a binding fed by more than one section (required unless --reopen)",
+    )
+    p_bind.add_argument(
+        "--reopen", action="store_true",
+        help="clear this exact (--block, --fact) binding's fixed state instead of recording one",
+    )
+
     p_observe = sub.add_parser(
         "observe",
         help="validate an insumos-observer report against the observable-fact schema, then "
@@ -2346,8 +2413,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "observe", "plan", "resolve", "full_text", "bib", "validate", "write", "render", "place",
-    "couplings", "verify", "packet", "reuse", "exhaustion",
+    "declare", "bind", "observe", "plan", "resolve", "full_text", "bib", "validate", "write", "render",
+    "place", "couplings", "verify", "packet", "reuse", "exhaustion",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2360,6 +2427,7 @@ _COMMANDS = {
     "skeleton": cmd_skeleton,
     "order": cmd_order,
     "declare": cmd_declare,
+    "bind": cmd_bind,
     "observe": cmd_observe,
     "plan": cmd_plan,
     "resolve": cmd_resolve,

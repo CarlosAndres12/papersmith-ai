@@ -24,6 +24,17 @@ Public surface:
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=..., produced_by=()) -> dict
     decline_fact(paper_dir, id, reason, condition, *, clock=..., produced_by=()) -> dict
+    bind_section(paper_dir, qualified_block_id, fact_id, lineage, sections, *, clock=...)
+        -> dict  (the-requirement-names-the-section-that-feeds-it, U3e: a THIRD
+        record kind, `binding`, keyed by (block, fact) -- the verb that RECORDS
+        a `source-section-binding`, in `paper/`, never `sections/*.md`)
+    reopen_binding(paper_dir, qualified_block_id, fact_id, *, clock=...) -> dict
+    read_bindings(paper_dir) -> dict  (read-only; qualified_block_id ->
+        {fact_id: {"lineage": str, "sections": tuple}}; {} before paper/ exists)
+    describe_binding_candidates(status, root) -> dict  (pure disk read; every
+        lineage a document-rooted or ingested-identity root carries RIGHT NOW,
+        its own current revision/paper, and the section titles read from it --
+        what `write`'s own SECTION_BINDING_ABSENT refusal shows an operator)
     read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
     read_declined(paper_dir) -> dict[str, dict]  (read-only;
         {fact_id: {"reason", "condition", "holds", "detail"}}, condition
@@ -495,6 +506,231 @@ def read_satisfied(paper_dir: Path) -> tuple[set, set]:
         if entry["kind"] == "declaration" and entry.get("fixed")
     }
     return satisfied_facts, satisfied_declarations
+
+
+def _binding_record_id(qualified_block_id: str, fact_id: str) -> str:
+    """The `binding` record's own composite id -- a (block, fact) PAIR,
+    since one block may bind more than one fact and one fact may be bound
+    by more than one block (the worked example this whole change exists
+    for: `mm-borrowed-machinery` and `mm-proposal` both require
+    `formulation` but bind different sections). Never a vocabulary member
+    of `FACTS`/`DECLARATIONS` — `reopen`'s own dispatch is untouched by
+    this; `reopen_binding` below is a dedicated function, not a widened
+    `reopen`."""
+    return f"{qualified_block_id}::{fact_id}"
+
+
+def bind_section(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, lineage: str, sections,
+    *, clock=paper_region.default_clock,
+) -> dict:
+    """Records ONE `binding` -- the `source-section-binding` half of a
+    `requires_facts` entry, decided by USING the skill (`bind`), never by
+    hand-editing `sections/*.md` (which ships with the forge and must stay
+    byte-identical to `main`) and never by an agent reading conversation
+    prose (`the-requirement-names-the-section-that-feeds-it`, U3e ruling,
+    design.md Decision J). Stored in the SAME `declarations` region
+    `set_fact`/`set_declaration` already write — `paper/`, never
+    `sections/`: that region is gitignored except `.gitkeep`, and it
+    already holds the paper's own decisions, protected by the SAME
+    `DECLARATIONS_HAND_EDITED` guard, with no `--adopt` escape.
+
+    A THIRD record kind, `binding` — deliberately not `fact`/`declaration`,
+    so a binding can never silently satisfy a check meant for the other
+    vocabulary (module docstring: "a shared field name invites a shared
+    code path"). Keyed by `id={block}::{fact}` (`_binding_record_id`).
+    `value_field="lineage"`; `sections` — a non-empty tuple of titles,
+    normalized here so a single string is accepted exactly the way
+    `paper_contract._validate_document_object`'s own `section` key already
+    is — is carried in `extra`, alongside `block`/`fact` themselves, so
+    `read_bindings` never has to re-derive them from the composite id.
+
+    Refuses `UNKNOWN_FACT` (`paper_vocabulary.validate_fact`, reused
+    verbatim) when `fact_id` is not one of the ten declared facts.
+    Refuses `BINDING_FACT_NOT_BINDABLE` (new; work-state) when `fact_id`
+    IS a declared fact but is not a key of `FACT_SOURCE_ROOT` (`is_
+    bindable_fact`) — a produced or structural fact has no document-rooted
+    source to bind at all (`source-section-binding` spec, `Requirement:
+    Bindable Facts Are Derived, Never Listed`). Refuses `BINDING_LINEAGE_
+    REQUIRED` / `BINDING_SECTIONS_REQUIRED` (new; invocation-defect) for an
+    empty `lineage` / an empty `sections` — enforced HERE, in the module
+    itself, not only at the CLI layer, the same precedent `decline_fact`'s
+    own `DECLINE_REASON_REQUIRED` set. Refuses `DECLARATION_FIXED`
+    (`_set_record`'s own guard, reused) when this exact (block, fact) pair
+    is already recorded and `reopen_binding` was not run first.
+
+    Raises nothing about `qualified_block_id`'s own shape or whether
+    `fact_id` is really one of that block's `requires_facts` — that cross-
+    check is the CALLER's concern (`paper_cli.cmd_bind`), which holds the
+    real, assembled corpus this module never imports (`paper_graph`
+    imports `paper_declarations`, so the reverse import would cycle); a
+    binding naming a block or fact that turns out not to exist in the real
+    corpus is simply orphaned data, harmless, the same tolerance `reopen`
+    already extends to an id with no existing record.
+    """
+    paper_vocabulary.validate_fact(fact_id)
+    if not is_bindable_fact(fact_id):
+        raise Refused(
+            "BINDING_FACT_NOT_BINDABLE",
+            f"{fact_id!r} is not a key of FACT_SOURCE_ROOT; it has no document-rooted "
+            "source to bind at all",
+        )
+    if not lineage:
+        raise Refused(
+            "BINDING_LINEAGE_REQUIRED", "recording a binding requires a non-empty lineage",
+        )
+    if isinstance(sections, str):
+        sections = (sections,)
+    sections = tuple(sections)
+    if not sections:
+        raise Refused(
+            "BINDING_SECTIONS_REQUIRED", "recording a binding requires at least one section title",
+        )
+    binding_id = _binding_record_id(qualified_block_id, fact_id)
+    return _set_record(
+        paper_dir, kind="binding", id_=binding_id, value_field="lineage", value=lineage,
+        clock=clock,
+        extra={"block": qualified_block_id, "fact": fact_id, "sections": list(sections)},
+    )
+
+
+def reopen_binding(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, *, clock=paper_region.default_clock,
+) -> dict:
+    """Clears the `fixed` state for exactly the `binding` record naming
+    `(qualified_block_id, fact_id)` — mirroring `reopen`'s own per-id
+    clearing, as a DEDICATED function rather than a widened `reopen`,
+    because a binding's own id is a (block, fact) PAIR, not a single
+    vocabulary member `reopen`'s own `FACTS`/`DECLARATIONS` dispatch
+    already closes over. Reopening a pair with no existing record is
+    harmless, matching `reopen`'s own precedent — there is nothing to
+    clear, and the region's own `generation` still bumps.
+    """
+    binding_id = _binding_record_id(qualified_block_id, fact_id)
+    tex_path, pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    new_generation = body.get("generation", 0) + 1
+    new_records = []
+    for entry in body["records"]:
+        if entry["kind"] == "binding" and entry["id"] == binding_id:
+            entry = dict(entry)
+            entry["fixed"] = False
+            entry["generation"] = new_generation
+        new_records.append(entry)
+    new_body = {"generation": new_generation, "records": new_records}
+    _write_declarations(paper_dir, pre, record, new_body)
+    return {
+        "id": binding_id, "kind": "binding", "block": qualified_block_id, "fact": fact_id,
+        "generation": new_body["generation"],
+    }
+
+
+def read_bindings(paper_dir: Path) -> dict:
+    """Read-only: every currently-FIXED `binding` record, as `qualified_
+    block_id -> {fact_id: {"lineage": str, "sections": tuple}}` — the
+    corpus's own read of what `bind` has recorded so far
+    (`paper_graph.assemble_corpus`'s own merge, U3e).
+
+    Returns `{}` when `paper_dir` (or `main.tex` under it) does not exist
+    yet — a corpus is legitimately assemblable, read-only, before `paper/`
+    is even scaffolded, the SAME tolerance `Corpus.undecided_bindings`
+    already extends to every bindable fact carrying no binding at all;
+    this is not `PAPER_ABSENT`'s concern, which is reserved for a verb
+    that actually needs to WRITE `paper/` (`declare`, `bind` itself).
+    Reuses the exact same private readers every other reader of this
+    region already goes through (`_read_declarations`, `_verify_not_hand_
+    edited`, `_body_or_default`) once `paper_dir` IS scaffolded — never a
+    second reader, and `DECLARATIONS_HAND_EDITED` still refuses a
+    tampered region exactly as it does for every other reader.
+    """
+    tex_path = paper_dir / "main.tex"
+    if not paper_dir.is_dir() or not tex_path.is_file():
+        return {}
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    result: dict = {}
+    for entry in body["records"]:
+        if entry["kind"] == "binding" and entry.get("fixed"):
+            result.setdefault(entry["block"], {})[entry["fact"]] = {
+                "lineage": entry["lineage"], "sections": tuple(entry["sections"]),
+            }
+    return result
+
+
+def _heading_titles(path: Path) -> list:
+    """Every heading title `paper_guidance.segment_markdown` reads from
+    `path` right now — the same read `_verify_source_section_bindings`
+    already performs per resolved revision, reused here purely for
+    reporting (`describe_binding_candidates`), never for resolution
+    itself."""
+    body = path.read_text(encoding="utf-8")
+    outline = paper_guidance.segment_markdown(body)
+    return [heading["title"] for heading in outline["headings"]]
+
+
+def describe_binding_candidates(status: dict, root: SourceRoot) -> dict:
+    """Every candidate an operator answering `write`'s own `SECTION_
+    BINDING_ABSENT` refusal can see WITHOUT opening anything: `{lineage:
+    {"revision": filename, "sections": [title, ...]}}`, read from disk at
+    call time — nothing cached, nothing hand-listed (`the-requirement-
+    names-the-section-that-feeds-it`, U3e ruling: "the refusal IS the
+    question").
+
+    `root.kind is INGESTED`: each ingested paper under `status['path']`
+    (`paper_guidance.ingested_papers`, reused) is its own "lineage",
+    identity-resolved — no ordinal to pick a "current" revision from.
+
+    Otherwise (`PROSE`): `read_revisions_marker(status['path'])` — `None`
+    (no marker yet; `SOURCE_REVISIONS_UNDECLARED` is a DIFFERENT check's
+    concern, never raised here) falls back to reporting every `*.md` file
+    under the root, ungrouped, by its own filename stem. A marker present
+    derives the SAME per-root regex `resolve_lineage` composes, but
+    matches every filename that fits it (never one literal lineage,
+    generalizing `resolve_lineage`'s per-lineage regex into one that
+    admits ANY lineage segment) and keeps only the highest-ordinal file
+    per distinct lineage segment found — the current revision, per
+    lineage, exactly as `resolve_lineage` would resolve it, for every
+    lineage this root actually carries right now.
+    """
+    base_path = status["path"]
+    if root.kind is SourceRootKind.INGESTED:
+        papers = paper_guidance.ingested_papers(base_path.parent).get(base_path.name, [])
+        return {
+            entry["folder"]: {
+                "revision": Path(entry["markdown"]).name,
+                "sections": _heading_titles(Path(entry["markdown"])),
+            }
+            for entry in papers
+        }
+
+    marker = read_revisions_marker(base_path)
+    if marker is None:
+        return {
+            doc_path.stem: {"revision": doc_path.name, "sections": _heading_titles(doc_path)}
+            for doc_path in sorted(base_path.glob("*.md"))
+        }
+
+    marker_prefix = marker["revision_prefix"]
+    marker_digits = marker["ordinal_digits"]
+    pattern = re.compile(
+        rf"^(?P<lineage>.+)-{re.escape(marker_prefix)}(?P<ordinal>\d{{{marker_digits},}})\.md$"
+    )
+    current_by_lineage: dict = {}
+    for doc_path in sorted(base_path.glob("*.md")):
+        match = pattern.match(doc_path.name)
+        if not match:
+            continue
+        found_lineage = match.group("lineage")
+        ordinal = int(match.group("ordinal"))
+        current = current_by_lineage.get(found_lineage)
+        if current is None or ordinal > current[0]:
+            current_by_lineage[found_lineage] = (ordinal, doc_path)
+    return {
+        found_lineage: {"revision": doc_path.name, "sections": _heading_titles(doc_path)}
+        for found_lineage, (_ordinal, doc_path) in sorted(current_by_lineage.items())
+    }
 
 
 def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> dict:

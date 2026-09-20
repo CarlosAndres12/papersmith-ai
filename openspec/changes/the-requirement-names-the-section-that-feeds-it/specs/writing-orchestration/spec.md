@@ -90,3 +90,32 @@ invent a binding rather than leave any assembly refusing.
   `write`, never the read-only verb
 - THEN the test fails, since `write` would proceed and draft the block
   instead of refusing
+
+### Requirement: `SECTION_BINDING_ABSENT` Names Its Own Next Action
+
+`SECTION_BINDING_ABSENT`'s own refusal detail MUST name the block, the
+fact, and the source root, AND — read from disk at the moment of refusal,
+never cached or hand-listed — every lineage that root currently carries,
+each one's own current revision (or, for an identity-resolved root, its
+own paper), and the section titles that revision actually holds right
+now. It MUST also name the exact recording-verb invocation (naming this
+refusal's own block and fact) that answers it. A person reading the
+refusal MUST be able to answer it without opening anything else.
+
+#### Scenario: The refusal names the block, fact, root and disk-derived candidates
+
+- GIVEN a bindable, measured entry with no binding, under a root carrying
+  more than one revision of the same lineage
+- WHEN `write` refuses `SECTION_BINDING_ABSENT` for it
+- THEN the detail names the block, the fact, the root, the CURRENT
+  (highest-ordinal) revision only — never an older one — and every
+  section title that revision carries
+
+#### Scenario: Mutation — reverting the detail to a bare message is caught
+
+- GIVEN the refusal detail reverted to name only the block, the fact and
+  the root, with no disk-derived candidates
+- WHEN a test asserts the detail names a candidate section title read
+  from disk
+- THEN the test fails, since the bare message carries nothing to answer
+  the refusal with
