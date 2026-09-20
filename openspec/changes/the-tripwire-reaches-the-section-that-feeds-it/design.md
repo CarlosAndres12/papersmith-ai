@@ -307,9 +307,13 @@ Reverting the branch restores the shipped tripwire's measured prior behaviour, w
 
 ## Open Questions
 
-- [ ] None blocking. Three things are ruled here rather than deferred: the fence exclusion and its
-      gate (A), the same-author threshold and its falsifier (C), and where the resolved bindings
-      reach `write` (E).
-- [ ] Recorded, not folded in: verifying that a transposition block asserts only what its bound
-      section carries; widening the check to `argument` mode; `_attempt_key` not resetting on a new
-      source revision.
+- [x] None blocking. Three things were ruled here rather than deferred, and all three landed: the
+      fence exclusion and its gate (A, WU0), the same-author threshold and its falsifier (C, WU2),
+      and where the resolved bindings reach `write` (E, WU1). WU3 re-measured the roster
+      (`reachable_paper_refusal_codes()` reports **153**, `SOURCE_SECTION_VERBATIM` present),
+      re-ran the generality sweep (empty, scoped to this capability's own surface), and confirmed
+      the falsification obligation below is recorded rather than silently waived.
+- [ ] Recorded, not folded in, still out of scope after WU3: verifying that a transposition block
+      asserts only what its bound section carries; widening the check to `argument` mode;
+      `_attempt_key` not resetting on a new source revision. None of the three is silently
+      resolved by this change — each remains a named follow-up.

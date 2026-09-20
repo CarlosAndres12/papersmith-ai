@@ -316,7 +316,7 @@ sibling design must not violate).
 Satisfies the operator's own non-negotiable discipline items (generality, roster
 measurement) plus design.md's Migration/Rollout note (nothing deleted, no format change).
 
-- [ ] 3.1 Run `ForgeVocabularyDerivedGuardTests` (widened denylist, derived from every
+- [x] 3.1 Run `ForgeVocabularyDerivedGuardTests` (widened denylist, derived from every
       product root) as a **pre-apply-completion gate**: confirm it reports no NEW leak
       introduced by this change's own code, comments, docstrings, or fixtures across all
       three prior phases. Also run a plain `rg` sweep under
@@ -324,16 +324,42 @@ measurement) plus design.md's Migration/Rollout note (nothing deleted, no format
       section title, document filename, paper id, subject word, or revision-pattern
       literal belonging to the paper being written; confirm it comes back empty. Record
       the exact commands run.
-- [ ] 3.2 Re-derive the refusal roster by EXECUTING `reachable_paper_refusal_codes()`
+      **Done**: `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests -v`
+      — 21 run, exactly the one known pre-existing failure
+      (`test_rule_b_finds_no_target_vocabulary_in_the_forge`, isolated to
+      `experimental-deliberation/SKILL.md`'s "mechanisms", unrelated to `paper-writing`).
+      Derived the product vocabulary from disk (top-level names under `proposals/`,
+      `experiments/`, `implementations/`, `guidance/`, walked with `fd -H -I` since all
+      four are gitignored) and swept it with `rg -n -i -F <term> .claude/skills/paper-writing/
+      tests/test_paper_*.py tests/paper_mutation.py tests/forge_vocabulary.py
+      tests/math_fence_blast_radius.py tests/orphan_sweep.py tests/fixtures/math_fence_corpus/
+      -I -H` per term — zero hits inside this capability's own surface. The same terms do
+      hit widely across `tests/*.test.mjs` (the disclosed 48-collision, three-sibling-skill
+      audit named in the operator's own brief) — out of scope, not touched, and excluded
+      from this sweep's own scope so it never reads dirty from someone else's disclosed gap.
+- [x] 3.2 Re-derive the refusal roster by EXECUTING `reachable_paper_refusal_codes()`
       after all engine code from WU0-WU2 has landed. Record the measured number in the
       final apply report. **Do not write a predicted number into any artifact before this
       task runs** — the live figure today is 144; the post-change figure is whatever this
       execution reports (`SOURCE_SECTION_VERBATIM` is the only new code this change adds
       to the roster).
-- [ ] 3.3 Confirm `git diff main -- sections/` is empty (never edit any file under
+      **Done**: executed directly (`tests.test_paper_writing.reachable_paper_refusal_codes()`)
+      — measured **153**, `SOURCE_SECTION_VERBATIM` present. Design.md's own pre-change figure
+      was 144; `SOURCE_SECTION_VERBATIM` is the only newly-AUTHORED code this change adds
+      (design.md, Refusal Codes) — the rest of the 144→153 movement is codes that existed
+      elsewhere in the codebase becoming reachable through `paper_cli.py`'s widened import
+      graph (WU1 wired `paper_source_span.py` in, which reaches `paper_graph`/
+      `paper_declarations`), the same derivation mechanic `SKILL.md`'s own roster section
+      already documents ("every refusal in the two new modules shipped unrostered until a
+      later change re-derived it"). This task's own obligation is the live post-WU3 figure,
+      not an itemized diff of every contributing code.
+- [x] 3.3 Confirm `git diff main -- sections/` is empty (never edit any file under
       `sections/`) and that no file was deleted anywhere in the change (`git diff
       --stat main` shows only additions/modifications, zero deletions).
-- [ ] 3.4 Record the falsification obligation from design.md, Decision C, verbatim into
+      **Done**: `git diff main -- sections/` is 0 lines; `git diff --summary main` lists only
+      `create mode` entries (`paper_source_span.py`, `math-fence-blast-radius.md`, the six
+      fixture files), zero `delete mode` lines anywhere in the diff.
+- [x] 3.4 Record the falsification obligation from design.md, Decision C, verbatim into
       this change's own tracking (not silently dropped): the moment three real
       `document` bindings exist on disk, execute the two falsifiers — (a) a transposed
       draft in the paper's own register whose longest shared run with its bound section
@@ -342,7 +368,16 @@ measurement) plus design.md's Migration/Rollout note (nothing deleted, no format
       observation moves exactly one named constant in `paper_leak.py`, nothing else. State
       that this obligation is unexecutable today (no real bindings exist) and is not being
       silently waived.
-- [ ] 3.5 Run the full baseline in four chunks (per the project's own known ~650s discover
+      **Done, recorded here verbatim**: "A transposed draft — same claim, the paper's own
+      register — whose longest shared run with its bound section reaches 16. Then 16 is too
+      low. A sentence pasted verbatim out of the bound section whose normalized run is under
+      16 and passes. Then 16 is too high. Either observation moves ONE named constant in
+      `paper_leak.py`, and nothing else." (design.md, Decision C). **This obligation is
+      unexecutable today**: no real `document` binding exists on disk in this repository
+      (every bindable requirement is `undecided`, per `transposition-fidelity`'s own spec
+      preamble) — it is stated as an open, live obligation on the next real `bind`, not
+      silently waived, and design.md's Open Questions now points back at this exact record.
+- [x] 3.5 Run the full baseline in four chunks (per the project's own known ~650s discover
       time against a 600s foreground timeout): `npm test`, then
       `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` split into four
       foreground chunks as recorded in
@@ -352,11 +387,37 @@ measurement) plus design.md's Migration/Rollout note (nothing deleted, no format
       (`test_proposal_implementation.ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`,
       the generic-word-"mechanisms" baseline). **Any second failure belongs to this change
       and blocks delivery.**
-- [ ] 3.6 Update `design.md`'s Open Questions section to mark the three ruled questions
+      **Done**: `npm test` — 640/640, exit 0. Python suite run as four sequential, explicit
+      module-list chunks (never concurrently, `test_orphan_sweep.py` needing `PYTHONPATH=tests`
+      isolated in chunk 4): chunk 1 (`test_paper_writing`) 526 tests OK; chunk 2 (`test_paper_
+      citation`, `test_paper_contract`, `test_paper_decisions`, `test_paper_evidence`,
+      `test_paper_figure`, `test_paper_lifecycle`, `test_paper_separation`) 582 tests OK;
+      chunk 3 (`test_agents`, `test_experimental_implementation`, `test_experimental_
+      implementation_mutation`, `test_experiments_seal`, `test_extract_pdf`, `test_forge_gate`,
+      `test_forge_scaffolding`, `test_implementation_authorization_binding`, `test_
+      implementation_core`, `test_implementation_domain_lock`, `test_implementation_domain_
+      mutation`, `test_implementation_pair`, `test_implementation_profile`, `test_
+      implementation_seal`) 485 tests OK; chunk 4, split into three sequential sub-runs to
+      isolate `test_orphan_sweep.py`'s `PYTHONPATH=tests` quirk and to keep the heaviest
+      module last: `test_kaggle_accounts` 63 tests OK; `PYTHONPATH=tests test_orphan_sweep`
+      7 tests OK; `test_proposal_implementation test_remote_execution test_skill_audit
+      test_suite_collects` 2743 tests, **1 known failure**
+      (`ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`).
+      **Total: 526+582+485+63+7+2743 = 4406 tests, exactly the one known pre-existing
+      failure, 3 skipped, no second failure.** (First attempt at the last sub-run produced a
+      spurious extra error/failure from an orphaned leftover `implementations/` scratch
+      directory left behind by an earlier accidentally-concurrent process on this machine,
+      never from this change's own code; removed the stray directory and re-ran clean before
+      recording the number above — a live instance of the project's own documented
+      cross-chunk `implementations/` race, caught and not laundered into the reported figure.)
+- [x] 3.6 Update `design.md`'s Open Questions section to mark the three ruled questions
       (A, C, E) as landed, and confirm the two "recorded, not folded in" items (content
       verification against a bound span; widening to `argument` mode; `_attempt_key` not
       resetting on a new source revision) are still explicitly named as out of scope,
       never silently resolved by this change.
+      **Done**: `design.md`'s Open Questions section now marks the first bullet `[x]` (A, C,
+      E landed, WU-tagged) and keeps the second bullet's three follow-ups explicitly named,
+      unresolved, with an added sentence stating none is silently resolved by this change.
 
 ## Key discipline carried forward, not to be reinterpreted at apply time
 
