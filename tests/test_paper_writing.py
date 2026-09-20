@@ -6819,6 +6819,42 @@ class SourceSectionVerbatimTests(unittest.TestCase):
         self.assertIn("2. Widget Calibration", ctx.exception.detail)
         self.assertIn("willow", ctx.exception.detail)
 
+    def test_the_detail_message_names_all_five_fields_at_once(self) -> None:
+        """Item 6, `limpieza-de-pendientes-chicos`: the detail string names
+        FIVE fields -- `block_id`, the run length, the bound fact, the
+        lineage and the section title -- but no single scenario had ever
+        asserted all five together; `test_a_verbatim_paste_refuses_before_
+        substitute_and_main_tex_stays_unchanged` (above, through
+        `write_block`) checks block/fact/lineage and never title or
+        length, `test_a_verbatim_paste_beyond_the_backstop_refuses` (above,
+        calling this function directly with no `block_id`) checks fact/
+        lineage/title and never block or length -- either alone would
+        still pass a change that silently dropped one of the two fields
+        neither covers. This scenario supplies `block_id` explicitly and
+        checks all five in the same assertion set."""
+        section_text = (
+            "Some opening sentence about the widget calibration procedure. "
+            f"{_n_token_run(17)} A closing sentence about something else."
+        )
+        contract_prose = "The block's own contract prose shares almost nothing with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Opening sentence of the draft. {_n_token_run(17)} Closing sentence of the draft."
+
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_source_section_verbatim(
+                draft_latex, contract_prose, [section], block_id="mm-proposal",
+            )
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("17", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+
     def test_the_same_claim_in_different_words_passes(self) -> None:
         """Scenario "The same claim in the paper's own register passes": no
         normalized run longer than a handful of tokens is shared."""
