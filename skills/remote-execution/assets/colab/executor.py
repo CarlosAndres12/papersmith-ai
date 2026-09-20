@@ -97,7 +97,7 @@ PROTOCOL_FILENAMES = frozenset(
 # Three hours sits well above the observed run lengths this skill has
 # paid for (a 75-minute GPU run is on record) and below Colab's own
 # session ceiling.
-NOTEBOOK_TIMEOUT_SECONDS = 10800.0
+NOTEBOOK_TIMEOUT_SECONDS = 10800
 
 # The whole allowlist of ERROR TEXT kept in `status.json`. Bounded so a
 # runaway traceback cannot turn the completion signal into a multi-MB

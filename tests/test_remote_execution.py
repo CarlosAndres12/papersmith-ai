@@ -22841,6 +22841,38 @@ class ColabExecutorAssetTests(unittest.TestCase):
             self.assertIn("credential cleanup", status["error"])
             self.assertIn("injected deletion failure", status["error"])
 
+    def test_colab_executor_notebook_timeout_is_a_plain_int(self) -> None:
+        """D-1's guard (SD24), on both sides of the call.
+
+        `NotebookClient.timeout` is an `Int` trait, and the runtime's
+        strict traitlets (<= 5.14.3) refuse an integral float outright —
+        before the executor's own try/finally, so a failed run comes back
+        with no executed notebook and an empty manifest (the live
+        fingerprint in `findings.md`'s S5 defect D-1). Neither leg here
+        builds a real client: a behavior test that does passes on the
+        lenient traitlets this venv carries and stays blind exactly where
+        the defect lives, so the TYPES are the invariant — the constant's,
+        and the value `execute_notebook` actually hands the client.
+
+        The `bool` exclusion matters in both legs: `bool` is a subclass of
+        `int` in Python, and `True` is never a timeout.
+        """
+        constant = COLAB_EXECUTOR.NOTEBOOK_TIMEOUT_SECONDS
+        self.assertNotIsInstance(constant, bool)
+        self.assertIs(type(constant), int)
+        self.assertGreater(constant, 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._base(tmp)
+
+            with unittest.mock.patch("nbclient.NotebookClient") as client_cls:
+                COLAB_EXECUTOR.execute_notebook(base)
+
+            self.assertTrue(client_cls.called, "the client is constructed here")
+            timeout = client_cls.call_args.kwargs.get("timeout")
+            self.assertNotIsInstance(timeout, bool)
+            self.assertIs(type(timeout), int)
+
 
 if __name__ == "__main__":
     unittest.main()
