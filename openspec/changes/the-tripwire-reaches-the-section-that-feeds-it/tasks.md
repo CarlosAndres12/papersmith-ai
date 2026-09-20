@@ -120,7 +120,7 @@ Design.md, Decision E. Satisfies `transposition-fidelity` (new) — the prerequi
 plumbing every Requirement in that spec depends on (`source_sections` must arrive at
 `write_block` before any check can run against it).
 
-- [ ] 1.1 **Concurrency gate — read this before touching `paper_graph.py`.**
+- [x] 1.1 **Concurrency gate — read this before touching `paper_graph.py`.**
       `the-whole-cut-is-argued-before-any-section-is-claimed` owns `paper_graph.py` this
       cycle and must land first with `_verify_source_section_bindings`'s per-`(root,
       lineage)` memo widened from `{title: count}` to `(revision_path, segment_markdown
@@ -134,6 +134,13 @@ plumbing every Requirement in that spec depends on (`source_sections` must arriv
       not edit `paper_graph.py` yourself under any circumstance — this is the applier
       instruction from design.md, Decision E, carried here verbatim so it survives
       apply-time pressure to "just fix it forward."
+      **Confirmed landed**: read `paper_graph.py` directly — `resolve_section_index`
+      (extracted function, not the inline memo) returns `(revision_path, counts, outline)`,
+      and `_verify_source_section_bindings`'s own memo at line ~511-515 stores that whole
+      triple (`memo[memo_key] = resolve_section_index(...)`), keeping `outline` alongside
+      `counts` rather than discarding it. The outline shape is `paper_guidance.
+      segment_markdown`'s own `{"headings": [{"title", "level", "byte_start", "byte_end"}]}`.
+      Callable and correct; proceeded per instruction without editing `paper_graph.py`.
 - [x] 1.2 RED: add a failing test asserting `paper_cli._resolve_write_gate` returns the
       assembled `Corpus` rather than `None` (currently `-> None` at line ~1222, returning
       nothing after its `assemble_corpus(..., enforce_bindings=True)` call at line ~1253).
