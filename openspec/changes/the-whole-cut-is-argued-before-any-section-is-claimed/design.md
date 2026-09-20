@@ -7,8 +7,9 @@ or revision-pattern literal of the paper being written appears here, and none ma
 `.claude/skills/` or the forge suite. Fact ids (`formulation`) are the forge's own shipped
 vocabulary, not the paper's.
 
-Roster measured **144** live today via `reachable_paper_refusal_codes()`. No post-change count
-appears in this document; it is re-derived after the code lands.
+Roster measured **144** live before this change via `reachable_paper_refusal_codes()`. Re-measured
+after the code landed (Phase 6, task 6.5): **152** — the eight `SEPARATION_*`/`BINDING_UNARGUED`
+codes this change adds, all reachable through `paper_cli.py`'s own front door.
 
 ## Technical Approach
 
