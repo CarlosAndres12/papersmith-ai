@@ -32,6 +32,7 @@ unchanged from design.md, which already priced the marker reader in.
 | 3 (DP) | Owner rules on unanchorable entries | — | N/A — human decision | N/A | reversible; nothing lands until ruled |
 | 4 (U3) | Obligation unconditional, corpus transcribed, `write` wired for all six codes | PR 2 | full suite (both, see 4.12) | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write <bound-block-id>` | `git revert` U3's single commit |
 | 5 (U3b) | Correctness repair: undecided is reported (`Corpus.undecided_bindings`), `SECTION_BINDING_ABSENT` refuses at `write` only; removes the two invented bindings U3's own apply transcribed under the unconditional-obligation trap | PR 2 (same branch, engine-only lines) | `.venv/bin/python -m unittest tests.test_paper_writing.SourceSectionBindingCorpusTests tests.test_paper_writing.SourceSectionBindingWriteGateTests tests.test_paper_writing.SourceSectionBindingWriteGateMutationProofTests` | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write --section introduction --block block-4a --draft draft.json --audit audit.json` (refuses `SECTION_BINDING_ABSENT` before either file is opened) | `git revert` U3b's own commit(s); U3's transcribed bindings and fixtures are untouched |
+| 7 (U3d) | Owner ruling (design.md Decision I): no binding is transcribed ahead of `write` asking for it. Removes all nine `document` bindings from `sections/*.md`; renames every suite fixture borrowing the proposal's own real lineage/paper-id spelling; widens `ForgeVocabularyDerivedGuardTests.derived_denylist` to derive from `proposals/`/`experiments/`/`guidance/` too | PR 2 (same branch) | `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions tests.test_forge_scaffolding` | N/A — decontamination, no new runtime path | `git revert` U3d's own commit(s); `sections/*.md` return to their U2d state, the widened guard reverts to `implementations/`-only |
 
 ## Phase 1 — U1: Entry shape, inert
 
@@ -139,7 +140,7 @@ everywhere else, mirroring `source_roots`'s own report shape.
 - [x] 5.7 Update `design.md` (Decision H), `specs/source-section-binding/spec.md` (undecided requirement/scenarios), and `specs/writing-orchestration/spec.md` (write-only reachability note + scenario) to describe the corrected behaviour; a spec still demanding the assembly-time refusal would contradict the code.
 - [x] 5.8 Re-derive the refusal roster with `reachable_paper_refusal_codes()`; confirm it stays **140** — the raise site is still a static AST scan target, only WHEN it fires changed.
 - [x] 5.9 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for the paper's own subject words, section titles, and block ids in every new comment/docstring this phase adds; zero new matches.
-- [x] 5.10 Report the corpus's remaining nine bindings to the owner, marked owner-ruled vs agent-derived, so the owner may strike any of them; remove none beyond the two named in 5.6.
+- [x] 5.10 Report the corpus's remaining nine bindings to the owner, marked owner-ruled vs agent-derived, so the owner may strike any of them; remove none beyond the two named in 5.6. **Superseded by Phase 7 (U3d) below**: the owner ruled that none of the nine survive, including the three settled in conversation about a table — see design.md Decision I.
 - [x] 5.11 Ran `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions` (732/732, green) AND the full baseline (`npm test`; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`); confirmed zero new failures beyond the known pre-existing one.
 
 ## Phase 6 — U3c: A second prose root is proven by fixture, not waived for being empty
@@ -176,3 +177,72 @@ edits landed or were needed.
 - [x] 6.6 Ran `.venv/bin/python -m unittest tests.test_paper_writing.SecondProseRootGeneralityTests tests.test_paper_writing.SecondProseRootWriteGateTests` (13/13, green) AND the full baseline
       (`npm test`: 640/640; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`);
       confirmed zero new failures beyond the known pre-existing one.
+
+## Phase 7 — U3d: The forge carries no paper of its own
+
+The owner ruled on all nine `document` bindings U3/U3b transcribed into shipped section contracts:
+none survive, not even the three settled in conversation about a table (`mm-borrowed-machinery`,
+`mm-proposal`, `lim-proposal-items`) — a decision taken in conversation is not a decision taken by
+using the skill, and the only moment that decision belongs to is `write` asking for it. This phase
+also closes the blindness that let it happen: `ForgeVocabularyDerivedGuardTests.derived_denylist`
+derived its denylist from `implementations/` alone.
+
+- [x] 7.1 Remove all nine `document` bindings from `sections/01-materials-and-methods.md`,
+      `02-experimental-setup.md`, `04-limitations.md`, `06-introduction.md`, `08-abstract.md` by
+      restoring each file to its `main` content (`git checkout main -- sections/...`); confirmed
+      `git diff main -- sections/` is empty and `rg -n -i 'MIL.?CREDA|research-concept|s41597|Rényi
+      |Renyi' sections/*.md` returns nothing.
+- [x] 7.2 Rename every suite fixture across `tests/test_paper_contract.py`, `test_paper_writing.py`,
+      `test_paper_decisions.py` that had borrowed the proposal's own real lineage
+      (`research-concept` → `lumen-thesis`) or the ingested paper's own real id
+      (`s41597-026-06758-7` → `q77213-004-11029-2`) or the evidence folder's own real name
+      (`data-paper` → `source-manuscript`); left the two assertions in
+      `test_paper_decisions.py::GuidanceRegistryTests.test_against_the_real_shipped_guidance_tree`
+      and `SourceDatasetRootTests.test_dataset_root_name_is_never_the_paper_specific_folder` that
+      legitimately assert against the real shipped tree unchanged, genericizing only their
+      docstrings' literal restatement of the same real name.
+- [x] 7.3 RED: widen `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests` with
+      `paper_product_root_words()`, deriving vocabulary from `paper_declarations.FACT_SOURCE_ROOT`'s
+      `PROSE`/`INGESTED` roots (`proposals/`, `experiments/`, whichever `guidance/` folder
+      `paper_guidance.read_registry` classes `evidence`) and merge it into `derived_denylist()`;
+      confirmed red against the pre-7.1/7.2 tree (`experimental-deliberation`'s hardcoded
+      `guidance/data-paper` plus every occurrence 7.1/7.2 later cleaned).
+- [x] 7.4 Measured: splitting a live lineage/evidence-folder/paper-id name into parts (mirroring
+      `target_words`) put ordinary English nouns (`data`, `paper`, `concept`, `research`) on the
+      denylist and reported ~70 shipped files as leaking, none an actual mention of either real name;
+      only the UNDIVIDED compound is derived.
+- [x] 7.5 Isolate `derived_denylist`'s two existing exact-list/skip assertions
+      (`test_rule_b_names_the_file_and_the_word_a_planted_leak_is_in`,
+      `test_a_clone_with_no_target_skips_instead_of_passing`) from this checkout's own real
+      `proposals/`/`guidance/` content via the new `forge_root` parameter, defaulting to `FORGE`
+      everywhere else.
+- [x] 7.6 Add `scratch_paper_product_root()` and three reachability tests: derivation proves
+      compound-only (never split parts), a planted mention in a scratch shipped file is named by
+      file and word (mutation-shaped proof mirroring `test_rule_b_names_the_file_and_the_word_a_
+      planted_leak_is_in`), and an `implementations/`-less clone with a live paper product root does
+      NOT skip (the OR half of the skip condition).
+- [x] 7.7 Fix the two genuine leaks the widened guard found inside `paper-writing`'s own shipped
+      surface: `.claude/skills/paper-writing/SKILL.md`'s illustrative folder-name list named the real
+      evidence folder (`data-paper`) as if it were a generic example; `tests/test_forge_scaffolding.py`'s
+      module docstring named the same real folder in a historical-incident narrative. Both
+      genericized without changing any assertion.
+- [x] 7.8 Report two further hits the widened guard found and did NOT fix, judged collisions/
+      out-of-scope rather than leaks belonging to this change: `experimental-deliberation/profile.ts`'s
+      hardcoded `const DATA_PAPER = "guidance/data-paper"` (a real architectural leak in a DIFFERENT
+      skill's engine, needing the same registry-derived repair Decision F gave `paper-writing`'s own
+      `dataset` fact — out of scope/budget here); `proposal-deliberation/profile.ts`'s `stem:
+      "research-concept"` (that skill's own sanctioned single point of per-project configuration, not
+      a leak) and the pervasive `research-concept-rNN.md` worked-example convention across
+      `proposal-deliberation`'s and `proposal-implementation`'s `references/usage.md` (dozens of
+      lines, pre-existing, already a partially-tracked doctrine question unrelated to
+      `source-section-binding`). Recorded in design.md's Open Questions for the owner to rule on.
+- [x] 7.9 Update `design.md` (new Decision I, File Changes table, Work Units table, Open Questions)
+      and this file so no artifact still claims the shipped corpus carries a transcribed binding.
+- [x] 7.10 Ran `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
+      (21/21, green) AND `tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions
+      tests.test_forge_scaffolding` (748/748, green) AND the full baseline (`npm test`;
+      `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`); confirmed the ONLY
+      `test_proposal_implementation` failure is the SAME `test_rule_b_finds_no_target_vocabulary_in_
+      the_forge` test as the pre-existing `mechanisms` baseline, now additionally naming the two
+      reported-not-fixed collisions from 7.8 — zero failures beyond those, zero new failing test
+      methods.

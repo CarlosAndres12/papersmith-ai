@@ -215,8 +215,50 @@ honestly support. The raise site itself is unconditional in source (still reacha
 
 `introduction.block-4a` and `abstract.slot-3`'s invented `document` halves are removed by this
 repair: both report `undecided` at read-time and refuse `SECTION_BINDING_ABSENT` at `write`, which is
-the truth — nobody has ruled which section of `research-concept` feeds either block, and the owner
-rules that, not an apply agent's guess.
+the truth — nobody has ruled which section of the proposal's own lineage feeds either block, and the
+owner rules that, not an apply agent's guess.
+
+### I — No binding is transcribed ahead of `write` asking for it (U3d ruling)
+
+U3's own apply, faced with the unconditional-obligation trap Decision H repairs, transcribed nine
+`document` bindings into the shipped section contracts (`sections/01-*.md`, `02-*.md`, `04-*.md`,
+`06-*.md`, `08-*.md`) — three of the nine (`mm-borrowed-machinery`, `mm-proposal`,
+`lim-proposal-items`) were settled in a conversation about a table, to unblock a repair. The owner
+ruled that none of the nine survive, not even those three: a binding decided in conversation is not a
+binding decided by using the skill, and the only moment that decision belongs to is `write` asking
+for it — the exact machinery U3b's `enforce_bindings`/`undecided_bindings` split already built.
+
+| Option | Tradeoff | Decision |
+|---|---|---|
+| Remove all nine `document` bindings from `sections/*.md`; the corpus reports every one `undecided` until an operator runs `write` and the skill asks | The shipped contracts return to byte-identical with `main`; `write` still refuses `SECTION_BINDING_ABSENT` for every bindable, measured entry, exactly as Decision H already specifies — nothing about the refusal tier changes, only that NO entry currently satisfies it | **Chosen** |
+| Keep the three the owner had already ruled on in conversation, remove only the other six | Preserves the exact defect being closed: a decision taken in conversation, to unblock a repair, is not the same act as the skill asking at `write` and an operator answering it in that moment | Rejected |
+| Relocate the nine bindings into a fixture or a new file instead of deleting them | The owner's ruling is that the binding does not exist yet, not that it exists somewhere else; a relocated binding is still a pre-empted `write`-time decision wearing a different path | Rejected |
+
+The corpus's `sections/*.md` now carry zero `document` bindings — `rg` for the proposal's own lineage
+and paper id, and for its section titles, returns nothing under `sections/`. `assemble_corpus()`
+reports all nine as `undecided` (Decision H's own report shape), and `write` refuses
+`SECTION_BINDING_ABSENT` for each until an operator supplies the binding at that moment. No spec or
+task artifact in this change claims the corpus carries a transcribed binding; where earlier units'
+own tasks described the corpus as holding them, this ruling supersedes that description.
+
+**The suite's own fixture names, and the guard that missed them.** `tests/test_paper_writing.py`,
+`test_paper_contract.py` and `test_paper_decisions.py` had used the proposal's own real lineage
+name and the ingested paper's own real id as fixture DATA — a document lineage is not a secret, but a
+fixture proves a shape and must never borrow a real paper's spelling to do it. Both are now invented
+names with no product meaning. `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
+(`derived_denylist`) is the guard meant to catch exactly this, and it did not: it derived its
+denylist from `implementations/` alone, so a name living in `proposals/`, `experiments/` or
+`guidance/` was invisible to it. `paper_product_root_words` widens the SAME rule to those roots too —
+derived from `paper_declarations.FACT_SOURCE_ROOT` and `paper_guidance.read_registry`, never a
+hand-listed root or folder name — contributing only the UNDIVIDED compound of a live lineage or
+evidence-folder/paper id, never its split parts: splitting was tried first and measured to add
+ordinary English nouns (`data`, `paper`, `concept`, `research`) that this forge legitimately uses
+everywhere, reporting roughly seventy shipped files as leaking, none of them an actual mention of
+either real name. Widening the guard surfaced two further mentions the same way — `paper-writing`'s
+own `SKILL.md` used the real evidence-folder name as a "for example" in an illustrative list, and
+`test_forge_scaffolding.py` named it in a historical-incident docstring — both repaired the same way,
+without touching `experimental-deliberation`'s own `guidance/data-paper` requirement (see Open
+Questions: two collisions this ruling does not resolve).
 
 ## Refusal Codes — seven, and why the proposal's four became seven
 
@@ -258,8 +300,11 @@ WHEN the code fires, never WHETHER it is reachable in source).
 | `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged |
 | `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it; U3b passes `enforce_bindings=True` from `_resolve_write_gate` only |
 | `proposals/.paper-writing.json` | Create | `{"revisions":{"revision_prefix":"r","ordinal_digits":2}}` |
-| `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify | Bindings transcribed for every bindable requirement whose root is measured (`formulation`, `dataset`); prose bytes untouched below the header; U3b removes the two invented `document` halves (`introduction.block-4a`, `abstract.slot-3`), prose bytes still untouched |
-| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests; U3b moves the assembly-time `SECTION_BINDING_ABSENT` test to an `undecided`-report assertion and retargets its mutation proof through `cmd_write` |
+| `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify, then reverted | U3 transcribed bindings for every bindable, measured requirement; U3b removed two of the nine (`introduction.block-4a`, `abstract.slot-3`); U3d removes the remaining seven, per Decision I's ruling — all five files are byte-identical to `main` again |
+| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests; U3b moves the assembly-time `SECTION_BINDING_ABSENT` test to an `undecided`-report assertion and retargets its mutation proof through `cmd_write`; U3d renames every fixture that had borrowed the proposal's own real lineage/paper-id spelling to an invented one |
+| `tests/test_forge_scaffolding.py` | Modify | U3d: a historical-incident docstring naming the real evidence-folder name is genericized; no assertion changed |
+| `.claude/skills/paper-writing/SKILL.md` | Modify | U3d: an illustrative folder-name list swaps the real evidence-folder name for an invented one |
+| `tests/test_proposal_implementation.py` | Modify | U3d: `ForgeVocabularyDerivedGuardTests` gains `paper_product_root_words()`, widening `derived_denylist()`'s denylist derivation from `implementations/` alone to also cover `proposals/`/`experiments/`/`guidance/`'s evidence folder, contributing only the undivided compound of a live lineage or paper id (Decision I) |
 
 ## Interfaces
 
@@ -376,6 +421,7 @@ so an untracked fixture cannot pass on a no-op edit:
 | U3 | Transcribe corpus bindings, obligation unconditional (`SECTION_BINDING_ABSENT`), refusal wired at `write`, ship `proposals/.paper-writing.json`, fixtures, roster re-derived | ~170 | yes |
 | U3b | Correctness repair: an undecided binding reports (`Corpus.undecided_bindings`, mirroring `source_roots`), `SECTION_BINDING_ABSENT` refuses at `write` ONLY (Decision H); removes the two invented bindings (`introduction.block-4a`, `abstract.slot-3`) U3's own apply transcribed under this same pressure | engine-only, well under budget (owner ruling: budget counts engine lines) | yes |
 | U3c | Discharges the stated `experiments/` generality risk: the full marker/lineage/section/`undecided`-`write` path proven against a SECOND `PROSE`-kind root, tests-only, zero engine edits | tests-only, well under budget | yes |
+| U3d | Owner ruling (Decision I): removes all nine `document` bindings U3/U3b left transcribed in `sections/*.md`, restoring byte-identity with `main`; renames every suite fixture that had borrowed the proposal's own real lineage/paper-id spelling; widens `ForgeVocabularyDerivedGuardTests.derived_denylist` to derive from `proposals/`/`experiments/`/`guidance/` too, not `implementations/` alone | tests + suite-fixture renames, well under budget | yes |
 
 Estimated total **~470 changed lines** against the 400-line budget — above the proposal's ~440
 because the marker reader and its two codes were added by the Question-1 ruling.
@@ -400,6 +446,25 @@ which an older revision of the code ignores entirely.
 
 ## Open Questions
 
-None. Both questions the proposal held open are ruled above: Decision A (per-root marker) and
-Decision B (document-rooted predicate). The in-place digest stays deferred with the owner's reason,
-additive as a third field on the binding this change ships if in-place rewrites turn out to recur.
+None inside this change's own scope. Both questions the proposal held open are ruled above:
+Decision A (per-root marker) and Decision B (document-rooted predicate). The in-place digest stays
+deferred with the owner's reason, additive as a third field on the binding this change ships if
+in-place rewrites turn out to recur.
+
+**Two collisions U3d's widened guard found and did not resolve, reported for the owner instead of
+fixed here (out of scope/budget for this change):**
+
+- `.claude/skills/experimental-deliberation/profile.ts` hardcodes `const DATA_PAPER =
+  "guidance/data-paper"` as a required source, and that skill's own `SKILL.md`/`references/usage.md`
+  accurately describe that hardcoded literal. This is the same shape of leak Decision F repaired for
+  `paper-writing`'s own `dataset` fact (deriving the evidence root from `guidance/`'s own
+  classification instead of a literal) — but applying that repair to a different skill's engine is
+  its own change, not a U3d task.
+- `.claude/skills/proposal-deliberation/profile.ts` declares `artifact: { directory: "proposals",
+  stem: "research-concept", ... }` — the skill's OWN sanctioned single point of per-project
+  configuration (its own comment: "This profile is now the only place that names them"), naming this
+  repository's actual document stem so the skill can manage it. That is not itself a leak the way a
+  transcribed binding was; whether `proposal-deliberation`'s and `proposal-implementation`'s
+  extensive worked-example documentation (`references/usage.md`, dozens of lines in each) should stop
+  mirroring that same real stem is a separate, pre-existing, already-partially-tracked question about
+  those two skills' own doctrine, not this change's `source-section-binding` feature.

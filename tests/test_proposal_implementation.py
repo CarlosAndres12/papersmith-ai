@@ -59,6 +59,15 @@ from forge_vocabulary import (  # noqa: E402  (path set above)
     SKILLS_ROOT, is_scannable_text, leak_pattern, leaks_in,
     repository_ignored, scannable_suite_text, shipped_documents, suite_modules)
 
+# Rule B's OTHER product roots (`the-requirement-names-the-section-that-
+# feeds-it`, U3d): `paper-writing` is a shipped skill too, and its own
+# `FACT_SOURCE_ROOT`/`guidance/` registry already name every root a paper
+# in progress is read from -- reused here rather than re-spelled, so this
+# guard never carries a second, independent copy of that mapping.
+sys.path.insert(0, str(FORGE / ".claude" / "skills" / "paper-writing" / "scripts"))
+import paper_declarations  # noqa: E402  (path set above)
+import paper_guidance  # noqa: E402  (path set above)
+
 SKILL_ROOT = CLI.parent.parent
 KIT = SKILL_ROOT / "assets" / "kit"
 
@@ -14454,19 +14463,133 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
                 words.update(self.names_in(product / self.NOTEBOOK_CATEGORY))
         return {word for word in words if len(word) >= self.MINIMUM_WORD}, targets
 
-    def derived_denylist(self, root=None):
+    def paper_product_root_words(self, forge_root=None):
+        """Vocabulary the paper-writing skill's OTHER product roots own --
+        `proposals/`/`experiments/` (`PROSE`-kind) and whichever `guidance/`
+        folder that registry classes `evidence` (`INGESTED`-kind) --
+        derived the same way `target_words` derives `implementations/`'s
+        own: from names on disk, never a root or a folder name written
+        here twice.
+
+        `REPOSITORY`-kind roots (`implementation`/`results`) are NOT
+        walked here: `impl_layout.WORKSPACE` is the SAME `implementations/`
+        tree `target_words` already derives, so a second walk would only
+        double what rule B already sees.
+
+        **The blind spot this closes.** Before this, rule B derived its
+        denylist from `implementations/` alone -- its own docstring said
+        so ("silence is the right answer for a clone with no
+        `implementations/` repository"). A lineage name sitting in
+        `proposals/`/`experiments/`, or a paper id under `guidance/`'s
+        evidence folder, was invisible to it, which is exactly how one
+        paper's own document lineage and ingested paper id walked into
+        shipped section contracts and this suite's own fixtures while this
+        guard stayed green throughout (`the-requirement-names-the-section-
+        that-feeds-it`, U3d).
+
+        **The compound only, never its split parts (measured, not
+        assumed).** `target_words` splits an `implementations/` directory
+        name because that target's own name is typically a distinctive
+        compound (`Nimbus_Benchmark`), where each part still reads as
+        fairly specific. A prose lineage or a `guidance/` evidence folder
+        is under no such constraint -- this checkout's own live lineage
+        and evidence-folder names are both built from ordinary English
+        nouns this forge legitimately uses everywhere it talks about what
+        it ships (a paper-writing forge, about a research concept, reading
+        data). Splitting them was tried first and measured: it put those
+        same four ordinary nouns on the denylist and reported roughly
+        seventy files across the WHOLE shipped surface as leaking, none of
+        them an actual mention of either real lineage or paper id. Only
+        the UNDIVIDED compound is added here, so a hit
+        means the exact lineage or paper id was named, never that the
+        forge used one of the ordinary words composing it.
+
+        Every root name and folder classification is read off
+        `paper_declarations.FACT_SOURCE_ROOT` and `paper_guidance.
+        read_registry` -- the SAME mappings `source_root_status` itself
+        resolves through -- never a second, hand-listed root name. A root
+        `source_root_status` itself reports `unmeasured` (no marker, no
+        `*.md`, no folder classed `evidence` yet) contributes nothing and
+        is not counted as "seen": that is the identical reading
+        `experiments/` holding only `.gitkeep` already gets everywhere
+        else in this skill.
+
+        Returns `(words, seen_root)`: `seen_root` is `True` only when at
+        least one root actually resolved `document-rooted`, so a clone
+        with no live paper-writing product at all reports the SAME
+        announced silence `derived_denylist` already gives for
+        `implementations/`, never a quiet pass.
+        """
+        base = FORGE if forge_root is None else Path(forge_root)
+        words: set[str] = set()
+        seen_root = False
+
+        prose_roots = {
+            source for source in paper_declarations.FACT_SOURCE_ROOT.values()
+            if source.kind is paper_declarations.SourceRootKind.PROSE
+        }
+        for source in sorted(prose_roots):
+            status = paper_declarations.source_root_status(base, source)
+            if status["state"] != "document-rooted":
+                continue
+            seen_root = True
+            marker = paper_declarations.read_revisions_marker(status["path"])
+            if marker is None:
+                continue
+            prefix, digits = marker["revision_prefix"], marker["ordinal_digits"]
+            lineage_re = re.compile(
+                rf"^(?P<lineage>.+)-{re.escape(prefix)}\d{{{digits},}}\.md$")
+            for entry in sorted(status["path"].glob("*.md")):
+                match = lineage_re.match(entry.name)
+                if not match:
+                    continue
+                lineage = match.group("lineage").lower()
+                if len(lineage) >= self.MINIMUM_WORD:
+                    words.add(lineage)
+
+        ingested_roots = {
+            source for source in paper_declarations.FACT_SOURCE_ROOT.values()
+            if source.kind is paper_declarations.SourceRootKind.INGESTED
+        }
+        for source in sorted(ingested_roots):
+            status = paper_declarations.source_root_status(base, source)
+            if status["state"] != "document-rooted":
+                continue
+            seen_root = True
+            evidence_dir = status["path"]
+            if len(evidence_dir.name) >= self.MINIMUM_WORD:
+                words.add(evidence_dir.name.lower())
+            guidance_dir = evidence_dir.parent
+            for paper in paper_guidance.ingested_papers(guidance_dir).get(
+                    evidence_dir.name, []):
+                paper_id = paper["folder"].lower()
+                if len(paper_id) >= self.MINIMUM_WORD:
+                    words.add(paper_id)
+
+        return words, seen_root
+
+    def derived_denylist(self, root=None, forge_root=None):
         """Rule B's denylist, or a skip when nobody has a target.
 
         Silence is the right answer for a clone with no `implementations/`
-        repository, but it has to be an announced silence: a guard that passes
-        because it had nothing to look at reads exactly like a guard that
-        looked and found nothing.
+        repository AND no live paper-writing product root, but it has to
+        be an announced silence: a guard that passes because it had
+        nothing to look at reads exactly like a guard that looked and
+        found nothing. `forge_root` scopes `paper_product_root_words`
+        independently of `root` (which scopes `implementations/` alone),
+        so a scratch `implementations/`-shaped fixture can still be
+        proven in isolation from this checkout's own real `proposals/`/
+        `guidance/` content.
         """
         words, targets = self.target_words(root)
-        if not targets:
+        paper_words, paper_root_seen = self.paper_product_root_words(forge_root)
+        words = words | paper_words
+        if not targets and not paper_root_seen:
             self.skipTest(
-                "no repository under implementations/, so rule B has no "
-                "vocabulary to derive and this is silence rather than a pass")
+                "no repository under implementations/ and no live root "
+                "under proposals/, experiments/ or guidance/, so rule B "
+                "has no vocabulary to derive and this is silence rather "
+                "than a pass")
         # The floor comes out here, and this is the one place the two rules
         # are told apart. Rule C scans `FORGE_VOCABULARY_FLOOR` over the same
         # surface and carries its own per-file admissions for the ten shipped
@@ -14686,7 +14809,12 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         self.assertNotIn("paddock", FORGE_LEXICON)
         self.assertNotIn("paddock", FORGE_VOCABULARY_FLOOR)
 
-        denylist = self.derived_denylist(self.scratch_targets())
+        # `forge_root` is scoped to an empty scratch directory so this
+        # exact-list assertion stays about `implementations/` alone --
+        # this checkout's own real `proposals/`/`guidance/` product roots
+        # must not leak a second, unasked-for word into it.
+        denylist = self.derived_denylist(
+            self.scratch_targets(), forge_root=self.scratch_forge())
         self.assertEqual(
             denylist, ["nimbus", "nimbus_benchmark", "paddock", "stirrup"],
             "the denylist is every word the target owns minus the lexicon, so "
@@ -14955,10 +15083,98 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         """
         empty = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, empty, ignore_errors=True)
+        # `forge_root=empty` too: a clone with nothing at all has neither an
+        # `implementations/` repository NOR a live `proposals/`/`guidance/`
+        # product root, and both must be silent before this skips.
         with self.assertRaises(unittest.SkipTest) as raised:
-            self.derived_denylist(empty)
+            self.derived_denylist(empty, forge_root=empty)
         self.assertIn("implementations/", str(raised.exception))
         self.assertIn("silence rather than a pass", str(raised.exception))
+
+    def scratch_paper_product_root(self):
+        """A `FORGE`-shaped root owning ONLY a `proposals/` lineage and a
+        `guidance/` evidence folder -- neither name real anywhere else in
+        this repository (`the-requirement-names-the-section-that-feeds-
+        it`, U3d) -- for proving `paper_product_root_words` reachable
+        without reading this checkout's own real `proposals/`/`guidance/`.
+        """
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, ignore_errors=True)
+        proposals = base / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "v", "ordinal_digits": 2}}),
+            encoding="utf-8")
+        (proposals / "borealis-survey-v01.md").write_text("# 1. Something\n", encoding="utf-8")
+        evidence = base / "guidance" / "citation-vault"
+        evidence.mkdir(parents=True)
+        (evidence / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8")
+        paper = evidence / "finch-cascade-9"
+        paper.mkdir()
+        (paper / "finch-cascade-9.md").write_text("# 1. Something\n", encoding="utf-8")
+        return base
+
+    def test_a_live_lineage_and_evidence_paper_are_derived_as_product_root_vocabulary(self):
+        """Task U3d's own reachability proof: a `proposals/` lineage and a
+        `guidance/` evidence-classed paper id are both derived, and ONLY as
+        their undivided compound -- `derived_denylist` and its skip
+        condition are proven with the SAME fixture, isolated from this
+        checkout's real `implementations/` via an empty `root`.
+        """
+        paper_root = self.scratch_paper_product_root()
+        words, seen_root = self.paper_product_root_words(paper_root)
+        self.assertTrue(seen_root)
+        self.assertEqual(words, {"borealis-survey", "citation-vault", "finch-cascade-9"})
+        self.assertNotIn(
+            "borealis", words,
+            "the lineage's own split parts must never reach the denylist -- "
+            "measured to be ordinary English broadly enough to report "
+            "roughly seventy shipped files as leaking (see "
+            "`paper_product_root_words`'s own docstring)")
+
+        empty_impl = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty_impl, ignore_errors=True)
+        denylist = self.derived_denylist(empty_impl, forge_root=paper_root)
+        self.assertEqual(
+            denylist, ["borealis-survey", "citation-vault", "finch-cascade-9"],
+            "no `implementations/` repository is present, so the whole "
+            "denylist must come from the paper-writing product roots alone")
+
+    def test_a_paper_product_root_name_leaking_into_a_shipped_file_is_caught(self):
+        """Rule B's widened half, proven the way its `implementations/`
+        half already is (`test_rule_b_names_the_file_and_the_word_a_
+        planted_leak_is_in`): a name owned only by a `proposals/`/
+        `guidance/` product root, planted into a shipped forge file, is
+        named by file and by word.
+        """
+        paper_root = self.scratch_paper_product_root()
+        empty_impl = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty_impl, ignore_errors=True)
+        denylist = self.derived_denylist(empty_impl, forge_root=paper_root)
+
+        forge = self.scratch_forge()
+        (forge / "scripts" / "leaky.py").write_text(
+            "# drafted straight out of borealis-survey's own outline\nVALUE = 1\n",
+            encoding="utf-8")
+        (forge / "scripts" / "clean.py").write_text("VALUE = 2\n", encoding="utf-8")
+        self.assertEqual(
+            self.leaks(denylist, forge),
+            {"scripts/leaky.py": ["borealis-survey"]},
+            "a paper-writing product root's own name has to be named by "
+            "file and by word, exactly as the implementations/ half already is")
+
+    def test_a_clone_with_only_a_paper_product_root_does_not_skip(self):
+        """The OR half of `derived_denylist`'s skip condition: an
+        `implementations/`-less clone that nonetheless has a live
+        `proposals/`/`guidance/` product root must NOT read as silence --
+        only the conjunction of BOTH being empty does.
+        """
+        empty_impl = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, empty_impl, ignore_errors=True)
+        paper_root = self.scratch_paper_product_root()
+        denylist = self.derived_denylist(empty_impl, forge_root=paper_root)
+        self.assertTrue(denylist, "a live paper product root must produce a denylist")
 
     def test_every_lexicon_entry_costs_an_argument(self):
         """The reason column is the review artifact.
