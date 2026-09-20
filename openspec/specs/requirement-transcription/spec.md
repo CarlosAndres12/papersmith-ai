@@ -21,7 +21,18 @@ markdown-emphasis-stripped) substring of `source.file`'s prose body —
 self-file or cross-file, reusing `paper_contract.quote_in_body` via
 `_validate_source`, exactly as `after` edges are verified. An entry whose
 quote is not found in the named file MUST refuse `SPAN_NOT_IN_SOURCE` naming
-the entry's owning block and fact/declaration id.
+the entry's owning block and fact/declaration id. This check is unaffected
+by an entry's optional `document: {lineage, section}` half
+(`source-section-binding`): the two halves prove different claims — this
+one that the contract's own prose asks for the fact, the other that a real
+document section answers it — and neither's outcome substitutes for the
+other. A `document` half that resolves cleanly does not excuse a failing
+`source.quote`, and a verified `source.quote` does not excuse an absent or
+unresolved `document` half on a bindable fact.
+
+(Previously: this quote check was the only verification any requirement
+entry needed; no second, document-rooted half existed to independently
+confirm what a bindable fact's binding actually answers.)
 
 #### Scenario: A self-file transcribed entry verifies
 
@@ -45,6 +56,23 @@ the entry's owning block and fact/declaration id.
   `source.file`'s body
 - WHEN the corpus is assembled
 - THEN it refuses `SPAN_NOT_IN_SOURCE` naming the entry
+
+#### Scenario: A resolved document binding does not excuse a failing quote
+
+- GIVEN a bindable-fact entry whose `document` half resolves cleanly (its
+  lineage and section both exist), but whose `source.quote` is not a
+  substring of `source.file`'s body
+- WHEN the corpus is assembled
+- THEN it still refuses `SPAN_NOT_IN_SOURCE`; the clean `document`
+  resolution does not clear this check
+
+#### Scenario: A verified quote does not excuse an unresolved document half
+
+- GIVEN a bindable-fact entry whose `source.quote` verifies, but whose
+  `document.section` names a title absent from the resolved revision
+- WHEN the corpus is assembled
+- THEN it refuses `SECTION_NOT_IN_SOURCE` (`source-section-binding`); the
+  verified quote does not clear that separate check
 
 ### Requirement: Derived Plain Tuple For Downstream Consumers
 

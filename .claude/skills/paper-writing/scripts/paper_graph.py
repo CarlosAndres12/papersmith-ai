@@ -13,12 +13,13 @@ from __future__ import annotations
 import heapq
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_contract  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_guidance  # noqa: E402
 import paper_verify  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
@@ -102,6 +103,15 @@ class BlockRecord:
     #: `tests/test_paper_decisions.py`'s own direct `BlockRecord(...)`
     #: fixture) stays green without passing it.
     produces_facts: tuple = ()
+    #: `source-section-binding` spec (`the-requirement-names-the-section-
+    #: that-feeds-it`, design.md Interfaces): every `(fact_id, lineage,
+    #: section_title)` triple a `requires_facts` entry's `document` half
+    #: declares, derived via `paper_contract.requirement_documents` — never
+    #: independently listed. Defaulted to `()`, the same precedent
+    #: `produces_facts` sets, so every existing construction site stays
+    #: green. Inert at U1/U2: populated from the parsed header, resolved
+    #: against real disk only by `_verify_source_section_bindings` (U2).
+    source_bindings: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -113,9 +123,115 @@ class Corpus:
     sections: dict
     blocks: dict
     order_by_section: dict
+    #: `source-section-binding` spec, `Requirement: An Unmeasured Root Is
+    #: Reported, Never Silently Passed`; design.md Decision B. Every
+    #: distinct `SourceRoot.name` in `paper_declarations.FACT_SOURCE_ROOT
+    #: .values()`, each mapped to `paper_declarations.source_root_status`'s
+    #: own report — "the guard is off for this root" is always on screen,
+    #: echoed by every corpus-reading verb wired against it. A
+    #: `REPOSITORY`-kind root always reports `unmeasured`, by kind, per
+    #: `paper_declarations.source_root_status`'s own U2b correctness
+    #: repair. Defaulted to `{}`, the same precedent
+    #: `produces_facts`/`source_bindings` set, so every existing direct
+    #: `Corpus(...)` construction site stays green.
+    source_roots: dict = field(default_factory=dict)
+    #: (U3b correctness repair, `the-requirement-names-the-section-that-
+    #: feeds-it`) The read-time counterpart `source_roots` already
+    #: established for an unmeasured root, extended to an unbound binding:
+    #: every bindable `requires_facts` entry whose own source root is
+    #: MEASURED but carries no `document` half yet, reported here rather
+    #: than raised. Keyed by qualified block id -> `{fact_id: {"state":
+    #: "undecided", "root": root_name}}`; a fully-bound block never
+    #: appears here at all (a bound fact is already visible via
+    #: `BlockRecord.source_bindings`), the same parsimony a per-block
+    #: report can afford that `source_roots`'s own unconditional
+    #: per-root report cannot. `SECTION_BINDING_ABSENT` (`source-section-
+    #: binding` spec) turns an entry surviving here into a refusal ONLY
+    #: when `assemble_corpus` is called with `enforce_bindings=True` --
+    #: `write`'s own gate, and nowhere else (`writing-orchestration`
+    #: spec, `Requirement: Section Binding Resolution Gates write`).
+    #: Defaulted to `{}`, the same precedent `source_roots` sets.
+    undecided_bindings: dict = field(default_factory=dict)
 
 
-def assemble_corpus(sections_dir: Path) -> Corpus:
+def _compute_undecided_bindings(blocks: dict, source_roots: dict) -> dict:
+    """Pure derivation of `Corpus.undecided_bindings` (U3b), computed
+    BEFORE `Corpus` is constructed: a frozen dataclass has nowhere to
+    gain this after the fact, so this runs from the same `blocks` dict
+    and the same `source_roots` dict `assemble_corpus` is about to hand
+    the constructor, one statement below.
+
+    Iterates blocks and their own `requires_facts` in the SAME order
+    `_verify_source_section_bindings`'s old unconditional obligation loop
+    used, so the first entry `enforce_bindings=True` raises on on any
+    given call is exactly the same entry that loop would have raised on
+    first -- moving the obligation off assembly-time changes WHEN it can
+    fire, never WHICH entry it names first.
+    """
+    undecided: dict = {}
+    for qualified_id, record in blocks.items():
+        bound_fact_ids = {fact_id for fact_id, _lineage, _title in record.source_bindings}
+        for fact_id in record.requires_facts:
+            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root is None:
+                continue
+            status = source_roots.get(root.name)
+            if status is None or status["state"] == "unmeasured":
+                continue
+            if fact_id not in bound_fact_ids:
+                undecided.setdefault(qualified_id, {})[fact_id] = {
+                    "state": "undecided",
+                    "root": root.name,
+                }
+    return undecided
+
+
+def _reconcile_source_bindings(
+    qualified_id: str, header_triples: tuple, recorded_by_fact: dict,
+) -> tuple:
+    """Merges a block's header-declared bindings (`paper_contract.
+    requirement_documents`) with bindings RECORDED via `bind`
+    (`paper_declarations.read_bindings`), per fact id — `the-requirement-
+    names-the-section-that-feeds-it`, U3e ruling (design.md Decision J):
+    "the corpus reads bindings from `paper/`, not from the contract" no
+    longer means the header half is removed (U1's own shape stays valid,
+    and its tests hold it); it means `paper/`'s own recorded bindings are
+    now a SECOND, equally authoritative source this function reconciles
+    against the first, never a fallback consulted only when the header is
+    silent.
+
+    A fact bound by only ONE source (header alone, or `paper/` alone)
+    contributes exactly that source's triples, unchanged. A fact bound by
+    BOTH must name the identical lineage and the identical section-title
+    SET, or this refuses `SOURCE_BINDING_CONFLICT` naming the block, the
+    fact, and both sides verbatim — a disagreement between two sources
+    claiming to answer the SAME question is a conflict to resolve, never
+    a precedence puzzle to silently pick a winner from.
+    """
+    by_fact: dict = {}
+    for fact_id, lineage, title in header_triples:
+        by_fact.setdefault(fact_id, []).append((lineage, title))
+
+    result = list(header_triples)
+    for fact_id, info in sorted(recorded_by_fact.items()):
+        recorded_titles = [(info["lineage"], title) for title in info["sections"]]
+        if fact_id in by_fact:
+            if sorted(by_fact[fact_id]) != sorted(recorded_titles):
+                raise Refused(
+                    "SOURCE_BINDING_CONFLICT",
+                    f"{qualified_id}: {fact_id!r} is bound in the contract header as "
+                    f"{by_fact[fact_id]!r} and recorded via 'bind' as {recorded_titles!r} "
+                    "-- these must agree exactly",
+                )
+            continue  # the header already contributed identical triples
+        result.extend((fact_id, lineage, title) for lineage, title in recorded_titles)
+    return tuple(result)
+
+
+def assemble_corpus(
+    sections_dir: Path, *, source_base: Path | None = None, paper_dir: Path | None = None,
+    enforce_bindings: bool = False,
+) -> Corpus:
     """Parse every `*.md` under `sections_dir`, sorted by filename for
     reproducibility only. Refuses `ID_COLLISION` (work-state) when a raw
     block id equals any section id anywhere in the corpus — the one flat
@@ -137,6 +253,37 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     (`_verify_block_subunits`) — `section_bodies` (section id -> its own
     body) is built in the SAME loop as `bodies`, from the same read,
     keyed by `header.section` rather than a filename.
+
+    `source_base` (`source-section-binding` spec; design.md Decision C):
+    the directory each `PROSE`-kind `paper_declarations.FACT_SOURCE_ROOT`
+    root (`proposals/`, `experiments/`, ...) is resolved under; a
+    `REPOSITORY`-kind root never resolves under it at all. `None` derives
+    `sections_dir.parent` — the real repository root under this skill's
+    shipped layout. Every root's `document-rooted`/`unmeasured` status is
+    computed once here (`Corpus.source_roots`) and then consumed by
+    `_verify_source_section_bindings` below, which resolves and checks
+    every `document`-bound `requires_facts` entry the parsed corpus names.
+
+    `enforce_bindings` (U3b correctness repair, design.md Decision H):
+    `False` (default) — a bindable, measured, unbound entry is reported
+    in `Corpus.undecided_bindings`, never raised; every read-only verb
+    keeps working on a corpus that still carries an undecided binding.
+    `True` — the SAME condition raises `SECTION_BINDING_ABSENT`. Only
+    `paper_cli._resolve_write_gate` (`write`'s own first statement) ever
+    passes `True`: drafting a block without knowing which section feeds
+    it is the one moment an undecided binding would otherwise force an
+    invented answer, so only that moment refuses.
+
+    `paper_dir` (U3e ruling, `the-requirement-names-the-section-that-
+    feeds-it`, design.md Decision J): where `paper_declarations.
+    read_bindings` looks for bindings RECORDED via `bind` — `None`
+    derives `resolved_base / "paper"`, this skill's own shipped default
+    layout (`<repo>/paper`), the SAME convention every existing test
+    fixture already follows (`self.paper_dir = self.forge_root /
+    "paper"`). Read once, before the block loop, and merged per block
+    with that block's own header-declared bindings by
+    `_reconcile_source_bindings` — never a second, independent source of
+    truth `BlockRecord.source_bindings` could silently drift from.
     """
     sections: dict = {}
     bodies: dict = {}
@@ -147,6 +294,10 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
         sections[header.section] = header
         bodies[f"{sections_dir.name}/{path.name}"] = body
         section_bodies[header.section] = body
+
+    resolved_base = source_base if source_base is not None else sections_dir.parent
+    resolved_paper_dir = paper_dir if paper_dir is not None else resolved_base / "paper"
+    recorded_bindings = paper_declarations.read_bindings(resolved_paper_dir)
 
     section_ids = set(sections)
     blocks: dict = {}
@@ -161,6 +312,10 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                     f"block id {block_id!r} in section {section_id!r} collides with a section id",
                 )
             qualified_id = f"{section_id}.{block_id}"
+            header_bindings = paper_contract.requirement_documents(raw_block["requires_facts"])
+            source_bindings = _reconcile_source_bindings(
+                qualified_id, header_bindings, recorded_bindings.get(qualified_id, {}),
+            )
             blocks[qualified_id] = BlockRecord(
                 section=section_id,
                 block_id=block_id,
@@ -174,15 +329,26 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
                 citations=raw_block["citations"],
                 optional=raw_block["optional"],
                 produces_facts=paper_contract.requirement_values(raw_block["produces_facts"]),
+                source_bindings=source_bindings,
             )
             order_by_section[section_id].append(qualified_id)
 
-    corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
+    source_roots = {
+        root.name: paper_declarations.source_root_status(resolved_base, root)
+        for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name)
+    }
+    undecided_bindings = _compute_undecided_bindings(blocks, source_roots)
+
+    corpus = Corpus(
+        sections=sections, blocks=blocks, order_by_section=order_by_section,
+        source_roots=source_roots, undecided_bindings=undecided_bindings,
+    )
     _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
+    _verify_source_section_bindings(corpus, enforce_bindings=enforce_bindings)
     declarations = _produces_facts_declarations(corpus)
     _verify_route_exclusivity(declarations)
     _verify_producer_duplication(declarations)
@@ -191,6 +357,143 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_producer_reachability(corpus, declarations)
     _verify_producer_chain_rows(corpus, declarations, section_bodies)
     return corpus
+
+
+def _describe_binding_absent(corpus: Corpus, qualified_id: str, fact_id: str, info: dict) -> str:
+    """`SECTION_BINDING_ABSENT`'s own detail text (U3e ruling, `the-
+    requirement-names-the-section-that-feeds-it`: "the refusal IS the
+    question"). Names the block, the fact, the root, and — read from disk
+    at this exact moment, via `paper_declarations.describe_binding_
+    candidates` — every lineage that root currently carries, its own
+    resolved current revision (or, for an INGESTED root, its own paper),
+    and the section titles that revision actually holds right now, so a
+    person can answer the refusal without opening anything. Also spells
+    the exact `bind` invocation that answers it, naming this refusal's own
+    block and fact — never a generic "run bind" pointer.
+    """
+    root = paper_declarations.FACT_SOURCE_ROOT[fact_id]
+    status = corpus.source_roots[info["root"]]
+    candidates = paper_declarations.describe_binding_candidates(status, root)
+    detail = (
+        f"{qualified_id}: {fact_id!r} is bindable and its source root {info['root']!r} is "
+        f"measured, but carries no binding. Record one with `bind --block {qualified_id} "
+        f"--fact {fact_id} --lineage <lineage> --section <title> [--section <title> ...]`."
+    )
+    if not candidates:
+        return detail + f" No document was found on disk under {info['root']!r} yet."
+    parts = [
+        f"{lineage!r} (current: {candidate['revision']}, sections: {candidate['sections']!r})"
+        for lineage, candidate in sorted(candidates.items())
+    ]
+    return detail + " Candidates on disk right now: " + "; ".join(parts) + "."
+
+
+def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = False) -> None:
+    """`source-section-binding` spec — every check a `document`-bound
+    `requires_facts` entry (`BlockRecord.source_bindings`) is held to,
+    against real disk. Inert for every entry with no `document` half (U1),
+    and inert for every root `corpus.source_roots` reports `unmeasured`
+    (design.md Decision B: an unmeasured root is reported, never a
+    refusal) — resolution only ever runs against a `document-rooted` root.
+
+    For each `(root, lineage)` pair the corpus's bindings actually name,
+    under a document-rooted root, resolution branches on the root's OWN
+    `kind` (design.md, `SourceRootKind`):
+
+    1a. `PROSE`/`REPOSITORY` roots (a `REPOSITORY` root is never
+        document-rooted, so it never reaches this branch in practice):
+        `paper_declarations.read_revisions_marker` — `None` (absent
+        marker) refuses `SOURCE_REVISIONS_UNDECLARED` naming the root; a
+        malformed marker propagates `MALFORMED_SOURCE_MARKER` from the
+        reader itself. `paper_declarations.resolve_lineage` then refuses
+        `SOURCE_LINEAGE_UNRESOLVED` on zero or tied candidates.
+    1b. `INGESTED` roots (U2c ruling): an ingested paper is not a
+        revisioned lineage, so there is no marker to read at all —
+        `paper_declarations.resolve_ingested_document` resolves the
+        lineage by IDENTITY, refusing the SAME `SOURCE_LINEAGE_UNRESOLVED`
+        on zero or more-than-one matching ingested document.
+    2. The resolved document is segmented once (`paper_guidance.
+       segment_markdown`) into a `{title: count}` memo, keyed by
+       `(root, lineage)` — one file read per distinct pair for the WHOLE
+       corpus (design.md Decision E), never one per binding. Every binding
+       naming that pair is then a dict lookup: a zero count refuses
+       `SECTION_NOT_IN_SOURCE`, a count above one refuses
+       `SECTION_TITLE_AMBIGUOUS`, both naming the owning block and the
+       title.
+
+    0. (U3b correctness repair, `the-requirement-names-the-section-that-
+       feeds-it` — U3's own unconditional version of this step forced an
+       agent to INVENT two bindings rather than leave the corpus
+       assemblable at all, which the owner ruled worse than the defect it
+       fixed) `Corpus.undecided_bindings` already names every bindable,
+       measured, unbound entry (`_compute_undecided_bindings`, run before
+       this function, before `Corpus` even exists). `enforce_bindings=False`
+       (every read-only verb's own default) leaves that report as a
+       report: this step raises NOTHING for it. `enforce_bindings=True`
+       (`write`'s own gate, and ONLY `write`'s) turns the first entry
+       `Corpus.undecided_bindings` names, in the SAME block order the old
+       unconditional obligation loop used, into `SECTION_BINDING_ABSENT`
+       naming the owning block and the fact id — the obligation is still
+       UNCONDITIONAL at `write` and still never consults
+       `BlockRecord.optional`, it is merely no longer unconditional at
+       every OTHER verb too.
+    """
+    if enforce_bindings:
+        for qualified_id, facts in corpus.undecided_bindings.items():
+            fact_id, info = next(iter(facts.items()))
+            raise Refused(
+                "SECTION_BINDING_ABSENT",
+                _describe_binding_absent(corpus, qualified_id, fact_id, info),
+            )
+
+    memo: dict = {}
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id, lineage, section_title in record.source_bindings:
+            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root is None:
+                continue
+            status = corpus.source_roots.get(root.name)
+            if status is None or status["state"] == "unmeasured":
+                continue
+
+            memo_key = (root.name, lineage)
+            if memo_key not in memo:
+                if root.kind is paper_declarations.SourceRootKind.INGESTED:
+                    revision_path = paper_declarations.resolve_ingested_document(
+                        status["path"], lineage
+                    )
+                else:
+                    marker = paper_declarations.read_revisions_marker(status["path"])
+                    if marker is None:
+                        raise Refused(
+                            "SOURCE_REVISIONS_UNDECLARED",
+                            f"{root.name!r} is document-rooted but carries no "
+                            f"'.paper-writing.json' marker",
+                        )
+                    revision_path = paper_declarations.resolve_lineage(
+                        status["path"], lineage, marker
+                    )
+                body = revision_path.read_text(encoding="utf-8")
+                outline = paper_guidance.segment_markdown(body)
+                counts: dict = {}
+                for heading in outline["headings"]:
+                    counts[heading["title"]] = counts.get(heading["title"], 0) + 1
+                memo[memo_key] = (revision_path, counts)
+
+            revision_path, counts = memo[memo_key]
+            count = counts.get(section_title, 0)
+            if count == 0:
+                raise Refused(
+                    "SECTION_NOT_IN_SOURCE",
+                    f"{qualified_id}: section {section_title!r} is not a heading in "
+                    f"{revision_path.name} (lineage {lineage!r})",
+                )
+            if count > 1:
+                raise Refused(
+                    "SECTION_TITLE_AMBIGUOUS",
+                    f"{qualified_id}: section {section_title!r} matches {count} headings in "
+                    f"{revision_path.name} (lineage {lineage!r})",
+                )
 
 
 def _verify_input_partition(corpus: Corpus, bodies: dict) -> None:

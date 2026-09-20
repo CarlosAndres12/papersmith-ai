@@ -24,6 +24,17 @@ Public surface:
     set_declaration(paper_dir, id, value, *, clock=...) -> dict
     set_fact(paper_dir, id, resolution, *, clock=..., produced_by=()) -> dict
     decline_fact(paper_dir, id, reason, condition, *, clock=..., produced_by=()) -> dict
+    bind_section(paper_dir, qualified_block_id, fact_id, lineage, sections, *, clock=...)
+        -> dict  (the-requirement-names-the-section-that-feeds-it, U3e: a THIRD
+        record kind, `binding`, keyed by (block, fact) -- the verb that RECORDS
+        a `source-section-binding`, in `paper/`, never `sections/*.md`)
+    reopen_binding(paper_dir, qualified_block_id, fact_id, *, clock=...) -> dict
+    read_bindings(paper_dir) -> dict  (read-only; qualified_block_id ->
+        {fact_id: {"lineage": str, "sections": tuple}}; {} before paper/ exists)
+    describe_binding_candidates(status, root) -> dict  (pure disk read; every
+        lineage a document-rooted or ingested-identity root carries RIGHT NOW,
+        its own current revision/paper, and the section titles read from it --
+        what `write`'s own SECTION_BINDING_ABSENT refusal shows an operator)
     read_fact(paper_dir, id) -> str | None  (read-only; None when unresolved)
     read_declined(paper_dir) -> dict[str, dict]  (read-only;
         {fact_id: {"reason", "condition", "holds", "detail"}}, condition
@@ -39,25 +50,36 @@ Public surface:
     infer_skeleton_decisions(paper_dir, corpus) -> dict  (read-only; disk, never a stored flag)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
-    FACT_SOURCE_ROOT -> dict[str, str]  (fact id -> the source root it is read from)
+    FACT_SOURCE_ROOT -> dict[str, SourceRoot]  (fact id -> the root it is read from,
+        AND that root's kind -- PROSE (a document revision, section-bindable),
+        REPOSITORY (a target code repository, measured by running it), or
+        INGESTED (a published paper under guidance/, identity-resolved))
+    resolve_ingested_document(evidence_dir, lineage) -> Path  (pure disk read;
+        the INGESTED-kind counterpart to resolve_lineage above)
     source_available(root) -> bool  (pure disk measurement; gitignore-blind, `Path.iterdir()`)
     reconcile_observation_report(report, measured) -> list[dict]  (pure; every
         disagreement between the agent's account and a real disk measurement)
 """
 from __future__ import annotations
 
+import enum
+import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
+import paper_guidance  # noqa: E402
 import paper_region  # noqa: E402
 import paper_vocabulary  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
+import impl_layout  # noqa: E402
 
 #: The five facts an outside observer (`insumos-observer`) may report on —
 #: read from `proposals/`, `experiments/`, or the target implementation
@@ -486,6 +508,231 @@ def read_satisfied(paper_dir: Path) -> tuple[set, set]:
     return satisfied_facts, satisfied_declarations
 
 
+def _binding_record_id(qualified_block_id: str, fact_id: str) -> str:
+    """The `binding` record's own composite id -- a (block, fact) PAIR,
+    since one block may bind more than one fact and one fact may be bound
+    by more than one block (the worked example this whole change exists
+    for: `mm-borrowed-machinery` and `mm-proposal` both require
+    `formulation` but bind different sections). Never a vocabulary member
+    of `FACTS`/`DECLARATIONS` — `reopen`'s own dispatch is untouched by
+    this; `reopen_binding` below is a dedicated function, not a widened
+    `reopen`."""
+    return f"{qualified_block_id}::{fact_id}"
+
+
+def bind_section(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, lineage: str, sections,
+    *, clock=paper_region.default_clock,
+) -> dict:
+    """Records ONE `binding` -- the `source-section-binding` half of a
+    `requires_facts` entry, decided by USING the skill (`bind`), never by
+    hand-editing `sections/*.md` (which ships with the forge and must stay
+    byte-identical to `main`) and never by an agent reading conversation
+    prose (`the-requirement-names-the-section-that-feeds-it`, U3e ruling,
+    design.md Decision J). Stored in the SAME `declarations` region
+    `set_fact`/`set_declaration` already write — `paper/`, never
+    `sections/`: that region is gitignored except `.gitkeep`, and it
+    already holds the paper's own decisions, protected by the SAME
+    `DECLARATIONS_HAND_EDITED` guard, with no `--adopt` escape.
+
+    A THIRD record kind, `binding` — deliberately not `fact`/`declaration`,
+    so a binding can never silently satisfy a check meant for the other
+    vocabulary (module docstring: "a shared field name invites a shared
+    code path"). Keyed by `id={block}::{fact}` (`_binding_record_id`).
+    `value_field="lineage"`; `sections` — a non-empty tuple of titles,
+    normalized here so a single string is accepted exactly the way
+    `paper_contract._validate_document_object`'s own `section` key already
+    is — is carried in `extra`, alongside `block`/`fact` themselves, so
+    `read_bindings` never has to re-derive them from the composite id.
+
+    Refuses `UNKNOWN_FACT` (`paper_vocabulary.validate_fact`, reused
+    verbatim) when `fact_id` is not one of the ten declared facts.
+    Refuses `BINDING_FACT_NOT_BINDABLE` (new; work-state) when `fact_id`
+    IS a declared fact but is not a key of `FACT_SOURCE_ROOT` (`is_
+    bindable_fact`) — a produced or structural fact has no document-rooted
+    source to bind at all (`source-section-binding` spec, `Requirement:
+    Bindable Facts Are Derived, Never Listed`). Refuses `BINDING_LINEAGE_
+    REQUIRED` / `BINDING_SECTIONS_REQUIRED` (new; invocation-defect) for an
+    empty `lineage` / an empty `sections` — enforced HERE, in the module
+    itself, not only at the CLI layer, the same precedent `decline_fact`'s
+    own `DECLINE_REASON_REQUIRED` set. Refuses `DECLARATION_FIXED`
+    (`_set_record`'s own guard, reused) when this exact (block, fact) pair
+    is already recorded and `reopen_binding` was not run first.
+
+    Raises nothing about `qualified_block_id`'s own shape or whether
+    `fact_id` is really one of that block's `requires_facts` — that cross-
+    check is the CALLER's concern (`paper_cli.cmd_bind`), which holds the
+    real, assembled corpus this module never imports (`paper_graph`
+    imports `paper_declarations`, so the reverse import would cycle); a
+    binding naming a block or fact that turns out not to exist in the real
+    corpus is simply orphaned data, harmless, the same tolerance `reopen`
+    already extends to an id with no existing record.
+    """
+    paper_vocabulary.validate_fact(fact_id)
+    if not is_bindable_fact(fact_id):
+        raise Refused(
+            "BINDING_FACT_NOT_BINDABLE",
+            f"{fact_id!r} is not a key of FACT_SOURCE_ROOT; it has no document-rooted "
+            "source to bind at all",
+        )
+    if not lineage:
+        raise Refused(
+            "BINDING_LINEAGE_REQUIRED", "recording a binding requires a non-empty lineage",
+        )
+    if isinstance(sections, str):
+        sections = (sections,)
+    sections = tuple(sections)
+    if not sections:
+        raise Refused(
+            "BINDING_SECTIONS_REQUIRED", "recording a binding requires at least one section title",
+        )
+    binding_id = _binding_record_id(qualified_block_id, fact_id)
+    return _set_record(
+        paper_dir, kind="binding", id_=binding_id, value_field="lineage", value=lineage,
+        clock=clock,
+        extra={"block": qualified_block_id, "fact": fact_id, "sections": list(sections)},
+    )
+
+
+def reopen_binding(
+    paper_dir: Path, qualified_block_id: str, fact_id: str, *, clock=paper_region.default_clock,
+) -> dict:
+    """Clears the `fixed` state for exactly the `binding` record naming
+    `(qualified_block_id, fact_id)` — mirroring `reopen`'s own per-id
+    clearing, as a DEDICATED function rather than a widened `reopen`,
+    because a binding's own id is a (block, fact) PAIR, not a single
+    vocabulary member `reopen`'s own `FACTS`/`DECLARATIONS` dispatch
+    already closes over. Reopening a pair with no existing record is
+    harmless, matching `reopen`'s own precedent — there is nothing to
+    clear, and the region's own `generation` still bumps.
+    """
+    binding_id = _binding_record_id(qualified_block_id, fact_id)
+    tex_path, pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    new_generation = body.get("generation", 0) + 1
+    new_records = []
+    for entry in body["records"]:
+        if entry["kind"] == "binding" and entry["id"] == binding_id:
+            entry = dict(entry)
+            entry["fixed"] = False
+            entry["generation"] = new_generation
+        new_records.append(entry)
+    new_body = {"generation": new_generation, "records": new_records}
+    _write_declarations(paper_dir, pre, record, new_body)
+    return {
+        "id": binding_id, "kind": "binding", "block": qualified_block_id, "fact": fact_id,
+        "generation": new_body["generation"],
+    }
+
+
+def read_bindings(paper_dir: Path) -> dict:
+    """Read-only: every currently-FIXED `binding` record, as `qualified_
+    block_id -> {fact_id: {"lineage": str, "sections": tuple}}` — the
+    corpus's own read of what `bind` has recorded so far
+    (`paper_graph.assemble_corpus`'s own merge, U3e).
+
+    Returns `{}` when `paper_dir` (or `main.tex` under it) does not exist
+    yet — a corpus is legitimately assemblable, read-only, before `paper/`
+    is even scaffolded, the SAME tolerance `Corpus.undecided_bindings`
+    already extends to every bindable fact carrying no binding at all;
+    this is not `PAPER_ABSENT`'s concern, which is reserved for a verb
+    that actually needs to WRITE `paper/` (`declare`, `bind` itself).
+    Reuses the exact same private readers every other reader of this
+    region already goes through (`_read_declarations`, `_verify_not_hand_
+    edited`, `_body_or_default`) once `paper_dir` IS scaffolded — never a
+    second reader, and `DECLARATIONS_HAND_EDITED` still refuses a
+    tampered region exactly as it does for every other reader.
+    """
+    tex_path = paper_dir / "main.tex"
+    if not paper_dir.is_dir() or not tex_path.is_file():
+        return {}
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    result: dict = {}
+    for entry in body["records"]:
+        if entry["kind"] == "binding" and entry.get("fixed"):
+            result.setdefault(entry["block"], {})[entry["fact"]] = {
+                "lineage": entry["lineage"], "sections": tuple(entry["sections"]),
+            }
+    return result
+
+
+def _heading_titles(path: Path) -> list:
+    """Every heading title `paper_guidance.segment_markdown` reads from
+    `path` right now — the same read `_verify_source_section_bindings`
+    already performs per resolved revision, reused here purely for
+    reporting (`describe_binding_candidates`), never for resolution
+    itself."""
+    body = path.read_text(encoding="utf-8")
+    outline = paper_guidance.segment_markdown(body)
+    return [heading["title"] for heading in outline["headings"]]
+
+
+def describe_binding_candidates(status: dict, root: SourceRoot) -> dict:
+    """Every candidate an operator answering `write`'s own `SECTION_
+    BINDING_ABSENT` refusal can see WITHOUT opening anything: `{lineage:
+    {"revision": filename, "sections": [title, ...]}}`, read from disk at
+    call time — nothing cached, nothing hand-listed (`the-requirement-
+    names-the-section-that-feeds-it`, U3e ruling: "the refusal IS the
+    question").
+
+    `root.kind is INGESTED`: each ingested paper under `status['path']`
+    (`paper_guidance.ingested_papers`, reused) is its own "lineage",
+    identity-resolved — no ordinal to pick a "current" revision from.
+
+    Otherwise (`PROSE`): `read_revisions_marker(status['path'])` — `None`
+    (no marker yet; `SOURCE_REVISIONS_UNDECLARED` is a DIFFERENT check's
+    concern, never raised here) falls back to reporting every `*.md` file
+    under the root, ungrouped, by its own filename stem. A marker present
+    derives the SAME per-root regex `resolve_lineage` composes, but
+    matches every filename that fits it (never one literal lineage,
+    generalizing `resolve_lineage`'s per-lineage regex into one that
+    admits ANY lineage segment) and keeps only the highest-ordinal file
+    per distinct lineage segment found — the current revision, per
+    lineage, exactly as `resolve_lineage` would resolve it, for every
+    lineage this root actually carries right now.
+    """
+    base_path = status["path"]
+    if root.kind is SourceRootKind.INGESTED:
+        papers = paper_guidance.ingested_papers(base_path.parent).get(base_path.name, [])
+        return {
+            entry["folder"]: {
+                "revision": Path(entry["markdown"]).name,
+                "sections": _heading_titles(Path(entry["markdown"])),
+            }
+            for entry in papers
+        }
+
+    marker = read_revisions_marker(base_path)
+    if marker is None:
+        return {
+            doc_path.stem: {"revision": doc_path.name, "sections": _heading_titles(doc_path)}
+            for doc_path in sorted(base_path.glob("*.md"))
+        }
+
+    marker_prefix = marker["revision_prefix"]
+    marker_digits = marker["ordinal_digits"]
+    pattern = re.compile(
+        rf"^(?P<lineage>.+)-{re.escape(marker_prefix)}(?P<ordinal>\d{{{marker_digits},}})\.md$"
+    )
+    current_by_lineage: dict = {}
+    for doc_path in sorted(base_path.glob("*.md")):
+        match = pattern.match(doc_path.name)
+        if not match:
+            continue
+        found_lineage = match.group("lineage")
+        ordinal = int(match.group("ordinal"))
+        current = current_by_lineage.get(found_lineage)
+        if current is None or ordinal > current[0]:
+            current_by_lineage[found_lineage] = (ordinal, doc_path)
+    return {
+        found_lineage: {"revision": doc_path.name, "sections": _heading_titles(doc_path)}
+        for found_lineage, (_ordinal, doc_path) in sorted(current_by_lineage.items())
+    }
+
+
 def reopen(paper_dir: Path, id_: str, *, clock=paper_region.default_clock) -> dict:
     """Clears the `fixed` state for exactly the record named `id_`, and no
     other, then bumps the region's own `generation` counter.
@@ -630,21 +877,365 @@ def affected_blocks(corpus, target_id: str) -> set:
     }
 
 
-#: Which real-disk root each observable fact is read from
-#: (`.claude/agents/insumos-observer.md`: "formulation, dataset (from
+class SourceRootKind(enum.Enum):
+    """Whether a `FACT_SOURCE_ROOT` root is read as PROSE (a document
+    revision with headings, resolvable for section binding), is a
+    REPOSITORY (a target code repository, measured by running it -- never
+    read as prose, regardless of what happens to exist on disk under its
+    name), or is INGESTED (a published paper under `guidance/`, identified
+    by that folder's own `evidence` classification -- never by a folder
+    name literal). U2b correctness repair to `source-section-binding`
+    spec's `Requirement: An Unmeasured Root Is Reported, Never Silently
+    Passed`: a REPOSITORY-kind root is unmeasured BY KIND, not merely by
+    the document-rooted predicate that requirement already names. U2c
+    ruling (`the-requirement-names-the-section-that-feeds-it`): an
+    INGESTED-kind root is not a revisioned lineage at all -- a published
+    paper gets no `r22` -- so its resolution is IDENTITY (the lineage IS
+    the document), never the PROSE branch's marker-driven max-ordinal
+    search."""
+
+    PROSE = "prose"
+    REPOSITORY = "repository"
+    INGESTED = "ingested"
+
+
+class SourceRoot(NamedTuple):
+    """One `FACT_SOURCE_ROOT` value: `name` (the root's own label -- for a
+    `PROSE` root, the directory `source_root_status` resolves under the
+    source base) and `kind` (`SourceRootKind`, above). `kind` carries NO
+    default: a sixth fact/root pair that omits it fails immediately with
+    `TypeError: missing ... argument`, rather than silently defaulting to
+    `PROSE` and becoming spuriously section-bindable."""
+
+    name: str
+    kind: SourceRootKind
+
+
+#: Which real-disk root each observable fact is read from, and that root's
+#: KIND (`.claude/agents/insumos-observer.md`: "formulation, dataset (from
 #: `proposals/` -- the managed mathematical proposal), experimental-design
 #: (from `experiments/` -- the managed experiments document), implementation
 #: (from the target implementation repository's own source) and results
-#: (from that same repository's own run outputs)"). Used only to RECONCILE
-#: an agent's report against a measurement this process takes itself
-#: (`reconcile_observation_report` below) -- never to decide a fact's value.
+#: (from that same repository's own run outputs)"). `implementation`/
+#: `results` are `REPOSITORY`-kind: a target code repository, measured by
+#: RUNNING it, never read as prose for section binding -- `impl_layout.
+#: WORKSPACE` (the forge's own canonical target-repository workspace) is
+#: the real path, never re-spelled here (U2b correctness repair, per
+#: `source_root_status`'s own docstring below).
+#:
+#: `dataset` is `INGESTED`-kind (U2c ruling,
+#: `the-requirement-names-the-section-that-feeds-it`): a proposal
+#: lineage states the mathematics and need carry no dataset section at
+#: all, so the fact is sourced from the ingested EVIDENCE
+#: document under `guidance/` instead -- whichever folder that own
+#: registry classes `'evidence'` (`paper_guidance.read_registry`,
+#: DERIVED, never a folder name literal). `name="evidence"` here is a
+#: generic vocabulary word already shared with `paper_guidance.CLASSES`,
+#: never this paper's own guidance folder name -- `source_root_status`'s
+#: INGESTED branch never resolves a directory from `root.name` at all,
+#: the same "kind gates the check, name is not resolved" precedent
+#: `REPOSITORY` already established.
+#:
+#: The `name` label is used only to RECONCILE an agent's report against a
+#: measurement this process takes itself (`reconcile_observation_report`
+#: below) -- never to resolve a directory for a REPOSITORY- or
+#: INGESTED-kind root, and never to decide a fact's value. Every root
+#: consumed by `assemble_corpus` (`paper_graph.Corpus.source_roots`, keyed
+#: by `name` alone) MUST carry a name distinct from every other root
+#: actually resolved on disk, or two different-kind roots would collide
+#: on one dict key -- this is why `dataset` could not simply keep sharing
+#: `formulation`'s `"proposals"` label once its KIND changed.
 FACT_SOURCE_ROOT: dict = {
-    "formulation": "proposals",
-    "dataset": "proposals",
-    "experimental-design": "experiments",
-    "implementation": "implementation",
-    "results": "implementation",
+    "formulation": SourceRoot("proposals", SourceRootKind.PROSE),
+    "dataset": SourceRoot("evidence", SourceRootKind.INGESTED),
+    "experimental-design": SourceRoot("experiments", SourceRootKind.PROSE),
+    "implementation": SourceRoot("implementation", SourceRootKind.REPOSITORY),
+    "results": SourceRoot("implementation", SourceRootKind.REPOSITORY),
 }
+
+
+#: Per-root revision marker (`source-section-binding` spec, `Requirement:
+#: The Marker Grammar Is Validated, And Disjoint From guidance/'s`; design.md
+#: Decision A). Same filename `paper_guidance.py`'s own `guidance/` marker
+#: uses (`_MARKER_NAME`) but a DISJOINT key set — `revisions` here,
+#: `class` there — so a marker read by the wrong reader refuses loudly
+#: rather than being silently half-understood.
+_SOURCE_MARKER_NAME = ".paper-writing.json"
+_SOURCE_MARKER_TOP_KEY = "revisions"
+_SOURCE_MARKER_REQUIRED = ("revision_prefix", "ordinal_digits")
+
+
+def read_revisions_marker(root: Path) -> dict | None:
+    """`root / '.paper-writing.json'`'s own `{"revisions": {"revision_
+    prefix": str, "ordinal_digits": int}}` declaration, or `None` when the
+    marker file does not exist at all — an ABSENT marker is a distinct,
+    legitimate state (`SOURCE_REVISIONS_UNDECLARED`, the caller's concern,
+    never this reader's).
+
+    Refuses `MALFORMED_SOURCE_MARKER` (work-state) naming the offending
+    file and the missing, unknown, or wrong-typed key when the marker
+    EXISTS but is not valid UTF-8, not valid JSON, not a JSON object, is
+    missing the top-level `revisions` key, carries any other top-level key,
+    is missing `revision_prefix`/`ordinal_digits`, carries an unknown
+    nested key, or gives either required key the wrong type. A
+    `guidance/`-shaped marker (`{"class": ...}`) refuses naming `revisions`
+    as missing, rather than silently accepting `class` — the disjoint-key
+    requirement, checked missing-before-unknown so the ABSENT key is always
+    named first, the same ordering `paper_contract._validate_document_
+    object` uses."""
+    marker_path = root / _SOURCE_MARKER_NAME
+    if not marker_path.is_file():
+        return None
+    try:
+        raw_text = marker_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
+    try:
+        obj = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+    if not isinstance(obj, dict):
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: must be a JSON object")
+    if _SOURCE_MARKER_TOP_KEY not in obj:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: missing required key {_SOURCE_MARKER_TOP_KEY!r}",
+        )
+    unknown = [key for key in obj if key != _SOURCE_MARKER_TOP_KEY]
+    if unknown:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: carries unknown key {unknown[0]!r}"
+        )
+    revisions = obj[_SOURCE_MARKER_TOP_KEY]
+    if not isinstance(revisions, dict):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} must be an object",
+        )
+    missing = [key for key in _SOURCE_MARKER_REQUIRED if key not in revisions]
+    if missing:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} missing {missing[0]!r}",
+        )
+    unknown_nested = [key for key in revisions if key not in _SOURCE_MARKER_REQUIRED]
+    if unknown_nested:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} carries unknown key {unknown_nested[0]!r}",
+        )
+    revision_prefix = revisions["revision_prefix"]
+    if not isinstance(revision_prefix, str):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: 'revision_prefix' must be a string"
+        )
+    ordinal_digits = revisions["ordinal_digits"]
+    if not isinstance(ordinal_digits, int) or isinstance(ordinal_digits, bool):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: 'ordinal_digits' must be an integer"
+        )
+    return {"revision_prefix": revision_prefix, "ordinal_digits": ordinal_digits}
+
+
+def source_root_status(base: Path, root: SourceRoot) -> dict:
+    """`{"state": "document-rooted"|"unmeasured", "path": Path|None,
+    "documents": int, "reason": str|None}` (design.md, Interfaces).
+
+    A `SourceRootKind.REPOSITORY` root (`impl_layout.WORKSPACE` — the
+    forge's own canonical target-repository workspace, never a name this
+    skill re-spells) is ALWAYS `unmeasured`, regardless of whether that
+    directory exists or holds `*.md` files: it is a target code
+    repository, measured by RUNNING it, never read as prose for section
+    binding. A U2b correctness repair to `source-section-binding` spec's
+    `Requirement: An Unmeasured Root Is Reported, Never Silently Passed`
+    — `implementation`/`results` were previously excluded only by an
+    invented, never-existing directory name; here they are excluded by
+    KIND, never by the document-rooted predicate below, so the outcome
+    never depends on what a target repo's own `README.md`/`AGREED.md`
+    happen to contain.
+
+    A `SourceRootKind.INGESTED` root (U2c ruling) delegates to
+    `_ingested_root_status` below — its path is DERIVED from `guidance/`'s
+    own per-folder classification, never resolved from `root.name`.
+
+    Otherwise (`SourceRootKind.PROSE`), document-rooted iff `base /
+    root.name` is a directory holding at least one `*.md` file — a
+    property computed on disk, never keyed by a fact id
+    (`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses`; design.md Decision B). An absent root
+    and a root holding no `*.md` (e.g. only `.gitkeep`) both report
+    `unmeasured` — the SAME report, never a refusal; only a document-rooted
+    root missing its OWN marker refuses (`SOURCE_REVISIONS_UNDECLARED`,
+    the caller's concern, checked one layer up)."""
+    if root.kind is SourceRootKind.REPOSITORY:
+        return {
+            "state": "unmeasured", "path": impl_layout.WORKSPACE, "documents": 0,
+            "reason": (
+                f"{root.name!r} is a {root.kind.value} root ({impl_layout.WORKSPACE}), "
+                "not read as prose for section binding"
+            ),
+        }
+    if root.kind is SourceRootKind.INGESTED:
+        return _ingested_root_status(base)
+    path = base / root.name
+    if not path.is_dir():
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"{root.name!r} is not a directory under {base}",
+        }
+    documents = sorted(path.glob("*.md"))
+    if not documents:
+        return {
+            "state": "unmeasured", "path": path, "documents": 0,
+            "reason": f"{path} holds no '*.md' documents",
+        }
+    return {"state": "document-rooted", "path": path, "documents": len(documents), "reason": None}
+
+
+def _ingested_root_status(base: Path) -> dict:
+    """`source_root_status`'s `SourceRootKind.INGESTED` branch (U2c ruling,
+    `the-requirement-names-the-section-that-feeds-it`): which `guidance/`
+    folder feeds an ingested-kind fact is DERIVED from that folder's own
+    `.paper-writing.json` classification — `paper_guidance.read_registry`,
+    reused verbatim, the SAME reader every other `guidance/` consumer
+    already goes through (`paper_cli._guard_source_md_classification`);
+    this is its first SOURCE-ROOT consumer, never a second reader.
+
+    An absent `guidance/` directory, or one carrying no folder classed
+    `'evidence'` yet, reports `unmeasured` — a paper that has not
+    classified (or ingested) its evidence document yet is a paper at an
+    EARLIER STAGE, the same reading `experiments/` holding only
+    `.gitkeep` already gets (`source-section-binding` spec, `Requirement:
+    An Unmeasured Root Is Reported, Never Silently Passed`), never a
+    fault. Exactly one folder classed `'evidence'` but holding zero
+    ingested papers is ALSO `unmeasured`, for the identical reason.
+
+    More than one folder classed `'evidence'` refuses
+    `EVIDENCE_ROOT_AMBIGUOUS` naming every candidate — deciding WHICH
+    folder is the root is this function's own job, and picking the first
+    would be exactly the silent guess this change exists to rule out.
+    """
+    guidance_dir = paper_guidance.resolve_guidance_dir(None, forge_root=base)
+    if not guidance_dir.is_dir():
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"{guidance_dir} does not exist yet",
+        }
+    registry = paper_guidance.read_registry(guidance_dir)
+    evidence_folders = sorted(name for name, klass in registry.items() if klass == "evidence")
+    if not evidence_folders:
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"no folder under {guidance_dir} is classed 'evidence' yet",
+        }
+    if len(evidence_folders) > 1:
+        raise Refused(
+            "EVIDENCE_ROOT_AMBIGUOUS",
+            f"more than one folder under {guidance_dir} is classed 'evidence': "
+            f"{evidence_folders}",
+        )
+    evidence_dir = guidance_dir / evidence_folders[0]
+    papers = paper_guidance.ingested_papers(guidance_dir).get(evidence_folders[0], [])
+    if not papers:
+        return {
+            "state": "unmeasured", "path": evidence_dir, "documents": 0,
+            "reason": f"{evidence_dir} is classed 'evidence' but carries no ingested paper yet",
+        }
+    return {
+        "state": "document-rooted", "path": evidence_dir, "documents": len(papers), "reason": None,
+    }
+
+
+def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
+    """The single highest-ordinal revision file under `root` matching
+    `lineage`, per `marker`'s own declared `revision_prefix`/
+    `ordinal_digits` — never a pattern literal (`source-section-binding`
+    spec, `Requirement: Lineage Resolves To The Current Revision On Disk`;
+    design.md Decision D). The regex is composed as
+    `^{lineage}-{prefix}\\d{{digits,}}\\.md$`, so the ordinal capture group
+    admits any digit COUNT at or above the declared minimum — two files
+    whose ordinal-bearing suffix differs only in leading-zero padding
+    (e.g. a two-digit and a three-digit spelling of the same prefix) parse
+    to the SAME integer ordinal.
+
+    Candidates are grouped by their PARSED integer ordinal; the winner is
+    the highest one. Gaps between ordinals are irrelevant (an intermediate
+    ordinal missing entirely never blocks resolving a later one). Refuses
+    `SOURCE_LINEAGE_UNRESOLVED` naming the lineage and the root on ZERO
+    candidates, and naming the lineage, the root, and every tied candidate
+    when the highest ordinal is shared by more than one file (two
+    spellings of the same ordinal) — covering both "did not resolve to
+    exactly one revision" cases under this one code, never a seventh."""
+    prefix = marker["revision_prefix"]
+    digits = marker["ordinal_digits"]
+    pattern = re.compile(rf"^{re.escape(lineage)}-{re.escape(prefix)}(\d{{{digits},}})\.md$")
+    candidates = []
+    for entry in sorted(root.glob("*.md")):
+        match = pattern.match(entry.name)
+        if match:
+            candidates.append((int(match.group(1)), entry))
+    if not candidates:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} resolved to no file under {root} "
+            f"(pattern {pattern.pattern!r})",
+        )
+    max_ordinal = max(ordinal for ordinal, _path in candidates)
+    winners = sorted(path.name for ordinal, path in candidates if ordinal == max_ordinal)
+    if len(winners) > 1:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} under {root} ties at ordinal {max_ordinal}: {winners}",
+        )
+    return root / winners[0]
+
+
+def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
+    """The IDENTITY resolution route for a `SourceRootKind.INGESTED` root
+    (U2c ruling, `the-requirement-names-the-section-that-feeds-it`,
+    Structural consequence): an ingested paper is not a revisioned
+    lineage — a published paper gets no `r22` — so `document.lineage`
+    names the paper's own stable id directly, and resolution is PRESENCE
+    of `evidence_dir/<lineage>/<lineage>.md`, never a marker-driven
+    ordinal search.
+
+    Reuses `paper_guidance.ingested_papers` verbatim (asked for
+    `evidence_dir`'s own PARENT registry, filtered to `evidence_dir.
+    name`'s own entries) rather than a second directory walk, then
+    matches by exact folder-name equality against `lineage`. Refuses
+    `SOURCE_LINEAGE_UNRESOLVED` — the SAME code a PROSE-kind root's
+    `resolve_lineage` raises above, never a new one — when that filter
+    yields anything other than exactly one candidate: zero (not yet
+    ingested, or a different lineage named) and more than one
+    (structurally unreachable on a real filesystem, where two
+    directories cannot share one name, but checked explicitly rather
+    than assumed) both refuse under this one shared code, covering "this
+    lineage did not resolve to exactly one document" the same way
+    `resolve_lineage`'s own docstring already generalizes its two cases.
+    """
+    papers = paper_guidance.ingested_papers(evidence_dir.parent).get(evidence_dir.name, [])
+    candidates = [Path(entry["markdown"]) for entry in papers if entry["folder"] == lineage]
+    if len(candidates) != 1:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} resolved to {len(candidates)} ingested document(s) under "
+            f"{evidence_dir} (expected exactly one)",
+        )
+    return candidates[0]
+
+
+def is_bindable_fact(fact_id: str) -> bool:
+    """`source-section-binding` spec, `Requirement: Bindable Facts Are
+    Derived, Never Listed`: a fact is bindable **iff** it is a key of
+    `FACT_SOURCE_ROOT` -- membership in this mapping is the sole and only
+    test. The four PRODUCED facts and the structural `skeleton` fact are
+    excluded by their absence from `FACT_SOURCE_ROOT`, not by a second,
+    hand-maintained list naming them here or anywhere under `scripts/`.
+    Extending `FACT_SOURCE_ROOT` with a new fact/root pair widens
+    bindability with zero edit to this function (proven by
+    `tests/test_paper_decisions.py::BindableFactDerivationTests
+    .test_a_sixth_root_widens_bindability_with_zero_engine_edit`)."""
+    return fact_id in FACT_SOURCE_ROOT
 
 
 def source_available(root: Path) -> bool:
@@ -682,7 +1273,8 @@ def reconcile_observation_report(report: dict, measured: dict) -> list:
     it did not.
     """
     disagreements = []
-    for fact_id, root_name in FACT_SOURCE_ROOT.items():
+    for fact_id, root in FACT_SOURCE_ROOT.items():
+        root_name = root.name
         if root_name not in measured or not measured[root_name]:
             continue
         entry = report.get(fact_id) or {}

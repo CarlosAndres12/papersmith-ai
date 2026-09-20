@@ -18,10 +18,16 @@ parses, and an entry missing `value` or `source`, carrying a `null`
 `source`, or carrying an unknown key, MUST refuse `MALFORMED_HEADER` naming
 the missing or unknown key. A `requires_facts` entry MAY additionally carry
 `document: {lineage, section}` — the source document's lineage and the exact
-title text of the section within that document that feeds this entry. Both
-keys are required together whenever `document` is present: an entry's
-`document` object missing `lineage` or `section`, carrying a `null` value
-for either, or carrying a key outside `{lineage, section}` MUST refuse
+title text of the section (or sections) within that document that feed this
+entry. `section` MUST be either a non-empty string (one title) or a
+non-empty list of unique non-empty-string titles (more than one section
+feeding the same entry); an empty list, a list carrying a repeated title, or
+a list entry that is not a non-empty string all refuse `MALFORMED_HEADER`
+the same way a malformed single title does. A single string remains valid on
+its own — the list shape is never forced onto every binding. Both `lineage`
+and `section` are required together whenever `document` is present: an
+entry's `document` object missing `lineage` or `section`, carrying a `null`
+value for either, or carrying a key outside `{lineage, section}` MUST refuse
 `MALFORMED_HEADER` naming the missing or unknown key. `document` is never
 accepted on a `requires_declarations` entry — a declaration is
 operator-supplied, never document-rooted — and one carrying `document` MUST
@@ -129,6 +135,27 @@ MUST carry one is a corpus-level obligation, not a schema-level one —
 #### Scenario: A malformed document binding refuses
 
 - GIVEN a `requires_facts` entry's `document` object with no `section` key
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `section`
+
+#### Scenario: A document binding naming more than one section parses
+
+- GIVEN a `requires_facts` entry declaring `document: {lineage:
+  research-concept, section: ["1. Fundamentos de métodos de kernel", "2.
+  Estimación de la entropía de Rényi basada en kernels"]}`
+- WHEN the reader parses it
+- THEN it accepts the entry with no refusal
+
+#### Scenario: An empty section list refuses
+
+- GIVEN a `requires_facts` entry's `document.section` is `[]`
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `section`
+
+#### Scenario: A section list carrying a repeated title refuses
+
+- GIVEN a `requires_facts` entry's `document.section` is a list naming the
+  same title twice
 - WHEN the reader parses it
 - THEN it refuses `MALFORMED_HEADER` naming `section`
 

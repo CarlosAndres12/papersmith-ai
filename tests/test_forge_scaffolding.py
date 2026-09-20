@@ -4,11 +4,11 @@ The rule the operator states for the whole forge is that **a skill creates the
 folders it needs, the structure travels to GitHub and the content never does**.
 `.gitignore` already enforces the second half for `guidance/` (`guidance/*/*`
 with a `!guidance/*/.gitkeep` escape). Nothing enforced the first half, and it
-was broken: `guidance/data-paper/` existed on this disk, is declared
-`required: true` by `experimental-deliberation`'s profile, and had no
-`.gitkeep` -- so a fresh clone arrived without the one source that domain
-cannot draft without, while the *optional* `guidance/paper-guide/` shipped
-fine. `guidance/area-benchmark/` did not exist at all.
+was broken: this repository's own evidence-classed `guidance/` folder existed
+on this disk, is declared `required: true` by `experimental-deliberation`'s
+profile, and had no `.gitkeep` -- so a fresh clone arrived without the one
+source that domain cannot draft without, while an *optional* style-reference
+folder shipped fine. A third declared folder did not exist at all.
 
 Both sides are derived, neither is listed here:
 

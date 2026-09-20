@@ -578,7 +578,7 @@ def position_state(target: Path, name: str, evidence: dict,
     `position["sequence"]` on a target that never reached a gate must not
     special-case the one status where the key would otherwise be missing.
     This branch's own return is a bare Name, not a dict literal, so
-    `returned_keys` (test_proposal_implementation.py:230-232) cannot see
+    `returned_keys` (test_proposal_implementation.py:240-242) cannot see
     it at all -- parity here is kept by hand, not by that lock.
 
     Reported and never gating, exactly like `agreements_state` beside it: a

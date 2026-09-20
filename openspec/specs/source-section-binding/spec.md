@@ -7,13 +7,23 @@ prose asks for a fact (`requirement-transcription`). They have never proved
 which part of the real source document answers it. This capability adds
 that second half: an optional `document: {lineage, section}` binding
 (`section-contract`) naming a document's lineage and the title of the
-section within it that feeds one entry. It owns which facts a binding may
-name (derived, never listed), lineage resolution to the current revision on
-disk off a per-root `.paper-writing.json` marker's own declared revision
-grammar, section existence and ambiguity by title, the report an unmeasured
-root produces versus the refusal a document-rooted but undeclared or
-malformed marker produces, and the property that a version bump whose bound
-titles survive costs no edit anywhere.
+section — or, when more than one section feeds the same entry, the titles
+of the sections — within it that feed one entry. It owns which facts a
+binding may name (derived, never listed), lineage resolution to the current
+revision on disk off a per-root `.paper-writing.json` marker's own declared
+revision grammar, section existence and ambiguity by title (checked
+independently per title when a binding names more than one), the report an
+unmeasured root produces versus the refusal a document-rooted but
+undeclared or malformed marker produces, the property that a version
+bump whose bound titles survive costs no edit anywhere, and the report a
+bindable-but-not-yet-decided binding produces (`undecided`) versus the
+refusal that same binding produces the one time drafting actually depends
+on it (`write`). A binding itself is answered by USING the skill — a
+dedicated recording verb, never a hand edit to a shipped section contract
+and never an agent inferring one from conversation prose — and the corpus
+resolves a fact's binding from whichever of two sources (the header's own
+shape, or a recorded one) names it, refusing when both name it and
+disagree.
 
 ## Requirements
 
@@ -46,11 +56,25 @@ by a special case naming them.
 - THEN it reports bindable, proving the test is membership in the mapping
   and not a hand-maintained list elsewhere
 
-### Requirement: A Bindable Fact With No Binding Refuses
+### Requirement: A Bindable Fact With No Binding Is Undecided, And Refuses Only At `write`
 
-A `requires_facts` entry naming a bindable fact but carrying no `document`
-half MUST refuse `SECTION_BINDING_ABSENT` naming the owning block and the
-fact id.
+A `requires_facts` entry naming a bindable fact whose source root is
+MEASURED but carrying no `document` half is **undecided**: assembling the
+corpus for a read-only purpose MUST NOT refuse for it, and MUST instead
+report it — the same shape `source_roots` already uses to report an
+unmeasured root, never a second, invented reporting convention. A bindable
+entry left undecided MUST refuse `SECTION_BINDING_ABSENT` naming the owning
+block and the fact id **only** at the one moment that undecided state would
+otherwise let a false claim through: `write` assembling the corpus for the
+block it is about to draft (`writing-orchestration`, `Requirement: Section
+Binding Resolution Gates write`). No other verb — read-only or otherwise —
+may turn an undecided binding into this refusal.
+
+An apply agent facing a genuinely undecided binding MUST NOT invent one to
+keep the corpus assemblable: reporting `undecided` at read-time, refusing
+only at `write`, exists precisely so nothing forces that invention. The
+obligation itself stays unconditional — it never consults a block's own
+`optional` flag — only WHEN it can fire changed.
 
 #### Scenario: A bound bindable entry parses
 
@@ -58,11 +82,98 @@ fact id.
 - WHEN the corpus is assembled
 - THEN it accepts the entry, pending its own resolution checks below
 
-#### Scenario: An unbound bindable entry refuses
+#### Scenario: An unbound bindable entry is reported undecided, not refused
 
-- GIVEN a `requires_facts` entry naming `formulation` with no `document` half
+- GIVEN a `requires_facts` entry naming `formulation` with no `document`
+  half, under a source root the corpus reports MEASURED
+- WHEN the corpus is assembled for a read-only purpose
+- THEN it accepts the entry with no refusal, and reports it `undecided`,
+  naming the block, the fact id, and the root
+
+#### Scenario: The same unbound entry refuses only when `write` assembles it
+
+- GIVEN the same unbound bindable entry
+- WHEN `write` assembles the corpus for the block that entry belongs to
+- THEN it refuses `SECTION_BINDING_ABSENT` naming the block and
+  `formulation`
+
+### Requirement: A Binding Is Recorded By Using The Skill, Never By Editing A Shipped File
+
+An operator answers `SECTION_BINDING_ABSENT` by recording a binding through
+a dedicated verb (`bind`) — naming the block, the fact, the source
+document's lineage, and one or more section titles — never by hand-editing
+a shipped section contract under `sections/*.md`, and never by an agent
+inferring a binding from conversation prose. The recorded binding is
+stored where the paper's own decisions already live, never in a file that
+ships with the forge: `sections/*.md` MUST NOT carry a transcribed
+`document` binding as a mechanism for satisfying this obligation. The verb
+MUST refuse to record an empty lineage or an empty set of section titles,
+and MUST refuse to record a binding for a fact that is not bindable
+(`Requirement: Bindable Facts Are Derived, Never Listed`) — recording an
+answer to a question that was never asked is itself a defect. A binding,
+once recorded, MUST be reversible: reopening it clears its fixed state
+without touching any other recorded binding.
+
+#### Scenario: An operator records a binding through the skill
+
+- GIVEN a bindable, measured entry with no binding yet
+- WHEN an operator names the block, the fact, a lineage, and one or more
+  section titles through the recording verb
+- THEN the binding is recorded, and it is not written to any file under
+  `sections/`
+
+#### Scenario: Recording with no section title refuses
+
+- GIVEN the recording verb invoked with no section title
+- WHEN it runs
+- THEN it refuses, naming that a section title is required
+
+#### Scenario: Recording with no lineage refuses
+
+- GIVEN the recording verb invoked with no lineage
+- WHEN it runs
+- THEN it refuses, naming that a lineage is required
+
+#### Scenario: Recording a binding for a non-bindable fact refuses
+
+- GIVEN a fact absent from `FACT_SOURCE_ROOT` (e.g. a produced fact)
+- WHEN the recording verb is invoked naming that fact
+- THEN it refuses, naming that the fact is not bindable
+
+#### Scenario: Reopening one binding leaves a sibling binding untouched
+
+- GIVEN two distinct recorded bindings
+- WHEN one is reopened
+- THEN the other still resolves exactly as it did before
+
+### Requirement: A Recorded Binding And A Header-Declared Binding Must Agree
+
+The corpus resolves a `requires_facts` entry's binding from two possible
+sources: the contract header's own `document` half (`section-contract`),
+still a validated, parseable shape, and a binding recorded through the
+skill (the requirement above). A fact named by only one source uses that
+source. A fact named by BOTH sources MUST name the identical lineage and
+the identical set of section titles, or the corpus MUST refuse, naming the
+block, the fact, and both sides' own values verbatim — an agreement is
+never assumed by precedence, and a disagreement between two sources both
+claiming to answer the same question is surfaced, never silently resolved
+in favor of either one.
+
+#### Scenario: A header binding and a recorded binding that agree are not a conflict
+
+- GIVEN a `requires_facts` entry whose header names `document: {lineage,
+  section}`, and a recorded binding naming the identical lineage and
+  section for the same block and fact
 - WHEN the corpus is assembled
-- THEN it refuses `SECTION_BINDING_ABSENT` naming the block and `formulation`
+- THEN it accepts the entry with no refusal
+
+#### Scenario: A header binding and a recorded binding that disagree refuse
+
+- GIVEN the same entry, but the recorded binding names a different section
+  title than the header's own `document.section`
+- WHEN the corpus is assembled
+- THEN it refuses, naming the block, the fact, and both the header's own
+  value and the recorded value
 
 ### Requirement: Lineage Resolves To The Current Revision On Disk
 
@@ -238,6 +349,40 @@ MUST succeed against the new revision with no edit to any existing binding.
   and `3.2`, so the exact bound title no longer exists as a heading
 - THEN the corpus assembles against `r22` and refuses `SECTION_NOT_IN_SOURCE`
   naming `mm-proposal`'s binding
+
+### Requirement: A Binding May Name More Than One Section
+
+`document.section` MAY name more than one section of the same lineage: a
+contract's own prose block may draw from several sections of the source
+document (for example, a block that borrows both the foundational theory
+sections and the proposal sections). Each named title is resolved and
+checked independently, exactly as a single-title binding is: a title
+matching zero headings MUST refuse `SECTION_NOT_IN_SOURCE` naming that
+title specifically, and a title matching two or more headings MUST refuse
+`SECTION_TITLE_AMBIGUOUS` naming that title specifically — a refusal MUST
+name WHICH title failed, never merely the owning block, and a resolvable
+title MUST NOT be masked by a sibling title's own failure. The number of
+blocks a contract declares MUST NOT be driven by how many sections a
+source document currently has: a binding names as many sections as feed
+it, and that block count never moves just because a later revision of the
+source document grows or shrinks its own section count.
+
+#### Scenario: A binding naming two sections resolves both
+
+- GIVEN a binding naming lineage `research-concept` and sections `["1.
+  Fundamentos de métodos de kernel", "2. Estimación de la entropía de
+  Rényi basada en kernels"]`, both present as headings in the resolved
+  revision
+- WHEN the corpus is assembled
+- THEN it accepts the entry with no refusal
+
+#### Scenario: One missing title among several refuses by naming only that title
+
+- GIVEN the same binding, but the resolved revision no longer carries "2.
+  Estimación de la entropía de Rényi basada en kernels" as a heading
+- WHEN the corpus is assembled
+- THEN it refuses `SECTION_NOT_IN_SOURCE` naming that missing title, and
+  the detail does not name the sibling title that still resolves
 
 ### Requirement: An Unmeasured Root Is Reported, Never Silently Passed
 

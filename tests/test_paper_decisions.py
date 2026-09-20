@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 import uuid
 from pathlib import Path
 
@@ -290,6 +291,25 @@ class GuidanceRegistryTests(unittest.TestCase):
             paper_guidance.read_registry(self.guidance_dir)
         self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
 
+    def test_a_source_root_shaped_marker_refuses_as_an_unknown_key(self) -> None:
+        """`the-requirement-names-the-section-that-feeds-it`,
+        `source-section-binding` spec, `Requirement: The Marker Grammar Is
+        Validated, And Disjoint From guidance/'s`: `guidance/`'s own
+        reader (`_MARKER_ALLOWED_KEYS = ("class",)`) MUST NOT silently
+        accept a source-root-shaped marker (`{"revisions": {...}}`) --
+        regression proof only, no production edit expected here, since
+        `_MARKER_ALLOWED_KEYS` already excludes `revisions`."""
+        self._write_marker(
+            "prior-papers",
+            {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
+        self.assertIn("revisions", ctx.exception.detail)
+
     def test_marker_that_is_not_an_object_refuses_malformed(self) -> None:
         target = self.guidance_dir / "prior-papers"
         target.mkdir(parents=True)
@@ -368,7 +388,7 @@ class SourceMdClassificationTests(unittest.TestCase):
         )
 
     def test_a_path_under_an_evidence_folder_classifies_evidence(self) -> None:
-        folder = self._write_marker("data-paper", "evidence")
+        folder = self._write_marker("source-manuscript", "evidence")
         paper_dir = folder / "paper1" / "paper1.md"
         paper_dir.parent.mkdir(parents=True)
         paper_dir.write_text("body", encoding="utf-8")
@@ -458,7 +478,7 @@ class ValidateSourceMdGuardTests(unittest.TestCase):
         self.assertIn(str(source_md), ctx.exception.detail)
 
     def test_a_quote_from_an_evidence_source_is_accepted(self) -> None:
-        folder = self._write_marker("data-paper", "evidence")
+        folder = self._write_marker("source-manuscript", "evidence")
         source_md = self._write_source(folder, "scientific data")
 
         result = paper_cli.cmd_validate(self._args(source_md=source_md, quote="scientific data"))
@@ -574,7 +594,7 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         must still find. `Path.iterdir()` never consults `.gitignore` at
         all, so this is true regardless; the point of the fixture is to
         make that explicit rather than assumed."""
-        self._write_paper("data-paper", "s41597-026-06758-7", extra_files=("_page_0_Picture_2.jpeg",))
+        self._write_paper("source-manuscript", "q77213-004-11029-2", extra_files=("_page_0_Picture_2.jpeg",))
         self._write_paper("paper-guide", "brainsci-16-00363")
         self._write_paper("paper-guide", "Li_2026_Prog._Biomed._Eng._8_022013")
         (self.guidance_dir / "area-benchmark").mkdir()
@@ -585,7 +605,7 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         registry = paper_guidance.ingested_papers(self.guidance_dir)
 
         self.assertEqual(
-            {folder["folder"] for folder in registry["data-paper"]}, {"s41597-026-06758-7"},
+            {folder["folder"] for folder in registry["source-manuscript"]}, {"q77213-004-11029-2"},
         )
         self.assertEqual(
             {folder["folder"] for folder in registry["paper-guide"]},
@@ -607,14 +627,26 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         self.assertEqual(registry, {})
 
     def test_against_the_real_shipped_guidance_tree(self) -> None:
-        """The real corpus, measured 2026-09-18 (not the tasks artifact's
-        own stale forecast of 3 roots): 4 tracked root folders
-        (`data-paper`, `paper-guide`, `reference-papers`, `area-benchmark`),
-        8 ingested papers total, `area-benchmark` genuinely empty. `guidance/`
-        contents are `.gitignore`d (`guidance/*/*`); this reads the real,
-        checked-out tree directly, proving the reader is gitignore-blind
-        against real ignored bytes, not only a synthetic mirror of the
-        pattern."""
+        """The PROPERTY, not this checkout's own particular counts (U3d
+        left this test pinned to `len(registry["data-paper"]) == 1` /
+        `total_papers == 8`, measured against ONE machine's ambient,
+        gitignored content on ONE day -- `git ls-files guidance/` shows
+        only five `.gitkeep` files travel, so a fresh clone reports every
+        root empty and every one of those counts was false on that
+        checkout). The four ROOT FOLDERS themselves ARE tracked
+        (`guidance/<root>/.gitkeep`), so their names are the one part of
+        this assertion that never depends on ambient local content.
+
+        The property this test exists to hold: `ingested_papers` must
+        report the SAME papers a gitignore-blind walk (`Path.iterdir()`,
+        never `fd`/`rg`) finds on THIS disk right now -- independently
+        re-derived here, against the real, checked-out tree, so a
+        regression that silently traded `Path.iterdir()` for gitignore-
+        aware tooling would still be caught: it would report empty (or
+        undercounted) roots while this test's OWN gitignore-blind count
+        disagrees. True on every checkout, whether the gitignored
+        `guidance/*/*` content is fully populated or (a fresh clone)
+        entirely absent beyond its own tracked `.gitkeep`."""
         real_guidance_dir = paper_guidance.resolve_guidance_dir(
             None, forge_root=FORGE_ROOT,
         )
@@ -623,12 +655,16 @@ class GuidanceIngestedPapersTests(unittest.TestCase):
         self.assertEqual(
             set(registry), {"data-paper", "paper-guide", "reference-papers", "area-benchmark"},
         )
-        self.assertEqual(registry["area-benchmark"], [])
-        self.assertEqual(len(registry["data-paper"]), 1)
-        self.assertEqual(len(registry["paper-guide"]), 2)
-        self.assertEqual(len(registry["reference-papers"]), 5)
-        total_papers = sum(len(papers) for papers in registry.values())
-        self.assertEqual(total_papers, 8)
+        for root_name, papers in registry.items():
+            root_dir = real_guidance_dir / root_name
+            expected = sorted(
+                entry.name for entry in root_dir.iterdir()
+                if entry.is_dir() and (entry / f"{entry.name}.md").is_file()
+            )
+            self.assertEqual(
+                sorted(paper["folder"] for paper in papers), expected,
+                f"{root_name!r}: ingested_papers must match a gitignore-blind walk taken now",
+            )
 
 
 class SectionCitationStatusTests(unittest.TestCase):
@@ -915,6 +951,287 @@ class DeclarationsTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
 
         self.assertEqual(tex_path.read_bytes(), corrupted, "a refused write must leave disk untouched")
+
+
+class BindingRecordTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e ruling
+    (design.md Decision J): the verb that RECORDS a `source-section-
+    binding` -- `bind_section` -- and its own read (`read_bindings`) and
+    reopen (`reopen_binding`) counterparts, all through the SAME
+    `declarations` region `set_fact`/`set_declaration` already write, a
+    THIRD record kind (`binding`) never sharing `fact`'s or
+    `declaration`'s own field name."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_a_recorded_binding_is_read_back(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(
+            bindings["a.only"]["formulation"],
+            {"lineage": "lumen-thesis", "sections": ("1. Fundamentos",)},
+        )
+
+    def test_a_single_string_section_is_accepted_and_read_back_as_a_tuple(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            "1. Fundamentos", clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(bindings["a.only"]["formulation"]["sections"], ("1. Fundamentos",))
+
+    def test_two_facts_on_the_same_block_are_recorded_independently(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "dataset", "q77213-004-11029-2",
+            ("Dataset",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(set(bindings["a.only"]), {"formulation", "dataset"})
+
+    def test_the_same_fact_bound_on_two_blocks_is_recorded_independently(self) -> None:
+        """The worked example this whole change exists for:
+        `mm-borrowed-machinery` and `mm-proposal` both require
+        `formulation` but bind different sections."""
+        paper_declarations.bind_section(
+            self.paper_dir, "materials-and-methods.mm-borrowed-machinery", "formulation",
+            "lumen-thesis", ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "materials-and-methods.mm-proposal", "formulation",
+            "lumen-thesis", ("3. Formulacion",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+
+        self.assertEqual(
+            bindings["materials-and-methods.mm-borrowed-machinery"]["formulation"]["sections"],
+            ("1. Fundamentos",),
+        )
+        self.assertEqual(
+            bindings["materials-and-methods.mm-proposal"]["formulation"]["sections"],
+            ("3. Formulacion",),
+        )
+
+    def test_an_empty_sections_tuple_refuses_binding_sections_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "lumen-thesis", (), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_SECTIONS_REQUIRED")
+
+    def test_an_empty_lineage_refuses_binding_lineage_required(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "", ("1. Intro",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_LINEAGE_REQUIRED")
+
+    def test_binding_a_produced_fact_refuses_unknown_fact(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "not-a-fact", "lumen-thesis", ("1. Intro",),
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_binding_a_non_bindable_fact_refuses_fact_not_bindable(self) -> None:
+        """`gap` is a produced fact -- absent from `FACT_SOURCE_ROOT` by
+        construction, so it can never be document-bound (`source-section-
+        binding` spec, `Requirement: Bindable Facts Are Derived, Never
+        Listed`)."""
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "gap", "lumen-thesis", ("1. Intro",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "BINDING_FACT_NOT_BINDABLE")
+        self.assertIn("gap", ctx.exception.detail)
+
+    def test_rebinding_the_same_block_and_fact_without_reopen_refuses(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.only", "formulation", "lumen-thesis",
+                ("3. Formulacion",), clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATION_FIXED")
+
+    def test_reopen_then_bind_admits_a_new_lineage(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.reopen_binding(self.paper_dir, "a.only", "formulation", clock=self._clock)
+
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("3. Formulacion",), clock=self._clock,
+        )
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+        self.assertEqual(bindings["a.only"]["formulation"]["sections"], ("3. Formulacion",))
+
+    def test_reopening_a_never_bound_pair_is_harmless(self) -> None:
+        result = paper_declarations.reopen_binding(
+            self.paper_dir, "a.never", "formulation", clock=self._clock,
+        )
+        self.assertEqual(result["block"], "a.never")
+        self.assertEqual(result["fact"], "formulation")
+
+    def test_reopening_one_pair_leaves_a_sibling_binding_untouched(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        paper_declarations.bind_section(
+            self.paper_dir, "a.other", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+
+        paper_declarations.reopen_binding(self.paper_dir, "a.only", "formulation", clock=self._clock)
+
+        bindings = paper_declarations.read_bindings(self.paper_dir)
+        self.assertNotIn("a.only", bindings)
+        self.assertEqual(bindings["a.other"]["formulation"]["sections"], ("1. Fundamentos",))
+
+    def test_read_bindings_reports_empty_before_paper_is_scaffolded(self) -> None:
+        """A corpus must be assemblable, read-only, before `paper/` even
+        exists -- the SAME tolerance `Corpus.undecided_bindings` already
+        extends to a fact with no binding at all."""
+        unscaffolded = self.forge_root / "no-such-paper"
+
+        self.assertEqual(paper_declarations.read_bindings(unscaffolded), {})
+
+    def test_a_hand_edited_declarations_region_still_refuses_a_new_binding(self) -> None:
+        paper_declarations.bind_section(
+            self.paper_dir, "a.only", "formulation", "lumen-thesis",
+            ("1. Fundamentos",), clock=self._clock,
+        )
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"lumen", b"lumin", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.bind_section(
+                self.paper_dir, "a.other", "dataset", "q77213-004-11029-2", ("Dataset",),
+                clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_bindings(self.paper_dir)
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+
+class DescribeBindingCandidatesTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U3e: what `write`'s
+    own improved `SECTION_BINDING_ABSENT` refusal shows an operator --
+    every lineage a root carries RIGHT NOW, its own current revision (or,
+    for an INGESTED root, its own paper), and the section titles read from
+    it at call time. Nothing here is cached or hand-listed."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def _marker(self, root: Path, prefix: str = "r", digits: int = 2) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def test_a_marked_root_reports_the_current_revision_per_lineage(self) -> None:
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r20.md").write_text("# Old\n", encoding="utf-8")
+        (proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+        (proposals / "other-thesis-r05.md").write_text("# Only heading\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        self.assertEqual(
+            candidates,
+            {
+                "lumen-thesis": {
+                    "revision": "lumen-thesis-r21.md",
+                    "sections": ["1. Intro", "3. Something"],
+                },
+                "other-thesis": {"revision": "other-thesis-r05.md", "sections": ["Only heading"]},
+            },
+        )
+
+    def test_a_root_with_no_marker_yet_reports_every_file_by_its_own_stem(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE),
+        )
+
+        self.assertEqual(
+            candidates,
+            {"lumen-thesis-r21": {"revision": "lumen-thesis-r21.md", "sections": ["1. Intro"]}},
+        )
+
+    def test_an_ingested_root_reports_every_paper_as_its_own_lineage(self) -> None:
+        guidance = self.base / "guidance" / "source-manuscript"
+        paper_dir = guidance / "q77213-004-11029-2"
+        paper_dir.mkdir(parents=True)
+        (paper_dir / "q77213-004-11029-2.md").write_text("# Dataset\n", encoding="utf-8")
+        status = {"state": "document-rooted", "path": guidance, "documents": 1, "reason": None}
+
+        candidates = paper_declarations.describe_binding_candidates(
+            status, paper_declarations.SourceRoot("evidence", paper_declarations.SourceRootKind.INGESTED),
+        )
+
+        self.assertEqual(
+            candidates,
+            {"q77213-004-11029-2": {"revision": "q77213-004-11029-2.md", "sections": ["Dataset"]}},
+        )
 
 
 class ProducedFactUndeclarableTests(unittest.TestCase):
@@ -2305,6 +2622,96 @@ class SourceAvailableTests(unittest.TestCase):
         self.assertTrue(paper_declarations.source_available(target))
 
 
+class BindableFactDerivationTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: Bindable Facts Are
+    Derived, Never Listed`: a fact is bindable iff it is a key of
+    `FACT_SOURCE_ROOT` -- membership in the mapping is the sole test, never
+    a hand-maintained list of fact ids anywhere under `scripts/`."""
+
+    def test_a_document_rooted_fact_is_bindable(self) -> None:
+        self.assertTrue(paper_declarations.is_bindable_fact("formulation"))
+
+    def test_a_produced_fact_is_never_bindable(self) -> None:
+        self.assertFalse(paper_declarations.is_bindable_fact("gap"))
+
+    def test_the_structural_fact_is_never_bindable(self) -> None:
+        self.assertFalse(paper_declarations.is_bindable_fact("skeleton"))
+
+    def test_a_sixth_root_widens_bindability_with_zero_engine_edit(self) -> None:
+        """The spec's own mutation scenario: extending `FACT_SOURCE_ROOT`
+        with a sixth fact/root pair (via `patch.dict`, never a source
+        edit) makes that sixth fact bindable, proving the test is
+        membership in the mapping and not a second, hand-maintained list."""
+        with unittest.mock.patch.dict(
+            paper_declarations.FACT_SOURCE_ROOT, {"a-sixth-fact": "a-sixth-root"}
+        ):
+            self.assertTrue(paper_declarations.is_bindable_fact("a-sixth-fact"))
+
+
+class SourceRootDeclaresItsKindTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U2b correctness
+    repair to `source-section-binding` spec's `Requirement: An Unmeasured
+    Root Is Reported, Never Silently Passed`: a `FACT_SOURCE_ROOT` value
+    is one `SourceRoot(name, kind)` record, never a bare string -- and
+    `kind` carries no default, so a sixth fact/root pair that omits it
+    fails immediately rather than silently defaulting to `PROSE` and
+    becoming spuriously section-bindable."""
+
+    def test_kind_carries_no_default_and_must_be_stated(self) -> None:
+        with self.assertRaises(TypeError):
+            paper_declarations.SourceRoot("a-sixth-root")  # type: ignore[call-arg]
+
+    def test_every_shipped_root_states_its_kind(self) -> None:
+        for fact_id, root in paper_declarations.FACT_SOURCE_ROOT.items():
+            self.assertIsInstance(
+                root, paper_declarations.SourceRoot, f"{fact_id!r} is not a SourceRoot record"
+            )
+            self.assertIn(root.kind, (paper_declarations.SourceRootKind.PROSE,
+                                       paper_declarations.SourceRootKind.REPOSITORY,
+                                       paper_declarations.SourceRootKind.INGESTED))
+
+    def test_implementation_and_results_are_repository_kind_not_prose(self) -> None:
+        """The exact defect: `implementation`/`results` are read by
+        RUNNING a target repository, never by reading a document's
+        headings -- so both must be `REPOSITORY`, never `PROSE`."""
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["implementation"].kind,
+            paper_declarations.SourceRootKind.REPOSITORY,
+        )
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["results"].kind,
+            paper_declarations.SourceRootKind.REPOSITORY,
+        )
+
+    def test_formulation_and_experimental_design_stay_prose(self) -> None:
+        for fact_id in ("formulation", "experimental-design"):
+            self.assertEqual(
+                paper_declarations.FACT_SOURCE_ROOT[fact_id].kind,
+                paper_declarations.SourceRootKind.PROSE,
+            )
+
+    def test_dataset_is_ingested_kind_not_prose(self) -> None:
+        """U2c ruling (`the-requirement-names-the-section-that-feeds-it`):
+        `dataset` is sourced from the ingested evidence document, never
+        from `proposals/`'s mathematics lineage -- a published paper gets
+        no `r22`, so it cannot share `formulation`'s `PROSE` root."""
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["dataset"].kind,
+            paper_declarations.SourceRootKind.INGESTED,
+        )
+
+    def test_dataset_root_name_is_never_the_paper_specific_folder(self) -> None:
+        """Generality: the `SourceRoot.name` for `dataset` is a generic
+        vocabulary word this skill already uses (`paper_guidance.CLASSES`
+        holds `'evidence'`), never this paper's own guidance folder name
+        (asserted below, never repeated in this docstring -- the same
+        reason `ForgeVocabularyDerivedGuardTests` scans this suite's own
+        commentary) -- which root actually feeds it is DERIVED at
+        resolution time, never named here."""
+        self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "data-paper")
+        self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "proposals")
+
+
 class ReconcileObservationReportTests(unittest.TestCase):
     """`reconcile_observation_report`: the pure comparison `observe`'s new
     disk-truth gate is built on."""
@@ -2831,7 +3238,12 @@ class CouplingsMutationTests(unittest.TestCase):
 #: these 18 codes was read off the live roster on 2026-09-19 (`paper_cli.
 #: REFUSAL_CLASSIFICATION` held exactly 127 keys at the time), never
 #: guessed from the code's name alone -- the same discipline `REFUSAL_
-#: CLASSIFICATION` itself holds every reachable code to.
+#: CLASSIFICATION` itself holds every reachable code to. `MALFORMED_
+#: SOURCE_MARKER` was pinned separately on 2026-09-19, added by `the-
+#: requirement-names-the-section-that-feeds-it` U1+U2 (roster moved 133 ->
+#: 138) — design.md's own words: "qualifier-led, which the measured roster
+#: admits for exactly this family: the three existing `MALFORMED_*` codes
+#: are all shape checks, and so is this."
 #:
 #: - `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE`: an opposite-direction PAIR
 #:   naming the same relational condition (a `\\cite{}` key with no bib
@@ -2844,13 +3256,14 @@ class CouplingsMutationTests(unittest.TestCase):
 #:   subject) trails.
 #: - `SHARED_COMPONENT`: the predicate `SHARED` leads; `COMPONENT` trails.
 #: - `MALFORMED_FIGURE_OBLIGATION`, `MALFORMED_GUIDANCE_MARKER`,
-#:   `MALFORMED_HEADER`: the predicate `MALFORMED` leads. Contrast the six
-#:   OTHER shipped codes where `MALFORMED` correctly TRAILS a leading
-#:   subject and need no pin: `MARKER_MALFORMED`, `REGION_MALFORMED`,
-#:   `CONDITION_MALFORMED`, `COUPLINGS_RECORD_MALFORMED`, `CITE_KEY_
-#:   MALFORMED`, `BLOCK_ID_MALFORMED` -- the same WORD is subject-first in
-#:   six codes and predicate-first in these three, which is exactly why
-#:   this guard pins CODE NAMES, never a word-anywhere-in-the-code rule.
+#:   `MALFORMED_HEADER`, `MALFORMED_SOURCE_MARKER`: the predicate
+#:   `MALFORMED` leads. Contrast the six OTHER shipped codes where
+#:   `MALFORMED` correctly TRAILS a leading subject and need no pin:
+#:   `MARKER_MALFORMED`, `REGION_MALFORMED`, `CONDITION_MALFORMED`,
+#:   `COUPLINGS_RECORD_MALFORMED`, `CITE_KEY_MALFORMED`, `BLOCK_ID_
+#:   MALFORMED` -- the same WORD is subject-first in six codes and
+#:   predicate-first in these four, which is exactly why this guard pins
+#:   CODE NAMES, never a word-anywhere-in-the-code rule.
 #: - `NOT_AN_OBSERVABLE_FACT`: the negation `NOT` leads with no subject
 #:   noun ahead of it at all (contrast the many codes where `NOT` trails
 #:   the subject correctly, e.g. `ENTRY_NOT_INGESTED`, `PHASE_NOT_READY`).
@@ -2870,6 +3283,7 @@ _SUBJECT_FIRST_EXCEPTIONS = frozenset({
     "CITE_WITHOUT_ENTRY", "ENTRY_WITHOUT_CITE",
     "EXCLUDED_COMPONENT", "SHARED_COMPONENT",
     "MALFORMED_FIGURE_OBLIGATION", "MALFORMED_GUIDANCE_MARKER", "MALFORMED_HEADER",
+    "MALFORMED_SOURCE_MARKER",
     "NOT_AN_OBSERVABLE_FACT", "NOTHING_TO_ADOPT", "UNBOUND_SENTENCE",
     "UNKNOWN_CITATIONS_REGIME", "UNKNOWN_CONDITION_TYPE", "UNKNOWN_DECLARATION",
     "UNKNOWN_FACT", "UNKNOWN_GUIDANCE_CLASS", "UNKNOWN_MODE", "UNKNOWN_ROLE",
