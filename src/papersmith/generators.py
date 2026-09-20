@@ -17,6 +17,14 @@ from .errors import UserError
 from .render import render_package_template
 
 ALL_TOOLS = ("claude", "opencode", "pi", "antigravity")
+
+#: Each runtime's *static* entrypoints. Used to answer "is this a known runtime?"
+#: and, for a runtime a workspace does not declare, to name that runtime's
+#: surplus static files in ``audit``. It is deliberately not a complete
+#: rendered-path list and cannot become one: the dynamic
+#: ``.opencode/commands/<name>.md`` and ``.claude/commands/<name>.md`` files are
+#: one per discovered skill. :func:`render_files` is the single authority for
+#: the path set.
 TOOL_OUTPUTS = {
     "claude": ("CLAUDE.md",),
     "opencode": ("OPENCODE.md",),
@@ -36,14 +44,62 @@ def _frontmatter_value(value: str) -> str:
     return value
 
 
+def _is_dir(path: Path) -> bool:
+    """``Path.is_dir`` treating an unstatable path as absent.
+
+    ``Path.is_dir`` re-raises anything but ENOENT/ENOTDIR, so an unsearchable
+    directory (EACCES) would escape the fail-soft contract of the collectors
+    that call this.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def is_regular_file(path: Path) -> bool:
+    """True when ``path`` is a regular file the framework may read.
+
+    Two distinct hazards fold into ``False``. ``Path.is_file`` re-raises every
+    errno but ENOENT/ENOTDIR/EBADF/ELOOP, so on CPython 3.11-3.13 an unsearchable
+    directory (EACCES) would escape; and a non-regular but openable path — a FIFO,
+    or a symlink to a character device — would make a subsequent read block
+    forever. Both are "there is nothing to read here", not an error.
+
+    This is the gate every managed-path read must pass before it opens a file.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def collect_agents(workspace: Path) -> list[dict[str, str]]:
-    """Read only agent names/descriptions from the canonical front matter."""
+    """Read only agent names/descriptions from the canonical front matter.
+
+    Fail-soft by contract, like :func:`collect_commands`: this runs inside every
+    rendered-context derivation, so a damaged or unreadable agent file must not
+    break ``status`` or ``audit``. Such a file is reported by name with an empty
+    description instead of raising.
+    """
     agents: list[dict[str, str]] = []
     agent_dir = workspace / ".claude" / "agents"
-    if not agent_dir.is_dir():
+    if not _is_dir(agent_dir):
         return agents
-    for path in sorted(agent_dir.glob("*.md")):
-        lines = path.read_text(encoding="utf-8").splitlines()
+    try:
+        candidates = sorted(agent_dir.glob("*.md"))
+    except OSError:
+        return agents
+    for path in candidates:
+        if not is_regular_file(path):
+            agents.append({"name": path.stem, "description": ""})
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            agents.append({"name": path.stem, "description": ""})
+            continue
+        lines = text.splitlines()
         if not lines or lines[0].strip() != "---":
             agents.append({"name": path.stem, "description": ""})
             continue
@@ -101,11 +157,11 @@ def _skill_command(skill_dir: Path) -> tuple[dict[str, str] | None, str | None]:
     """Return ``(entry, None)`` or ``(None, skip_reason)`` — never raises."""
     name = skill_dir.name
     skill_file = skill_dir / "SKILL.md"
-    if not skill_file.is_file():
+    if not is_regular_file(skill_file):
         return None, "missing SKILL.md"
     try:
         lines = skill_file.read_text(encoding="utf-8").splitlines()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None, "unreadable SKILL.md"
     if not lines or lines[0].strip() != "---":
         return None, "malformed front matter"
@@ -142,11 +198,15 @@ def collect_commands(workspace: Path, *,
     """
     commands: list[dict[str, str]] = []
     skills_dir = workspace / "skills"
-    if not skills_dir.is_dir():
+    if not _is_dir(skills_dir):
+        return commands
+    try:
+        skill_dirs = sorted(skills_dir.iterdir())
+    except OSError:
         return commands
     skipped: list[str] = []
-    for skill_dir in sorted(skills_dir.iterdir()):
-        if not skill_dir.is_dir() or skill_dir.name.startswith("_"):
+    for skill_dir in skill_dirs:
+        if not _is_dir(skill_dir) or skill_dir.name.startswith("_"):
             continue
         entry, reason = _skill_command(skill_dir)
         if entry is None:
@@ -183,6 +243,32 @@ def context_for_workspace(workspace: Path) -> dict[str, Any]:
     }
 
 
+def workspace_tools(workspace: Path) -> tuple[str, ...]:
+    """The tool set a workspace declares. The only place this is decided.
+
+    Returns the validated ``active_tools`` from ``.papersmith/config.json``.
+    Fail-soft by contract: when that file is absent, unreadable, corrupt, or
+    missing/malformed in ``active_tools``, this resolver emits exactly one
+    aggregated :class:`UserWarning` and falls back to :data:`ALL_TOOLS`. It never
+    raises, so a consumer that only needs the declared set always proceeds.
+
+    That guarantee covers this resolver alone. ``status`` and ``audit`` still
+    require a valid workspace config and raise ``UserError`` without one, because
+    they read it independently of this fallback.
+    """
+    config_path = workspace / ".papersmith" / "config.json"
+    try:
+        return tuple(load_workspace_config(workspace)["active_tools"])
+    except (UserError, OSError, UnicodeDecodeError) as exc:
+        _warnings.warn(
+            f"could not read the declared tool set from {config_path} ({exc}); "
+            f"assuming all runtimes: {', '.join(ALL_TOOLS)}",
+            UserWarning,
+            stacklevel=2,
+        )
+        return ALL_TOOLS
+
+
 def _context_with_defaults(context: dict[str, Any]) -> dict[str, Any]:
     result = dict(context)
     result.setdefault("name", "paper-workspace")
@@ -192,13 +278,6 @@ def _context_with_defaults(context: dict[str, Any]) -> dict[str, Any]:
     result.setdefault("tools", ", ".join(ALL_TOOLS))
     result.setdefault("agents", "- No specialized agents have been installed yet.")
     return result
-
-
-def output_paths(tools: list[str] | tuple[str, ...] = ALL_TOOLS) -> list[str]:
-    paths = [".gitignore"]
-    for tool in tools:
-        paths.extend(TOOL_OUTPUTS[tool])
-    return list(dict.fromkeys(paths))
 
 
 def render_files(workspace: Path, context: dict[str, Any] | None = None,
@@ -260,6 +339,6 @@ def check_generated(workspace: Path, context: dict[str, Any] | None = None,
     drifted: list[str] = []
     for relpath, content in render_files(workspace, context, tools, warnings=warnings).items():
         path = workspace / relpath
-        if not path.is_file() or path.read_bytes() != content.encode("utf-8"):
+        if not is_regular_file(path) or path.read_bytes() != content.encode("utf-8"):
             drifted.append(relpath)
     return drifted

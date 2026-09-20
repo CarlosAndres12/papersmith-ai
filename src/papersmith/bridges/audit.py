@@ -7,9 +7,41 @@ from pathlib import Path
 from ..core import manifest
 from ..core.exit_codes import DRIFT_ERROR, SUCCESS
 from ..errors import UserError
-from ..generators import check_generated, context_for_workspace
+from ..generators import (
+    ALL_TOOLS,
+    TOOL_OUTPUTS,
+    check_generated,
+    context_for_workspace,
+    is_regular_file,
+    workspace_tools,
+)
 from ..kit import resolve_and_validate
 from .python import emit_result, run_script
+
+#: Static entrypoints that postdate ``TOOL_OUTPUTS``. Kept beside the check so
+#: the surplus scan covers a runtime's whole static surface.
+_EXTRA_STATIC = {
+    "opencode": ("opencode.json", ".opencode/plugins/refuse-offpath-push.js"),
+}
+
+
+def _surplus_static_files(root: Path, active: tuple[str, ...]) -> list[str]:
+    """Static entrypoints owned by runtimes this workspace does not declare.
+
+    A workspace created with a wider tool set keeps those files: they are
+    ``reported`` here and never deleted. Dynamic outputs such as
+    ``.claude/commands/`` are deliberately excluded — a never-baselined command
+    file is user data, and a baselined one is handled by ``upgrade``'s orphan
+    rule.
+    """
+    found: list[str] = []
+    for tool in ALL_TOOLS:
+        if tool in active:
+            continue
+        for relpath in (*TOOL_OUTPUTS.get(tool, ()), *_EXTRA_STATIC.get(tool, ())):
+            if is_regular_file(root / relpath):
+                found.append(relpath)
+    return sorted(set(found))
 
 
 def execute(workspace: str | Path, *, check_drift: bool = False) -> int:
@@ -32,7 +64,11 @@ def execute(workspace: str | Path, *, check_drift: bool = False) -> int:
         return code
     if not check_drift:
         return SUCCESS
-    drift = check_generated(root, context_for_workspace(root))
+    # ``context_for_workspace`` raises on an absent/corrupt config, so a
+    # workspace that reaches the resolver below always has a valid one.
+    context = context_for_workspace(root)
+    active = workspace_tools(root)
+    drift = check_generated(root, context, active)
     stored = manifest.load_manifest(root)
     if stored is None:
         raise UserError(f"not a papersmith workspace: missing {root / '.papersmith/manifest.json'}")
@@ -42,11 +78,14 @@ def execute(workspace: str | Path, *, check_drift: bool = False) -> int:
         path for path in set(current) | set(stored["files"])
         if current.get(path) != stored["files"].get(path)
     })
-    if drift or manifest_drift:
+    surplus = _surplus_static_files(root, active)
+    if drift or manifest_drift or surplus:
         if drift:
             print("generator drift: " + ", ".join(drift))
         if manifest_drift:
             print("manifest drift: " + ", ".join(manifest_drift))
+        if surplus:
+            print("surplus: " + ", ".join(surplus))
         return DRIFT_ERROR
     print("drift: clean")
     return SUCCESS

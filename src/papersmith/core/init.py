@@ -169,7 +169,10 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
     (root / ".papersmith" / "version").write_text(version + "\n", encoding="utf-8")
     (root / ".papersmith" / "runs_ledger.jsonl").touch()
 
-    generated = apply_generated(root, context_for_workspace(root), ALL_TOOLS)
+    # Render exactly the declared tool set: the payload the CLI validated and
+    # stored above is the same set every later consumer resolves through
+    # ``generators.workspace_tools``.
+    generated = apply_generated(root, context_for_workspace(root), tools)
     warnings: list[str] = []
     if run_npm:
         warning = _run_npm_install(root)

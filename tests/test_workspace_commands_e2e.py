@@ -18,14 +18,20 @@ import contextlib
 import io
 import json
 import os
+import shutil
+import signal
 import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
 
+from papersmith.bridges import audit as audit_module
 from papersmith.cli import main
 from papersmith.core import ledger as run_ledger
+from papersmith.core import status as status_module
+from papersmith.core import upgrade as upgrade_module
 from papersmith.core.exit_codes import DRIFT_ERROR, SUCCESS, USER_ERROR
+from papersmith.errors import UserError
 
 from workspace_series import (
     FIXTURE_PDF,
@@ -235,6 +241,288 @@ class HarnessCommandProjectionTests(unittest.TestCase):
         rc, _, _ = capture(["upgrade", str(workspace)])
         self.assertEqual(rc, SUCCESS)
         self.assertEqual(command.read_bytes(), original)
+
+
+class RenderedSetLifecycleTests(unittest.TestCase):
+    """Change B: one resolver owns the tool set, ``render_files`` owns the paths.
+
+    The five acceptance criteria that describe lifecycle behaviour rather than
+    pure derivation live here. Their fixtures are deliberately written through
+    the real CLI so the declared set, the rendered set, the detected set and the
+    stored baseline are exercised end to end.
+    """
+
+    KIT_COMMAND_NAMES = HarnessCommandProjectionTests.COMMAND_NAMES
+    STATIC_ENTRYPOINTS = ("OPENCODE.md", "PI.md", ".antigravity/rules.md")
+
+    @staticmethod
+    def _init_subset(base: Path, tools: str) -> Path:
+        workspace = base / "subset"
+        rc = main(["init", str(workspace), "--tools", tools, "--remote", "local", "--no-npm"])
+        assert rc == SUCCESS, f"init failed with exit {rc}"
+        return workspace
+
+    def test_init_honours_a_subset_tool_selection(self) -> None:
+        """Criterion 3: a correctly scoped workspace has no drift and no surplus."""
+        workspace = self._init_subset(new_tmp(self), "claude")
+        self.assertTrue((workspace / "CLAUDE.md").is_file())
+        self.assertFalse((workspace / "OPENCODE.md").exists(),
+                         "init must render only the tool set it stored")
+        self.assertEqual(sorted(p.stem for p in (workspace / ".claude/commands").glob("*.md")),
+                         sorted(self.KIT_COMMAND_NAMES))
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("drift: clean", out)
+
+    def test_migration_keeps_static_entrypoints_and_names_them_as_surplus(self) -> None:
+        """Criterion 4: pre-Change-B subset workspaces are reported, never damaged."""
+        workspace = self._init_subset(new_tmp(self), "claude")
+        for relpath in self.STATIC_ENTRYPOINTS:
+            (workspace / relpath).write_text("pre-Change-B entrypoint\n", encoding="utf-8")
+
+        rc, _, _ = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, SUCCESS)
+        for relpath in self.STATIC_ENTRYPOINTS:
+            with self.subTest(relpath=relpath):
+                self.assertTrue((workspace / relpath).is_file(),
+                                "static entrypoints are never deleted")
+
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        for relpath in self.STATIC_ENTRYPOINTS:
+            with self.subTest(relpath=relpath):
+                self.assertIn(relpath, out)
+
+    def test_orphan_removal_is_baselined_dynamic_paths_only(self) -> None:
+        """Criteria 5 and 6: the M1 case, plus its data-loss-safe boundary.
+
+        A workspace-local, non-kit skill is removed, so its command stops being
+        derivable and is cleaned up on both command harnesses. A hand-written
+        command file that was never baselined survives.
+        """
+        workspace = make_workspace(new_tmp(self))
+        ghost = workspace / "skills/zz-ghost"
+        ghost.mkdir()
+        (ghost / "SKILL.md").write_text(
+            '---\nname: zz-ghost\ndescription: "Trigger: orphan fixture."\n---\n',
+            encoding="utf-8",
+        )
+        rc, _, _ = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, SUCCESS)
+        for harness in (".opencode/commands", ".claude/commands"):
+            self.assertTrue((workspace / harness / "zz-ghost.md").is_file(), harness)
+
+        shutil.rmtree(ghost)
+        note = workspace / ".opencode/commands/user-note.md"
+        note.write_text("hand written, never baselined\n", encoding="utf-8")
+
+        result = upgrade_module.upgrade(workspace)
+        for harness in (".opencode/commands", ".claude/commands"):
+            with self.subTest(harness=harness):
+                orphan = f"{harness}/zz-ghost.md"
+                self.assertIn(orphan, result["removed"])
+                self.assertFalse((workspace / orphan).exists())
+                survivors = sorted(p.stem for p in (workspace / harness).glob("*.md"))
+                self.assertTrue(set(self.KIT_COMMAND_NAMES) <= set(survivors))
+        self.assertTrue(note.is_file(), "a never-baselined command file is user data")
+
+    def test_command_drift_is_visible_to_audit_and_status_then_restored(self) -> None:
+        """Criterion 7: the CA-2 reconciliation, detection and restoration agreeing."""
+        workspace = make_workspace(new_tmp(self))
+        command = workspace / ".opencode/commands/paper-writing.md"
+        original = command.read_bytes()
+        command.write_bytes(b"tampered\n")
+
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        self.assertIn(".opencode/commands/paper-writing.md", out)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        drifted = json.loads(out)["framework"]["drifted_files"]
+        self.assertIn(".opencode/commands/paper-writing.md", drifted)
+
+        rc, _, _ = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, SUCCESS)
+        self.assertEqual(command.read_bytes(), original)
+
+    def test_malformed_skill_never_raises_from_derivation(self) -> None:
+        """Criterion 8(a): a user's broken skill is reported, never fatal."""
+        workspace = make_workspace(new_tmp(self))
+        broken = workspace / "skills/broken"
+        broken.mkdir()
+        (broken / "SKILL.md").write_text("# no front matter at all\n", encoding="utf-8")
+
+        rc, _, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        rc, _, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, SUCCESS)
+
+    def test_workspace_operations_still_require_a_config(self) -> None:
+        """Criterion 8(b): the resolver's fallback does not extend to these two.
+
+        The workspace keeps its skill-audit probe so ``audit`` reaches the config
+        read rather than failing earlier for a missing probe.
+        """
+        workspace = make_workspace(new_tmp(self))
+        (workspace / ".papersmith/config.json").unlink()
+        with self.assertRaises(UserError):
+            status_module.status(workspace)
+        with self.assertRaises(UserError):
+            audit_module.execute(workspace, check_drift=True)
+
+    def test_unreadable_user_files_never_break_derivation(self) -> None:
+        """The M2 boundary: a damaged user file is reported, never fatal.
+
+        ``workspace_framework_files`` derives through ``render_files``, which
+        reads agent and skill front matter. Neither read may raise, or ``status``
+        would abort with an untyped traceback on a workspace the previous
+        implementation reported fine. An uncaught ``UnicodeDecodeError`` escapes
+        ``main`` and fails here by erroring outright.
+        """
+        workspace = make_workspace(new_tmp(self))
+        (workspace / ".claude/agents/binary.md").write_bytes(b"\xff\xfe\x00 not utf-8")
+        broken = workspace / "skills/binary-skill"
+        broken.mkdir()
+        (broken / "SKILL.md").write_bytes(b"\xff\xfe not utf-8 either")
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        json.loads(out)
+        rc, _, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertIn(rc, (SUCCESS, DRIFT_ERROR),
+                      "the derivation reports; it never raises")
+
+    def test_unsearchable_skill_directory_never_breaks_derivation(self) -> None:
+        """``Path.is_file`` re-raises EACCES, so the stat calls are guarded too.
+
+        A skill directory the user cannot traverse must not make ``status`` abort;
+        the guard has to cover the stats, not only the reads.
+        """
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permission bits")
+        workspace = make_workspace(new_tmp(self))
+        locked = workspace / "skills/locked"
+        locked.mkdir()
+        (locked / "SKILL.md").write_text(
+            '---\nname: locked\ndescription: "Trigger: locked fixture."\n---\n',
+            encoding="utf-8",
+        )
+        os.chmod(locked, 0o000)
+        self.addCleanup(os.chmod, locked, 0o755)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        json.loads(out)
+        rc, _, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertIn(rc, (SUCCESS, DRIFT_ERROR), "the derivation reports; it never raises")
+
+    def test_crafted_manifest_keys_are_refused_not_resolved(self) -> None:
+        """A stored key must be a plain relative path, and containment is lexical.
+
+        Without the lexical gate a crafted key such as
+        ``.opencode/commands/../../papersmith.yaml`` stays inside the workspace
+        and is still deleted. Without the guarded resolve, a non-encodable key
+        aborts ``upgrade`` with an untyped exception.
+        """
+        workspace = make_workspace(new_tmp(self))
+        guard = workspace / "papersmith.yaml"
+        original = guard.read_bytes()
+
+        manifest_path = workspace / ".papersmith" / "manifest.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        traversal = ".opencode/commands/../../papersmith.yaml"
+        payload["files"][traversal] = "0" * 64
+        payload["files"][".opencode/commands/\x00nul.md"] = "0" * 64
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        result = upgrade_module.upgrade(workspace)
+        self.assertEqual(guard.read_bytes(), original, "no in-workspace data loss")
+        self.assertNotIn(traversal, result["removed"])
+        self.assertNotIn(".opencode/commands/\x00nul.md", result["removed"])
+
+    def test_a_fifo_at_a_managed_path_never_blocks_derivation(self) -> None:
+        """A non-regular managed path is skipped, not opened.
+
+        ``open(2)`` on a FIFO with no writer blocks forever, so a guarded *read*
+        is not enough: the regular-file gate has to come first. The alarm turns a
+        regression into a failure instead of a hung suite.
+        """
+        if not hasattr(os, "mkfifo") or not hasattr(signal, "setitimer"):
+            self.skipTest("mkfifo / setitimer unavailable")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        managed.unlink()
+        os.mkfifo(managed)
+
+        def _blocked(signum, frame):
+            raise AssertionError("derivation blocked on a non-regular managed path")
+
+        previous = signal.signal(signal.SIGALRM, _blocked)
+        signal.setitimer(signal.ITIMER_REAL, 15)
+        try:
+            rc, out, _ = capture(["status", str(workspace), "--json"])
+            self.assertEqual(rc, SUCCESS)
+            json.loads(out)
+            rc, _, _ = capture(["audit", str(workspace), "--check-drift"])
+            self.assertIn(rc, (SUCCESS, DRIFT_ERROR))
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+
+    def test_removal_survives_a_read_only_parent(self) -> None:
+        """A refused unlink must not abort a run that already synchronized files."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permission bits")
+        workspace = make_workspace(new_tmp(self))
+        ghost = workspace / "skills/zz-ghost"
+        ghost.mkdir()
+        (ghost / "SKILL.md").write_text(
+            '---\nname: zz-ghost\ndescription: "Trigger: orphan fixture."\n---\n',
+            encoding="utf-8",
+        )
+        rc, _, _ = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, SUCCESS)
+
+        shutil.rmtree(ghost)
+        commands_dir = workspace / ".opencode/commands"
+        os.chmod(commands_dir, 0o555)
+        self.addCleanup(os.chmod, commands_dir, 0o755)
+
+        result = upgrade_module.upgrade(workspace)
+        orphan = ".opencode/commands/zz-ghost.md"
+        self.assertNotIn(orphan, result["removed"],
+                         "a path that could not be deleted is not reported as removed")
+        self.assertIn(orphan, result["stranded"],
+                      "a refused removal must be reported, not swallowed")
+        self.assertTrue((workspace / orphan).is_file())
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn(orphan, json.loads(out)["framework"]["drifted_files"],
+                      "an undeletable stale file stays visible as drift and is retried later")
+
+    def test_manifest_keys_can_never_escape_the_workspace(self) -> None:
+        """A stored-manifest key is data, not a trusted path.
+
+        Without a containment check the removal predicate would resolve a
+        crafted ``..`` key outside the workspace and ``unlink`` a user's file.
+        """
+        workspace = make_workspace(new_tmp(self))
+        victim = workspace.parent / "victim.txt"
+        victim.write_text("must survive\n", encoding="utf-8")
+
+        manifest_path = workspace / ".papersmith" / "manifest.json"
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        escape = f".opencode/commands/../../../{victim.name}"
+        self.assertTrue((workspace / escape).resolve() == victim.resolve(),
+                        "fixture must name a path outside the workspace")
+        payload["files"][escape] = "0" * 64
+        manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        result = upgrade_module.upgrade(workspace)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "must survive\n")
+        self.assertNotIn(escape, result["removed"])
 
 
 class TargetCommandTests(unittest.TestCase):

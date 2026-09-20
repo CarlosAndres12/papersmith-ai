@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..errors import UserError
+from ..generators import is_regular_file, render_files, workspace_tools
 
 MANIFEST_SCHEMA = 1
 
@@ -33,17 +34,6 @@ KIT_ENTRIES = (
     "scripts/setup-harnesses.sh",
     "package.json",
     "requirements.txt",
-)
-
-# Framework-managed rendered files: generated deterministically, owned by the
-# framework, and re-rendered on upgrade.
-RENDERED_FILES = (
-    "CLAUDE.md",
-    "OPENCODE.md",
-    "PI.md",
-    ".pi/gentle-ai/persona.json",
-    ".antigravity/rules.md",
-    ".gitignore",
 )
 
 # Paths ``upgrade`` must never overwrite or delete. ``papersmith.yaml`` is
@@ -152,7 +142,7 @@ def copy_kit_file(kit_root: Path, relpath: str, dest_root: Path) -> None:
 
 def load_manifest(workspace: Path) -> dict | None:
     path = workspace / ".papersmith" / "manifest.json"
-    if not path.is_file():
+    if not is_regular_file(path):
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -235,18 +225,45 @@ def kit_version(kit_root: Path) -> str:
     return "0.0.0"
 
 
-def workspace_framework_files(workspace: Path, kit_root: Path) -> dict[str, str]:
-    """Current hashes of every framework-managed file in a workspace."""
+def _sha256_if_readable(path: Path) -> str | None:
+    """``sha256_file`` for a path that may be absent or unreadable.
+
+    A framework-managed file can be missing, permission-denied, or otherwise
+    unstatable. The manifest records what it can actually read rather than
+    aborting its caller: ``status`` and ``audit`` must report a damaged
+    workspace, not die on one.
+    """
+    if not is_regular_file(path):
+        return None
+    try:
+        return sha256_file(path)
+    except OSError:
+        return None
+
+
+def workspace_framework_files(workspace: Path, kit_root: Path,
+                              context: dict | None = None) -> dict[str, str]:
+    """Current hashes of every framework-managed file in a workspace.
+
+    The rendered contribution derives from :func:`generators.render_files` — the
+    single path authority — instead of a second, hand-maintained path list. The
+    stored baseline, ``status`` and ``audit`` therefore all see the same set,
+    dynamic per-skill command files included, and cannot drift apart.
+
+    ``context`` is optional so the existing two-argument callers keep working: a
+    caller that already built one may pass it, and it is derived here otherwise.
+    """
     files: dict[str, str] = {}
     for relpath in kit_files(kit_root):
-        target = workspace / relpath
-        if target.is_file():
-            files[relpath] = sha256_file(target)
-    for relpath in RENDERED_FILES:
-        target = workspace / relpath
-        if target.is_file():
-            files[relpath] = sha256_file(target)
-    version_file = workspace / ".papersmith" / "version"
-    if version_file.is_file():
-        files[".papersmith/version"] = sha256_file(version_file)
+        digest = _sha256_if_readable(workspace / relpath)
+        if digest is not None:
+            files[relpath] = digest
+    rendered = render_files(workspace, context, workspace_tools(workspace))
+    for relpath in rendered:
+        digest = _sha256_if_readable(workspace / relpath)
+        if digest is not None:
+            files[relpath] = digest
+    version_digest = _sha256_if_readable(workspace / ".papersmith" / "version")
+    if version_digest is not None:
+        files[".papersmith/version"] = version_digest
     return files
