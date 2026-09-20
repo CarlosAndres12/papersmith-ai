@@ -63,24 +63,24 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 2: U2 — Proposal Shape, Resolution, Round-1 Path, Four Codes
 
-- [ ] 2.1 RED: shape tests for the proposal file — exact key set `{lineage, assignments}` plus optional `concedes_to_round`; each assignment exactly `{block, fact, sections}`; `sections` a list of unique non-empty strings; a duplicate `(block, fact)` pair; an unknown top-level key; a file whose facts resolve through two source roots.
-- [ ] 2.2 Implement the proposal reader/validator (`compute_separation`'s shape stage) in `paper_cli.py`; refuse `SEPARATION_REPORT_UNREADABLE` per 2.1, naming the offending key, duplicate, or both roots.
-- [ ] 2.3 Run 2.1 green.
-- [ ] 2.4 Mutation: exact key-set check → subset check; confirm the extra-key fixture goes red.
-- [ ] 2.5 RED: per-title resolution tests reusing `bind`'s existing existence/ambiguity path — a title matching zero headings refuses `SECTION_NOT_IN_SOURCE` BEFORE any scoring runs; a title matching two headings refuses `SECTION_TITLE_AMBIGUOUS`; confirm scoring never runs in either case.
-- [ ] 2.6 Extract `paper_graph.resolve_section_index(source_roots, root, lineage) -> (path, counts, outline)` from `_verify_source_section_bindings`'s marker → lineage → `segment_markdown` chain; `outline` carries `{title, level, byte_start, byte_end}` per heading — the byte-offset shape the sibling change's dependency needs, never a `{title: count}` memo.
-- [ ] 2.7 Wire `_verify_source_section_bindings` to call `resolve_section_index`; run the full existing `source-section-binding` suite and confirm zero new failures, behavior and memo semantics unchanged.
-- [ ] 2.8 Wire `cmd_separate` to call the same `resolve_section_index`; run 2.5 green.
-- [ ] 2.9 RED: corpus-anchoring tests — an assignment for a `(block, fact)` absent from the assembled corpus's `requires_facts` is reported as unanchored and contributes nothing to coverage.
-- [ ] 2.10 Wire `separate`'s scoring stage to call `assemble_corpus(enforce_bindings=False)` for anchoring; feed anchored claims into `score_cut`; run 2.9 green.
-- [ ] 2.11 RED — single-refusal semantics, its own explicit task: a cut carrying overlap AND orphan AND gap simultaneously (the worked-example round 1) raises EXACTLY ONE refusal code, never more than one.
-- [ ] 2.12 RED — all-classes detail, its own explicit task: that single refusal's detail names EVERY instance of EVERY present class (the overlapping title, both orphaned titles, the gapped block and title) plus all four totals (orphan, overlap, gap, sum); assert on the full detail payload, not just the raised code name.
-- [ ] 2.13 Implement the fixed-precedence dispatch in `cmd_separate` (`overlap → orphan → gap`): compute all three counts first, then raise ONE code chosen by precedence with a detail built from every counted instance across all classes; confirm 2.11 and 2.12 both green.
-- [ ] 2.14 RED: orphan-and-gap-with-no-overlap raises `SEPARATION_SECTION_ORPHANED`, naming the gap too; gap-only raises `SEPARATION_NOTATION_GAP`; run green.
-- [ ] 2.15 RED: `SEPARATION_SECTION_UNCLAIMABLE` fixtures — a named title resolving to a real heading outside the claimable set, and an unmeasured claimable set — both refuse, naming the title/claimable-set or the document/reason respectively.
-- [ ] 2.16 Wire `SEPARATION_SECTION_UNCLAIMABLE` into `cmd_separate`, checked before overlap/orphan/gap scoring; run 2.15 green.
-- [ ] 2.17 Register the `separate` subparser, `COMMANDS`/`_COMMANDS` entries, and the `REFUSAL_CLASSIFICATION` entries for the codes landed so far in `paper_cli.py`.
-- [ ] 2.18 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green. No round persistence yet (Phase 3).
+- [x] 2.1 RED: shape tests for the proposal file — exact key set `{lineage, assignments}` plus optional `concedes_to_round`; each assignment exactly `{block, fact, sections}`; `sections` a list of unique non-empty strings; a duplicate `(block, fact)` pair; an unknown top-level key; a file whose facts resolve through two source roots.
+- [x] 2.2 Implement the proposal reader/validator (`compute_separation`'s shape stage) in `paper_cli.py`; refuse `SEPARATION_REPORT_UNREADABLE` per 2.1, naming the offending key, duplicate, or both roots.
+- [x] 2.3 Run 2.1 green.
+- [x] 2.4 Mutation: exact key-set check → subset check; confirm the extra-key fixture goes red.
+- [x] 2.5 RED: per-title resolution tests reusing `bind`'s existing existence/ambiguity path — a title matching zero headings refuses `SECTION_NOT_IN_SOURCE` BEFORE any scoring runs; a title matching two headings refuses `SECTION_TITLE_AMBIGUOUS`; confirm scoring never runs in either case.
+- [x] 2.6 Extract `paper_graph.resolve_section_index(source_roots, root, lineage) -> (path, counts, outline)` from `_verify_source_section_bindings`'s marker → lineage → `segment_markdown` chain; `outline` carries `{title, level, byte_start, byte_end}` per heading — the byte-offset shape the sibling change's dependency needs, never a `{title: count}` memo.
+- [x] 2.7 Wire `_verify_source_section_bindings` to call `resolve_section_index`; run the full existing `source-section-binding` suite and confirm zero new failures, behavior and memo semantics unchanged.
+- [x] 2.8 Wire `cmd_separate` to call the same `resolve_section_index`; run 2.5 green.
+- [x] 2.9 RED: corpus-anchoring tests — an assignment for a `(block, fact)` absent from the assembled corpus's `requires_facts` is reported as unanchored and contributes nothing to coverage.
+- [x] 2.10 Wire `separate`'s scoring stage to call `assemble_corpus(enforce_bindings=False)` for anchoring; feed anchored claims into `score_cut`; run 2.9 green.
+- [x] 2.11 RED — single-refusal semantics, its own explicit task: a cut carrying overlap AND orphan AND gap simultaneously (the worked-example round 1) raises EXACTLY ONE refusal code, never more than one.
+- [x] 2.12 RED — all-classes detail, its own explicit task: that single refusal's detail names EVERY instance of EVERY present class (the overlapping title, both orphaned titles, the gapped block and title) plus all four totals (orphan, overlap, gap, sum); assert on the full detail payload, not just the raised code name.
+- [x] 2.13 Implement the fixed-precedence dispatch in `cmd_separate` (`overlap → orphan → gap`): compute all three counts first, then raise ONE code chosen by precedence with a detail built from every counted instance across all classes; confirm 2.11 and 2.12 both green.
+- [x] 2.14 RED: orphan-and-gap-with-no-overlap raises `SEPARATION_SECTION_ORPHANED`, naming the gap too; gap-only raises `SEPARATION_NOTATION_GAP`; run green.
+- [x] 2.15 RED: `SEPARATION_SECTION_UNCLAIMABLE` fixtures — a named title resolving to a real heading outside the claimable set, and an unmeasured claimable set — both refuse, naming the title/claimable-set or the document/reason respectively.
+- [x] 2.16 Wire `SEPARATION_SECTION_UNCLAIMABLE` into `cmd_separate`, checked before overlap/orphan/gap scoring; run 2.15 green.
+- [x] 2.17 Register the `separate` subparser, `COMMANDS`/`_COMMANDS` entries, and the `REFUSAL_CLASSIFICATION` entries for the codes landed so far in `paper_cli.py`.
+- [x] 2.18 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green. No round persistence yet (Phase 3).
 
 ## Phase 3: U3 — Round Record Kind, Persistence, `SEPARATION_ROUND_ABSENT`
 

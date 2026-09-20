@@ -100,7 +100,7 @@ import paper_verify  # noqa: E402 -- the-couplings-hold-or-they-do-not: the seve
 import paper_couplings  # noqa: E402 -- the-skill-stops-trusting-memory, item 4: the producer `paper/couplings.json` never had; `couplings` verb
 import paper_full_text  # noqa: E402 -- the-pdf-arrives-or-the-operator-is-told: fills the full-text role; `full_text` verb
 import paper_lifecycle  # noqa: E402 -- a-leftover-paper-is-offered-before-it-is-lost: the reuse and exhaustion reports over the ingested-papers lifecycle; `reuse`/`exhaustion` verbs; raises no `Refused` of its own
-import paper_separation  # noqa: E402,F401 -- the-whole-cut-is-argued-before-any-section-is-claimed, U1: the pure claimable-section/score-cut core, imported here only to keep the module-completeness invariant true; it raises no `Refused` of its own and gains its `separate` verb wiring in U2
+import paper_separation  # noqa: E402 -- the-whole-cut-is-argued-before-any-section-is-claimed, U1: the pure claimable-section/score-cut core; wired to the `separate` verb in U2 (`compute_separation`/`cmd_separate` below); raises no `Refused` of its own
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -440,6 +440,23 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "BINDING_LINEAGE_REQUIRED": INVOCATION_DEFECT,
     "BINDING_FACT_NOT_BINDABLE": WORK_STATE,
     "SOURCE_BINDING_CONFLICT": WORK_STATE,
+    # --- the-whole-cut-is-argued-before-any-section-is-claimed, U2:
+    # `separate`, the whole-cut reviewer shaped on `observe` -- reads an
+    # agent-authored proposal (`_read_separation_proposal`'s own shape stage,
+    # this file), resolves every title through the SAME existence/ambiguity
+    # path `bind` already uses (`paper_graph.resolve_section_index`, extracted
+    # from `_verify_source_section_bindings`), derives the claimable section
+    # set from the document's own structure (`paper_separation.
+    # claimable_sections`), and scores the cut's orphan/overlap/gap defects
+    # (`paper_separation.score_cut`) -- never records a binding under any
+    # outcome. `UNKNOWN_FACT`/`BINDING_FACT_NOT_BINDABLE`/`SECTION_NOT_IN_
+    # SOURCE`/`SECTION_TITLE_AMBIGUOUS` above are reused verbatim, never a
+    # second code for the same condition -----------------------------------
+    "SEPARATION_REPORT_UNREADABLE": WORK_STATE,
+    "SEPARATION_SECTION_UNCLAIMABLE": WORK_STATE,
+    "SEPARATION_SECTION_OVERLAP": WORK_STATE,
+    "SEPARATION_SECTION_ORPHANED": WORK_STATE,
+    "SEPARATION_NOTATION_GAP": WORK_STATE,
 }
 
 
@@ -820,6 +837,311 @@ def cmd_bind(args: argparse.Namespace) -> dict:
     return paper_declarations.bind_section(
         paper_dir, args.block, args.fact, args.lineage, tuple(args.section or ()),
     )
+
+
+#: `_read_separation_proposal`'s own closed key-set grammar (design.md,
+#: Interfaces / Contracts) -- the marker's own closed-grammar discipline,
+#: reused: `lineage`/`assignments` required, `concedes_to_round` optional,
+#: nothing else admitted.
+_SEPARATION_TOP_KEYS = frozenset({"lineage", "assignments", "concedes_to_round"})
+_SEPARATION_REQUIRED_TOP_KEYS = frozenset({"lineage", "assignments"})
+_SEPARATION_ASSIGNMENT_KEYS = frozenset({"block", "fact", "sections"})
+
+
+def _read_separation_proposal(proposal_path: Path) -> dict:
+    """`separate --proposal <path>`'s own shape stage (design.md, Interfaces
+    / Contracts; `source-separation-review` spec, `Requirement: The
+    Proposal File Has One Validated Shape`) -- the same shuttle-file read
+    `compute_observation` keeps, widened with this verb's own grammar.
+
+    Refuses `SEPARATION_REPORT_UNREADABLE` (work-state) for every shape
+    violation named by the spec: unreadable, non-UTF-8, non-JSON,
+    non-object, a wrong/unknown top-level key, a missing required key, a
+    wrong-shaped assignment, `sections` not a list of unique non-empty
+    strings, a duplicate `(block, fact)` pair across assignments, or the
+    named facts resolving through more than one source root
+    (`_resolve_separation_root` below). Every OTHER stage this file wires
+    (per-title resolution, claimability, scoring, precedence) runs only
+    once this function returns cleanly.
+
+    Returns `{"lineage": str, "assignments": [{"block", "fact",
+    "sections": tuple}, ...], "concedes_to_round": int|None, "root":
+    paper_declarations.SourceRoot}` -- `root` is derived here, once, so no
+    later stage re-derives it from the raw facts a second time.
+    """
+    try:
+        raw = proposal_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise Refused("SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: {exc}")
+    try:
+        report = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise Refused("SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: invalid JSON: {exc.msg}")
+    if not isinstance(report, dict):
+        raise Refused("SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: must be a JSON object")
+
+    unknown_keys = set(report) - _SEPARATION_TOP_KEYS
+    if unknown_keys:
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE",
+            f"{proposal_path}: unknown top-level key(s) {sorted(unknown_keys)}",
+        )
+    missing_keys = _SEPARATION_REQUIRED_TOP_KEYS - set(report)
+    if missing_keys:
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE",
+            f"{proposal_path}: missing required key(s) {sorted(missing_keys)}",
+        )
+
+    lineage = report["lineage"]
+    if not isinstance(lineage, str) or not lineage:
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: 'lineage' must be a non-empty string",
+        )
+
+    concedes_to_round = report.get("concedes_to_round")
+    if concedes_to_round is not None and (
+        isinstance(concedes_to_round, bool) or not isinstance(concedes_to_round, int)
+    ):
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE",
+            f"{proposal_path}: 'concedes_to_round' must be an integer",
+        )
+
+    raw_assignments = report["assignments"]
+    if not isinstance(raw_assignments, list) or not raw_assignments:
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE",
+            f"{proposal_path}: 'assignments' must be a non-empty list",
+        )
+
+    assignments = []
+    seen_pairs = set()
+    fact_ids = []
+    for entry in raw_assignments:
+        if not isinstance(entry, dict) or set(entry) != _SEPARATION_ASSIGNMENT_KEYS:
+            raise Refused(
+                "SEPARATION_REPORT_UNREADABLE",
+                f"{proposal_path}: each assignment must carry exactly "
+                f"{sorted(_SEPARATION_ASSIGNMENT_KEYS)}, got {entry!r}",
+            )
+        block, fact, sections = entry["block"], entry["fact"], entry["sections"]
+        if not isinstance(block, str) or not block:
+            raise Refused(
+                "SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: 'block' must be a non-empty string",
+            )
+        if not isinstance(fact, str) or not fact:
+            raise Refused(
+                "SEPARATION_REPORT_UNREADABLE", f"{proposal_path}: 'fact' must be a non-empty string",
+            )
+        if (
+            not isinstance(sections, list) or not sections
+            or not all(isinstance(title, str) and title for title in sections)
+            or len(set(sections)) != len(sections)
+        ):
+            raise Refused(
+                "SEPARATION_REPORT_UNREADABLE",
+                f"{proposal_path}: 'sections' must be a list of unique non-empty strings, "
+                f"got {sections!r}",
+            )
+        pair = (block, fact)
+        if pair in seen_pairs:
+            raise Refused(
+                "SEPARATION_REPORT_UNREADABLE",
+                f"{proposal_path}: duplicate assignment for (block, fact) = {pair!r}",
+            )
+        seen_pairs.add(pair)
+        fact_ids.append(fact)
+        assignments.append({"block": block, "fact": fact, "sections": tuple(sections)})
+
+    root = _resolve_separation_root(proposal_path, fact_ids)
+    return {
+        "lineage": lineage, "assignments": assignments,
+        "concedes_to_round": concedes_to_round, "root": root,
+    }
+
+
+def _resolve_separation_root(proposal_path: Path, fact_ids: list) -> object:
+    """The facts named across the whole proposal MUST resolve through
+    EXACTLY one source root (`source-separation-review` spec). Refuses
+    `UNKNOWN_FACT`/`BINDING_FACT_NOT_BINDABLE` verbatim
+    (`paper_vocabulary.validate_fact`/`paper_declarations.
+    is_bindable_fact`, reused, never a second code for the same
+    condition) for an individual bad fact id, and
+    `SEPARATION_REPORT_UNREADABLE` naming every distinct root name found
+    when more than one is named -- a file spanning two roots is not one
+    document's cut at all, so it fails the FILE's own contract rather than
+    earning a code of its own (design.md, Interfaces / Contracts)."""
+    roots = {}
+    for fact_id in fact_ids:
+        paper_vocabulary.validate_fact(fact_id)
+        if not paper_declarations.is_bindable_fact(fact_id):
+            raise Refused(
+                "BINDING_FACT_NOT_BINDABLE",
+                f"{fact_id!r} is not a key of FACT_SOURCE_ROOT; it has no document-rooted "
+                "source to bind at all",
+            )
+        source_root = paper_declarations.FACT_SOURCE_ROOT[fact_id]
+        roots[source_root.name] = source_root
+    if len(roots) > 1:
+        raise Refused(
+            "SEPARATION_REPORT_UNREADABLE",
+            f"{proposal_path}: assignments resolve through more than one source root: "
+            f"{sorted(roots)}",
+        )
+    return next(iter(roots.values()))
+
+
+def _bind_invocation(entry: dict, lineage: str) -> str:
+    """The exact `bind` invocation a settled (score-0) cut's own assignment
+    answers -- named in the payload, never recorded (design.md, Decision
+    G: `separate` never calls `bind`)."""
+    section_flags = " ".join(f"--section {title!r}" for title in entry["sections"])
+    return f"bind --block {entry['block']} --fact {entry['fact']} --lineage {lineage} {section_flags}"
+
+
+def _separation_structural_detail(result: dict) -> str:
+    """Every instance of every present class, plus all four counted
+    totals -- built once so a raise from `_raise_separation_refusal` names
+    everything `paper_separation.score_cut` counted, never merely the
+    first defect (design.md Decision E; task 2.12's own separately-
+    checkable property)."""
+    orphan_count = len(result["orphan"])
+    overlap_count = sum(item["count"] for item in result["overlap"])
+    gap_count = len(result["gap"])
+    parts = [f"total={result['total']} (orphan={orphan_count}, overlap={overlap_count}, gap={gap_count})"]
+    if result["overlap"]:
+        parts.append(
+            "overlap: " + "; ".join(
+                f"{item['title']!r} claimed by {list(item['blocks'])!r}"
+                for item in result["overlap"]
+            )
+        )
+    if result["orphan"]:
+        parts.append(f"orphan: {result['orphan']!r}")
+    if result["gap"]:
+        parts.append(
+            "gap: " + "; ".join(
+                f"{item['block']!r} skips {item['title']!r}" for item in result["gap"]
+            )
+        )
+    return " | ".join(parts)
+
+
+def _raise_separation_refusal(result: dict) -> None:
+    """Fixed precedence `overlap -> orphan -> gap` (design.md Decision E):
+    exactly ONE code, chosen by whichever class is present first in that
+    order, with a detail naming every instance of every class present."""
+    detail = _separation_structural_detail(result)
+    if result["overlap"]:
+        raise Refused("SEPARATION_SECTION_OVERLAP", detail)
+    if result["orphan"]:
+        raise Refused("SEPARATION_SECTION_ORPHANED", detail)
+    raise Refused("SEPARATION_NOTATION_GAP", detail)
+
+
+def compute_separation(
+    proposal_path: Path, *, sections_dir: Path, paper_dir: Path, source_base: Path | None = None,
+) -> dict:
+    """`separate`'s own logic on already-resolved paths (design.md,
+    Interfaces / Contracts) -- the same separation `compute_observation`
+    keeps from `cmd_observe`.
+
+    The fixed pipeline (design.md, Technical Approach): (1) shape
+    (`_read_separation_proposal`, above); (2) assemble the real corpus
+    (`enforce_bindings=False`, so an undecided binding elsewhere never
+    blocks this read-only verb) and reuse its OWN `source_roots` for
+    `paper_graph.resolve_section_index` -- one corpus assembly, not two,
+    since `Corpus.source_roots` already carries everything that function
+    needs (a deliberate refinement over assembling the corpus a second
+    time just to recompute the identical dict); (3) derive the claimable
+    set (`paper_separation.claimable_sections`) -- an UNMEASURED claimable
+    set refuses `SEPARATION_SECTION_UNCLAIMABLE` immediately, before any
+    per-title check, because there is no structure to resolve a title
+    against at all; (4) per-title existence/ambiguity
+    (`SECTION_NOT_IN_SOURCE`/`SECTION_TITLE_AMBIGUOUS`, the SAME checks
+    `bind` already uses) then claimability
+    (`SEPARATION_SECTION_UNCLAIMABLE`) for every named title, before any
+    scoring runs; (5) anchor every assignment against the corpus's own
+    `requires_facts` (unanchored ones are reported, never deleted or
+    invented, and clear no orphan); (6) score
+    (`paper_separation.score_cut`) and either return a score-0 payload
+    naming the exact `bind` invocation for every assignment -- recording
+    NONE of them, Phase 3 lands round persistence -- or raise the ONE
+    structural refusal fixed precedence names (`_raise_separation_
+    refusal`).
+    """
+    proposal = _read_separation_proposal(proposal_path)
+    lineage = proposal["lineage"]
+    assignments = proposal["assignments"]
+    root = proposal["root"]
+
+    corpus = paper_graph.assemble_corpus(sections_dir, source_base=source_base, paper_dir=paper_dir)
+    status = corpus.source_roots.get(root.name)
+    if status is None or status["state"] != "document-rooted":
+        raise Refused(
+            "SEPARATION_SECTION_UNCLAIMABLE",
+            f"{root.name!r} is not document-rooted; lineage {lineage!r} has no document to "
+            f"measure a cut against ({(status or {}).get('reason')})",
+        )
+    _revision_path, counts, outline = paper_graph.resolve_section_index(
+        corpus.source_roots, root, lineage,
+    )
+    claimable = paper_separation.claimable_sections(outline)
+    if claimable["state"] == "unmeasured":
+        raise Refused(
+            "SEPARATION_SECTION_UNCLAIMABLE",
+            f"lineage {lineage!r}'s claimable set is unmeasured ({claimable['reason']})",
+        )
+    claimable_titles = set(claimable["titles"])
+
+    for entry in assignments:
+        block = entry["block"]
+        for title in entry["sections"]:
+            count = counts.get(title, 0)
+            if count == 0:
+                raise Refused(
+                    "SECTION_NOT_IN_SOURCE",
+                    f"{block}: section {title!r} is not a heading in the resolved revision "
+                    f"(lineage {lineage!r})",
+                )
+            if count > 1:
+                raise Refused(
+                    "SECTION_TITLE_AMBIGUOUS",
+                    f"{block}: section {title!r} matches {count} headings (lineage {lineage!r})",
+                )
+            if title not in claimable_titles:
+                raise Refused(
+                    "SEPARATION_SECTION_UNCLAIMABLE",
+                    f"{block}: section {title!r} is not in the claimable set "
+                    f"{claimable['titles']!r}",
+                )
+
+    claims_by_block: dict = {}
+    unanchored = []
+    for entry in assignments:
+        block, fact = entry["block"], entry["fact"]
+        record = corpus.blocks.get(block)
+        if record is None or fact not in record.requires_facts:
+            unanchored.append({"block": block, "fact": fact})
+            continue
+        claims_by_block.setdefault(block, [])
+        claims_by_block[block].extend(entry["sections"])
+
+    result = paper_separation.score_cut(claimable["titles"], claims_by_block)
+    if result["total"] == 0:
+        return {
+            "total": 0, "unanchored": unanchored,
+            "bind_invocations": [_bind_invocation(entry, lineage) for entry in assignments],
+        }
+    _raise_separation_refusal(result)
+
+
+def cmd_separate(args: argparse.Namespace) -> dict:
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    sections_dir = paper_contract.resolve_sections_dir(args.sections)
+    proposal_path = _resolve_repo_path(args.proposal)
+    return compute_separation(proposal_path, sections_dir=sections_dir, paper_dir=paper_dir)
 
 
 def compute_observation(
@@ -2099,6 +2421,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="clear this exact (--block, --fact) binding's fixed state instead of recording one",
     )
 
+    p_separate = sub.add_parser(
+        "separate",
+        help="score a proposed whole-cut assignment of source sections to blocks against the "
+             "document's own structure and refuse on any defect -- never records a binding "
+             "under any outcome",
+    )
+    p_separate.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
+    )
+    p_separate.add_argument(
+        "--sections", default=None,
+        help="override sections/ location; must resolve inside the repository root",
+    )
+    p_separate.add_argument(
+        "--proposal", required=True,
+        help="path to the proposal JSON file naming the whole cut; must resolve inside the "
+             "repository root",
+    )
+
     p_observe = sub.add_parser(
         "observe",
         help="validate an insumos-observer report against the observable-fact schema, then "
@@ -2414,8 +2756,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "bind", "observe", "plan", "resolve", "full_text", "bib", "validate", "write", "render",
-    "place", "couplings", "verify", "packet", "reuse", "exhaustion",
+    "declare", "bind", "separate", "observe", "plan", "resolve", "full_text", "bib", "validate", "write",
+    "render", "place", "couplings", "verify", "packet", "reuse", "exhaustion",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2429,6 +2771,7 @@ _COMMANDS = {
     "order": cmd_order,
     "declare": cmd_declare,
     "bind": cmd_bind,
+    "separate": cmd_separate,
     "observe": cmd_observe,
     "plan": cmd_plan,
     "resolve": cmd_resolve,

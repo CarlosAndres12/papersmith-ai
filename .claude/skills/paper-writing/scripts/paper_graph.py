@@ -388,6 +388,58 @@ def _describe_binding_absent(corpus: Corpus, qualified_id: str, fact_id: str, in
     return detail + " Candidates on disk right now: " + "; ".join(parts) + "."
 
 
+def resolve_section_index(source_roots: dict, root, lineage: str) -> tuple:
+    """The shipped marker -> lineage -> `segment_markdown` chain,
+    EXTRACTED from `_verify_source_section_bindings`'s own inline
+    resolution below, so a second caller (`paper_cli.cmd_separate`,
+    `the-whole-cut-is-argued-before-any-section-is-claimed`, design.md
+    Decision H) reaches it instead of duplicating it -- and so a sibling
+    change's own dependency can import the byte-offset OUTLINE this now
+    returns, never a `{title: count}` memo alone (design.md, "Leave the
+    sibling reachable").
+
+    `source_roots` is `Corpus.source_roots` (or an identically-shaped
+    dict): `root.name -> {"state", "path", ...}`
+    (`paper_declarations.source_root_status`'s own return shape). `root`
+    is a `paper_declarations.FACT_SOURCE_ROOT` value; its `.kind` decides
+    whether resolution runs the PROSE/REPOSITORY marker-driven branch
+    (`read_revisions_marker` + `resolve_lineage`) or the INGESTED identity
+    branch (`resolve_ingested_document`) -- unchanged from the inline
+    version this replaces.
+
+    Returns `(revision_path, counts, outline)`: `counts` is the SAME
+    `{title: int}` memo the existing verifier below consumes (a zero
+    count is `SECTION_NOT_IN_SOURCE`, above one is
+    `SECTION_TITLE_AMBIGUOUS`); `outline` is `paper_guidance.
+    segment_markdown`'s own return shape -- `{"headings": [{"title",
+    "level", "byte_start", "byte_end"}, ...]}` -- the byte-offset shape
+    `paper_separation.claimable_sections` and the sibling change both
+    need, never re-derived from `counts` alone.
+
+    The caller is responsible for skipping an `unmeasured` root before
+    calling this (unchanged): this function assumes `root.name` already
+    resolves to a document-rooted status.
+    """
+    status = source_roots[root.name]
+    if root.kind is paper_declarations.SourceRootKind.INGESTED:
+        revision_path = paper_declarations.resolve_ingested_document(status["path"], lineage)
+    else:
+        marker = paper_declarations.read_revisions_marker(status["path"])
+        if marker is None:
+            raise Refused(
+                "SOURCE_REVISIONS_UNDECLARED",
+                f"{root.name!r} is document-rooted but carries no "
+                f"'.paper-writing.json' marker",
+            )
+        revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)
+    body = revision_path.read_text(encoding="utf-8")
+    outline = paper_guidance.segment_markdown(body)
+    counts: dict = {}
+    for heading in outline["headings"]:
+        counts[heading["title"]] = counts.get(heading["title"], 0) + 1
+    return revision_path, counts, outline
+
+
 def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = False) -> None:
     """`source-section-binding` spec — every check a `document`-bound
     `requires_facts` entry (`BlockRecord.source_bindings`) is held to,
@@ -458,29 +510,9 @@ def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = 
 
             memo_key = (root.name, lineage)
             if memo_key not in memo:
-                if root.kind is paper_declarations.SourceRootKind.INGESTED:
-                    revision_path = paper_declarations.resolve_ingested_document(
-                        status["path"], lineage
-                    )
-                else:
-                    marker = paper_declarations.read_revisions_marker(status["path"])
-                    if marker is None:
-                        raise Refused(
-                            "SOURCE_REVISIONS_UNDECLARED",
-                            f"{root.name!r} is document-rooted but carries no "
-                            f"'.paper-writing.json' marker",
-                        )
-                    revision_path = paper_declarations.resolve_lineage(
-                        status["path"], lineage, marker
-                    )
-                body = revision_path.read_text(encoding="utf-8")
-                outline = paper_guidance.segment_markdown(body)
-                counts: dict = {}
-                for heading in outline["headings"]:
-                    counts[heading["title"]] = counts.get(heading["title"], 0) + 1
-                memo[memo_key] = (revision_path, counts)
+                memo[memo_key] = resolve_section_index(corpus.source_roots, root, lineage)
 
-            revision_path, counts = memo[memo_key]
+            revision_path, counts, _outline = memo[memo_key]
             count = counts.get(section_title, 0)
             if count == 0:
                 raise Refused(

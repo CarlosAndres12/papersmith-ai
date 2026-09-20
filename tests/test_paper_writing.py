@@ -2903,8 +2903,8 @@ class SecondProseRootGeneralityTests(unittest.TestCase):
 
     def test_mutation_removing_the_undeclared_guard_breaks_on_this_root(self) -> None:
         proc = _run_against_mutant(
-            "                    if marker is None:",
-            "                    if False:",
+            "        if marker is None:",
+            "        if False:",
             "tests.test_paper_writing.SecondProseRootGeneralityTests"
             ".test_second_root_reports_unmeasured_then_refuses_once_it_holds_undeclared_documents",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
@@ -3101,8 +3101,8 @@ class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
         self._ingest(evidence, "a-fixture-paper-id", "# 1. Intro\n\n# 3. Something\n")
 
         proc = _run_against_mutant(
-            "                if root.kind is paper_declarations.SourceRootKind.INGESTED:",
-            "                if False:",
+            "    if root.kind is paper_declarations.SourceRootKind.INGESTED:",
+            "    if False:",
             "tests.test_paper_writing.IngestedSourceSectionBindingCorpusTests"
             ".test_a_dataset_binding_resolves_against_the_ingested_evidence_document",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
@@ -7008,9 +7008,23 @@ class RefusalRosterTests(unittest.TestCase):
         RECORDED one disagree for the same (block, fact). Four new codes
         total, reachable the instant their raise sites exist -- `cmd_bind`
         as a new root, the other three via modules `paper_cli.py` already
-        imports. Measured directly against `reachable_paper_refusal_
-        codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 144)
+        imports.
+
+        Moved from 144 to 149 in `the-whole-cut-is-argued-before-any-
+        section-is-claimed`, U2: the new `separate` verb (`cmd_separate`, a
+        new root in `paper_cli.COMMANDS`) lands five new raise sites, all in
+        this file -- `SEPARATION_REPORT_UNREADABLE` (the proposal's own
+        shape stage), `SEPARATION_SECTION_UNCLAIMABLE`, `SEPARATION_
+        SECTION_OVERLAP`, `SEPARATION_SECTION_ORPHANED`, `SEPARATION_
+        NOTATION_GAP` (the fixed-precedence structural dispatch).
+        `UNKNOWN_FACT`, `BINDING_FACT_NOT_BINDABLE`, `SECTION_NOT_IN_
+        SOURCE` and `SECTION_TITLE_AMBIGUOUS` are reused verbatim, adding
+        nothing new -- `separate` resolves every title through the SAME
+        `paper_graph.resolve_section_index` extraction `bind` already
+        reaches. Measured directly against `reachable_paper_refusal_
+        codes()`, never forecast. U3/U4/U5/U6 of this same change move this
+        number again."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 149)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -9785,6 +9799,518 @@ class PacketPathContainmentTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "GUIDANCE_OUTSIDE_REPOSITORY")
         self.assertFalse(outside.exists())
+
+
+class SeparationProposalShapeTests(unittest.TestCase):
+    """`the-whole-cut-is-argued-before-any-section-is-claimed`, U2, task
+    2.1-2.4: `paper_cli._read_separation_proposal`'s own shape stage --
+    pure JSON/key-set validation, no corpus needed at all (design.md,
+    Interfaces / Contracts: key set exactly `{lineage, assignments}` plus
+    the optional `concedes_to_round`; each assignment exactly `{block,
+    fact, sections}`; `sections` a list of unique non-empty strings; a
+    duplicate `(block, fact)` pair; facts resolving through more than one
+    source root)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def _write(self, obj) -> Path:
+        path = self.base / "proposal.json"
+        path.write_text(obj if isinstance(obj, str) else json.dumps(obj), encoding="utf-8")
+        return path
+
+    def test_a_well_shaped_proposal_parses(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation",
+                 "sections": ["1. Background on widget metrics"]},
+                {"block": "methods.block-b", "fact": "formulation",
+                 "sections": ["2. Alignment estimators"]},
+                {"block": "methods.block-c", "fact": "formulation",
+                 "sections": ["2. Alignment estimators"]},
+            ],
+        })
+        result = paper_cli._read_separation_proposal(path)
+        self.assertEqual(result["lineage"], "field-survey")
+        self.assertEqual(len(result["assignments"]), 3)
+        self.assertEqual(result["root"].name, "proposals")
+
+    def test_an_unknown_top_level_key_refuses_naming_it(self) -> None:
+        path = self._write({"lineage": "field-survey", "assignments": [], "author": "someone"})
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+        self.assertIn("author", ctx.exception.detail)
+
+    def test_a_duplicate_block_fact_pair_refuses_naming_it(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "methods.block-b", "fact": "formulation", "sections": ["A"]},
+                {"block": "methods.block-b", "fact": "formulation", "sections": ["B"]},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+        self.assertIn("methods.block-b", ctx.exception.detail)
+
+    def test_a_proposal_spanning_two_source_roots_refuses_naming_both(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation", "sections": ["A"]},
+                {"block": "overview.block-d", "fact": "experimental-design", "sections": ["B"]},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+        self.assertIn("proposals", ctx.exception.detail)
+        self.assertIn("experiments", ctx.exception.detail)
+
+    def test_a_wrong_shaped_assignment_refuses(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [{"block": "overview.block-a", "fact": "formulation"}],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+
+    def test_sections_must_be_a_list_of_unique_non_empty_strings(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation", "sections": "A"},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+
+    def test_duplicate_titles_inside_one_assignment_refuse(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation", "sections": ["A", "A"]},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+
+    def test_a_non_json_file_refuses(self) -> None:
+        path = self._write("not json at all")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_REPORT_UNREADABLE")
+
+    def test_an_unknown_fact_refuses_unknown_fact(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "not-a-real-fact", "sections": ["A"]},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+
+    def test_a_non_bindable_fact_refuses_binding_fact_not_bindable(self) -> None:
+        path = self._write({
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "contributions", "sections": ["A"]},
+            ],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli._read_separation_proposal(path)
+
+        self.assertEqual(ctx.exception.code, "BINDING_FACT_NOT_BINDABLE")
+
+    def test_mutation_exact_key_set_weakened_to_a_subset_check(self) -> None:
+        proc = _run_against_mutant(
+            "unknown_keys = set(report) - _SEPARATION_TOP_KEYS",
+            "unknown_keys = set()",
+            "tests.test_paper_writing.SeparationProposalShapeTests"
+            ".test_an_unknown_top_level_key_refuses_naming_it",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class _SeparationCorpusMixin:
+    """Shared fixture for `separate`'s integration tests: a two-section,
+    three-block corpus, every block `requires_facts: formulation` with NO
+    `document` half (`separate` reads `requires_facts` values directly,
+    never a recorded/declared binding), and a `proposals/` root carrying
+    lineage `field-survey`'s marker and current revision -- the worked
+    example's own invented vocabulary (design.md)."""
+
+    _CLAIMABLE_DOC = (
+        "# Field Survey of Widget Alignment\n\n"
+        "## 1. Background on widget metrics\n\nBody.\n\n"
+        "## 2. Alignment estimators\n\nBody.\n\n"
+        "## 3. Proposed alignment objective\n\nBody.\n\n"
+        "## 4. Calibration procedure\n\nBody.\n\n"
+        "## 5. Open problems\n\nBody.\n"
+    )
+
+    _ROUND_1 = {
+        "lineage": "field-survey",
+        "assignments": [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+            {"block": "methods.block-b", "fact": "formulation",
+             "sections": ["2. Alignment estimators", "4. Calibration procedure"]},
+            {"block": "methods.block-c", "fact": "formulation",
+             "sections": ["2. Alignment estimators"]},
+        ],
+    }
+
+    _BRANCH_A = {
+        "lineage": "field-survey",
+        "assignments": [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+            {"block": "methods.block-b", "fact": "formulation",
+             "sections": ["2. Alignment estimators", "3. Proposed alignment objective"]},
+            {"block": "methods.block-c", "fact": "formulation",
+             "sections": ["4. Calibration procedure", "5. Open problems"]},
+        ],
+    }
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.sections_dir = self.base / "sections"
+        self.sections_dir.mkdir()
+        self.paper_dir = self.base / "paper"
+        self._write_block_section("01-overview.md", "overview", [("block-a", "formulation")])
+        self._write_block_section(
+            "02-methods.md", "methods", [("block-b", "formulation"), ("block-c", "formulation")],
+        )
+        self.proposals = self.base / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "field-survey-r07.md").write_text(self._CLAIMABLE_DOC, encoding="utf-8")
+
+    def _write_block_section(self, filename: str, section_id: str, block_facts: list) -> None:
+        blocks = []
+        for block_id, fact in block_facts:
+            blocks.append({
+                "id": block_id,
+                "requires_facts": [{
+                    "value": fact,
+                    "source": {"file": f"sections/{filename}", "quote": "Prose here."},
+                }],
+                "requires_declarations": [], "citations": "none",
+            })
+        header = {"section": section_id, "position": 1, "blocks": blocks}
+        body = "Prose here.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _proposal_path(self, obj) -> Path:
+        path = self.base / "proposal.json"
+        path.write_text(json.dumps(obj), encoding="utf-8")
+        return path
+
+    def _compute(self, obj) -> dict:
+        return paper_cli.compute_separation(
+            self._proposal_path(obj), sections_dir=self.sections_dir, paper_dir=self.paper_dir,
+            source_base=self.base,
+        )
+
+
+class SeparationResolutionReuseTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 2.5/2.7/2.8: every title resolves through the SAME existence/
+    ambiguity path `bind` already uses, before any scoring runs."""
+
+    def test_an_unresolvable_title_refuses_before_scoring(self) -> None:
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation",
+                 "sections": ["9. Nothing like this exists"]},
+                {"block": "methods.block-b", "fact": "formulation",
+                 "sections": ["2. Alignment estimators"]},
+            ],
+        }
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+        self.assertIn("9. Nothing like this exists", ctx.exception.detail)
+
+    def test_an_ambiguous_title_refuses_before_scoring(self) -> None:
+        (self.proposals / "field-survey-r07.md").write_text(
+            self._CLAIMABLE_DOC.replace(
+                "## 2. Alignment estimators\n\nBody.\n\n",
+                "## 2. Alignment estimators\n\nBody.\n\n## 2. Alignment estimators\n\nBody.\n\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._ROUND_1)
+
+        self.assertEqual(ctx.exception.code, "SECTION_TITLE_AMBIGUOUS")
+        self.assertIn("2. Alignment estimators", ctx.exception.detail)
+
+
+class SeparationCorpusAnchoringTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 2.9/2.10: an assignment for a `(block, fact)` absent from the
+    assembled corpus's `requires_facts` is reported, never deleted or
+    invented, and contributes nothing to coverage."""
+
+    def test_an_unanchored_assignment_is_reported_and_scores_nothing(self) -> None:
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": list(self._BRANCH_A["assignments"]) + [
+                {"block": "no-such.block", "fact": "formulation",
+                 "sections": ["1. Background on widget metrics"]},
+            ],
+        }
+
+        result = self._compute(proposal)
+
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(result["unanchored"], [{"block": "no-such.block", "fact": "formulation"}])
+
+
+class SeparationRefusalPrecedenceTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 2.11-2.14: fixed precedence `overlap -> orphan -> gap`, ONE
+    refusal, and its detail names every present class plus all totals --
+    two properties, two separately-checkable tests (design.md Decision E)."""
+
+    def test_all_three_classes_present_raise_exactly_one_refusal(self) -> None:
+        """Task 2.11's own explicit, separately-checkable property: never
+        more than one code, even though round 1 carries defects in all
+        three classes at once."""
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._ROUND_1)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_OVERLAP")
+
+    def test_the_single_refusals_detail_names_every_class_and_every_total(self) -> None:
+        """Task 2.12's own explicit, separately-checkable property: the
+        SAME refusal from the test above also names every orphaned title,
+        the gapped block and title, and all four counted totals -- not
+        merely the overlapping title that decided which code fired. A test
+        that only checked `.code` above would pass an implementation that
+        silently dropped the orphan/gap detail from the message."""
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._ROUND_1)
+
+        detail = ctx.exception.detail
+        self.assertIn("2. Alignment estimators", detail)
+        self.assertIn("3. Proposed alignment objective", detail)
+        self.assertIn("5. Open problems", detail)
+        self.assertIn("methods.block-b", detail)
+        self.assertIn("total=4", detail)
+        self.assertIn("orphan=2", detail)
+        self.assertIn("overlap=1", detail)
+        self.assertIn("gap=1", detail)
+
+    def test_orphan_and_gap_with_no_overlap_raise_the_orphan_code(self) -> None:
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "methods.block-b", "fact": "formulation",
+                 "sections": ["1. Background on widget metrics",
+                              "3. Proposed alignment objective"]},
+            ],
+        }
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_ORPHANED")
+        self.assertIn("2. Alignment estimators", ctx.exception.detail)
+
+    def test_only_a_gap_raises_the_gap_code(self) -> None:
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation",
+                 "sections": ["1. Background on widget metrics",
+                              "3. Proposed alignment objective"]},
+                {"block": "methods.block-b", "fact": "formulation",
+                 "sections": ["2. Alignment estimators"]},
+                {"block": "methods.block-c", "fact": "formulation",
+                 "sections": ["4. Calibration procedure", "5. Open problems"]},
+            ],
+        }
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_NOTATION_GAP")
+
+    def test_mutation_disabling_the_overlap_branch_reddens_round_1(self) -> None:
+        """Reachability proof for `SEPARATION_SECTION_OVERLAP`'s own
+        wiring, distinct from `paper_separation.score_cut`'s own overlap
+        arithmetic (already proven in U1): if the dispatch never checked
+        overlap first, round 1 would raise the orphan code instead."""
+        proc = _run_against_mutant(
+            '    if result["overlap"]:\n        raise Refused("SEPARATION_SECTION_OVERLAP", detail)',
+            "    if False:\n        raise Refused(\"SEPARATION_SECTION_OVERLAP\", detail)",
+            "tests.test_paper_writing.SeparationRefusalPrecedenceTests"
+            ".test_all_three_classes_present_raise_exactly_one_refusal",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_disabling_the_orphan_branch_reddens_the_orphan_only_fixture(self) -> None:
+        """Reachability proof for `SEPARATION_SECTION_ORPHANED`'s own
+        wiring: disabling it falls through to the gap code instead, on a
+        fixture carrying both defects."""
+        proc = _run_against_mutant(
+            '    if result["orphan"]:\n        raise Refused("SEPARATION_SECTION_ORPHANED", detail)',
+            "    if False:\n        raise Refused(\"SEPARATION_SECTION_ORPHANED\", detail)",
+            "tests.test_paper_writing.SeparationRefusalPrecedenceTests"
+            ".test_orphan_and_gap_with_no_overlap_raise_the_orphan_code",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_relabeling_the_gap_code_reddens_the_gap_only_fixture(self) -> None:
+        """Reachability proof for `SEPARATION_NOTATION_GAP` itself: the
+        gap-only fixture must see THIS code, not a copy-pasted sibling."""
+        proc = _run_against_mutant(
+            'raise Refused("SEPARATION_NOTATION_GAP", detail)',
+            'raise Refused("SEPARATION_SECTION_ORPHANED", detail)',
+            "tests.test_paper_writing.SeparationRefusalPrecedenceTests"
+            ".test_only_a_gap_raises_the_gap_code",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class SeparationUnclaimableTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 2.15/2.16: a title resolving to a real heading outside the
+    claimable set, or an unmeasured claimable set, both refuse
+    `SEPARATION_SECTION_UNCLAIMABLE` -- never a silent pass."""
+
+    def test_naming_the_documents_own_title_refuses_unclaimable(self) -> None:
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation",
+                 "sections": ["Field Survey of Widget Alignment"]},
+            ],
+        }
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_UNCLAIMABLE")
+        self.assertIn("Field Survey of Widget Alignment", ctx.exception.detail)
+
+    def test_an_unmeasured_claimable_set_refuses_unclaimable_naming_the_reason(self) -> None:
+        """A headingless resolved revision reports `unmeasured` BEFORE any
+        per-title existence check runs -- naming ANY title against it
+        refuses `SEPARATION_SECTION_UNCLAIMABLE`, never `SECTION_NOT_IN_
+        SOURCE`, because there is no claimable set at all to resolve a
+        title's existence against in the first place."""
+        (self.proposals / "field-survey-r07.md").write_text(
+            "Just prose, no headings anywhere.\n", encoding="utf-8",
+        )
+        proposal = {
+            "lineage": "field-survey",
+            "assignments": [
+                {"block": "overview.block-a", "fact": "formulation", "sections": ["Anything"]},
+            ],
+        }
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_UNCLAIMABLE")
+        self.assertIn("NO_HEADINGS", ctx.exception.detail)
+
+    def test_mutation_disabling_the_claimability_check_reddens_the_own_title_fixture(self) -> None:
+        """Reachability proof for `SEPARATION_SECTION_UNCLAIMABLE`'s own
+        wiring in `compute_separation`, distinct from `paper_separation.
+        claimable_sections`'s own derivation (already proven in U1): a
+        title resolving to a real heading outside the claimable set must
+        still be caught HERE, at the per-title loop, or it silently
+        proceeds to scoring."""
+        proc = _run_against_mutant(
+            "            if title not in claimable_titles:",
+            "            if False:",
+            "tests.test_paper_writing.SeparationUnclaimableTests"
+            ".test_naming_the_documents_own_title_refuses_unclaimable",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class SeparateVerbEndToEndTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 2.17/2.18: `separate` is a real, registered `paper_cli.py`
+    verb, and a settled cut exits 0 naming the exact `bind` invocations --
+    never recording any of them (Phase 3 lands persistence)."""
+
+    def test_separate_is_a_registered_command(self) -> None:
+        self.assertIn("separate", paper_cli.COMMANDS)
+        self.assertIs(paper_cli._COMMANDS["separate"], paper_cli.cmd_separate)
+
+    def test_a_settled_cut_exits_clean_naming_every_bind_invocation(self) -> None:
+        result = self._compute(self._BRANCH_A)
+
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(len(result["bind_invocations"]), 3)
+        for invocation in result["bind_invocations"]:
+            self.assertTrue(invocation.startswith("bind --block "))
+        self.assertTrue(any("overview.block-a" in inv for inv in result["bind_invocations"]))
+
+    def test_cmd_separate_resolves_real_paths_and_refuses_containment(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-separate-outside-{os.getpid()}"
+        args = argparse.Namespace(paper=None, sections=None, proposal=str(outside))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_separate(args)
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
 
 
 if __name__ == "__main__":
