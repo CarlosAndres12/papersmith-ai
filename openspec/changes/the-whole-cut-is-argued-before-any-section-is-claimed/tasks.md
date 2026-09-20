@@ -12,8 +12,18 @@ blocking on a number the owner does not govern by; the ledger ceiling is set
 high so it records rather than blocks, and the engine figure is measured
 directly at each unit.
 
-Engine budget: **1600 lines**. Measured after U2: **577**
-(`paper_cli.py` 348, `paper_separation.py` 151, `paper_graph.py` 78).
+Engine budget: **1600 lines**.
+
+| point | engine lines |
+|---|---|
+| after U2 | 577 |
+| after U3+U4 | 798 |
+| after U6 | 1145 |
+| after U5 (docs only) | 1145 |
+| **final** | **1145 of 1600** |
+
+Measured at each unit by summing the diff under
+`.claude/skills/paper-writing/scripts/`, never read from an artifact.
 
 ## Review Workload Forecast
 
@@ -159,7 +169,7 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 6: U5 — Docs, Roster Re-Derivation, Final Gate Re-Run
 
-- [x] 6.1 Update `.claude/skills/paper-writing/SKILL.md` AND `.claude/skills/paper-writing/references/usage.md` with the two-step loop (`separate` → `bind`) — both files; a doc fix that stops at `SKILL.md` is half a fix (Decision J). **Deviation, reported not silently forced (see report):** `.claude/skills/paper-writing/references/usage.md` does not exist and never has — verified via `git ls-files` and `fd -I -H`, unlike the three sibling skills the design's Decision J generalized from. SKILL.md is this skill's only documentation surface (1108 → 1249 lines); the full two-step loop, both verbs' refusal tables and a Decision Gates block landed there. No second file was fabricated to force a premise this skill's own structure does not hold.
+- [x] 6.1 Update `.claude/skills/paper-writing/SKILL.md` AND `.claude/skills/paper-writing/references/usage.md` with the two-step loop (`separate` → `bind`) — both files; a doc fix that stops at `SKILL.md` is half a fix (Decision J). **Deviation, reported not silently forced (see report):** `.claude/skills/paper-writing/references/usage.md` does not exist and never has — verified via `git ls-files` and `fd -I -H`, unlike the four sibling skills the design's Decision J generalized from. SKILL.md is this skill's only documentation surface (1108 → 1249 lines); the full two-step loop, both verbs' refusal tables and a Decision Gates block landed there. No second file was fabricated to force a premise this skill's own structure does not hold.
 - [x] 6.2 Confirm both docs use only invented example names — no real lineage, section-title, or paper-id literal. Confirmed for SKILL.md (the only doc file); reused design.md's own invented convention (`field-survey`, `overview.block-a`, `methods.block-b`, `"1. Background on widget metrics"`, …).
 - [x] 6.3 Generality sweep: `rg` under `.claude/skills/` and the forge suite for any block id, section title, document filename, paper id, subject word, or revision-pattern literal of the paper being written; confirm empty. Zero hits in `.claude/skills/paper-writing/` and its own test files, before and after this phase's edit (see report for the derived-vocabulary word list and counts).
 - [x] 6.4 Re-run `.venv/bin/python -m unittest tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests` (the GATE-0 audit, task 0.1) now that all code has landed; confirm still green. 21 tests, 1 known pre-existing failure (`test_rule_b_finds_no_target_vocabulary_in_the_forge`, over "mechanisms" in `experimental-deliberation/SKILL.md` — not this change's scope), no new failure.
