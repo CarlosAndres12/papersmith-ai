@@ -141,3 +141,38 @@ everywhere else, mirroring `source_roots`'s own report shape.
 - [x] 5.9 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for the paper's own subject words, section titles, and block ids in every new comment/docstring this phase adds; zero new matches.
 - [x] 5.10 Report the corpus's remaining nine bindings to the owner, marked owner-ruled vs agent-derived, so the owner may strike any of them; remove none beyond the two named in 5.6.
 - [x] 5.11 Ran `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions` (732/732, green) AND the full baseline (`npm test`; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`); confirmed zero new failures beyond the known pre-existing one.
+
+## Phase 6 — U3c: A second prose root is proven by fixture, not waived for being empty
+
+The design's own stated risk — "generality over `experiments/` rests entirely on a synthetic
+fixture" — was recorded but never discharged: every full-path test (marker read, lineage
+resolution, section existence/ambiguity, the `undecided`/`write` tier boundary) ran only against
+`proposals`, the one `PROSE`-kind root this checkout happens to populate. Tests only; zero engine
+edits landed or were needed.
+
+- [x] 6.1 Add `SecondProseRootGeneralityTests` (`tests/test_paper_writing.py`) driving the full
+      corpus-assembly path — marker read, lineage resolution, section existence/ambiguity,
+      multi-title binding, the `unmeasured`/`SOURCE_REVISIONS_UNDECLARED` distinction, and the
+      read-time `undecided` report — against `experiments` (the second `PROSE`-kind root
+      `FACT_SOURCE_ROOT` already declares), using an invented lineage (`field-log`) and invented,
+      generic section titles at a marker width (3 digits) that is deliberately not the live root's
+      own (2).
+- [x] 6.2 Add `SecondProseRootWriteGateTests`, proving the `write`-only `SECTION_BINDING_ABSENT`
+      tier boundary (U3b, Decision H) through the REAL `cmd_write` root against this second root,
+      mirroring `SourceSectionBindingWriteGateTests.test_write_refuses_section_binding_absent`.
+- [x] 6.3 RED: for each behaviour, mutate the engine and confirm the corresponding new test on
+      this second root goes red before it is trusted green — marker-declared width overriding the
+      live root's own default (`digits = marker["ordinal_digits"]` → `digits = 2`), highest-ordinal
+      selection (`max` → `min`), multi-title masking (`paper_contract.requirement_documents`'s list
+      expansion collapsed to its first title), the undeclared-marker guard (`if marker is None:` →
+      `if False:`), and the `write`-gate absence check (`if fact_id not in bound_fact_ids:` →
+      `if False:`) — six mutation runs total, all confirmed red under mutation and green on the
+      unmutated engine.
+- [x] 6.4 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for every invented
+      fixture word this phase adds (`field-log`, its section titles); zero matches — the engine
+      remains untouched.
+- [x] 6.5 Update `design.md` (Decision C) to record the risk as discharged, with what discharged
+      it, and add a Work Units row for U3c.
+- [x] 6.6 Ran `.venv/bin/python -m unittest tests.test_paper_writing.SecondProseRootGeneralityTests tests.test_paper_writing.SecondProseRootWriteGateTests` (13/13, green) AND the full baseline
+      (`npm test`: 640/640; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`);
+      confirmed zero new failures beyond the known pre-existing one.

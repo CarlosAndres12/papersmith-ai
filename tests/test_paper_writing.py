@@ -2568,6 +2568,320 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self.assertNotIn("1. Intro", ctx.exception.detail)
 
 
+class SecondProseRootGeneralityTests(unittest.TestCase):
+    """U3c (design.md's own stated risk, discharged): every check
+    `SourceSectionBindingCorpusTests` above proves against `proposals` --
+    the only `PROSE`-kind root actually populated on this checkout -- is
+    proven again here against `experiments`, the SECOND `PROSE`-kind root
+    already declared in `FACT_SOURCE_ROOT` (holding only `.gitkeep` on
+    this checkout). The full path -- marker read, lineage resolved to a
+    current revision, section existence and ambiguity per title, the
+    `undecided`/`write` tier boundary -- is driven through an invented
+    lineage (`field-log`) and invented section titles that name nothing
+    any shipped contract binds to, at a marker width (3 digits) that is
+    NOT the live root's own (2)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.sections_dir = self.base / "sections"
+        self.sections_dir.mkdir()
+
+    def _write_section(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _bound_header(self, section_title, *, lineage: str = "field-log") -> dict:
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only",
+                "requires_facts": [{
+                    "value": "experimental-design",
+                    "source": {"file": "sections/01-a.md", "quote": "The design, written here."},
+                    "document": {"lineage": lineage, "section": section_title},
+                }],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
+    def _unbound_header(self) -> dict:
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only",
+                "requires_facts": [{
+                    "value": "experimental-design",
+                    "source": {"file": "sections/01-a.md", "quote": "The design, written here."},
+                }],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
+    _BODY = (
+        "The design, written here.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+
+    def _marker(self, root: Path, *, prefix: str = "v", digits: int = 3) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def test_the_markers_own_declared_width_governs_resolution_not_the_live_roots_default(
+        self,
+    ) -> None:
+        """This root's marker declares `ordinal_digits: 3` -- the live
+        `proposals/.paper-writing.json` declares 2. `field-log-v05.md` (a
+        two-digit ordinal) MUST be excluded under this root's own declared
+        width, leaving exactly one candidate; nothing here silently
+        depends on a two-digit default."""
+        self._write_section("01-a.md", self._bound_header("1. Setup Notes"), self._BODY)
+        experiments = self.base / "experiments"
+        self._marker(experiments, prefix="v", digits=3)
+        (experiments / "field-log-v05.md").write_text("# 0. Decoy\n", encoding="utf-8")
+        (experiments / "field-log-v005.md").write_text("# 1. Setup Notes\n", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_mutation_hardcoding_the_live_roots_default_width_breaks_this_roots_resolution(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            '    digits = marker["ordinal_digits"]',
+            "    digits = 2",
+            "tests.test_paper_writing.SecondProseRootGeneralityTests"
+            ".test_the_markers_own_declared_width_governs_resolution_not_the_live_roots_default",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_lineage_resolves_to_the_highest_ordinal_and_a_further_revision_moves_it_free(
+        self,
+    ) -> None:
+        """The change's own headline property -- 'a version bump costs
+        nothing' -- proven on a root other than the one it was developed
+        against: the highest-ordinal revision wins with gaps between
+        ordinals, and publishing a further revision moves resolution with
+        no edit to the binding above."""
+        self._write_section("01-a.md", self._bound_header("1. Setup Notes"), self._BODY)
+        experiments = self.base / "experiments"
+        self._marker(experiments)
+        (experiments / "field-log-v005.md").write_text("# 0. Draft Notes\n", encoding="utf-8")
+        (experiments / "field-log-v012.md").write_text("# 0. Draft Notes\n", encoding="utf-8")
+        (experiments / "field-log-v020.md").write_text("# 1. Setup Notes\n", encoding="utf-8")
+
+        first = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- picks v020
+        self.assertIn("a.only", first.blocks)
+
+        (experiments / "field-log-v031.md").write_text("# 1. Setup Notes\n", encoding="utf-8")
+
+        second = paper_graph.assemble_corpus(self.sections_dir)  # no edit to the binding
+        self.assertIn("a.only", second.blocks)
+
+    def test_mutation_picking_the_lowest_ordinal_breaks_this_roots_resolution(self) -> None:
+        proc = _run_against_mutant(
+            "    max_ordinal = max(ordinal for ordinal, _path in candidates)",
+            "    max_ordinal = min(ordinal for ordinal, _path in candidates)",
+            "tests.test_paper_writing.SecondProseRootGeneralityTests"
+            ".test_lineage_resolves_to_the_highest_ordinal_and_a_further_revision_moves_it_free",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_binding_naming_two_sections_resolves_both_on_this_root(self) -> None:
+        self._write_section(
+            "01-a.md", self._bound_header(["1. Setup Notes", "2. Session Records"]), self._BODY,
+        )
+        experiments = self.base / "experiments"
+        self._marker(experiments)
+        (experiments / "field-log-v005.md").write_text(
+            "# 1. Setup Notes\n\n# 2. Session Records\n", encoding="utf-8",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_one_missing_title_among_several_names_only_that_title_on_this_root(self) -> None:
+        self._write_section(
+            "01-a.md", self._bound_header(["1. Setup Notes", "9. Missing Log"]), self._BODY,
+        )
+        experiments = self.base / "experiments"
+        self._marker(experiments)
+        (experiments / "field-log-v005.md").write_text("# 1. Setup Notes\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+        self.assertIn("9. Missing Log", ctx.exception.detail)
+        self.assertNotIn("1. Setup Notes", ctx.exception.detail)
+
+    def test_mutation_collapsing_the_title_list_masks_the_missing_sibling_on_this_root(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "        titles = section if isinstance(section, list) else (section,)",
+            "        titles = (section[0] if isinstance(section, list) else section,)",
+            "tests.test_paper_writing.SecondProseRootGeneralityTests"
+            ".test_one_missing_title_among_several_names_only_that_title_on_this_root",
+            source_path=SKILL_SCRIPTS / "paper_contract.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_an_ambiguous_title_refuses_section_title_ambiguous_on_this_root(self) -> None:
+        self._write_section("01-a.md", self._bound_header("1. Setup Notes"), self._BODY)
+        experiments = self.base / "experiments"
+        self._marker(experiments)
+        (experiments / "field-log-v005.md").write_text(
+            "# 1. Setup Notes\n\n# 1. Setup Notes\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_TITLE_AMBIGUOUS")
+
+    def test_second_root_reports_unmeasured_then_refuses_once_it_holds_undeclared_documents(
+        self,
+    ) -> None:
+        """Both `source-section-binding` states, proven distinguishable on
+        `experiments` exactly as they already are on `proposals`: an
+        absent root is `unmeasured` and a bound entry over it raises
+        nothing; the SAME root, once it holds a document but no marker,
+        refuses `SOURCE_REVISIONS_UNDECLARED` -- never a silent
+        `unmeasured` report."""
+        self._write_section("01-a.md", self._bound_header("1. Setup Notes"), self._BODY)
+
+        first = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- root absent
+        self.assertEqual(first.source_roots["experiments"]["state"], "unmeasured")
+
+        experiments = self.base / "experiments"
+        experiments.mkdir()
+        (experiments / "field-log-v005.md").write_text("# 1. Setup Notes\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+        self.assertIn("experiments", ctx.exception.detail)
+
+    def test_mutation_removing_the_undeclared_guard_breaks_on_this_root(self) -> None:
+        proc = _run_against_mutant(
+            "                    if marker is None:",
+            "                    if False:",
+            "tests.test_paper_writing.SecondProseRootGeneralityTests"
+            ".test_second_root_reports_unmeasured_then_refuses_once_it_holds_undeclared_documents",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_an_unbound_entry_under_this_root_reports_undecided_at_read_time(self) -> None:
+        self._write_section("01-a.md", self._unbound_header(), self._BODY)
+        experiments = self.base / "experiments"
+        experiments.mkdir()
+        (experiments / "field-log-v005.md").write_text("# 0. Draft Notes\n", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(
+            corpus.undecided_bindings["a.only"]["experimental-design"]["state"], "undecided",
+        )
+        self.assertEqual(
+            corpus.undecided_bindings["a.only"]["experimental-design"]["root"], "experiments",
+        )
+
+
+class SecondProseRootWriteGateTests(unittest.TestCase):
+    """U3c: the `write`-only tier boundary (`source-section-binding` spec,
+    `Requirement: A Bindable Fact With No Binding Is Undecided, And
+    Refuses Only At write`) proven through the REAL `cmd_write` root
+    against `experiments`, mirroring `SourceSectionBindingWriteGateTests
+    .test_write_refuses_section_binding_absent` on a root that is not
+    `proposals`."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-second-root-write-gate-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+    def _args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def test_write_refuses_section_binding_absent_on_a_second_root(self) -> None:
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "experimental-design",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The design, written here.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            }) + "\n---\n\nThe design, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        experiments = self.test_root / "experiments"
+        experiments.mkdir()
+        (experiments / "field-log-v005.md").write_text("# 0. Draft Notes\n", encoding="utf-8")
+
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        before = tex_path.read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args())
+
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+        self.assertFalse((self.test_root / "draft.json").exists())
+        self.assertFalse((self.test_root / "audit.json").exists())
+        self.assertEqual(tex_path.read_bytes(), before)
+
+    def test_mutation_removing_the_absence_check_lets_this_root_pass_write(self) -> None:
+        proc = _run_against_mutant(
+            "            if fact_id not in bound_fact_ids:\n",
+            "            if False:\n",
+            "tests.test_paper_writing.SecondProseRootWriteGateTests"
+            ".test_write_refuses_section_binding_absent_on_a_second_root",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
 class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
     """U2c corpus-level acceptance: a `dataset`-bound entry resolves
     through the evidence-classed `guidance/` root, identity not

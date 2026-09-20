@@ -91,6 +91,19 @@ with **zero edits** — the direct mitigation for the proposal's top risk. Defau
 directory reports its roots unmeasured rather than refusing; the report names the base it looked
 under, so the condition is visible rather than inferred.
 
+**Risk discharged (U3c):** exploration.md's own caveat — "`experiments/` is empty except
+`.gitkeep` in this checkout, so generality over that root can only be exercised against a
+synthetic fixture" — named a real gap: every full-path test (marker read, lineage resolution,
+section existence/ambiguity, the `undecided`/`write` tier boundary) ran only against `proposals`,
+the one `PROSE`-kind root this checkout happens to populate. `SecondProseRootGeneralityTests` and
+`SecondProseRootWriteGateTests` (`tests/test_paper_writing.py`) now drive the identical full path
+against `experiments` — the second `PROSE`-kind root `FACT_SOURCE_ROOT` already declares — using an
+invented lineage (`field-log`) and invented section titles, at a marker width (3 digits) that is
+deliberately not the live root's own (2). Six mutation runs (marker width, max-ordinal selection,
+multi-title masking, the undeclared-marker guard, and the `write`-gate absence check) confirm each
+behaviour is reachable on this second root, not merely on the one it was developed against. No
+engine edit was needed to make any of this pass — the caveat was a coverage gap, not a defect.
+
 ### D — Current revision: highest ordinal, exactly one
 
 Candidates are the files under the root matching the composed regex. The winner is the **highest
@@ -362,6 +375,7 @@ so an untracked fixture cannot pass on a no-op edit:
 | **DP** | **Owner rules on any entry that cannot be anchored** | **blocking** | — |
 | U3 | Transcribe corpus bindings, obligation unconditional (`SECTION_BINDING_ABSENT`), refusal wired at `write`, ship `proposals/.paper-writing.json`, fixtures, roster re-derived | ~170 | yes |
 | U3b | Correctness repair: an undecided binding reports (`Corpus.undecided_bindings`, mirroring `source_roots`), `SECTION_BINDING_ABSENT` refuses at `write` ONLY (Decision H); removes the two invented bindings (`introduction.block-4a`, `abstract.slot-3`) U3's own apply transcribed under this same pressure | engine-only, well under budget (owner ruling: budget counts engine lines) | yes |
+| U3c | Discharges the stated `experiments/` generality risk: the full marker/lineage/section/`undecided`-`write` path proven against a SECOND `PROSE`-kind root, tests-only, zero engine edits | tests-only, well under budget | yes |
 
 Estimated total **~470 changed lines** against the 400-line budget — above the proposal's ~440
 because the marker reader and its two codes were added by the Question-1 ruling.
