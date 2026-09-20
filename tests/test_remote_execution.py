@@ -21636,33 +21636,91 @@ class ColabSessionLifecycleTests(unittest.TestCase):
             self.assertEqual(len(probes), 2, "one probe before, one re-probe after")
             self.assertNotIn("stop", sim.subcommands())
 
-    def test_colab_submit_refuses_declared_accelerator_until_slice_s4(self) -> None:
+    def test_colab_accelerator_mapping_and_refusals(self) -> None:
+        """SD18/D13: a declared `sm_*` architecture becomes the matching
+        `--gpu` variant on `new`, and anything the table cannot map
+        refuses BEFORE any CLI call — never a silent CPU fallback, and
+        never an invented TPU mapping.
+        """
+
+        def config_with(accelerator: object) -> dict:
+            return {
+                "schemaVersion": 1,
+                "commit": "c" * 40,
+                "repo": {
+                    "url": "https://example.invalid/repo.git",
+                    "ref": "refs/heads/main",
+                },
+                "clonePaths": ["src/pkg"],
+                "run": {"module": "pkg.harness", "function": "run", "kwargs": {}},
+                "accelerator": accelerator,
+            }
+
+        for architecture, variant in (
+            ("sm_75", "T4"),
+            ("sm_80", "A100"),
+            ("sm_90", "H100"),
+        ):
+            with self.subTest(mapped=architecture):
+                with tempfile.TemporaryDirectory() as tmp:
+                    sim = _ColabCLISimulator(tmp)
+                    sim.scenario(**self._fast_knobs())
+                    folder = self._job_folder(
+                        tmp,
+                        config=config_with(
+                            {"kind": "cuda", "architectures": [architecture]}
+                        ),
+                    )
+                    adapter = self._adapter(sim)
+                    submission = self._submit(adapter, folder)
+                    adapter.cancel(submission.id)
+                    new_calls = [entry for entry in sim.invocations() if entry[0] == "new"]
+                    self.assertEqual(len(new_calls), 1)
+                    self.assertIn("--gpu", new_calls[0])
+                    self.assertEqual(
+                        new_calls[0][new_calls[0].index("--gpu") + 1], variant
+                    )
+
+        refusals = {
+            "unknown architecture": {"kind": "cuda", "architectures": ["sm_50"]},
+            "tpu kind": {"kind": "tpu", "architectures": ["sm_75"]},
+            "other kind": {"kind": "xgpu", "architectures": ["sm_75"]},
+            "zero architectures": {"kind": "cuda", "architectures": []},
+            "two architectures": {
+                "kind": "cuda",
+                "architectures": ["sm_75", "sm_80"],
+            },
+            "non-list architectures": {"kind": "cuda", "architectures": "sm_75"},
+        }
+        for label, accelerator in refusals.items():
+            with self.subTest(refused=label):
+                with tempfile.TemporaryDirectory() as tmp:
+                    sim = _ColabCLISimulator(tmp)
+                    sim.scenario(**self._fast_knobs())
+                    folder = self._job_folder(tmp, config=config_with(accelerator))
+                    adapter = self._adapter(sim)
+                    with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                        self._submit(adapter, folder)
+                    if label == "unknown architecture":
+                        self.assertIn("sm_50", str(ctx.exception))
+                        self.assertIn("sm_75", str(ctx.exception))
+                    self.assertEqual(
+                        sim.invocations(),
+                        [],
+                        "the refusal must land before any CLI call at all",
+                    )
+
+        # No declared block: no flag, exactly as before this existed.
         with tempfile.TemporaryDirectory() as tmp:
             sim = _ColabCLISimulator(tmp)
             sim.scenario(**self._fast_knobs())
-            folder = self._job_folder(
-                tmp,
-                config={
-                    "schemaVersion": 1,
-                    "commit": "c" * 40,
-                    "repo": {
-                        "url": "https://example.invalid/repo.git",
-                        "ref": "refs/heads/main",
-                    },
-                    "clonePaths": ["src/pkg"],
-                    "run": {"module": "pkg.harness", "function": "run", "kwargs": {}},
-                    "accelerator": {"kind": "cuda", "architectures": ["sm_75"]},
-                },
-            )
+            folder = self._job_folder(tmp)
             adapter = self._adapter(sim)
-            with self.assertRaises(COLAB.ColabAdapterError) as ctx:
-                self._submit(adapter, folder)
-            self.assertIn("S4", str(ctx.exception))
-            self.assertEqual(
-                sim.invocations(),
-                [],
-                "the refusal must land before any CLI call at all",
-            )
+            submission = self._submit(adapter, folder)
+            adapter.cancel(submission.id)
+            new_calls = [entry for entry in sim.invocations() if entry[0] == "new"]
+            self.assertEqual(len(new_calls), 1)
+            self.assertNotIn("--gpu", new_calls[0])
 
     # -- poll: the mapping table and the retry rule ------------------------
 
@@ -21949,7 +22007,9 @@ class ColabSessionLifecycleTests(unittest.TestCase):
         """
         captured_subcommands = {"new", "sessions", "status", "stop", "exec",
                                 "upload", "download", "install", "keep-alive"}
-        captured_flags = {"-s", "-f", "--timeout"}
+        # `--gpu` joined this set with S4's mapping table: it is in the same
+        # captured `help-new.log` surface as the rest of `new`'s flags.
+        captured_flags = {"-s", "-f", "--timeout", "--gpu"}
         with tempfile.TemporaryDirectory() as tmp:
             sim = _ColabCLISimulator(tmp)
             sim.scenario(**self._fast_knobs())

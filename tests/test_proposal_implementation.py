@@ -8329,6 +8329,25 @@ FORGE_FLOOR_SURFACE_ADMISSIONS: dict[str, dict[str, str]] = {
                     "in the paragraph about a probe whose budget a real "
                     "transfer exceeded; ordinary English, named by no target",
     },
+    "remote-execution/assets/colab/executor.py": {
+        "ceiling": "ordinary English for the execution bound this file sets "
+                   "for one notebook — the word the sentence needs to say "
+                   "which bound is not the CLI's helper budget, named by no "
+                   "target",
+    },
+    "remote-execution/scripts/adapters/colab.py": {
+        "kaggle": "one sentence naming the sibling adapter whose "
+                  "`sys.modules`-reuse technique this module follows — a "
+                  "file path, the same way the push hook's own admission "
+                  "names a path, not a loan from any research project",
+        "t4": "the accelerator variant this adapter requests by name; the "
+              "file is the one the doctrine designates to know what the "
+              "service offers, and the variant table cannot name the "
+              "machines without naming them",
+        "transfer": "ordinary English for the per-file upload/download size "
+                    "class throughout the timeout section and the fetch "
+                    "docstring; git's word, named by no target",
+    },
     "remote-execution/scripts/adapters/kaggle.py": {
         "kaggle": "the one file in this forge its own doctrine designates as "
                   "allowed to name a service, which is the seam that keeps "

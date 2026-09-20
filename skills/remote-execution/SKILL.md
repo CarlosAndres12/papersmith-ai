@@ -695,7 +695,7 @@ executable — no test in this suite reaches the network or a real account).
 | 2 | `pin-is-head` | The pin is HEAD, or nothing changed between the pin and HEAD under the declared clone paths. `unknown` refuses as firmly as `drift`. | `generate-job`, `submit` | The changed clone paths, the pin and HEAD, and git's own message |
 | 3 | `declared-paths-exist` | Every declared clone path exists at the pin — `git cat-file -e <pin>:<path>`, asked of the pin and never of the working tree. `sparse-checkout` accepts a path the tree does not contain and fetches nothing for it, silently. | `generate-job`, `submit` | Every absent path, and that the remedy is committing them and pinning the commit that carries them |
 | 4 | `declared-notebook-reachable` | Every notebook the run block declares (`run.notebook`, `run.smoke.notebook`) is covered by a declared clone path AND exists at the pin — `git cat-file -e <pin>:<notebook>`. Nothing imports a notebook, so the import cross-check has no representative for it and `sparse-checkout` reports nothing for a path its patterns do not cover. A job declaring no notebook passes through untouched. | `generate-job`, `submit` | Every notebook no clone path covers, every notebook absent at the pin, and the remedy for each |
-| 5 | `pin-published` | The declared remote can serve the pin — `git fetch --dry-run --depth 1` from a scratch repository. | `generate-job`, `submit` | The commit, the remote URL, the missing push addressed to `--repo-ref`, and git's own message |
+| 5 | `pin-published` | The declared remote can serve the pin — `git fetch --dry-run --depth 1` from a scratch repository. Credentialless that probe is anonymous; with `--repo-credential` it authenticates through the staged askpass material (see the Colab environment block) and an SSH-shaped `--repo-url` refuses by name. | `generate-job`, `submit` | The commit, the remote URL, the missing push addressed to `--repo-ref`, and git's own message |
 
   **Why condition (1) exists, and why it is `status` and not `diff`.**
   `resolve_clone_paths()` walks the WORKING TREE. Without this condition
@@ -772,15 +772,25 @@ executable — no test in this suite reaches the network or a real account).
      and running any depth inside your repository would leave those objects
      there (12.8 MiB per generation, measured against this project's own
      remote).
-  3. **It is unauthenticated, and stays that way.** The child's environment
-     is built from an allowlist that admits `PATH`, proxy configuration and
-     the trust store, and admits no credential helper, no agent socket and
-     no `HOME`. `runner_bootstrap.py` clones with no credential step at
-     all, so a probe that authenticated would pass jobs whose runner can
-     never clone the repository — the same defect one layer up. An SSH
-     `--repo-url` is not refused on sight; it is probed like any other and,
-     if it fails, the refusal says the probe was unauthenticated so the
-     failure is not misread as a local accident.
+  3. **It is unauthenticated by default — and, with `--repo-credential`,
+     it authenticates exactly because the runner will.** Credentialless,
+     the child's environment is built from an allowlist that admits
+     `PATH`, proxy configuration and the trust store, and admits no
+     credential helper, no agent socket and no `HOME`;
+     `runner_bootstrap.py` clones with no credential step either, so a
+     probe that authenticated would pass jobs whose runner can never
+     clone the repository — the same defect one layer up. An SSH
+     `--repo-url` is not refused on sight; it is probed like any other
+     and, if it fails, the refusal says the probe was unauthenticated so
+     the failure is not misread as a local accident. With
+     `--repo-credential`, the amendment S3 adds: the credential is
+     staged for the RUNNER too (uploaded beside the executor, used by
+     `clone_repo()`'s clone) and both transports are pinned to
+     `https://` — with a credential, only `https://` remotes are
+     admissible, an SSH-shaped remote refuses by name, and every other
+     scheme refuses naming the rule. The credential value itself rides
+     `_run_git()`'s `extra_env`, a per-call channel separate from the
+     allowlist above, which this route never widens.
   4. **It owns its own time budget, `PIN_PUBLISHED_TIMEOUT_SECONDS` (240s)
      — a SEPARATE constant from `GIT_TIMEOUT_SECONDS` (120s), never the
      same one reused (Finding 4 case A).** That local budget times the two
@@ -1502,6 +1512,51 @@ installed and still unreachable, which reads exactly like not having
 installed it. A backend that cannot be found refuses by name and says this —
 see `KaggleAdapter._run` and `kaggle_driver.py`'s own import-time refusal —
 rather than surfacing a raw traceback and leaving a reader to guess.
+
+**The Colab backend (`adapters/colab.py`).** Installed as the service's own
+headless CLI, pinned exactly:
+
+```
+uv tool install --force --python 3.14 google-colab-cli --with "jupyter-kernel-client<1"
+```
+
+The pin is not decorative: `google-colab-cli` 0.6.0 with
+`jupyter-kernel-client` 1.x crashes every `exec` (`AttributeError: module
+'jupyter_kernel_client' has no attribute 'KernelClient'`; upstream #94), so
+the working combination is 0.6.0 with the 0.x client that a bare dependency
+resolution does not pick. The adapter shells out to `colab` on `PATH` by
+default; a non-default location can be supplied as `colab_executable` when
+constructing `ColabAdapter` directly.
+
+Authentication is the CLI's own oauth2 consent ritual — run any `colab`
+command once in a terminal and approve it — and the adapter never reads
+`~/.config/colab-cli/token.json`: the CLI's own child process resolves it
+from the `HOME` the adapter forwards, and no module above the seam learns a
+path to it.
+
+Sessions are expensive and idle-reclaimed, so release is part of the flow,
+not housekeeping: `fetch` stops a session only AFTER the manifest has
+landed AND the run is terminal; the adapter spawns the CLI's own keep-alive
+(best-effort) to hold a session through a long run; a released or expired
+session is simply gone, and the operator's own `colab stop -s <name>` is
+the manual exit. When you are done with a session, stop it — an abandoned
+one burns the account's capacity until the service reclaims it.
+
+**Never read, copy or print `~/.config/colab-cli/sessions.json`.** It
+carries a live per-session access token beside each session record
+(measured in spike S0), which makes it credential-grade: every session fact
+this skill uses comes from the CLI's own stdout instead.
+
+**Private repositories: `--repo-credential` (both `submit` and
+`generate-job`).** It names a token file; only backends that declare
+`REPO_CREDENTIAL_CARRIER` accept it (the Colab adapter does), and with it
+only `https://` remotes are admissible — an SSH-shaped remote refuses by
+name, because the runner's clone has no SSH agent and no key, and every
+other scheme refuses naming the rule. The reachability probe authenticates
+through the same staged material the runner's clone uses, so a pass means
+the RUNNER can clone. The bytes are read at exactly one expression per
+site, never appear on argv, in `run-config.json`, in the job folder or in
+the ledger, and the staged material is deleted on the VM after the run.
 
 A second backend brings its own answer to this section: nothing above the
 adapter seam knows a service exists, so nothing above it knows what a service

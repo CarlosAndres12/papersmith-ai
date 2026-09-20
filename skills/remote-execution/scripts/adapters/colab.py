@@ -49,9 +49,12 @@ Slice status, stated so a refusal is never a mystery: this file owns the
 S1 surface (registration, the static worker, `list_active()`, `cancel()`),
 the S2 session lifecycle (`submit()`, `poll()`, `fetch()` — uploads,
 the detached launch, the `/content/.psmith/<session>/` sentinel protocol,
-downloads, release), and the S3 repo-credential route
+downloads, release), the S3 repo-credential route
 (`REPO_CREDENTIAL_CARRIER`, the `repo_credential_path` constructor
-parameter, the staged askpass material).
+parameter, the staged askpass material), and the D13 accelerator mapping
+(`COLAB_ACCELERATOR_VARIANTS`: a declared `sm_*` architecture becomes the
+matching `--gpu` variant on `new`, and anything the table cannot map
+refuses by name rather than silently running on CPU).
 
 Measured against `google-colab-cli` 0.6.0, live (spike S0; evidence in
 `proposals/colab-cli-spike/findings.md`):
@@ -180,6 +183,16 @@ COLAB_SUBPROCESS_SLACK_SECONDS = 30.0
 # The three distributions `executor.py` needs on the VM (measured present
 # live; the probe exists for the machines where they are not).
 PROBE_PACKAGES = ("nbclient", "nbformat", "jupyter_client")
+
+# D13's declared-architecture → GPU-variant table: the `sm_*` names this
+# project's dual-architecture torch builds declare, mapped to the variant
+# names `colab new --gpu` accepts (all three are in the captured
+# `help-new.log` surface, S0 fact 4). A declared architecture outside this
+# table refuses by name — never a fallback to CPU — and TPU kinds are
+# refused outright, because no `--tpu` mapping is invented here. This table
+# only decides which machine arrives; the VM-side `check_accelerator()`
+# remains the authority on whether that machine can run the build.
+COLAB_ACCELERATOR_VARIANTS = {"sm_75": "T4", "sm_80": "A100", "sm_90": "H100"}
 
 # The two job-folder names this adapter knows: `run-config.json` beside
 # the entrypoint is what makes a submission shaped like this backend's
@@ -687,14 +700,75 @@ class ColabAdapter(ADAPTER.Adapter):
                 "resubmitting this same job."
             )
 
-    def _new_session(self, session_name: str) -> None:
-        """Provision one machine, requiring the measured positive
-        confirmation (`Session READY`) rather than a bare exit code.
+    def _accelerator_variant(self, accelerator: object) -> str | None:
+        """The `--gpu` variant a declared `accelerator` block maps to, or
+        `None` when the run-config declares no block at all (CPU, exactly
+        as before this existed).
+
+        Fail-closed in every direction (SD18/D13), because every failure
+        here is one the VM-side gate could not catch except after session
+        spend: `kind` must be `cuda` (a TPU refuses — no `--tpu` mapping
+        is invented), exactly one architecture string is required (zero
+        or two cannot choose a machine, and a non-list is not a shape
+        this protocol writes), and an architecture absent from
+        `COLAB_ACCELERATOR_VARIANTS` refuses naming both the declared
+        value and the table. The declared block still travels unchanged
+        to the VM, where `check_accelerator()` remains the authority: it
+        compares the declared `sm_*` names against the torch build
+        actually installed on the arriving machine.
         """
-        result = self._run(
-            [self._colab_executable, "new", "-s", session_name],
-            timeout=self._new_timeout,
-        )
+        if accelerator is None:
+            return None
+        if not isinstance(accelerator, dict):
+            raise ColabAdapterError(
+                f"run-config.json's 'accelerator' block is "
+                f"{type(accelerator).__name__}, not an object; refusing to "
+                "guess at which machine this job needs"
+            )
+        kind = accelerator.get("kind")
+        if kind != "cuda":
+            raise ColabAdapterError(
+                f"run-config.json declares accelerator kind {kind!r}, and "
+                "this backend maps only 'cuda' architectures to a GPU "
+                "variant (D13); a TPU is never requested here. Refusing "
+                "rather than silently running the job on CPU."
+            )
+        architectures = accelerator.get("architectures")
+        if (
+            not isinstance(architectures, list)
+            or len(architectures) != 1
+            or not isinstance(architectures[0], str)
+        ):
+            raise ColabAdapterError(
+                f"run-config.json declares accelerator architectures "
+                f"{architectures!r}; exactly one architecture string is "
+                "required to choose a GPU variant. Refusing rather than "
+                "guessing."
+            )
+        architecture = architectures[0]
+        variant = COLAB_ACCELERATOR_VARIANTS.get(architecture)
+        if variant is None:
+            raise ColabAdapterError(
+                f"run-config.json declares accelerator architecture "
+                f"{architecture!r}, which is not in this backend's variant "
+                f"table {COLAB_ACCELERATOR_VARIANTS!r}; refusing rather than "
+                "silently running the job on CPU."
+            )
+        return variant
+
+    def _new_session(
+        self, session_name: str, *, accelerator_variant: str | None = None
+    ) -> None:
+        """Provision one machine, requiring the measured positive
+        confirmation (`Session READY`) rather than a bare exit code. A
+        mapped accelerator is requested with `--gpu <variant>`; the flag
+        and all three mapped variants are in the captured `help-new.log`
+        surface (S0 fact 4).
+        """
+        argv = [self._colab_executable, "new", "-s", session_name]
+        if accelerator_variant is not None:
+            argv += ["--gpu", accelerator_variant]
+        result = self._run(argv, timeout=self._new_timeout)
         combined = f"{result.stdout}\n{result.stderr}"
         if result.returncode != 0 or "session ready" not in combined.lower():
             raise ColabAdapterError(
@@ -910,13 +984,12 @@ class ColabAdapter(ADAPTER.Adapter):
                 "submission digest is built from it and a guessed pin would "
                 "name the wrong session"
             )
-        if parsed_run_config.get("accelerator") is not None:
-            raise ColabAdapterError(
-                "this run-config declares an 'accelerator' block, and this "
-                "backend's declared-architecture mapping lands with "
-                "implementation slice S4 (planned decision D13). Refusing "
-                "rather than silently running the job on CPU."
-            )
+        # D13/S4: the declared accelerator decides which machine arrives,
+        # and the decision is made BEFORE any CLI call at all — an
+        # unmappable declaration refuses here, while refusing is free.
+        accelerator_variant = self._accelerator_variant(
+            parsed_run_config.get("accelerator")
+        )
         try:
             entrypoint_bytes = entrypoint.read_bytes()
         except OSError as exc:
@@ -961,7 +1034,7 @@ class ColabAdapter(ADAPTER.Adapter):
             staged_run_config.write_text(staged_run_config_text, encoding="utf-8")
 
             try:
-                self._new_session(session_name)
+                self._new_session(session_name, accelerator_variant=accelerator_variant)
                 endpoint = self._endpoint_for(session_name)
                 self._spawn_keep_alive(endpoint, session_name)
 
