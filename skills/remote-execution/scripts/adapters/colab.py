@@ -1293,4 +1293,14 @@ class ColabAdapter(ADAPTER.Adapter):
         return active
 
 
+def _declared_capacity() -> tuple[int, int]:
+    """The engine's declared-capacity channel (`adapter.py`'s fourth
+    registry): the same static fact `workers()` already declares — one
+    operator account, capacity one — answered from constants, per that
+    registry's own contract (no network, nothing guessed). A subprocess
+    here would be a lie about a figure that is constant by construction."""
+    return (1, COLAB_WORKER_CAPACITY)
+
+
 ADAPTER.register("colab", ColabAdapter)
+ADAPTER.register_declared_capacity("colab", _declared_capacity)

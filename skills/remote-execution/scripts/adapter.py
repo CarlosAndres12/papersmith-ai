@@ -361,10 +361,12 @@ def resolve_default_accelerator(name: str) -> DefaultAcceleratorProvider | None:
 # it as `return self.workers()` and nothing here would notice.
 #
 # The contract this registry carries, load-bearing for every caller above
-# it: a reporter registered here answers from what is already on disk and
-# issues NO network request of its own. A backend that cannot answer that
-# way registers nothing — silence, not a guess, matching
-# `register_default_accelerator`'s own convention just above. A caller
+# it: a reporter registered here answers from what is already on disk — or
+# from constants the backend already fixes, when its capacity is constant
+# by construction — and issues NO network request of its own. A backend
+# that cannot answer that way registers nothing — silence, not a guess,
+# matching `register_default_accelerator`'s own convention just above. A
+# caller
 # composing a launch proposal reads a registry miss, or a registered
 # reporter's own runtime `None` answer, the same way: by leaving that
 # figure out of what it publishes entirely, never by falling back to

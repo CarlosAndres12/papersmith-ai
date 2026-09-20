@@ -20764,16 +20764,31 @@ class ColabAdapterSeamTests(unittest.TestCase):
         self.assertIsInstance(COLAB.ColabAdapter(), ADAPTER.Adapter)
 
     def test_colab_is_registered_under_its_own_name_and_silent_elsewhere(self) -> None:
-        """Registration only — and the three silences D6 and D13 require:
-        no metadata assembler, no accelerator default, no declared
-        capacity. Each absence is the deliberate "silence, not a guess"
-        state the plan records, not an unfinished registration.
+        """Registration only — and the silences D6 and D13 require: no
+        metadata assembler, no accelerator default. The declared-capacity
+        reporter is NOT silent (S5/SD21): the engine's launch-proposal
+        publisher reads that registry to compose a `launch` action, and a
+        miss there left every colab gate chain unmintable — its answer is
+        the same constant `workers()` already declares, never a guess.
         """
         self.assertIs(ADAPTER.resolve("colab"), COLAB.ColabAdapter)
         with self.assertRaises(KeyError):
             ADAPTER.resolve_metadata("colab")
         self.assertIsNone(ADAPTER.resolve_default_accelerator("colab"))
-        self.assertIsNone(ADAPTER.resolve_declared_capacity("colab"))
+        self.assertIsNotNone(ADAPTER.resolve_declared_capacity("colab"))
+
+    def test_colab_declared_capacity_is_the_static_worker_figure(self) -> None:
+        """The declared-capacity channel (S5/SD21) answers the same static
+        fact `workers()` already declares — patching the subprocess
+        boundary to explode proves the reporter reaches no child, the
+        property the engine's offer path depends on.
+        """
+        reporter = ADAPTER.resolve_declared_capacity("colab")
+        self.assertIsNotNone(reporter)
+        with unittest.mock.patch.object(
+            COLAB.subprocess, "run", side_effect=AssertionError("no subprocess")
+        ):
+            self.assertEqual(reporter(), (1, 1))
 
     def test_colab_declares_its_own_push_surface_for_the_tripwire(self) -> None:
         self.assertEqual(
