@@ -99,24 +99,24 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 3: U3 — Round Record Kind, Persistence, `SEPARATION_ROUND_ABSENT`
 
-- [ ] 3.1 RED: writer/reader tests for `record_separation_round`/`read_separation_rounds` — id shape `separation::{root}::{lineage}::{revision}::round-{n}`, `n` derived (max existing + 1, never supplied), append-only (no reopen), `{}` before `paper/` is scaffolded.
-- [ ] 3.2 Implement `record_separation_round`/`read_separation_rounds`/`_separation_record_id` in `paper_declarations.py` — a fourth `declarations`-region record kind through `_set_record`, unchanged; `document_digest` = sha256 of the resolved document's bytes read at scoring time.
-- [ ] 3.3 Run 3.1 green.
-- [ ] 3.4 RED: replay — a byte-identical, canonicalized cut resubmitted against the latest recorded round for that id prefix records nothing new and returns/re-refuses that same round.
-- [ ] 3.5 Implement canonicalization plus the replay check; run 3.4 green.
-- [ ] 3.6 RED: `SEPARATION_ROUND_ABSENT` — `concedes_to_round: 7` with no round 7 recorded for this `(root, lineage, revision)` refuses, naming the missing round.
-- [ ] 3.7 Wire round lookup and `SEPARATION_ROUND_ABSENT` into `cmd_separate`; run 3.6 green.
-- [ ] 3.8 Mutation: a missing round scores 0 instead of refusing (the concede-to-nothing case survives); confirm 3.6's fixture goes red.
-- [ ] 3.9 RED: recording ordering — every structurally-valid round records BEFORE the structural refusal fires; the refusal's detail names the recorded round id; a round scoring nonzero (round 1, score 4) is still recorded.
-- [ ] 3.10 Wire recording into `cmd_separate` after per-title resolution and claimability, before the overlap/orphan/gap raise; run 3.9 green.
-- [ ] 3.11 RED: no-process-state integration — two genuinely separate CLI invocations (the first process has exited); the second reads round 1 from disk alone and scores round 2 correctly.
-- [ ] 3.12 Confirm 3.11 passes with no in-process caching leaking state across the process boundary; fix if it does not.
-- [ ] 3.13 RED — AST assertion (Decisions F/G): the set of `declarations`-region record kinds reachable from `cmd_separate`'s own call graph is exactly `{"separation"}` — `separate` never records a `binding` under any outcome.
-- [ ] 3.14 Confirm 3.13 passes as implemented.
-- [ ] 3.15 Mutation: `kind="separation"` → `kind="binding"` in the round writer; confirm the settled-separation-then-`write`-still-refuses-`SECTION_BINDING_ABSENT` e2e test (3.16) goes red under this mutation.
-- [ ] 3.16 RED: settled-cut e2e — a cut scoring 0 exits 0, its payload names one `bind` invocation per assignment, no `binding` record exists afterward, and `write` still refuses `SECTION_BINDING_ABSENT`.
-- [ ] 3.17 Wire the score-0, exit-0 payload naming every `bind` invocation; run 3.16 green.
-- [ ] 3.18 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green.
+- [x] 3.1 RED: writer/reader tests for `record_separation_round`/`read_separation_rounds` — id shape `separation::{root}::{lineage}::{revision}::round-{n}`, `n` derived (max existing + 1, never supplied), append-only (no reopen), `{}` before `paper/` is scaffolded.
+- [x] 3.2 Implement `record_separation_round`/`read_separation_rounds`/`_separation_record_id` in `paper_declarations.py` — a fourth `declarations`-region record kind through `_set_record`, unchanged; `document_digest` = sha256 of the resolved document's bytes read at scoring time.
+- [x] 3.3 Run 3.1 green.
+- [x] 3.4 RED: replay — a byte-identical, canonicalized cut resubmitted against the latest recorded round for that id prefix records nothing new and returns/re-refuses that same round.
+- [x] 3.5 Implement canonicalization plus the replay check; run 3.4 green.
+- [x] 3.6 RED: `SEPARATION_ROUND_ABSENT` — `concedes_to_round: 7` with no round 7 recorded for this `(root, lineage, revision)` refuses, naming the missing round.
+- [x] 3.7 Wire round lookup and `SEPARATION_ROUND_ABSENT` into `cmd_separate`; run 3.6 green.
+- [x] 3.8 Mutation: a missing round scores 0 instead of refusing (the concede-to-nothing case survives); confirm 3.6's fixture goes red.
+- [x] 3.9 RED: recording ordering — every structurally-valid round records BEFORE the structural refusal fires; the refusal's detail names the recorded round id; a round scoring nonzero (round 1, score 4) is still recorded.
+- [x] 3.10 Wire recording into `cmd_separate` after per-title resolution and claimability, before the overlap/orphan/gap raise; run 3.9 green.
+- [x] 3.11 RED: no-process-state integration — two genuinely separate CLI invocations (the first process has exited); the second reads round 1 from disk alone and scores round 2 correctly.
+- [x] 3.12 Confirm 3.11 passes with no in-process caching leaking state across the process boundary; fix if it does not.
+- [x] 3.13 RED — AST assertion (Decisions F/G): the set of `declarations`-region record kinds reachable from `cmd_separate`'s own call graph is exactly `{"separation"}` — `separate` never records a `binding` under any outcome.
+- [x] 3.14 Confirm 3.13 passes as implemented.
+- [x] 3.15 Mutation: `kind="separation"` → `kind="binding"` in the round writer; confirm the settled-separation-then-`write`-still-refuses-`SECTION_BINDING_ABSENT` e2e test (3.16) goes red under this mutation.
+- [x] 3.16 RED: settled-cut e2e — a cut scoring 0 exits 0, its payload names one `bind` invocation per assignment, no `binding` record exists afterward, and `write` still refuses `SECTION_BINDING_ABSENT`.
+- [x] 3.17 Wire the score-0, exit-0 payload naming every `bind` invocation; run 3.16 green.
+- [x] 3.18 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green.
 
 ## Phase 4: U4 — Concession Check, Precedence, `SEPARATION_CONCESSION_REGRESSED`
 

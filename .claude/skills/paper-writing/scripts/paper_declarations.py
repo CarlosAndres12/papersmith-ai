@@ -31,6 +31,12 @@ Public surface:
     reopen_binding(paper_dir, qualified_block_id, fact_id, *, clock=...) -> dict
     read_bindings(paper_dir) -> dict  (read-only; qualified_block_id ->
         {fact_id: {"lineage": str, "sections": tuple}}; {} before paper/ exists)
+    record_separation_round(paper_dir, root, lineage, revision, document_digest,
+        assignments, score, *, clock=...) -> dict  (`the-whole-cut-is-argued-
+        before-any-section-is-claimed`, U3: a FOURTH record kind, `separation`,
+        keyed by a DERIVED round number; append-only, no reopen)
+    read_separation_rounds(paper_dir, root, lineage, revision) -> tuple  (read-only;
+        ordered by round; () before paper/ exists)
     describe_binding_candidates(status, root) -> dict  (pure disk read; every
         lineage a document-rooted or ingested-identity root carries RIGHT NOW,
         its own current revision/paper, and the section titles read from it --
@@ -657,6 +663,137 @@ def read_bindings(paper_dir: Path) -> dict:
                 "lineage": entry["lineage"], "sections": tuple(entry["sections"]),
             }
     return result
+
+
+def _separation_record_id(root: str, lineage: str, revision: str, round_number: int) -> str:
+    """`separation` record id -- `the-whole-cut-is-argued-before-any-
+    section-is-claimed`, design.md Decision A: `separation::{root}::
+    {lineage}::{revision}::round-{n}`. The revision is part of the id
+    (Decision A, refinement 1): two rounds scored against different
+    revisions of the source document are two numbers measured in
+    different regimes, so keying by revision makes staleness structurally
+    impossible -- a concession naming a round from an earlier revision
+    resolves to no record at all under the CURRENT revision's own prefix,
+    never a stale-round code. `round_number` is always DERIVED by the
+    caller (`record_separation_round`, `max(existing) + 1`) -- this
+    function never derives it itself, so nothing here could ever be
+    tricked into letting a caller name its own round."""
+    return f"separation::{root}::{lineage}::{revision}::round-{round_number}"
+
+
+def _separation_id_prefix(root: str, lineage: str, revision: str) -> str:
+    return f"separation::{root}::{lineage}::{revision}::round-"
+
+
+def _canonicalize_separation_assignments(assignments) -> tuple:
+    """Canonical, order-independent form of a proposal's `assignments` --
+    the replay comparison's own notion of "the same cut" (Decision A):
+    order-independent on BOTH axes `paper_separation.score_cut` itself
+    treats as sets (the assignments list as a whole, and each
+    assignment's own `sections`), so two proposals naming the identical
+    cut in a different JSON order are recognized as the SAME cut, never a
+    spuriously new round."""
+    return tuple(
+        sorted(
+            (entry["block"], entry["fact"], tuple(sorted(entry["sections"])))
+            for entry in assignments
+        )
+    )
+
+
+def read_separation_rounds(paper_dir: Path, root: str, lineage: str, revision: str) -> tuple:
+    """Read-only: every currently-recorded `separation` round for this
+    EXACT `(root, lineage, revision)`, ordered by round number ascending
+    -- mirrors `read_bindings`'s own tolerance: empty (`()`, this reader's
+    own plural shape) before `paper_dir` (or `main.tex` under it) exists
+    yet, the SAME "a corpus is legitimately assemblable, read-only,
+    before paper/ is even scaffolded" precedent `read_bindings` already
+    extends. Reuses the exact same private readers every other reader of
+    this region already goes through (`_read_declarations`, `_verify_not_
+    hand_edited`, `_body_or_default`) once `paper_dir` IS scaffolded --
+    never a second reader, and `DECLARATIONS_HAND_EDITED` still refuses a
+    tampered region exactly as it does for every other reader.
+
+    Each entry: `{"round": int, "id": str, "root": str, "lineage": str,
+    "revision": str, "document_digest": str, "assignments": list,
+    "score": int}` -- the same shape `record_separation_round` returns."""
+    tex_path = paper_dir / "main.tex"
+    if not paper_dir.is_dir() or not tex_path.is_file():
+        return ()
+    _tex_path, _pre, record = _read_declarations(paper_dir)
+    _verify_not_hand_edited(record)
+    body = _body_or_default(record)
+    prefix = _separation_id_prefix(root, lineage, revision)
+    rounds = []
+    for entry in body["records"]:
+        if entry["kind"] != "separation" or not entry.get("fixed"):
+            continue
+        if not entry["id"].startswith(prefix):
+            continue
+        rounds.append({
+            "round": entry["round"], "id": entry["id"], "root": entry["root"],
+            "lineage": entry["lineage"], "revision": entry["revision"],
+            "document_digest": entry["document_digest"], "assignments": entry["assignments"],
+            "score": entry["score"],
+        })
+    rounds.sort(key=lambda entry: entry["round"])
+    return tuple(rounds)
+
+
+def record_separation_round(
+    paper_dir: Path, root: str, lineage: str, revision: str, document_digest: str,
+    assignments: list, score: int, *, clock=paper_region.default_clock,
+) -> dict:
+    """Fourth `declarations`-region record kind (design.md Decision A):
+    `kind="separation"`, id `separation::{root}::{lineage}::{revision}::
+    round-{n}`, written through `_set_record` UNCHANGED (`value_
+    field="revision"`, `root`/`lineage`/`round`/`document_digest`/
+    `assignments`/`score` carried in `extra`) -- a DISTINCT id per round
+    means `_set_record`'s own "already fixed" refusal never blocks round
+    two: it never sees the same `(kind, id)` pair twice.
+
+    `round_number` is DERIVED here, never accepted as an argument: one
+    more than the highest existing round recorded for this exact `(root,
+    lineage, revision)` prefix, or 1 when none exist yet -- a caller
+    cannot name its own round. Append-only: there is no reopen for a
+    round (Decision A, refinement 3; `reopen_separation` does not exist),
+    so no parameter here could ever rewrite one.
+
+    Replay (Decision A): when `assignments`, canonicalized
+    (`_canonicalize_separation_assignments`), is identical to the LATEST
+    existing round's own canonicalized assignments for this id prefix,
+    nothing new is written and that latest round's own dict is returned
+    unchanged -- a retried invocation must never inflate the round count.
+
+    `document_digest` is the sha256 of the resolved document's bytes,
+    computed by the CALLER at scoring time (Decision I check 2, the
+    in-place-rewrite guard) -- this function never reads the document
+    itself, so it stays a pure declarations-region writer like every
+    other record kind in this module.
+    """
+    existing = read_separation_rounds(paper_dir, root, lineage, revision)
+    canonical_new = _canonicalize_separation_assignments(assignments)
+    if existing:
+        latest = existing[-1]
+        if _canonicalize_separation_assignments(latest["assignments"]) == canonical_new:
+            return latest
+    round_number = (existing[-1]["round"] + 1) if existing else 1
+    id_ = _separation_record_id(root, lineage, revision, round_number)
+    stored_assignments = [
+        {"block": entry["block"], "fact": entry["fact"], "sections": list(entry["sections"])}
+        for entry in assignments
+    ]
+    _set_record(
+        paper_dir, kind="separation", id_=id_, value_field="revision", value=revision, clock=clock,
+        extra={
+            "root": root, "lineage": lineage, "round": round_number,
+            "document_digest": document_digest, "assignments": stored_assignments, "score": score,
+        },
+    )
+    return {
+        "round": round_number, "id": id_, "root": root, "lineage": lineage, "revision": revision,
+        "document_digest": document_digest, "assignments": stored_assignments, "score": score,
+    }
 
 
 def _heading_titles(path: Path) -> list:

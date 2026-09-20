@@ -1154,6 +1154,256 @@ class BindingRecordTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
 
 
+class SeparationRoundRecordTests(unittest.TestCase):
+    """`the-whole-cut-is-argued-before-any-section-is-claimed`, U3
+    (design.md Decision A): a FOURTH `declarations`-region record kind,
+    `separation`, keyed by round -- `record_separation_round`/
+    `read_separation_rounds`, through the SAME `_set_record`/`_find_
+    record`/`_verify_not_hand_edited` path `binding` and `fact`/
+    `declaration` already go through. All example names invented
+    (design.md's own worked example: lineage `field-survey`, revision
+    `field-survey-r07.md`)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def _round_1_assignments(self) -> list:
+        return [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+        ]
+
+    def test_the_id_shape_carries_root_lineage_revision_and_a_derived_round(self) -> None:
+        result = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        self.assertEqual(
+            result["id"], "separation::proposals::field-survey::field-survey-r07.md::round-1",
+        )
+        self.assertEqual(result["round"], 1)
+
+    def test_a_recorded_round_is_read_back_by_root_lineage_and_revision(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0]["round"], 1)
+        self.assertEqual(rounds[0]["score"], 4)
+        self.assertEqual(rounds[0]["document_digest"], "deadbeef" * 8)
+        self.assertEqual(rounds[0]["assignments"], self._round_1_assignments())
+
+    def test_the_round_number_is_derived_never_a_caller_supplied_argument(self) -> None:
+        """A caller cannot name its own round -- the function signature
+        carries no `round`/`round_number` parameter at all, and a SECOND
+        submission for the identical `(root, lineage, revision)` derives
+        round 2 regardless of what the caller's own bookkeeping thinks the
+        next number should be."""
+        import inspect
+        signature = inspect.signature(paper_declarations.record_separation_round)
+        self.assertNotIn("round", signature.parameters)
+        self.assertNotIn("round_number", signature.parameters)
+
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "cafebabe" * 8,
+            [{"block": "overview.block-a", "fact": "formulation",
+              "sections": ["1. Background on widget metrics", "2. Alignment estimators"]}],
+            0, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], 2)
+        self.assertIn("round-2", second["id"])
+
+    def test_a_new_revision_restarts_numbering_at_round_one(self) -> None:
+        """Decision A, refinement 1: the revision is part of the id, so a
+        mid-negotiation publish restarts the count -- staleness is
+        structurally impossible, never a code that has to catch it."""
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        under_new_revision = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r08.md",
+            "cafebabe" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        self.assertEqual(under_new_revision["round"], 1)
+        self.assertIn("field-survey-r08.md", under_new_revision["id"])
+
+    def test_rounds_are_append_only_no_reopen_function_exists(self) -> None:
+        """Decision A, refinement 3: reopening a round would let an
+        argument be rewritten after its successor was scored against it,
+        so no such function exists at all -- not merely undocumented."""
+        self.assertFalse(hasattr(paper_declarations, "reopen_separation"))
+
+    def test_read_separation_rounds_reports_empty_before_paper_is_scaffolded(self) -> None:
+        unscaffolded = self.forge_root / "no-such-paper"
+
+        self.assertEqual(
+            paper_declarations.read_separation_rounds(
+                unscaffolded, "proposals", "field-survey", "field-survey-r07.md",
+            ),
+            (),
+        )
+
+    def test_two_different_lineages_under_the_same_root_stay_independent(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "other-survey", "other-survey-r01.md",
+            "cafebabe" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+
+        field_rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        other_rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "other-survey", "other-survey-r01.md",
+        )
+
+        self.assertEqual(len(field_rounds), 1)
+        self.assertEqual(len(other_rounds), 1)
+
+    def test_a_hand_edited_declarations_region_still_refuses_a_new_round(self) -> None:
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, self._round_1_assignments(), 4, clock=self._clock,
+        )
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"field", b"filed", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.record_separation_round(
+                self.paper_dir, "proposals", "field-survey", "field-survey-r08.md",
+                "cafebabe" * 8, self._round_1_assignments(), 0, clock=self._clock,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_separation_rounds(
+                self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+
+class SeparationRoundReplayTests(unittest.TestCase):
+    """Task 3.4/3.5: a byte-identical, canonicalized cut resubmitted
+    against the latest recorded round for that id prefix records nothing
+    new and returns that same round -- a retried invocation must not
+    inflate the round count."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+
+    def _clock(self) -> str:
+        return _FIXED_CLOCK
+
+    def test_an_identical_resubmission_records_nothing_new(self) -> None:
+        assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+        ]
+        first = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, assignments, 4, clock=self._clock,
+        )
+
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, assignments, 4, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], first["round"])
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        self.assertEqual(len(rounds), 1)
+
+    def test_a_canonicalized_reordering_is_still_recognized_as_a_replay(self) -> None:
+        """The same cut, its assignments and each assignment's own
+        `sections` in a different order, is still the SAME cut -- never a
+        spurious new round (`score_cut` itself treats both as sets)."""
+        first_assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background", "2. Estimators"]},
+            {"block": "methods.block-b", "fact": "formulation", "sections": ["3. Objective"]},
+        ]
+        reordered_assignments = [
+            {"block": "methods.block-b", "fact": "formulation", "sections": ["3. Objective"]},
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["2. Estimators", "1. Background"]},
+        ]
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, first_assignments, 1, clock=self._clock,
+        )
+
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, reordered_assignments, 1, clock=self._clock,
+        )
+
+        rounds = paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+        self.assertEqual(len(rounds), 1)
+
+    def test_a_genuinely_different_cut_records_a_new_round(self) -> None:
+        first_assignments = [
+            {"block": "overview.block-a", "fact": "formulation", "sections": ["1. Background"]},
+        ]
+        second_assignments = [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background", "2. Estimators"]},
+        ]
+        paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, first_assignments, 4, clock=self._clock,
+        )
+
+        second = paper_declarations.record_separation_round(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+            "deadbeef" * 8, second_assignments, 0, clock=self._clock,
+        )
+
+        self.assertEqual(second["round"], 2)
+
+
 class DescribeBindingCandidatesTests(unittest.TestCase):
     """`the-requirement-names-the-section-that-feeds-it`, U3e: what `write`'s
     own improved `SECTION_BINDING_ABSENT` refusal shows an operator --

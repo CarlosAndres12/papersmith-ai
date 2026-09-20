@@ -67,6 +67,7 @@ will ever grow.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -457,6 +458,13 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "SEPARATION_SECTION_OVERLAP": WORK_STATE,
     "SEPARATION_SECTION_ORPHANED": WORK_STATE,
     "SEPARATION_NOTATION_GAP": WORK_STATE,
+    # --- the-whole-cut-is-argued-before-any-section-is-claimed, U3/U4: round
+    # persistence (`paper_declarations.record_separation_round`/`read_
+    # separation_rounds`, a fourth `declarations`-region record kind) and the
+    # concession check (`_check_separation_concession`, recomputed from disk,
+    # never trusting a stored score) -----------------------------------------
+    "SEPARATION_ROUND_ABSENT": WORK_STATE,
+    "SEPARATION_CONCESSION_REGRESSED": WORK_STATE,
 }
 
 
@@ -1028,16 +1036,85 @@ def _separation_structural_detail(result: dict) -> str:
     return " | ".join(parts)
 
 
-def _raise_separation_refusal(result: dict) -> None:
+def _raise_separation_refusal(result: dict, recorded_round_id: str) -> None:
     """Fixed precedence `overlap -> orphan -> gap` (design.md Decision E):
     exactly ONE code, chosen by whichever class is present first in that
-    order, with a detail naming every instance of every class present."""
-    detail = _separation_structural_detail(result)
+    order, with a detail naming every instance of every class present
+    PLUS the id of the round `record_separation_round` just recorded
+    (task 3.9: recording happens before this refusal, and the refusal
+    names it)."""
+    detail = _separation_structural_detail(result) + f" | recorded round: {recorded_round_id!r}"
     if result["overlap"]:
         raise Refused("SEPARATION_SECTION_OVERLAP", detail)
     if result["orphan"]:
         raise Refused("SEPARATION_SECTION_ORPHANED", detail)
     raise Refused("SEPARATION_NOTATION_GAP", detail)
+
+
+def _claims_by_block(assignments, corpus) -> tuple:
+    """Anchor every assignment against the corpus's OWN `requires_facts`
+    (design.md, Technical Approach, step 5): an assignment for a `(block,
+    fact)` pair that is not a real `requires_facts` entry is unanchored --
+    reported, never deleted or invented, and it contributes nothing to
+    coverage. Shared between the current cut's own scoring and the
+    concession check's recompute of a PRIOR round's assignments
+    (`_check_separation_concession` below), so both go through the
+    identical anchoring rule rather than two copies that could drift."""
+    claims_by_block: dict = {}
+    unanchored = []
+    for entry in assignments:
+        block, fact = entry["block"], entry["fact"]
+        record = corpus.blocks.get(block)
+        if record is None or fact not in record.requires_facts:
+            unanchored.append({"block": block, "fact": fact})
+            continue
+        claims_by_block.setdefault(block, [])
+        claims_by_block[block].extend(entry["sections"])
+    return claims_by_block, unanchored
+
+
+def _find_separation_round(paper_dir: Path, root_name: str, lineage: str, revision: str, round_number: int):
+    for entry in paper_declarations.read_separation_rounds(paper_dir, root_name, lineage, revision):
+        if entry["round"] == round_number:
+            return entry
+    return None
+
+
+def _check_separation_concession(
+    paper_dir: Path, root_name: str, lineage: str, revision: str, concedes_to_round,
+    result: dict, claimable: dict, corpus,
+) -> None:
+    """design.md Decision E/`source-separation-review` spec, `Requirement:
+    A Concession Is Verified By Recomputing Both Cuts From Disk, Before
+    The Structural Refusal`: BOTH totals are recomputed here, from disk,
+    every time -- the conceding cut's own `result` (already computed by
+    the caller) and the conceded round's own `assignments`, read back and
+    re-scored through the SAME `_claims_by_block`/`score_cut` path, never
+    trusting either round's stored `score` field. Ties are not a
+    regression: an EQUAL total is accepted.
+
+    Called BEFORE the structural refusal (`compute_separation`'s own
+    ordering, task 4.3/4.4): reversed, `SEPARATION_CONCESSION_REGRESSED`
+    would be a refusal that could never fire, since only a score-0 cut
+    would ever reach it."""
+    if concedes_to_round is None:
+        return
+    conceded_round = _find_separation_round(paper_dir, root_name, lineage, revision, concedes_to_round)
+    if conceded_round is None:
+        raise Refused(
+            "SEPARATION_ROUND_ABSENT",
+            f"concedes_to_round={concedes_to_round} names no recorded round for "
+            f"(root={root_name!r}, lineage={lineage!r}, revision={revision!r})",
+        )
+    conceded_claims, _unanchored = _claims_by_block(conceded_round["assignments"], corpus)
+    conceded_result = paper_separation.score_cut(claimable["titles"], conceded_claims)
+    if result["total"] > conceded_result["total"]:
+        raise Refused(
+            "SEPARATION_CONCESSION_REGRESSED",
+            f"the conceding cut scores {result['total']}, worse than round "
+            f"{concedes_to_round}'s recomputed score {conceded_result['total']} (both recomputed "
+            f"from disk, never from a stored score field)",
+        )
 
 
 def compute_separation(
@@ -1064,17 +1141,23 @@ def compute_separation(
     (`SEPARATION_SECTION_UNCLAIMABLE`) for every named title, before any
     scoring runs; (5) anchor every assignment against the corpus's own
     `requires_facts` (unanchored ones are reported, never deleted or
-    invented, and clear no orphan); (6) score
-    (`paper_separation.score_cut`) and either return a score-0 payload
-    naming the exact `bind` invocation for every assignment -- recording
-    NONE of them, Phase 3 lands round persistence -- or raise the ONE
-    structural refusal fixed precedence names (`_raise_separation_
-    refusal`).
+    invented, and clear no orphan) and score (`paper_separation.
+    score_cut`); (6) `concedes_to_round`, when given, is verified BEFORE
+    anything is recorded (`_check_separation_concession`,
+    `SEPARATION_ROUND_ABSENT`/`SEPARATION_CONCESSION_REGRESSED`); (7)
+    EVERY structurally-valid round records now, whatever its score
+    (`paper_declarations.record_separation_round`, U3) -- Decision F/G:
+    `separate` writes ONLY `kind="separation"`, never a `binding`, under
+    any outcome; (8) a score-0 cut returns naming the exact `bind`
+    invocation for every assignment, and any nonzero total raises the ONE
+    structural refusal fixed precedence names, naming the round just
+    recorded (`_raise_separation_refusal`).
     """
     proposal = _read_separation_proposal(proposal_path)
     lineage = proposal["lineage"]
     assignments = proposal["assignments"]
     root = proposal["root"]
+    concedes_to_round = proposal["concedes_to_round"]
 
     corpus = paper_graph.assemble_corpus(sections_dir, source_base=source_base, paper_dir=paper_dir)
     status = corpus.source_roots.get(root.name)
@@ -1084,7 +1167,7 @@ def compute_separation(
             f"{root.name!r} is not document-rooted; lineage {lineage!r} has no document to "
             f"measure a cut against ({(status or {}).get('reason')})",
         )
-    _revision_path, counts, outline = paper_graph.resolve_section_index(
+    revision_path, counts, outline = paper_graph.resolve_section_index(
         corpus.source_roots, root, lineage,
     )
     claimable = paper_separation.claimable_sections(outline)
@@ -1117,24 +1200,25 @@ def compute_separation(
                     f"{claimable['titles']!r}",
                 )
 
-    claims_by_block: dict = {}
-    unanchored = []
-    for entry in assignments:
-        block, fact = entry["block"], entry["fact"]
-        record = corpus.blocks.get(block)
-        if record is None or fact not in record.requires_facts:
-            unanchored.append({"block": block, "fact": fact})
-            continue
-        claims_by_block.setdefault(block, [])
-        claims_by_block[block].extend(entry["sections"])
-
+    claims_by_block, unanchored = _claims_by_block(assignments, corpus)
     result = paper_separation.score_cut(claimable["titles"], claims_by_block)
+
+    revision = revision_path.name
+    document_digest = hashlib.sha256(revision_path.read_bytes()).hexdigest()
+
+    _check_separation_concession(
+        paper_dir, root.name, lineage, revision, concedes_to_round, result, claimable, corpus,
+    )
+    recorded_round = paper_declarations.record_separation_round(
+        paper_dir, root.name, lineage, revision, document_digest, assignments, result["total"],
+    )
     if result["total"] == 0:
         return {
             "total": 0, "unanchored": unanchored,
             "bind_invocations": [_bind_invocation(entry, lineage) for entry in assignments],
+            "round": recorded_round["round"], "round_id": recorded_round["id"],
         }
-    _raise_separation_refusal(result)
+    _raise_separation_refusal(result, recorded_round["id"])
 
 
 def cmd_separate(args: argparse.Namespace) -> dict:

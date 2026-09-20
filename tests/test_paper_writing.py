@@ -7022,9 +7022,16 @@ class RefusalRosterTests(unittest.TestCase):
         nothing new -- `separate` resolves every title through the SAME
         `paper_graph.resolve_section_index` extraction `bind` already
         reaches. Measured directly against `reachable_paper_refusal_
-        codes()`, never forecast. U3/U4/U5/U6 of this same change move this
-        number again."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 149)
+        codes()`, never forecast.
+
+        Moved from 149 to 151 in U3/U4 of the same change: the round
+        record's own concession pipeline (`_check_separation_concession`,
+        this file) adds two new raise sites -- `SEPARATION_ROUND_ABSENT`
+        (`concedes_to_round` names no recorded round) and `SEPARATION_
+        CONCESSION_REGRESSED` (the conceding cut's recomputed total is
+        strictly worse than the round it abandons). U6 of this same
+        change moves this number again."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 151)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -10010,6 +10017,7 @@ class _SeparationCorpusMixin:
         self.sections_dir = self.base / "sections"
         self.sections_dir.mkdir()
         self.paper_dir = self.base / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
         self._write_block_section("01-overview.md", "overview", [("block-a", "formulation")])
         self._write_block_section(
             "02-methods.md", "methods", [("block-b", "formulation"), ("block-c", "formulation")],
@@ -10049,6 +10057,43 @@ class _SeparationCorpusMixin:
             self._proposal_path(obj), sections_dir=self.sections_dir, paper_dir=self.paper_dir,
             source_base=self.base,
         )
+
+    def _read_rounds(self) -> tuple:
+        return paper_declarations.read_separation_rounds(
+            self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
+        )
+
+    def _run_separate_subprocess(self, proposal_obj, *, expect_ok: bool) -> dict:
+        """Task 3.11/3.12: a genuinely SEPARATE CLI invocation -- a real
+        subprocess, its own fresh Python process, no module-level state
+        shared with this test process at all -- reading whatever an
+        earlier, already-exited invocation left on disk."""
+        proposal_path = self._proposal_path(proposal_obj)
+        script_path = self.base / f"run_separate_{uuid.uuid4().hex}.py"
+        script_path.write_text(
+            "import json, sys\n"
+            f"sys.path.insert(0, {str(SKILL_SCRIPTS)!r})\n"
+            f"sys.path.insert(0, {str(CORE_IMPLEMENTATION)!r})\n"
+            "from pathlib import Path\n"
+            "import paper_cli\n"
+            "from impl_refusals import Refused\n"
+            "try:\n"
+            "    result = paper_cli.compute_separation(\n"
+            f"        Path({str(proposal_path)!r}), sections_dir=Path({str(self.sections_dir)!r}),\n"
+            f"        paper_dir=Path({str(self.paper_dir)!r}), source_base=Path({str(self.base)!r}),\n"
+            "    )\n"
+            "    print(json.dumps({'ok': True, 'result': result}))\n"
+            "except Refused as exc:\n"
+            "    print(json.dumps({'ok': False, 'code': exc.code, 'detail': exc.detail}))\n",
+            encoding="utf-8",
+        )
+        proc = subprocess.run(
+            [sys.executable, str(script_path)], capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(payload["ok"], expect_ok, payload)
+        return payload
 
 
 class SeparationResolutionReuseTests(_SeparationCorpusMixin, unittest.TestCase):
@@ -10311,6 +10356,246 @@ class SeparateVerbEndToEndTests(_SeparationCorpusMixin, unittest.TestCase):
             paper_cli.cmd_separate(args)
 
         self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+
+class SeparationRoundPersistenceTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 3.6/3.7/3.9: `separate` records EVERY structurally-valid
+    round, whatever its score, BEFORE the structural refusal fires -- and
+    `concedes_to_round` naming an unrecorded round refuses
+    `SEPARATION_ROUND_ABSENT`, recording nothing."""
+
+    def test_a_round_scoring_nonzero_is_recorded_before_the_structural_refusal(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._ROUND_1)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_OVERLAP")
+        self.assertIn("round-1", ctx.exception.detail)
+
+        rounds = self._read_rounds()
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0]["round"], 1)
+        self.assertEqual(rounds[0]["score"], 4)
+
+    def test_a_settled_cut_is_also_recorded(self) -> None:
+        result = self._compute(self._BRANCH_A)
+
+        self.assertEqual(result["round"], 1)
+        rounds = self._read_rounds()
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0]["score"], 0)
+
+    def test_conceding_to_a_nonexistent_round_refuses_round_absent_and_records_nothing(self) -> None:
+        proposal = dict(self._BRANCH_A)
+        proposal["concedes_to_round"] = 7
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(proposal)
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_ROUND_ABSENT")
+        self.assertIn("7", ctx.exception.detail)
+        self.assertEqual(self._read_rounds(), ())
+
+    def test_mutation_treating_a_missing_round_as_scoring_zero_reddens_round_absent(self) -> None:
+        """Task 3.8: a missing round scoring 0 instead of refusing (the
+        concede-to-nothing case silently survives) must redden the
+        `SEPARATION_ROUND_ABSENT` fixture above."""
+        proc = _run_against_mutant(
+            "    conceded_round = _find_separation_round(paper_dir, root_name, lineage, revision, concedes_to_round)\n"
+            "    if conceded_round is None:\n"
+            "        raise Refused(\n"
+            '            "SEPARATION_ROUND_ABSENT",\n'
+            '            f"concedes_to_round={concedes_to_round} names no recorded round for "\n'
+            '            f"(root={root_name!r}, lineage={lineage!r}, revision={revision!r})",\n'
+            "        )\n",
+            "    conceded_round = _find_separation_round(paper_dir, root_name, lineage, revision, concedes_to_round)\n"
+            "    if conceded_round is None:\n"
+            '        conceded_round = {"assignments": []}\n',
+            "tests.test_paper_writing.SeparationRoundPersistenceTests"
+            ".test_conceding_to_a_nonexistent_round_refuses_round_absent_and_records_nothing",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_round_two_is_checkable_with_no_process_state(self) -> None:
+        """Task 3.11/3.12: two genuinely separate CLI invocations, real
+        subprocesses -- the first has exited entirely before the second
+        starts -- the second reads round 1 back from disk alone and
+        scores the concession correctly."""
+        self._run_separate_subprocess(self._ROUND_1, expect_ok=False)
+
+        conceding = dict(self._BRANCH_A)
+        conceding["concedes_to_round"] = 1
+        second = self._run_separate_subprocess(conceding, expect_ok=True)
+
+        self.assertEqual(second["result"]["total"], 0)
+
+
+def _record_kinds_reachable_from(root_name: str) -> set:
+    """`declarations`-region record KINDS (`_set_record`'s own `kind=`
+    keyword argument) reachable from `root_name`'s own call graph, across
+    BOTH `paper_cli.py` and `paper_declarations.py` -- the two modules the
+    writer path actually spans (task 3.13, Decision F/G's AST proof).
+    Never a hand-listed set: a future call from `cmd_separate` into a
+    THIRD kind lands here the moment the AST sees it, the identical shape
+    `reachable_paper_refusal_codes` above already uses for refusal codes,
+    applied to record kinds instead."""
+    definitions: dict = {}
+    for path in (SKILL_SCRIPTS / "paper_cli.py", SKILL_SCRIPTS / "paper_declarations.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                definitions[node.name] = node
+
+    def _callee_name(func):
+        if isinstance(func, ast.Name):
+            return func.id
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return None
+
+    kinds: set = set()
+    seen: set = set()
+    frontier = [root_name]
+    while frontier:
+        name = frontier.pop()
+        if name in seen or name not in definitions:
+            continue
+        seen.add(name)
+        for call in ast.walk(definitions[name]):
+            if not isinstance(call, ast.Call):
+                continue
+            callee = _callee_name(call.func)
+            if callee is None:
+                continue
+            if callee == "_set_record":
+                for kw in call.keywords:
+                    if kw.arg == "kind" and isinstance(kw.value, ast.Constant):
+                        kinds.add(kw.value.value)
+            if callee in definitions:
+                frontier.append(callee)
+    return kinds
+
+
+class SeparateNeverRecordsABindingASTTests(unittest.TestCase):
+    """Task 3.13/3.14 (design.md Decision F/G): the set of `declarations`-
+    region record kinds reachable from `cmd_separate`'s own call graph is
+    EXACTLY `{"separation"}` -- `separate` never records a `binding`
+    under any outcome, derived from source rather than asserted by hand."""
+
+    def test_cmd_separate_reaches_only_the_separation_kind(self) -> None:
+        self.assertEqual(_record_kinds_reachable_from("cmd_separate"), {"separation"})
+
+    def test_cmd_bind_reaches_the_binding_kind_as_a_sanity_check_on_the_walk_itself(self) -> None:
+        """The derivation itself is exercised against a KNOWN positive:
+        `cmd_bind`'s own call graph must still show `binding`, or this
+        walk would trivially pass by never finding anything at all."""
+        self.assertEqual(_record_kinds_reachable_from("cmd_bind"), {"binding"})
+
+
+class SeparateNeverRecordsABindingEndToEndTests(unittest.TestCase):
+    """Task 3.16/3.17 (Decision G): a settled `separate` cut exits 0,
+    names the exact `bind` invocation for its one assignment, and records
+    no `binding` -- `write` still refuses `SECTION_BINDING_ABSENT` until
+    an operator actually runs `bind`. Rooted under `FORGE_ROOT/
+    implementations/`, the same containment `BindCliEndToEndTests`
+    already requires."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-separate-e2e-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only",
+            "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/a.md", "quote": "The formulation, written here."},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+    def _write_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def _proposal_path(self, obj) -> Path:
+        path = self.test_root / "proposal.json"
+        path.write_text(json.dumps(obj), encoding="utf-8")
+        return path
+
+    def _settled_proposal(self) -> dict:
+        return {
+            "lineage": "lumen-thesis",
+            "assignments": [
+                {"block": "a.only", "fact": "formulation",
+                 "sections": ["1. Intro", "3. Something"]},
+            ],
+        }
+
+    def test_a_settled_separation_records_no_binding_and_write_still_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+        result = paper_cli.compute_separation(
+            self._proposal_path(self._settled_proposal()),
+            sections_dir=self.sections_dir, paper_dir=self.paper_dir, source_base=self.test_root,
+        )
+
+        self.assertEqual(result["total"], 0)
+        self.assertEqual(len(result["bind_invocations"]), 1)
+        self.assertIn("a.only", result["bind_invocations"][0])
+
+        self.assertEqual(paper_declarations.read_bindings(self.paper_dir), {})
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+    def test_mutation_recording_a_binding_kind_reddens_the_settled_e2e_test(self) -> None:
+        """Task 3.15's own runtime reachability proof, alongside the AST
+        proof above: if the round writer persisted `kind='binding'`
+        instead of `kind='separation'`, this e2e's own assertions must
+        fail -- either `write` proceeds past its gate, or `read_bindings`
+        chokes on a `binding`-kind record with no `block`/`fact` of its
+        own, since a settled separation carries no such fields."""
+        proc = _run_against_mutant(
+            'kind="separation", id_=id_, value_field="revision", value=revision, clock=clock,',
+            'kind="binding", id_=id_, value_field="revision", value=revision, clock=clock,',
+            "tests.test_paper_writing.SeparateNeverRecordsABindingEndToEndTests"
+            ".test_a_settled_separation_records_no_binding_and_write_still_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 if __name__ == "__main__":
