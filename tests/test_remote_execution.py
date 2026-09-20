@@ -113,6 +113,20 @@ KAGGLE = importlib.util.module_from_spec(KAGGLE_SPEC)
 sys.modules[KAGGLE_SPEC.name] = KAGGLE
 KAGGLE_SPEC.loader.exec_module(KAGGLE)
 
+# Loaded the same path-import way as `kaggle.py` above, and for the same
+# `sys.modules`-reuse reason: this module's own `_load_adapter_seam()`
+# finds the already-loaded `remote_execution_adapter` module, so the
+# `ADAPTER.register("colab", ...)` its exec performs lands in the exact
+# registry every `ADAPTER.resolve("colab")` assertion below reads.
+COLAB_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapters/colab.py"
+COLAB_SPEC = importlib.util.spec_from_file_location(
+    "remote_execution_colab_adapter", COLAB_SCRIPT
+)
+assert COLAB_SPEC and COLAB_SPEC.loader
+COLAB = importlib.util.module_from_spec(COLAB_SPEC)
+sys.modules[COLAB_SPEC.name] = COLAB
+COLAB_SPEC.loader.exec_module(COLAB)
+
 # Deliberately NOT loaded here, unlike every module above: this one imports
 # `kagglesdk`, so eagerly exec'ing it at collection time would make the
 # whole suite uncollectable on an interpreter that lacks it — exactly the
@@ -18191,6 +18205,7 @@ class TargetVocabularyLeakTests(unittest.TestCase):
         JOBFOLDER_SCRIPT,
         KAGGLE_SCRIPT,
         KAGGLE_DRIVER_SCRIPT,
+        COLAB_SCRIPT,
         RUNNER_BOOTSTRAP_SCRIPT,
         RUNNER_INVOKE_SCRIPT,
         NOTEBOOK_REPO_ROOT_SCRIPT,
@@ -20536,6 +20551,361 @@ class AnnotatedModuleConstantFoldTests(unittest.TestCase):
             + "\nREPOSITORY = Path(__file__).resolve().parents[1]",
             self.FLAT_PRODUCT)
         self.assertEqual(result["computedReadsNotDeclared"], [])
+
+
+class ColabAdapterSeamTests(unittest.TestCase):
+    """`adapters/colab.py` — the second backend's own file, slice S1's seam
+    surface: registration, the static worker, session listing, cancel, and
+    the explicit refusals standing in for everything the session-lifecycle
+    slice (S2) has not landed yet.
+
+    No test here reaches the network or a real Colab account: every
+    subprocess call goes to a fake `colab` executable this class writes
+    into a temp directory and hands over by path (`colab_executable=`).
+    The session-line fixtures are the shapes measured live in spike S0.
+    """
+
+    def _fake_colab(
+        self,
+        tmp: str,
+        *,
+        stdout: str = "",
+        stderr: str = "",
+        exit_code: int = 0,
+        record: bool = False,
+    ) -> tuple[str, Path | None]:
+        """A fake `colab` executable, written into `tmp` and handed back by
+        path — never a PATH entry, so no resolution can ever reach a real
+        installation. `record=True` also returns the log path its argv
+        lands in, one argument per line.
+        """
+        script = Path(tmp) / "colab"
+        log = Path(tmp) / "argv.txt"
+        lines = ["#!/usr/bin/env python3", "import sys"]
+        if record:
+            lines.append("open(%r, 'w').write('\\n'.join(sys.argv[1:]))" % str(log))
+        lines.append("sys.stdout.write(%r)" % stdout)
+        lines.append("sys.stderr.write(%r)" % stderr)
+        lines.append("raise SystemExit(%d)" % exit_code)
+        script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        script.chmod(0o755)
+        return str(script), (log if record else None)
+
+    def test_colab_adapter_satisfies_the_abc(self) -> None:
+        self.assertIsInstance(COLAB.ColabAdapter(), ADAPTER.Adapter)
+
+    def test_colab_is_registered_under_its_own_name_and_silent_elsewhere(self) -> None:
+        """Registration only — and the three silences D6 and D13 require:
+        no metadata assembler, no accelerator default, no declared
+        capacity. Each absence is the deliberate "silence, not a guess"
+        state the plan records, not an unfinished registration.
+        """
+        self.assertIs(ADAPTER.resolve("colab"), COLAB.ColabAdapter)
+        with self.assertRaises(KeyError):
+            ADAPTER.resolve_metadata("colab")
+        self.assertIsNone(ADAPTER.resolve_default_accelerator("colab"))
+        self.assertIsNone(ADAPTER.resolve_declared_capacity("colab"))
+
+    def test_colab_declares_its_own_push_surface_for_the_tripwire(self) -> None:
+        self.assertEqual(
+            COLAB.PUSH_SURFACE,
+            ("colab new", "colab exec", "colab run", "colab upload"),
+        )
+
+    def test_workers_are_static_and_never_shell_out(self) -> None:
+        """`workers()` answers from constants: patching the subprocess
+        boundary to explode proves the method reaches no child at all, the
+        same guarantee the ledger fallback in `packer.plan()` depends on.
+        """
+        adapter = COLAB.ColabAdapter()
+        with unittest.mock.patch.object(
+            COLAB.subprocess, "run", side_effect=AssertionError("no subprocess")
+        ):
+            workers = adapter.workers()
+        self.assertEqual([(w.id, w.capacity) for w in workers], [("colab", 1)])
+
+    def test_packer_plans_and_selects_the_static_colab_worker_through_the_seam(
+        self,
+    ) -> None:
+        """Slice S1's own done-when, through `packer`'s real entry points:
+        one live `list_active()` read (the fake executable, never the
+        network) refines the ledger estimate, and the static capacity-1
+        worker yields exactly one place to both `plan()` and `select()`.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(
+                tmp, stdout="[colab] No active sessions found on server.\n"
+            )
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            plan = PACKER.plan(
+                adapter=adapter,
+                worker_id="colab",
+                requested=3,
+                ledger_lines=[],
+                live_digest="d" * 64,
+            )
+            self.assertEqual(
+                (plan.cap, plan.granted, plan.in_flight_source),
+                (1, 1, "list_active"),
+            )
+            selected = PACKER.select(
+                adapter=adapter,
+                requested=3,
+                ledger_lines=[],
+                live_digest="d" * 64,
+            )
+            self.assertEqual(selected.worker, "colab")
+            self.assertEqual(selected.granted, 1)
+
+    def test_list_active_claims_only_prefixed_named_sessions(self) -> None:
+        """One listing, three cases in one fixture: an orphan (`[?]`) is
+        skipped — it has no name to address — a foreign tool's session is
+        skipped (the CLI lists the ACCOUNT, not this skill), and both
+        prefixed names come back as `<worker>/<session>` ids.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(
+                tmp,
+                stdout=(
+                    "[?] m-s-orphan | Hardware: CPU | Variant: DEFAULT\n"
+                    "[psmith-a-01234567] m-1 | Hardware: CPU | Variant: DEFAULT\n"
+                    "[someone-elses-tool] m-2 | Hardware: GPU | Variant: GPU\n"
+                    "\n"
+                    "[psmith-b-89abcdef] m-3 | Hardware: T4 | Variant: GPU\n"
+                ),
+            )
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            self.assertEqual(
+                adapter.list_active("colab"),
+                ["colab/psmith-a-01234567", "colab/psmith-b-89abcdef"],
+            )
+
+    def test_list_active_reads_the_no_sessions_message_as_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(
+                tmp, stdout="[colab] No active sessions found on server.\n"
+            )
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            self.assertEqual(adapter.list_active("colab"), [])
+
+    def test_list_active_refuses_a_nonzero_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(tmp, stderr="boom\n", exit_code=1)
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                adapter.list_active("colab")
+            self.assertIn("boom", str(ctx.exception))
+
+    def test_cancel_stops_by_session_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, log = self._fake_colab(
+                tmp, stdout="[colab] Session terminated.\n", record=True
+            )
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            self.assertIsNone(adapter.cancel("colab/psmith-a-01234567"))
+            assert log is not None
+            self.assertEqual(
+                log.read_text(encoding="utf-8").splitlines(),
+                ["stop", "-s", "psmith-a-01234567"],
+            )
+
+    def test_cancel_treats_not_found_as_already_gone(self) -> None:
+        """The measured S0 shape: `stop` on an unknown session prints
+        `Session 'x' not found.` and exits 0. Output is the signal here,
+        never the exit code, so an already-released session is a no-op
+        rather than a fabricated failure.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(
+                tmp, stdout="[colab] Session 'psmith-x' not found.\n"
+            )
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            self.assertIsNone(adapter.cancel("colab/psmith-x"))
+
+    def test_cancel_refuses_a_generic_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            exe, _ = self._fake_colab(tmp, stderr="kaboom\n", exit_code=1)
+            adapter = COLAB.ColabAdapter(colab_executable=exe)
+            with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                adapter.cancel("colab/psmith-x")
+            self.assertIn("kaboom", str(ctx.exception))
+
+    def test_cancel_refuses_a_submission_id_without_a_session_name(self) -> None:
+        adapter = COLAB.ColabAdapter()
+        with self.assertRaises(COLAB.ColabAdapterError):
+            adapter.cancel("colab")
+
+    def test_missing_cli_refuses_with_the_install_remedy(self) -> None:
+        adapter = COLAB.ColabAdapter(colab_executable="/definitely/not/here/colab")
+        with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+            adapter.list_active("colab")
+        self.assertIn("google-colab-cli", str(ctx.exception))
+
+    def test_a_process_without_home_is_refused(self) -> None:
+        """`HOME` carries the CLI's own credential lookup — a child
+        forwarded without one would fail authentication for a reason no
+        caller could read, so the refusal happens here instead.
+        """
+        adapter = COLAB.ColabAdapter()
+        with unittest.mock.patch.dict(COLAB.os.environ, {}, clear=False):
+            COLAB.os.environ.pop("HOME", None)
+            with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                adapter._env_for()
+        self.assertIn("HOME", str(ctx.exception))
+
+    def test_the_lifecycle_operations_refuse_until_slice_s2(self) -> None:
+        """The S1 boundary as a contract: submit/poll/fetch raise, name the
+        slice that owns them, and state that nothing was launched. A
+        placeholder with an owner, never a mystery or a half-implementation
+        that would burn quota to produce nothing.
+        """
+        adapter = COLAB.ColabAdapter()
+        job = ADAPTER.Job(
+            entrypoint=Path("tools/colab/search-a/runner.ipynb"),
+            run_config={},
+            worker="colab",
+        )
+        with self.assertRaises(COLAB.ColabAdapterError) as submit_ctx:
+            adapter.submit(job)
+        with self.assertRaises(COLAB.ColabAdapterError) as poll_ctx:
+            adapter.poll("colab/psmith-a-01234567")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(COLAB.ColabAdapterError) as fetch_ctx:
+                adapter.fetch("colab/psmith-a-01234567", Path(tmp))
+        for ctx in (submit_ctx, poll_ctx, fetch_ctx):
+            self.assertIn("S2", str(ctx.exception))
+            self.assertIn("nothing was launched", str(ctx.exception))
+
+
+class ColabGenerateJobUnionTests(unittest.TestCase):
+    """`jobfolder.generate_job()`'s union-of-registries rule (D11) — a
+    service known to EITHER registry is legal — and the front-door path a
+    real `generate-job --service colab` invocation takes: a two-file job
+    folder for the adapter that registers no metadata assembler, a by-name
+    refusal for a service known to neither registry, and the pre-existing
+    metadata-only shape left exactly as it was.
+    """
+
+    def setUp(self) -> None:
+        # Same seam as `GenerateJobTests`: this class is not exercising the
+        # pin preconditions, so the whole-precondition function is stubbed
+        # rather than each condition's own network probe.
+        patcher = unittest.mock.patch.object(
+            JOBFOLDER, "verify_pin_preconditions", return_value=None
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _fixture_assets(self, tmp: str) -> tuple[Path, Path]:
+        bootstrap = Path(tmp) / "fixture_bootstrap.py"
+        invoke = Path(tmp) / "fixture_invoke.py"
+        bootstrap.write_text("# fixture bootstrap cell\nprint('cell-0')\n", encoding="utf-8")
+        invoke.write_text("# fixture invoke cell\nprint('cell-1')\n", encoding="utf-8")
+        return bootstrap, invoke
+
+    def _ensure_source_tree(self, target: Path) -> None:
+        harness = target / "src" / "FEM_TOLLA_Benchmark" / "harness.py"
+        if not harness.exists():
+            harness.parent.mkdir(parents=True, exist_ok=True)
+            harness.write_text("def campaign(*args, **kwargs):\n    pass\n", encoding="utf-8")
+
+    def _generate(self, tmp: str, target: Path, *, service: str) -> Path:
+        bootstrap, invoke = self._fixture_assets(tmp)
+        self._ensure_source_tree(target)
+        return JOBFOLDER.generate_job(
+            target=target,
+            service=service,
+            job_name="search-a",
+            product="FEM-TOLLA",
+            commit="a" * 40,
+            repo_url="https://example.invalid/repo.git",
+            repo_ref="main",
+            clone_paths=["src/FEM_TOLLA_Benchmark"],
+            run_module="FEM_TOLLA_Benchmark.harness",
+            run_function="campaign",
+            bootstrap_asset=bootstrap,
+            invoke_asset=invoke,
+        )
+
+    def test_an_adapter_without_a_metadata_assembler_writes_two_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            job_dir = self._generate(tmp, target, service="colab")
+            self.assertEqual(
+                sorted(p.name for p in job_dir.iterdir()),
+                ["run-config.json", "runner.ipynb"],
+            )
+
+    def test_a_service_unknown_to_both_registries_refuses_by_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                self._generate(tmp, target, service="nowhere-registered-service-s1")
+            message = str(ctx.exception)
+            self.assertIn("nowhere-registered-service-s1", message)
+            self.assertIn("no adapter and no metadata assembler", message)
+
+    def test_a_metadata_only_service_still_writes_its_metadata_file(self) -> None:
+        service = f"metadata-only-fixture-{os.getpid()}"
+        ADAPTER.register_metadata(
+            service, lambda run_config: ("fake-metadata.json", json.dumps({"ok": True}))
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            job_dir = self._generate(tmp, target, service=service)
+            self.assertEqual(
+                sorted(p.name for p in job_dir.iterdir()),
+                ["fake-metadata.json", "run-config.json", "runner.ipynb"],
+            )
+
+    def test_generate_job_service_colab_through_the_real_cli(self) -> None:
+        """The front-door proof, through the CLI's own side-loader: a real
+        `remote_cli.py generate-job --service colab` invocation plants the
+        adapter module in a fresh process, clears the union rule, and
+        writes exactly the two files the adapter's shape owes. Modeled on
+        `test_generate_job_reaches_the_assembler_its_service_names`.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            origin = root / "origin.git"
+            subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+            target = root / "target"
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            package = target / "src" / "product"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "harness.py").write_text(
+                "def run():\n    return {}\n", encoding="utf-8")
+            git = ["git", "-C", str(target),
+                   "-c", "user.email=t@t", "-c", "user.name=t"]
+            subprocess.run([*git, "add", "-A"], check=True)
+            subprocess.run([*git, "commit", "-q", "-m", "seed"], check=True)
+            subprocess.run([*git, "remote", "add", "origin", str(origin)], check=True)
+            subprocess.run([*git, "push", "-q", "origin", "HEAD:refs/heads/main"],
+                           check=True)
+            commit = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True,
+                                    text=True, check=True).stdout.strip()
+            completed = subprocess.run(
+                [sys.executable, str(REMOTE_CLI_SCRIPT), "generate-job",
+                 "--target", str(target), "--service", "colab",
+                 "--job-name", "probe-job", "--product", "Product",
+                 "--commit", commit,
+                 "--repo-url", str(origin),
+                 "--repo-ref", "main",
+                 "--clone-path", "src/product",
+                 "--run-module", "product.harness", "--run-function", "run"],
+                capture_output=True, text=True, cwd=str(target),
+            )
+            output = completed.stdout + completed.stderr
+            self.assertEqual(completed.returncode, 0, output)
+            job_dir = target / "tools" / "colab" / "probe-job"
+            self.assertEqual(
+                sorted(p.name for p in job_dir.iterdir()),
+                ["run-config.json", "runner.ipynb"],
+            )
 
 
 if __name__ == "__main__":

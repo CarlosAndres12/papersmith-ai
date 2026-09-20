@@ -1899,6 +1899,14 @@ def generate_job(
     service-registered fallback and no forge-invented value. Omitted, no
     `localBudget` block is written at all — see `build_run_config()`'s
     own docstring for why that silence must never become a `0`.
+
+    `service` is validated against BOTH registries together (the
+    union-of-registries rule): a service known to either registry is
+    legal. An adapter that registers no metadata assembler — a backend
+    whose service reads no metadata file — generates a job folder holding
+    exactly `run-config.json` and `runner.ipynb`; no third file is
+    invented for it. A name unknown to both registries refuses here, by
+    name, before anything is written.
     """
     resolved_target = resolve_target(target)
     destination = resolve_destination(resolved_target, service, job_name)
@@ -2026,7 +2034,31 @@ def generate_job(
         local_budget_seconds=local_budget_seconds,
     )
     notebook = build_notebook(resolved_bootstrap, resolved_invoke)
-    metadata_filename, metadata_text = ADAPTER.resolve_metadata(service)(run_config)
+
+    # The union-of-registries rule: a service is known when EITHER
+    # registry knows it. An adapter that registered no metadata assembler
+    # simply writes no third file; a name unknown to BOTH refuses here,
+    # by name, while refusing still costs nothing — the same placement
+    # every check above this line holds.
+    try:
+        ADAPTER.resolve(service)
+        adapter_known = True
+    except KeyError:
+        adapter_known = False
+    try:
+        metadata_assembler = ADAPTER.resolve_metadata(service)
+    except KeyError:
+        metadata_assembler = None
+    if metadata_assembler is None and not adapter_known:
+        raise JobFolderError(
+            f"generation refuses: no adapter and no metadata assembler is "
+            f"registered under {service!r}; register the service's own module "
+            "under scripts/adapters/ (reachable through the CLI's own "
+            "--service side-loader) before generating a job for it"
+        )
+    metadata_file: tuple[str, str] | None = (
+        metadata_assembler(run_config) if metadata_assembler is not None else None
+    )
 
     if destination.is_dir() and not regenerate:
         raise JobFolderError(
@@ -2050,7 +2082,9 @@ def generate_job(
         (partial / RUNNER_FILENAME).write_text(
             json.dumps(notebook, indent=1), encoding="utf-8"
         )
-        (partial / metadata_filename).write_text(metadata_text, encoding="utf-8")
+        if metadata_file is not None:
+            metadata_name, metadata_text = metadata_file
+            (partial / metadata_name).write_text(metadata_text, encoding="utf-8")
     except BaseException:
         _rmtree(partial)
         raise
