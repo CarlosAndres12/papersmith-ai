@@ -7,13 +7,15 @@ prose asks for a fact (`requirement-transcription`). They have never proved
 which part of the real source document answers it. This capability adds
 that second half: an optional `document: {lineage, section}` binding
 (`section-contract`) naming a document's lineage and the title of the
-section within it that feeds one entry. It owns which facts a binding may
-name (derived, never listed), lineage resolution to the current revision on
-disk off a per-root `.paper-writing.json` marker's own declared revision
-grammar, section existence and ambiguity by title, the report an unmeasured
-root produces versus the refusal a document-rooted but undeclared or
-malformed marker produces, and the property that a version bump whose bound
-titles survive costs no edit anywhere.
+section — or, when more than one section feeds the same entry, the titles
+of the sections — within it that feed one entry. It owns which facts a
+binding may name (derived, never listed), lineage resolution to the current
+revision on disk off a per-root `.paper-writing.json` marker's own declared
+revision grammar, section existence and ambiguity by title (checked
+independently per title when a binding names more than one), the report an
+unmeasured root produces versus the refusal a document-rooted but
+undeclared or malformed marker produces, and the property that a version
+bump whose bound titles survive costs no edit anywhere.
 
 ## Requirements
 
@@ -238,6 +240,40 @@ MUST succeed against the new revision with no edit to any existing binding.
   and `3.2`, so the exact bound title no longer exists as a heading
 - THEN the corpus assembles against `r22` and refuses `SECTION_NOT_IN_SOURCE`
   naming `mm-proposal`'s binding
+
+### Requirement: A Binding May Name More Than One Section
+
+`document.section` MAY name more than one section of the same lineage: a
+contract's own prose block may draw from several sections of the source
+document (for example, a block that borrows both the foundational theory
+sections and the proposal sections). Each named title is resolved and
+checked independently, exactly as a single-title binding is: a title
+matching zero headings MUST refuse `SECTION_NOT_IN_SOURCE` naming that
+title specifically, and a title matching two or more headings MUST refuse
+`SECTION_TITLE_AMBIGUOUS` naming that title specifically — a refusal MUST
+name WHICH title failed, never merely the owning block, and a resolvable
+title MUST NOT be masked by a sibling title's own failure. The number of
+blocks a contract declares MUST NOT be driven by how many sections a
+source document currently has: a binding names as many sections as feed
+it, and that block count never moves just because a later revision of the
+source document grows or shrinks its own section count.
+
+#### Scenario: A binding naming two sections resolves both
+
+- GIVEN a binding naming lineage `research-concept` and sections `["1.
+  Fundamentos de métodos de kernel", "2. Estimación de la entropía de
+  Rényi basada en kernels"]`, both present as headings in the resolved
+  revision
+- WHEN the corpus is assembled
+- THEN it accepts the entry with no refusal
+
+#### Scenario: One missing title among several refuses by naming only that title
+
+- GIVEN the same binding, but the resolved revision no longer carries "2.
+  Estimación de la entropía de Rényi basada en kernels" as a heading
+- WHEN the corpus is assembled
+- THEN it refuses `SECTION_NOT_IN_SOURCE` naming that missing title, and
+  the detail does not name the sibling title that still resolves
 
 ### Requirement: An Unmeasured Root Is Reported, Never Silently Passed
 

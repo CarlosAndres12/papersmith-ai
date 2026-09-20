@@ -136,6 +136,39 @@ two fields, `kind` mandatory. The binding entry shape (`document: {lineage, sect
 unchanged: only which root a fact resolves through, and how that root resolves a lineage, differ
 per kind.
 
+### G — A binding names one title or a non-empty list of titles (U2d, owner ruling)
+
+`document.section` accepts either a single title (the original shape) or a
+non-empty list of unique titles. The owner's own reason, read off the
+corpus: `sections/01-materials-and-methods.md`'s own prose states Slot 2 is
+"One to three subsections, each a body of existing theory the proposal
+needs" and Slot 3 is the proposal, "always last" — against `research-
+concept-r21`'s five top-level sections that is two sections feeding one
+block and three feeding another. A single-section binding cannot express
+what the contract already promises, so the shape widens rather than forcing
+every source document to be re-split to match the paper's own block count.
+
+The deciding argument: the paper's own block count is fixed by its
+contract, not by how many sections the CURRENT revision of a source
+document happens to have. `research-concept-r21` has 5 sections; a later
+`r22` may have 9. Splitting blocks to track that would make the paper's own
+structure follow the source document's section count instead of the other
+way around — exactly backwards from what a contract is for. A binding
+names as many sections as feed it; the block count never moves because a
+source document grew or shrank.
+
+| Option | Tradeoff | Decision |
+|---|---|---|
+| Widen `section` to accept a string or a non-empty list of unique strings | One shape change, in the one place (`_validate_document_object`) that already owns `document`'s grammar; `paper_contract.requirement_documents` expands a list into one `(fact_id, lineage, title)` triple per title, so `paper_graph._verify_source_section_bindings`'s own per-triple loop needs ZERO changes — existence/ambiguity checks, and their "name the failing title" refusal detail, fall out for free | **Chosen** |
+| A new `sections` (plural) key beside `section` | Two keys meaning almost the same thing is exactly the kind of drift `document`'s own shape exists to avoid; every caller would need to check which key is present | Rejected |
+| Force every binding into a list (`section: [title]` even for one) | Breaks every already-shipped single-title binding's shape for no benefit; the owner explicitly ruled a single string must stay valid | Rejected |
+
+No new refusal code: an empty list, a list with a repeated title, or a
+non-string list entry are all schema-shape errors, so they reuse
+`MALFORMED_HEADER` — the same code every other `document`-shape violation
+already raises. Roster stays **139** — U2d adds no new code, only widens
+an existing key's accepted shape.
+
 ## Refusal Codes — seven, and why the proposal's four became seven
 
 | Code | Condition | Tier |
@@ -231,7 +264,11 @@ def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
 
 `BlockRecord.source_bindings` is a tuple of `(fact_id, lineage, section_title)` triples — a tuple,
 matching the `produces_facts: tuple = ()` precedent for a frozen dataclass, defaulted so every
-existing construction site stays green.
+existing construction site stays green. A `document.section` naming more than one title (U2d)
+contributes one triple PER title, expanded by `paper_contract.requirement_documents` — never a
+fourth tuple element and never a nested list inside one triple — so every consumer of
+`source_bindings` (`_verify_source_section_bindings`'s per-triple loop, `SECTION_BINDING_ABSENT`'s
+own presence check keyed by `fact_id`) stays unchanged by the widening.
 
 ## Testing Strategy
 
@@ -268,6 +305,7 @@ so an untracked fixture cannot pass on a no-op edit:
 | U2 | Marker reader, lineage→revision resolver, `source_root_status`, `_verify_source_section_bindings`, `source_roots` report, existence/ambiguity refusals | ~170 | yes (inert without U3) |
 | U2b | Correctness repair: `implementation`/`results` unmeasured BY KIND (`SourceRootKind.REPOSITORY`), not by an invented directory name | ~295 | yes |
 | U2c | Owner ruling: `dataset` sourced from the ingested evidence document (`SourceRootKind.INGESTED`), never `proposals/`'s mathematics lineage | 572+/-52 measured (incl. this doc) | yes |
+| U2d | Owner ruling: `document.section` accepts one title or a non-empty list of unique titles (Decision G); `requirement_documents` expands a list into one triple per title | ~90 | yes |
 | **DP** | **Owner rules on any entry that cannot be anchored** | **blocking** | — |
 | U3 | Transcribe corpus bindings, obligation unconditional (`SECTION_BINDING_ABSENT`), refusal wired at `write`, ship `proposals/.paper-writing.json`, fixtures, roster re-derived | ~170 | yes |
 

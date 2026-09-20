@@ -584,6 +584,142 @@ class DocumentBindingSchemaTests(unittest.TestCase):
 
         self.assertEqual(paper_contract.requirement_documents([unbound]), ())
 
+    def test_a_document_binding_with_a_list_of_sections_parses(self) -> None:
+        """`the-requirement-names-the-section-that-feeds-it` (U2d): a block
+        may borrow from more than one section of the same lineage --
+        `document.section` MAY be a non-empty list of unique titles, never
+        forcing every binding into a list."""
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "research-concept",
+                "section": ["1. Fundamentos", "2. Estimación de la entropía"],
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+
+    def test_a_document_binding_with_an_empty_section_list_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "research-concept", "section": []},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_repeated_section_title_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "research-concept",
+                "section": ["3. Something", "3. Something"],
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_non_string_section_list_entry_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "research-concept", "section": ["3. Something", 7]},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_non_list_non_string_section_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "research-concept", "section": {"nested": True}},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_requirement_documents_derives_one_triple_per_section_title_in_order(self) -> None:
+        bound = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "x"},
+            "document": {
+                "lineage": "research-concept",
+                "section": ["1. First", "2. Second", "3. Third"],
+            },
+        }
+
+        self.assertEqual(
+            paper_contract.requirement_documents([bound]),
+            (
+                ("formulation", "research-concept", "1. First"),
+                ("formulation", "research-concept", "2. Second"),
+                ("formulation", "research-concept", "3. Third"),
+            ),
+        )
+
+    def test_mutation_collapsing_the_section_list_to_its_first_title_is_caught(self) -> None:
+        """A weaker `requirement_documents` that only expands the FIRST
+        title of a list would silently drop every other section a binding
+        names -- this mutation proves the multi-title expansion is real,
+        not merely a shape that happens to round-trip a single-entry list."""
+        proc = _run_against_mutant(
+            "        titles = section if isinstance(section, list) else (section,)\n",
+            "        titles = (section[0],) if isinstance(section, list) else (section,)\n",
+            "tests.test_paper_contract.DocumentBindingSchemaTests"
+            ".test_requirement_documents_derives_one_triple_per_section_title_in_order",
+            source_path=SKILL_SCRIPTS / "paper_contract.py",
+        )
+        _assert_mutant_test_failed(self, proc)
+
 
 class ProducesFactsSchemaTests(unittest.TestCase):
     """`fact-production` spec, `Requirement: produces_facts Field Grammar`:

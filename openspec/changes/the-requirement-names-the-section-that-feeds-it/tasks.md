@@ -28,6 +28,7 @@ unchanged from design.md, which already priced the marker reader in.
 |---|---|---|---|---|---|
 | 1 (U1) | `document` entry shape, inert | PR 1 | `.venv/bin/python -m unittest tests.test_paper_contract` | N/A — additive, no corpus edit yet | revert `paper_contract.py`/`paper_graph.py` diffs |
 | 2 (U2) | Marker + lineage resolver + existence/ambiguity, inert without U3 | PR 1 | `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions` | N/A — no binding demanded yet | revert `paper_declarations.py`/`paper_graph.py` diffs |
+| 2d (U2d) | `document.section` accepts one title or a non-empty list of unique titles (design.md Decision G) | PR 2 | `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing` | N/A — shape only, still optional | revert `paper_contract.py` diff |
 | 3 (DP) | Owner rules on unanchorable entries | — | N/A — human decision | N/A | reversible; nothing lands until ruled |
 | 4 (U3) | Obligation unconditional, corpus transcribed, `write` wired for all six codes | PR 2 | full suite (both, see 4.12) | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write <bound-block-id>` | `git revert` U3's single commit |
 
@@ -88,6 +89,16 @@ unchanged from design.md, which already priced the marker reader in.
 - [x] 2.21 Add `source_base: Path | None = None` kwarg to `assemble_corpus` (default `sections_dir.parent`); add a synthetic `experiments/`-only-`.gitkeep`-style fixture proving unmeasured with zero edits to any existing minimal fixture.
 - [x] 2.22 Integration test: fixture adds a `…-r22.md` revision preserving a bound title; assert the corpus assembles byte-identically untouched (success criterion 4).
 - [x] 2.23 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`; confirm green; bindings still optional (U3 not landed).
+
+## Phase 2d — U2d: A binding may name more than one section (shape only)
+
+- [x] 2d.1 RED: add failing tests in `tests/test_paper_contract.py` for `document.section` accepting a non-empty list of unique titles; and for an empty list, a repeated title, and a non-string list entry each refusing `MALFORMED_HEADER` naming `section`.
+- [x] 2d.2 Widen `_validate_document_object` in `.claude/skills/paper-writing/scripts/paper_contract.py`: `section` accepts a non-empty string (unchanged) or a non-empty list of unique non-empty-string titles; reuses `MALFORMED_HEADER`, no new code.
+- [x] 2d.3 Widen `requirement_documents()` to expand a list-shaped `section` into one `(fact_id, lineage, title)` triple per title, in declaration order; a single-string `section` still contributes exactly one triple.
+- [x] 2d.4 RED: add a failing integration test in `tests/test_paper_writing.py` asserting a binding naming two sections resolves both, and that one missing title among several refuses `SECTION_NOT_IN_SOURCE` naming only that title (the resolvable sibling does not mask it). Confirm `_verify_source_section_bindings` needs zero changes — the per-triple loop already covers this once `requirement_documents` expands the list.
+- [x] 2d.5 Mutation: collapse the list expansion to its first title only; confirm the multi-title test goes red.
+- [x] 2d.6 Update `specs/section-contract/spec.md` and `specs/source-section-binding/spec.md` for the widened shape and per-title resolution; update `design.md` (Decision G, Work Units table, `BlockRecord.source_bindings` docstring note).
+- [x] 2d.7 Run `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions`; confirm green; re-derive `reachable_paper_refusal_codes()` and confirm it is still 139 (no new code).
 
 ## Phase 3 — DP: Owner decision point (BLOCKING, before Phase 4)
 

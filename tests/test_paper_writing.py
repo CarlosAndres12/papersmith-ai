@@ -2411,6 +2411,42 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         )
         self._assert_guard_failed_under_mutation(proc)
 
+    def test_a_binding_naming_two_sections_resolves_both(self) -> None:
+        """U2d: a binding may name more than one section of the same
+        lineage -- both must resolve for the corpus to assemble cleanly."""
+        self._write_section(
+            "01-a.md", self._bound_header(["1. Intro", "3. Something"]), self._BODY,
+        )
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_a_binding_naming_two_sections_where_one_is_missing_names_that_title(self) -> None:
+        """The refusal must name WHICH title failed, never just the block
+        -- the other, resolvable title must not mask it."""
+        self._write_section(
+            "01-a.md", self._bound_header(["1. Intro", "9. Missing"]), self._BODY,
+        )
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("9. Missing", ctx.exception.detail)
+        self.assertNotIn("1. Intro", ctx.exception.detail)
+
 
 class IngestedSourceSectionBindingCorpusTests(unittest.TestCase):
     """U2c corpus-level acceptance: a `dataset`-bound entry resolves

@@ -280,7 +280,7 @@ def _validate_mode_object(raw, owner: str) -> dict:
 
 def _validate_document_object(raw, owner: str) -> dict:
     """`document: {lineage, section}` — the source document's lineage and
-    the exact title of the section within it that feeds one `requires_facts`
+    the title(s) of the section(s) within it that feed one `requires_facts`
     entry (`source-section-binding` spec; `section-contract` spec,
     `Requirement: Front Matter Schema`, MODIFIED). Both keys are required
     together: an absent key or an explicit `null` for either is treated as
@@ -289,6 +289,18 @@ def _validate_document_object(raw, owner: str) -> dict:
     — the identical missing-then-unknown ordering `_validate_source` and
     `_normalize_requirement_entry` already use, so a `guidance/`-shaped
     marker's own precedent (name the ABSENT key first) is followed here too.
+
+    `section` (U2d, `the-requirement-names-the-section-that-feeds-it`):
+    ONE title (a non-empty string, the original shape) OR MORE THAN ONE (a
+    non-empty list of unique non-empty-string titles) — a block may borrow
+    from several sections of the same lineage (a contract's own prose may
+    promise "one to three subsections" feeding one block), and the block
+    count must never move just because a source document's own section
+    count does. An empty list, a list carrying a repeated title, or a list
+    entry that is not a non-empty string all refuse the same way a
+    malformed single title would — shape errors, never silently tolerated.
+    A single string stays valid; this never forces every binding to widen
+    into a list.
     """
     if not isinstance(raw, dict):
         raise Refused("MALFORMED_HEADER", f"{owner}: 'document' must be an object")
@@ -306,11 +318,32 @@ def _validate_document_object(raw, owner: str) -> dict:
             "MALFORMED_HEADER", f"{owner}: 'document.lineage' must be a non-empty string"
         )
     section = raw["section"]
-    if not isinstance(section, str) or not section:
+    if isinstance(section, str):
+        if not section:
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' must be a non-empty string"
+            )
+    elif isinstance(section, list):
+        if not section:
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' list must not be empty"
+            )
+        if not all(isinstance(title, str) and title for title in section):
+            raise Refused(
+                "MALFORMED_HEADER",
+                f"{owner}: 'document.section' list entries must all be non-empty strings",
+            )
+        if len(set(section)) != len(section):
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' list carries a duplicate title"
+            )
+    else:
         raise Refused(
-            "MALFORMED_HEADER", f"{owner}: 'document.section' must be a non-empty string"
+            "MALFORMED_HEADER",
+            f"{owner}: 'document.section' must be a non-empty string or a "
+            "non-empty list of unique non-empty-string titles",
         )
-    return {"lineage": lineage, "section": section}
+    return {"lineage": lineage, "section": section if isinstance(section, str) else list(section)}
 
 
 def _normalize_requirement_entry(
@@ -390,12 +423,25 @@ def requirement_documents(entries) -> tuple:
     `document` is optional, and an unbound bindable fact is a corpus-level
     concern (`SECTION_BINDING_ABSENT`, U3), never this accessor's own.
     `paper_graph.BlockRecord.source_bindings` is built from this, the sole
-    source of that tuple."""
-    return tuple(
-        (entry["value"], entry["document"]["lineage"], entry["document"]["section"])
-        for entry in entries
-        if entry.get("document") is not None
-    )
+    source of that tuple.
+
+    `document.section` (U2d) may be one title or a list of several — this
+    accessor is where that shape is flattened: a list contributes ONE
+    triple per title, in the list's own declaration order, so every
+    downstream consumer (`paper_graph._verify_source_section_bindings`)
+    keeps working against a single `section_title` per triple, unchanged.
+    A single-string `section` still contributes exactly one triple, same
+    as before U2d."""
+    triples = []
+    for entry in entries:
+        document = entry.get("document")
+        if document is None:
+            continue
+        section = document["section"]
+        titles = section if isinstance(section, list) else (section,)
+        for title in titles:
+            triples.append((entry["value"], document["lineage"], title))
+    return tuple(triples)
 
 
 def _parse_figure(raw, owner: str) -> dict:
