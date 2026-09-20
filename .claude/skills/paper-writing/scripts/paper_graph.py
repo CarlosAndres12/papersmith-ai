@@ -124,11 +124,14 @@ class Corpus:
     blocks: dict
     order_by_section: dict
     #: `source-section-binding` spec, `Requirement: An Unmeasured Root Is
-    #: Reported, Never Silently Passed`; design.md Decision B. Every root
-    #: in `set(paper_declarations.FACT_SOURCE_ROOT.values())`, each mapped
-    #: to `paper_declarations.source_root_status`'s own report — "the guard
-    #: is off for this root" is always on screen, echoed by every corpus-
-    #: reading verb wired against it. Defaulted to `{}`, the same precedent
+    #: Reported, Never Silently Passed`; design.md Decision B. Every
+    #: distinct `SourceRoot.name` in `paper_declarations.FACT_SOURCE_ROOT
+    #: .values()`, each mapped to `paper_declarations.source_root_status`'s
+    #: own report — "the guard is off for this root" is always on screen,
+    #: echoed by every corpus-reading verb wired against it. A
+    #: `REPOSITORY`-kind root always reports `unmeasured`, by kind, per
+    #: `paper_declarations.source_root_status`'s own U2b correctness
+    #: repair. Defaulted to `{}`, the same precedent
     #: `produces_facts`/`source_bindings` set, so every existing direct
     #: `Corpus(...)` construction site stays green.
     source_roots: dict = field(default_factory=dict)
@@ -158,8 +161,9 @@ def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> C
     keyed by `header.section` rather than a filename.
 
     `source_base` (`source-section-binding` spec; design.md Decision C):
-    the directory `paper_declarations.FACT_SOURCE_ROOT`'s roots
-    (`proposals/`, `experiments/`, ...) are resolved under. `None` derives
+    the directory each `PROSE`-kind `paper_declarations.FACT_SOURCE_ROOT`
+    root (`proposals/`, `experiments/`, ...) is resolved under; a
+    `REPOSITORY`-kind root never resolves under it at all. `None` derives
     `sections_dir.parent` — the real repository root under this skill's
     shipped layout. Every root's `document-rooted`/`unmeasured` status is
     computed once here (`Corpus.source_roots`) and then consumed by
@@ -208,8 +212,8 @@ def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> C
 
     resolved_base = source_base if source_base is not None else sections_dir.parent
     source_roots = {
-        root_name: paper_declarations.source_root_status(resolved_base, root_name)
-        for root_name in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()))
+        root.name: paper_declarations.source_root_status(resolved_base, root)
+        for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name)
     }
 
     corpus = Corpus(
@@ -260,20 +264,20 @@ def _verify_source_section_bindings(corpus: Corpus) -> None:
     memo: dict = {}
     for qualified_id, record in corpus.blocks.items():
         for fact_id, lineage, section_title in record.source_bindings:
-            root_name = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
-            if root_name is None:
+            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root is None:
                 continue
-            status = corpus.source_roots.get(root_name)
+            status = corpus.source_roots.get(root.name)
             if status is None or status["state"] == "unmeasured":
                 continue
 
-            memo_key = (root_name, lineage)
+            memo_key = (root.name, lineage)
             if memo_key not in memo:
                 marker = paper_declarations.read_revisions_marker(status["path"])
                 if marker is None:
                     raise Refused(
                         "SOURCE_REVISIONS_UNDECLARED",
-                        f"{root_name!r} is document-rooted but carries no "
+                        f"{root.name!r} is document-rooted but carries no "
                         f"'.paper-writing.json' marker",
                     )
                 revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)

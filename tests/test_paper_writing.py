@@ -51,6 +51,7 @@ import paper_guidance  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
+import impl_layout  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "tests"))
 from paper_mutation import _run_against_mutant  # noqa: E402
@@ -1712,7 +1713,11 @@ class SourceRootStatusTests(unittest.TestCase):
     Source With No Marker Refuses` / design.md Decision B: a root is
     document-rooted iff it resolves to a directory under the source base
     holding at least one `*.md` file -- a property computed on disk, never
-    keyed by a fact id."""
+    keyed by a fact id. U2b correctness repair to `Requirement: An
+    Unmeasured Root Is Reported, Never Silently Passed`
+    (`the-requirement-names-the-section-that-feeds-it`): a
+    `SourceRootKind.REPOSITORY` root is unmeasured BY KIND, never by the
+    document-rooted predicate above."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -1720,7 +1725,9 @@ class SourceRootStatusTests(unittest.TestCase):
         self.base = Path(self._tmp.name)
 
     def test_an_absent_root_is_unmeasured(self) -> None:
-        status = paper_declarations.source_root_status(self.base, "does-not-exist")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("does-not-exist", paper_declarations.SourceRootKind.PROSE)
+        )
 
         self.assertEqual(status["state"], "unmeasured")
         self.assertIsNone(status["path"])
@@ -1730,7 +1737,9 @@ class SourceRootStatusTests(unittest.TestCase):
         root.mkdir()
         (root / ".gitkeep").write_text("", encoding="utf-8")
 
-        status = paper_declarations.source_root_status(self.base, "experiments")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("experiments", paper_declarations.SourceRootKind.PROSE)
+        )
 
         self.assertEqual(status["state"], "unmeasured")
         self.assertIsNotNone(status["reason"])
@@ -1740,12 +1749,57 @@ class SourceRootStatusTests(unittest.TestCase):
         root.mkdir()
         (root / "research-concept-r21.md").write_text("# Title\n", encoding="utf-8")
 
-        status = paper_declarations.source_root_status(self.base, "proposals")
+        status = paper_declarations.source_root_status(
+            self.base, paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
+        )
 
         self.assertEqual(status["state"], "document-rooted")
         self.assertEqual(status["path"], root)
         self.assertEqual(status["documents"], 1)
         self.assertIsNone(status["reason"])
+
+    def test_a_repository_kind_root_is_unmeasured_even_when_populated_with_markdown(
+        self,
+    ) -> None:
+        """The exact defect this unit repairs: a REPOSITORY-kind root
+        holding real `*.md` files (a target repo's `README.md`, `AGREED.md`,
+        ...) must NEVER read as document-rooted -- the has-at-least-one-
+        `*.md` predicate above is for PROSE roots only, and must never even
+        run for a REPOSITORY root."""
+        root = self.base / "implementation"
+        root.mkdir()
+        (root / "README.md").write_text("# Not prose\n", encoding="utf-8")
+
+        status = paper_declarations.source_root_status(
+            self.base,
+            paper_declarations.SourceRoot("implementation", paper_declarations.SourceRootKind.REPOSITORY),
+        )
+
+        self.assertEqual(status["state"], "unmeasured")
+        self.assertIn("not read as prose", status["reason"])
+        self.assertNotIn("is not a directory under", status["reason"])
+
+    def test_a_repository_kind_root_is_unmeasured_when_wholly_absent(self) -> None:
+        """Same outcome, same reason SHAPE, whether or not the directory
+        exists at all -- kind decides this, never disk presence."""
+        status = paper_declarations.source_root_status(
+            self.base,
+            paper_declarations.SourceRoot("implementation", paper_declarations.SourceRootKind.REPOSITORY),
+        )
+
+        self.assertEqual(status["state"], "unmeasured")
+        self.assertIn("not read as prose", status["reason"])
+
+    def test_the_repository_root_names_the_forges_own_canonical_workspace(self) -> None:
+        """Ties this skill's idea of the implementation root to
+        `impl_layout.WORKSPACE` directly -- never a re-spelled string --
+        so a future rename on either side goes red instead of silent."""
+        status = paper_declarations.source_root_status(
+            self.base,
+            paper_declarations.SourceRoot("implementation", paper_declarations.SourceRootKind.REPOSITORY),
+        )
+
+        self.assertEqual(status["path"], impl_layout.WORKSPACE)
 
 
 class SourceLineageResolutionTests(unittest.TestCase):
@@ -2104,6 +2158,59 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
             paper_graph.assemble_corpus(self.sections_dir)
 
         self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+
+    def test_a_repository_kind_fact_never_binds_even_against_a_populated_namesake_directory(
+        self,
+    ) -> None:
+        """The corpus-level acceptance case for the U2b correctness repair:
+        `implementation` binds to a REPOSITORY-kind root, so a `document`
+        half naming it must resolve with NO refusal at all --
+        `corpus.source_roots["implementation"]` stays `unmeasured` even
+        though the directory exists and holds `*.md` files that would
+        otherwise satisfy the document-rooted predicate and (wrongly)
+        demand section resolution."""
+        self._write_section(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "implementation",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The implementation, written here.",
+                        },
+                        "document": {"lineage": "does-not-matter", "section": "Nonexistent"},
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The implementation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        implementation = self.base / "implementation"
+        implementation.mkdir()
+        (implementation / "README.md").write_text("# A target repo, not prose\n", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.source_roots["implementation"]["state"], "unmeasured")
+
+    def test_mutation_treating_a_repository_root_as_prose_lets_it_bind(self) -> None:
+        """Mutate the kind guard itself away: `SourceRootKind.REPOSITORY`
+        roots fall through to the document-rooted predicate, and the
+        populated `implementation/README.md` fixture above wrongly
+        resolves as document-rooted -- proving the guard, not merely its
+        presence."""
+        proc = _run_against_mutant(
+            "    if root.kind is SourceRootKind.REPOSITORY:",
+            "    if False:",
+            "tests.test_paper_writing.SourceSectionBindingCorpusTests"
+            ".test_a_repository_kind_fact_never_binds_even_against_a_populated_namesake_directory",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
 
     def test_mutation_wiring_the_guard_only_behind_a_condition_is_caught(self) -> None:
         """Static proof the call is a direct statement of `assemble_corpus`'s

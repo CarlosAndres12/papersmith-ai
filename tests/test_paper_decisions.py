@@ -2351,6 +2351,48 @@ class BindableFactDerivationTests(unittest.TestCase):
             self.assertTrue(paper_declarations.is_bindable_fact("a-sixth-fact"))
 
 
+class SourceRootDeclaresItsKindTests(unittest.TestCase):
+    """`the-requirement-names-the-section-that-feeds-it`, U2b correctness
+    repair to `source-section-binding` spec's `Requirement: An Unmeasured
+    Root Is Reported, Never Silently Passed`: a `FACT_SOURCE_ROOT` value
+    is one `SourceRoot(name, kind)` record, never a bare string -- and
+    `kind` carries no default, so a sixth fact/root pair that omits it
+    fails immediately rather than silently defaulting to `PROSE` and
+    becoming spuriously section-bindable."""
+
+    def test_kind_carries_no_default_and_must_be_stated(self) -> None:
+        with self.assertRaises(TypeError):
+            paper_declarations.SourceRoot("a-sixth-root")  # type: ignore[call-arg]
+
+    def test_every_shipped_root_states_its_kind(self) -> None:
+        for fact_id, root in paper_declarations.FACT_SOURCE_ROOT.items():
+            self.assertIsInstance(
+                root, paper_declarations.SourceRoot, f"{fact_id!r} is not a SourceRoot record"
+            )
+            self.assertIn(root.kind, (paper_declarations.SourceRootKind.PROSE,
+                                       paper_declarations.SourceRootKind.REPOSITORY))
+
+    def test_implementation_and_results_are_repository_kind_not_prose(self) -> None:
+        """The exact defect: `implementation`/`results` are read by
+        RUNNING a target repository, never by reading a document's
+        headings -- so both must be `REPOSITORY`, never `PROSE`."""
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["implementation"].kind,
+            paper_declarations.SourceRootKind.REPOSITORY,
+        )
+        self.assertEqual(
+            paper_declarations.FACT_SOURCE_ROOT["results"].kind,
+            paper_declarations.SourceRootKind.REPOSITORY,
+        )
+
+    def test_formulation_dataset_experimental_design_stay_prose(self) -> None:
+        for fact_id in ("formulation", "dataset", "experimental-design"):
+            self.assertEqual(
+                paper_declarations.FACT_SOURCE_ROOT[fact_id].kind,
+                paper_declarations.SourceRootKind.PROSE,
+            )
+
+
 class ReconcileObservationReportTests(unittest.TestCase):
     """`reconcile_observation_report`: the pure comparison `observe`'s new
     disk-truth gate is built on."""

@@ -39,19 +39,23 @@ Public surface:
     infer_skeleton_decisions(paper_dir, corpus) -> dict  (read-only; disk, never a stored flag)
     validate_observation_report(report) -> None  (raises NOT_AN_OBSERVABLE_FACT,
                                                      EVIDENCE_CONFLATED)
-    FACT_SOURCE_ROOT -> dict[str, str]  (fact id -> the source root it is read from)
+    FACT_SOURCE_ROOT -> dict[str, SourceRoot]  (fact id -> the root it is read from,
+        AND that root's kind -- PROSE (a document revision, section-bindable) or
+        REPOSITORY (a target code repository, measured by running it))
     source_available(root) -> bool  (pure disk measurement; gitignore-blind, `Path.iterdir()`)
     reconcile_observation_report(report, measured) -> list[dict]  (pure; every
         disagreement between the agent's account and a real disk measurement)
 """
 from __future__ import annotations
 
+import enum
 import json
 import os
 import re
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
@@ -60,6 +64,7 @@ import paper_vocabulary  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
+import impl_layout  # noqa: E402
 
 #: The five facts an outside observer (`insumos-observer`) may report on —
 #: read from `proposals/`, `experiments/`, or the target implementation
@@ -632,20 +637,53 @@ def affected_blocks(corpus, target_id: str) -> set:
     }
 
 
-#: Which real-disk root each observable fact is read from
-#: (`.claude/agents/insumos-observer.md`: "formulation, dataset (from
+class SourceRootKind(enum.Enum):
+    """Whether a `FACT_SOURCE_ROOT` root is read as PROSE (a document
+    revision with headings, resolvable for section binding) or is a
+    REPOSITORY (a target code repository, measured by running it -- never
+    read as prose, regardless of what happens to exist on disk under its
+    name). U2b correctness repair to `source-section-binding` spec's
+    `Requirement: An Unmeasured Root Is Reported, Never Silently Passed`:
+    a REPOSITORY-kind root is unmeasured BY KIND, not merely by the
+    document-rooted predicate that requirement already names."""
+
+    PROSE = "prose"
+    REPOSITORY = "repository"
+
+
+class SourceRoot(NamedTuple):
+    """One `FACT_SOURCE_ROOT` value: `name` (the root's own label -- for a
+    `PROSE` root, the directory `source_root_status` resolves under the
+    source base) and `kind` (`SourceRootKind`, above). `kind` carries NO
+    default: a sixth fact/root pair that omits it fails immediately with
+    `TypeError: missing ... argument`, rather than silently defaulting to
+    `PROSE` and becoming spuriously section-bindable."""
+
+    name: str
+    kind: SourceRootKind
+
+
+#: Which real-disk root each observable fact is read from, and that root's
+#: KIND (`.claude/agents/insumos-observer.md`: "formulation, dataset (from
 #: `proposals/` -- the managed mathematical proposal), experimental-design
 #: (from `experiments/` -- the managed experiments document), implementation
 #: (from the target implementation repository's own source) and results
-#: (from that same repository's own run outputs)"). Used only to RECONCILE
-#: an agent's report against a measurement this process takes itself
-#: (`reconcile_observation_report` below) -- never to decide a fact's value.
+#: (from that same repository's own run outputs)"). `implementation`/
+#: `results` are `REPOSITORY`-kind: a target code repository, measured by
+#: RUNNING it, never read as prose for section binding -- `impl_layout.
+#: WORKSPACE` (the forge's own canonical target-repository workspace) is
+#: the real path, never re-spelled here (U2b correctness repair, per
+#: `source_root_status`'s own docstring below). The `name` label below
+#: is used only to RECONCILE an agent's report against a measurement this
+#: process takes itself (`reconcile_observation_report` below) -- never to
+#: resolve a directory for a REPOSITORY-kind root, and never to decide a
+#: fact's value.
 FACT_SOURCE_ROOT: dict = {
-    "formulation": "proposals",
-    "dataset": "proposals",
-    "experimental-design": "experiments",
-    "implementation": "implementation",
-    "results": "implementation",
+    "formulation": SourceRoot("proposals", SourceRootKind.PROSE),
+    "dataset": SourceRoot("proposals", SourceRootKind.PROSE),
+    "experimental-design": SourceRoot("experiments", SourceRootKind.PROSE),
+    "implementation": SourceRoot("implementation", SourceRootKind.REPOSITORY),
+    "results": SourceRoot("implementation", SourceRootKind.REPOSITORY),
 }
 
 
@@ -732,22 +770,45 @@ def read_revisions_marker(root: Path) -> dict | None:
     return {"revision_prefix": revision_prefix, "ordinal_digits": ordinal_digits}
 
 
-def source_root_status(base: Path, root_name: str) -> dict:
+def source_root_status(base: Path, root: SourceRoot) -> dict:
     """`{"state": "document-rooted"|"unmeasured", "path": Path|None,
     "documents": int, "reason": str|None}` (design.md, Interfaces).
-    Document-rooted iff `base / root_name` is a directory holding at least
-    one `*.md` file — a property computed on disk, never keyed by a fact
-    id (`source-section-binding` spec, `Requirement: A Document-Rooted
+
+    A `SourceRootKind.REPOSITORY` root (`impl_layout.WORKSPACE` — the
+    forge's own canonical target-repository workspace, never a name this
+    skill re-spells) is ALWAYS `unmeasured`, regardless of whether that
+    directory exists or holds `*.md` files: it is a target code
+    repository, measured by RUNNING it, never read as prose for section
+    binding. A U2b correctness repair to `source-section-binding` spec's
+    `Requirement: An Unmeasured Root Is Reported, Never Silently Passed`
+    — `implementation`/`results` were previously excluded only by an
+    invented, never-existing directory name; here they are excluded by
+    KIND, never by the document-rooted predicate below, so the outcome
+    never depends on what a target repo's own `README.md`/`AGREED.md`
+    happen to contain.
+
+    Otherwise (`SourceRootKind.PROSE`), document-rooted iff `base /
+    root.name` is a directory holding at least one `*.md` file — a
+    property computed on disk, never keyed by a fact id
+    (`source-section-binding` spec, `Requirement: A Document-Rooted
     Source With No Marker Refuses`; design.md Decision B). An absent root
     and a root holding no `*.md` (e.g. only `.gitkeep`) both report
     `unmeasured` — the SAME report, never a refusal; only a document-rooted
     root missing its OWN marker refuses (`SOURCE_REVISIONS_UNDECLARED`,
     the caller's concern, checked one layer up)."""
-    path = base / root_name
+    if root.kind is SourceRootKind.REPOSITORY:
+        return {
+            "state": "unmeasured", "path": impl_layout.WORKSPACE, "documents": 0,
+            "reason": (
+                f"{root.name!r} is a {root.kind.value} root ({impl_layout.WORKSPACE}), "
+                "not read as prose for section binding"
+            ),
+        }
+    path = base / root.name
     if not path.is_dir():
         return {
             "state": "unmeasured", "path": None, "documents": 0,
-            "reason": f"{root_name!r} is not a directory under {base}",
+            "reason": f"{root.name!r} is not a directory under {base}",
         }
     documents = sorted(path.glob("*.md"))
     if not documents:
@@ -851,7 +912,8 @@ def reconcile_observation_report(report: dict, measured: dict) -> list:
     it did not.
     """
     disagreements = []
-    for fact_id, root_name in FACT_SOURCE_ROOT.items():
+    for fact_id, root in FACT_SOURCE_ROOT.items():
+        root_name = root.name
         if root_name not in measured or not measured[root_name]:
             continue
         entry = report.get(fact_id) or {}
