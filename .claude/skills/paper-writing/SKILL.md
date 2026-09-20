@@ -855,7 +855,7 @@ anything itself.**
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then refuses if this block's own section citation folder is not fully ready, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute` | `PHASE_NOT_READY`, `CITATION_FOLDER_ABSENT`, `CITATION_NOT_INGESTED`, `CITATION_FOLDER_UNCLASSIFIED`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP` |
+| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then refuses if this block's own section citation folder is not fully ready, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute`. For a `transposition`-mode block with at least one resolved bound section, `check_source_section_verbatim` then runs against the same draft, after the style tripwire and before `substitute` | `PHASE_NOT_READY`, `CITATION_FOLDER_ABSENT`, `CITATION_NOT_INGESTED`, `CITATION_FOLDER_UNCLASSIFIED`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP`, `SOURCE_SECTION_VERBATIM` |
 
 **The phase gate stops the write path, it does not merely report it.**
 Unit 6 wired `PHASE_NOT_READY` onto the read-only `phases` verb alone;
@@ -990,6 +990,38 @@ between a styled draft and a sample in `R` refuses `STYLE_OVERLAP` by name
 — a tripwire, not the proof; tuning it can never move the guarantee above,
 because the guarantee's own function reads no threshold. Both measurements
 read `R` alone, never a reference file directly.
+
+### The transposition-fidelity guard: a same-author threshold, self-calibrated
+
+A `transposition`-mode block must carry its bound source section into the
+paper's own style, never copy it. `paper_leak.check_source_section_verbatim`
+is a SIBLING of the tripwire above — its own refusal, `SOURCE_SECTION_
+VERBATIM`, reusing the same shipped `overlap_against_set`/`tripwire_spans`
+primitives, never widening `check_tripwire` itself (that would compare
+against a reference file read directly, exactly what `Requirement: Overlap
+Reads Only The Recorded Sample Set` forbids).
+
+The eight-token tripwire above is calibrated against an INDEPENDENT
+published paper's prose, where any shared clause is already suspicious. A
+bound source section is the SAME author's own earlier text about the same
+work, where reusing terms, quantities and formal statements at a far higher
+baseline is ordinary — so this guard self-calibrates per block, per
+section, against the one text already known to be legitimate: the block's
+own contract prose. `threshold = max(overlap_against_set(contract_prose,
+[section]), SOURCE_RUN_BACKSTOP)`, `SOURCE_RUN_BACKSTOP = 16`, a RULING not
+a measurement. There is no upper clamp on the floor: a contract that
+already carries a long run from its own bound section has licensed that
+run, and the inertness this creates for that block is always visible — the
+floor and threshold are reported in every `write` envelope's
+`sourceFidelity`, per section, whether or not the check refused, never
+inferred from the absence of a refusal.
+
+Runs inside `write_block`, after the style tripwire above and before
+`substitute`, so a draft failing both checks always names `STYLE_OVERLAP`
+first. Guarded on `contract.mode == paper_vocabulary.MODE_TRANSPOSITION` —
+derived from the contract on disk, never a block id or a hand-maintained
+list; an `argument`-mode block is out of scope this change and is never
+checked, regardless of overlap.
 
 ## A diagram that compiles, or says why: `render` and `place`
 

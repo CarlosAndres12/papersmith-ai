@@ -1046,6 +1046,24 @@ class ModeWideningTests(unittest.TestCase):
                 self.assertIsNotNone(resolved, (path.name, block["id"]))
 
 
+class ModeVocabularyConstantsTests(unittest.TestCase):
+    """`transposition-fidelity` spec, `Requirement: Only A Transposition-Mode
+    Block Is Checked...` (design.md, Decision D; tasks.md 2.5-2.6): `MODES`
+    stops being a bare literal tuple and is composed from two named
+    constants, so no string literal for a mode needs to be spelled again in
+    `paper_write.py`/`paper_leak.py`."""
+
+    def test_named_mode_constants_hold_their_string_values(self) -> None:
+        self.assertEqual(paper_vocabulary.MODE_TRANSPOSITION, "transposition")
+        self.assertEqual(paper_vocabulary.MODE_ARGUMENT, "argument")
+
+    def test_modes_is_composed_from_the_named_constants(self) -> None:
+        self.assertEqual(
+            paper_vocabulary.MODES,
+            (paper_vocabulary.MODE_TRANSPOSITION, paper_vocabulary.MODE_ARGUMENT),
+        )
+
+
 class RequirementEntryShapeTests(unittest.TestCase):
     """`the-requirement-names-the-sentence-that-demands-it` — Work Units U1
     and U3. `section-contract` spec delta, `Requirement: Front Matter
@@ -5031,6 +5049,276 @@ class StyleChannelReportingTests(unittest.TestCase):
         self.assertEqual(result["status"], "measured")
 
 
+#: Invented, content-free filler words -- no digits, no number words
+#: (`paper_vocabulary.NUMBER_WORDS`), no comparatives
+#: (`paper_vocabulary.COMPARATIVES`) -- so a run built from them can be
+#: embedded inside a single `structural`-typed draft sentence in the
+#: `write_block` integration tests below without tripping `paper_bindings.
+#: type_structural`'s numeral/comparative checks the way a digit-suffixed
+#: token (`"clause1"`) would.
+_FILLER_WORDS: tuple[str, ...] = (
+    "willow", "cedar", "maple", "birch", "juniper", "cypress", "fern", "moss",
+    "lichen", "reed", "rush", "sedge", "clover", "thistle", "nettle",
+    "bramble", "hazel", "alder", "beech", "linden", "poplar", "sycamore",
+    "hemlock", "larch", "holly", "fennel", "sorrel", "mallow", "chicory",
+    "plantain", "bracken", "heather", "gorse", "bilberry", "hawthorn",
+    "blackthorn", "rowan", "hornbeam", "whitebeam", "sallow", "osier",
+    "spindle", "buckthorn", "dogwood",
+)
+
+
+def _n_token_run(n: int) -> str:
+    """A run of exactly `n` distinct, invented filler words -- calibrates
+    `source_section_floor`/`check_source_section_verbatim` against an exact
+    known run length, never borrowed from any real document."""
+    if n > len(_FILLER_WORDS):
+        raise ValueError(f"_FILLER_WORDS only holds {len(_FILLER_WORDS)} words; need {n}")
+    return " ".join(_FILLER_WORDS[:n])
+
+
+class SourceSectionVerbatimWriteGateTests(unittest.TestCase):
+    """`transposition-fidelity` spec, `Requirement: The Guard Fires Inside
+    write, Before Substitution, Never Only From A Read-Only Verb` +
+    `Requirement: Only A Transposition-Mode Block Is Checked...` (design.md,
+    Decisions C/D; tasks.md 2.7-2.11). WU1 wired the plumbing and the
+    `unmeasured` report only (`WritingPipelineTests` above); this class
+    proves the real verdict logic reaches an actual `write_block` call.
+    Every draft below is deliberately a single grammatical sentence (one
+    capitalised word, at the very start, and no digits, number words or
+    comparatives) so it clears `paper_bindings.type_structural`'s own
+    checks and the ONLY refusal in play is the one under test."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def _bound_section(self, text: str) -> dict:
+        return {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "path": "irrelevant.md",
+            "byte_start": 0, "byte_end": len(text), "text": text,
+        }
+
+    def _structural_draft(self, sentence: str) -> dict:
+        return {"latex": sentence, "bindings": [{"sentence": sentence, "binding": "structural"}]}
+
+    def test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Some framing text about the section itself. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        pre = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_transposed_draft_in_its_own_register_writes(self) -> None:
+        section = self._bound_section(
+            "The widget calibration procedure requires careful measurement "
+            "of every dial before the run starts."
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(
+            "Calibrating the widget takes patience, attention, and a steady hand."
+        )
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+    def test_a_refusal_here_writes_nothing_to_the_attempt_ledger(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIsNone(paper_write._read_ledger(self.paper_dir, "mm-proposal"))
+
+    def test_an_argument_mode_block_with_the_identical_binding_is_never_checked(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+    def test_a_passing_block_reports_per_section_floor_threshold_and_longest_run(self) -> None:
+        run = _n_token_run(16)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        entry = result["sourceFidelity"]["sections"][0]
+        self.assertEqual(entry["lineage"], "widget-study-r4")
+        self.assertEqual(entry["title"], "2. Widget Calibration")
+        self.assertEqual(entry["threshold"], 16)
+        self.assertEqual(entry["longest_run"], 16)
+        self.assertIn("floor", entry)
+
+    def test_a_contract_licensed_high_floor_is_visible_not_silent(self) -> None:
+        """Scenario "A contract-licensed high floor is visible, not silent":
+        a block whose own contract prose shares a forty-token run with its
+        bound section makes the guard inert for that run, and the envelope
+        reports a floor of forty and a threshold of forty."""
+        run = _n_token_run(40)
+        section = self._bound_section(f"Section framing text. {run} Section trailing text.")
+        bullet = f"A bullet stating that {run} plainly."
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition",
+            source_sections=(section,), disqualifiers=(bullet,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        audit_account = {"verdicts": [{"bullet": bullet, "verdict": "clear"}]}
+        result = paper_write.write_block(self.paper_dir, contract, draft, audit_account)
+        self.assertEqual(result["status"], "written")
+        entry = result["sourceFidelity"]["sections"][0]
+        self.assertEqual(entry["floor"], 40)
+        self.assertEqual(entry["threshold"], 40)
+
+    def test_a_draft_failing_both_checks_names_style_overlap_first(self) -> None:
+        """`transposition-fidelity` spec, Scenario "A verbatim source-section
+        paste is a distinct refusal from a style leak": `write` runs the
+        style tripwire BEFORE this capability's own stage (design.md, Data
+        Flow), so a draft failing both always names `STYLE_OVERLAP`
+        deterministically -- never computed by widening either check's own
+        function or sample set."""
+        style_run = _n_token_run(9)
+        section_run = " ".join(_FILLER_WORDS[9:26])
+        style_sample = {"reference": "paperA", "span": style_run}
+        section = self._bound_section(f"Framing text. {section_run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition",
+            source_sections=(section,), style_set=(style_sample,),
+        )
+        draft = self._structural_draft(
+            f"This passage restates that {style_run} and separately that {section_run} plainly."
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "STYLE_OVERLAP")
+
+
+class SourceSectionVerbatimMutationProofTests(unittest.TestCase):
+    """`transposition-fidelity` spec, the five mutation scenarios
+    (tasks.md 2.14-2.18) -- each a mutation a weaker lock survives
+    (design.md, Testing Strategy: "Mutation per claim")."""
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_the_backstop_alone_fails_the_licensed_floor_guard(self) -> None:
+        """Scenario "Mutation -- the backstop alone is not enough without
+        the floor": `max(floor, SOURCE_RUN_BACKSTOP)` mutated to
+        `SOURCE_RUN_BACKSTOP` alone must make the contract-licensed
+        forty-token-run test go red -- it now wrongly refuses under the
+        sixteen-token backstop alone."""
+        proc = _run_against_mutant(
+            "        threshold = max(floor, SOURCE_RUN_BACKSTOP)",
+            "        threshold = SOURCE_RUN_BACKSTOP",
+            "tests.test_paper_writing.SourceSectionVerbatimTests"
+            ".test_a_contract_licensed_forty_token_floor_makes_the_guard_inert",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_the_floor_alone_fails_the_six_token_idiom_guard(self) -> None:
+        """Scenario "Mutation -- the floor alone is not enough without the
+        backstop": `max(floor, SOURCE_RUN_BACKSTOP)` mutated to `floor`
+        alone must make the near-zero-floor six-token-idiom test go red --
+        it now wrongly refuses a six-token idiom that shares nothing with
+        the contract prose."""
+        proc = _run_against_mutant(
+            "        threshold = max(floor, SOURCE_RUN_BACKSTOP)",
+            "        threshold = floor",
+            "tests.test_paper_writing.SourceSectionVerbatimTests"
+            ".test_a_six_token_idiom_does_not_refuse_under_the_real_backstop",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_raising_the_effective_minimum_fails_the_reachability_guard(self) -> None:
+        """Scenario "Mutation -- the refusal is reachable at all": raising
+        the check's own effective minimum far above any real draft length
+        must make the verbatim-paste `write` test go red, proving
+        `SOURCE_SECTION_VERBATIM` is reachable under an unmutated
+        implementation, not merely asserted never to fire."""
+        proc = _run_against_mutant(
+            "            min_tokens=threshold + 1,",
+            "            min_tokens=10_000,",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_skipping_the_stage_in_write_block_fails_the_direct_write_guard(self) -> None:
+        """Scenario "Mutation -- wiring the guard only into a read-only verb
+        is caught": with `write_block` itself made to skip the new stage
+        (the shape a guard wired only onto a read-only verb would produce),
+        the direct-`write` verbatim-paste test must fail -- proving the
+        guard is wired to the enforcing verb, not merely a reachable
+        function."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if False and contract.mode == paper_vocabulary.MODE_TRANSPOSITION "
+            "and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_mode_check_flipped_fails_the_transposition_guard(self) -> None:
+        """Scenario "Mutation -- mode is derived, not assumed", transposition
+        half: the stage guard's own condition mutated from
+        `MODE_TRANSPOSITION` to `MODE_ARGUMENT` must make the
+        transposition-mode verbatim-paste test go red -- the transposition
+        block that should be checked is no longer checked."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if contract.mode == paper_vocabulary.MODE_ARGUMENT and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_mode_check_flipped_fails_the_argument_exemption_guard(self) -> None:
+        """Scenario "Mutation -- mode is derived, not assumed", argument
+        half: the SAME mutation must also make the argument-mode exemption
+        test go red -- the argument block that should be exempt is now
+        wrongly checked."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if contract.mode == paper_vocabulary.MODE_ARGUMENT and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_an_argument_mode_block_with_the_identical_binding_is_never_checked",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+
 # =====================================================================
 # Ruling 1 -- the no-subprocess seam, with exactly one named exception
 # =====================================================================
@@ -6484,6 +6772,126 @@ class StyleLeakDetectionTests(unittest.TestCase):
             self.assertEqual(paper_leak.tripwire_spans(styled, samples), [])
 
 
+class SourceSectionVerbatimTests(unittest.TestCase):
+    """`transposition-fidelity` spec. `check_source_section_verbatim` is a
+    SIBLING of `check_tripwire` (`Requirement: The Verbatim Check Is A
+    Sibling, Never An Extension Of The Style Tripwire`) -- its own refusal
+    code, its own self-calibrated threshold, reusing `overlap_against_set`/
+    `tripwire_spans` verbatim rather than re-implementing the overlap/
+    hit-scan machinery (design.md, Decision B/C; tasks.md 2.1-2.4)."""
+
+    def test_source_run_backstop_is_sixteen(self) -> None:
+        self.assertEqual(paper_leak.SOURCE_RUN_BACKSTOP, 16)
+
+    def test_source_section_floor_reuses_overlap_against_set_verbatim(self) -> None:
+        shared_run = _n_token_run(9)
+        contract_prose = f"Unrelated framing prose. {shared_run} More unrelated prose."
+        section_text = f"Different framing sentence. {shared_run} Different trailing sentence."
+        self.assertEqual(
+            paper_leak.source_section_floor(contract_prose, section_text),
+            paper_leak.overlap_against_set(contract_prose, [{"span": section_text}]),
+        )
+        self.assertEqual(paper_leak.source_section_floor(contract_prose, section_text), 9)
+
+    def test_a_verbatim_paste_beyond_the_backstop_refuses(self) -> None:
+        """Scenario "A draft pasting its bound section verbatim refuses":
+        the contract prose shares almost nothing with the section (the
+        floor stays under the backstop), so the threshold is the
+        sixteen-token backstop; the draft reproduces a seventeen-token run
+        from the section, one token past it."""
+        section_text = (
+            "Some opening sentence about the widget calibration procedure. "
+            f"{_n_token_run(17)} A closing sentence about something else."
+        )
+        contract_prose = "The block's own contract prose shares almost nothing with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Opening sentence of the draft. {_n_token_run(17)} Closing sentence of the draft."
+
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+        self.assertIn("willow", ctx.exception.detail)
+
+    def test_the_same_claim_in_different_words_passes(self) -> None:
+        """Scenario "The same claim in the paper's own register passes": no
+        normalized run longer than a handful of tokens is shared."""
+        section_text = (
+            "The widget calibration procedure requires careful measurement "
+            "of every dial before the run starts."
+        )
+        contract_prose = "Unrelated contract prose sharing nothing with the section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = "Calibrating the widget takes patience, attention, and a steady hand."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        self.assertEqual(report["sections"][0]["title"], "2. Widget Calibration")
+
+    def test_a_run_equal_to_the_threshold_passes(self) -> None:
+        """The strict-inequality half of `Requirement: The Threshold
+        Self-Calibrates...`: a run of EXACTLY sixteen tokens (the backstop,
+        against a near-zero floor) must pass, never refuse."""
+        run = _n_token_run(16)
+        section_text = f"Framing prose. {run} Trailing prose."
+        contract_prose = "The contract prose shares nothing at all with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft framing. {run} Draft trailing."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        entry = report["sections"][0]
+        self.assertEqual(entry["threshold"], 16)
+        self.assertEqual(entry["longest_run"], 16)
+
+    def test_a_contract_licensed_forty_token_floor_makes_the_guard_inert(self) -> None:
+        """Scenario "A contract-licensed long run is not refused": the
+        block's own contract prose already carries the same forty-token run
+        from its bound section, so the floor is forty, above the backstop,
+        and reproducing that same run passes -- equal to, never strictly
+        above, its own threshold. The inertness is visible through the
+        reported floor (`Requirement: The Floor And Threshold Are Reported,
+        Never Inferred Silently`)."""
+        run = _n_token_run(40)
+        section_text = f"Section framing. {run} Section trailing."
+        contract_prose = f"Contract framing sentence. {run} Contract trailing sentence."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft framing sentence. {run} Draft trailing sentence."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        entry = report["sections"][0]
+        self.assertEqual(entry["floor"], 40)
+        self.assertEqual(entry["threshold"], 40)
+        self.assertEqual(entry["longest_run"], 40)
+
+    def test_a_six_token_idiom_does_not_refuse_under_the_real_backstop(self) -> None:
+        """The scenario mutation 2.15 falsifies: a block whose contract
+        prose shares near nothing with its section (floor near zero)
+        drafts a six-token idiom that also appears in the section -- under
+        the REAL `max(floor, SOURCE_RUN_BACKSTOP)` threshold this must NOT
+        refuse; the backstop alone is what protects it."""
+        idiom = _n_token_run(6)
+        section_text = f"Framing text. {idiom} Trailing text of the section."
+        contract_prose = "Contract prose sharing almost nothing with this section at all."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft prose. {idiom} Draft closing prose."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        self.assertEqual(report["sections"][0]["threshold"], 16)
+
+
 def _every_strip_math_callable() -> list[tuple[str, object]]:
     """Every callable literally named `strip_math` or `_strip_math` in any
     module under `scripts/`, discovered by introspection -- never a
@@ -7220,8 +7628,19 @@ class RefusalRosterTests(unittest.TestCase):
         set (`settled_round_licensing`). Reachable the instant `cmd_bind`
         (already a root) records through `bind_section`; no new import
         needed. Measured directly against `reachable_paper_refusal_
-        codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 152)
+        codes()`, never forecast.
+
+        Moved from 152 to 153 in WU2 of `the-tripwire-reaches-the-section-
+        that-feeds-it`: `paper_leak.py` (already imported, `# for the
+        roster derivation`) gains one new raise site,
+        `check_source_section_verbatim`'s own `SOURCE_SECTION_VERBATIM` --
+        a transposition-mode block's draft pasting a run from its own bound
+        source section beyond the self-calibrated `max(floor,
+        SOURCE_RUN_BACKSTOP)` threshold. Reachable through the
+        whole-module scan the moment the new raise site lands in an
+        already-imported module; no new import needed. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 153)
 
 
 class ObjectiveNorthTests(unittest.TestCase):

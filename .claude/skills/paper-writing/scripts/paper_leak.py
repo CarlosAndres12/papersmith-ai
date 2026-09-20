@@ -176,3 +176,98 @@ def check_tripwire(styled: str, samples: list[dict]) -> None:
             f"styled draft shares {first['length']} normalized tokens with reference "
             f"{first['reference']!r}: {first['span']!r}",
         )
+
+
+#: The same-author threshold's backstop (`transposition-fidelity` spec,
+#: `Requirement: The Threshold Self-Calibrates Against The Contract's Own
+#: Prose`; `design.md`, Decision C). A RULING, not a measurement: the
+#: shipped eight-token tripwire above is deliberately sub-clause because
+#: for an INDEPENDENT paper's prose a shared clause is already suspicious;
+#: a bound source section is the SAME author's own earlier text about the
+#: same work, where reusing terms, quantities and formal statements at a
+#: far higher baseline is ordinary, and the unit that means "copied" is a
+#: sentence. Sixteen normalized tokens sits at the low end of an academic
+#: sentence, set at the permissive end on purpose -- a false refusal here
+#: blocks `write`, while a false pass still faces contract-audit and a
+#: human. What would falsify it (executable only once a real `document`
+#: binding exists, recorded as an obligation in `tasks.md`, not a hope): a
+#: transposed draft in the paper's own register whose longest shared run
+#: with its bound section reaches sixteen (16 is too low), or a verbatim
+#: sentence pasted from the bound section whose normalized run stays under
+#: sixteen and passes (16 is too high). Either observation moves this ONE
+#: named constant, nothing else.
+SOURCE_RUN_BACKSTOP: int = 16
+
+
+def source_section_floor(contract_prose: str, section_text: str) -> int:
+    """The longest normalized run the block's own contract prose already
+    legitimately shares with its bound section `section_text` -- the one
+    text already known to be legitimate, since it is same-author,
+    same-subject, and quote-anchored to that source. Reuses
+    `overlap_against_set` verbatim; computes no new overlap logic
+    (`design.md`, Decision C). No upper clamp: a contract that itself
+    carries a long run from its own bound section has licensed that run,
+    deliberately, and the cost of that licensing is reported, never
+    silently absorbed here."""
+    return overlap_against_set(contract_prose, [{"span": section_text}])
+
+
+def check_source_section_verbatim(
+    draft_latex: str, contract_prose: str, sections, *, block_id: str | None = None,
+) -> dict:
+    """A SIBLING of `check_tripwire`, never an extension of it
+    (`transposition-fidelity` spec, `Requirement: The Verbatim Check Is A
+    Sibling, Never An Extension Of The Style Tripwire`) -- `style-leak-
+    detection`'s own `Requirement: Overlap Reads Only The Recorded Sample
+    Set` forbids `STYLE_OVERLAP` comparing against a reference file read
+    directly, and a bound section's bytes are exactly that kind of direct
+    read, so folding them into `check_tripwire`'s own sample set would
+    break a shipped requirement rather than merely overload a function.
+
+    Per section: `threshold = max(source_section_floor(...),
+    SOURCE_RUN_BACKSTOP)`; refuses `SOURCE_SECTION_VERBATIM` on the first
+    run STRICTLY exceeding `threshold` (`tripwire_spans`'s own `min_tokens`
+    makes the inequality strict for free: a run of exactly `threshold`
+    tokens never reaches `min_tokens=threshold + 1`). Names the bound fact,
+    the lineage and the section title the offending span came from, plus
+    `block_id` when the caller (`paper_write.write_block`) supplies it --
+    kept a plain string parameter here, rather than the caller catching and
+    re-raising with a computed code, so the refusal's own CODE argument
+    stays the literal `"SOURCE_SECTION_VERBATIM"` this repository's roster
+    derivation (`tests/test_paper_writing.py::reachable_paper_refusal_
+    codes`) reads statically; a caller-side `raise Refused(exc.code, ...)`
+    would make that argument a runtime value instead, an unreadable site
+    the derivation refuses to silently guess past. Returns `{"sections":
+    [...]}` -- one `{"lineage", "title", "floor", "threshold",
+    "longest_run"}` entry per section -- when nothing exceeds, so the floor
+    and threshold that decided are always reported, never merely inferred
+    from the absence of a refusal (`Requirement: The Floor And Threshold
+    Are Reported, Never Inferred Silently`)."""
+    reports = []
+    for section in sections:
+        section_text = section["text"]
+        floor = source_section_floor(contract_prose, section_text)
+        threshold = max(floor, SOURCE_RUN_BACKSTOP)
+        hits = tripwire_spans(
+            draft_latex,
+            [{"reference": section["title"], "span": section_text}],
+            min_tokens=threshold + 1,
+        )
+        if hits:
+            first = hits[0]
+            prefix = f"{block_id}: " if block_id else ""
+            raise Refused(
+                "SOURCE_SECTION_VERBATIM",
+                f"{prefix}draft shares {first['length']} normalized tokens with bound fact "
+                f"{section['fact']!r} (lineage {section['lineage']!r}, section "
+                f"{section['title']!r}): {first['span']!r}",
+            )
+        longest_run = overlap_against_set(draft_latex, [{"span": section_text}])
+        reports.append({
+            "lineage": section["lineage"],
+            "title": section["title"],
+            "floor": floor,
+            "threshold": threshold,
+            "longest_run": longest_run,
+        })
+    return {"sections": reports}

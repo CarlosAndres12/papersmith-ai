@@ -215,13 +215,13 @@ sibling design must not violate).
 
 **Threshold and floor (parallel-safe against 2.5-2.6 below)**
 
-- [ ] 2.1 RED: add failing tests for `paper_leak.source_section_floor(contract_prose,
+- [x] 2.1 RED: add failing tests for `paper_leak.source_section_floor(contract_prose,
       section_text)` returning `overlap_against_set(contract_prose, [{"span":
       section_text}])` — reusing the shipped primitive verbatim, computing no new overlap
       logic.
-- [ ] 2.2 Add `SOURCE_RUN_BACKSTOP = 16` and `source_section_floor` to `paper_leak.py`.
+- [x] 2.2 Add `SOURCE_RUN_BACKSTOP = 16` and `source_section_floor` to `paper_leak.py`.
       Confirm 2.1 goes green.
-- [ ] 2.3 RED: add failing tests for `check_source_section_verbatim(draft_latex,
+- [x] 2.3 RED: add failing tests for `check_source_section_verbatim(draft_latex,
       contract_prose, sections)`: per section, `threshold = max(floor, SOURCE_RUN_BACKSTOP)`;
       refuses `SOURCE_SECTION_VERBATIM` (naming the block, fact, lineage, section title,
       and offending span) on the first run STRICTLY exceeding threshold; returns the
@@ -229,86 +229,86 @@ sibling design must not violate).
       nothing exceeds. Cover: (a) verbatim paste refuses; (b) same claim in the paper's
       own register passes; (c) a run EQUAL to threshold passes (strict inequality only);
       (d) a contract-licensed forty-token floor makes the guard inert for that run.
-- [ ] 2.4 Add `check_source_section_verbatim` to `paper_leak.py`, reusing
+- [x] 2.4 Add `check_source_section_verbatim` to `paper_leak.py`, reusing
       `overlap_against_set` and `tripwire_spans` verbatim (never re-implementing the
       overlap/hit-scan machinery). Confirm 2.3 goes green.
 
 **Mode derivation (parallel-safe against 2.1-2.4 above)**
 
-- [ ] 2.5 RED: add a failing test asserting `paper_vocabulary.MODE_TRANSPOSITION ==
+- [x] 2.5 RED: add a failing test asserting `paper_vocabulary.MODE_TRANSPOSITION ==
       "transposition"` and `MODE_ARGUMENT == "argument"` exist as named constants, and
       `MODES == (MODE_TRANSPOSITION, MODE_ARGUMENT)` (currently `MODES` at line 62 is a
       bare literal tuple `("transposition", "argument")` with no named constants backing
       it).
-- [ ] 2.6 Add `MODE_TRANSPOSITION`/`MODE_ARGUMENT` to `paper_vocabulary.py`; compose
+- [x] 2.6 Add `MODE_TRANSPOSITION`/`MODE_ARGUMENT` to `paper_vocabulary.py`; compose
       `MODES` from them. Confirm no string literal for a mode is introduced into
       `paper_write.py` or `paper_leak.py` by this phase's own new code (checked by 2.15
       below, not assumed here).
 
 **Wiring into `write_block` (sequential — depends on both groups above)**
 
-- [ ] 2.7 RED: add a failing `write_block` integration test — a transposition-mode block
+- [x] 2.7 RED: add a failing `write_block` integration test — a transposition-mode block
       (`contract.mode == paper_vocabulary.MODE_TRANSPOSITION`) with a bound section and a
       verbatim-pasting draft refuses `SOURCE_SECTION_VERBATIM` before `substitute` runs,
       and `main.tex` stays byte-identical to its pre-`write` state.
-- [ ] 2.8 Wire the new stage into `paper_write.write_block`, placed AFTER the style
+- [x] 2.8 Wire the new stage into `paper_write.write_block`, placed AFTER the style
       tripwire call (`paper_leak.check_tripwire`, currently line 195) and BEFORE
       `style_channel_report`/`substitute` (currently lines 206/208) — so a draft failing
       both checks always names `STYLE_OVERLAP` deterministically (design.md, Data Flow).
       Guard the call on `contract.mode == paper_vocabulary.MODE_TRANSPOSITION`; lazily
       import `paper_leak` exactly as the style tripwire already does at line 194, so
       `paper_write.py` stays importable without it. Confirm 2.7 goes green.
-- [ ] 2.9 RED-then-GREEN: add a test asserting a refusal here writes NOTHING to the
+- [x] 2.9 RED-then-GREEN: add a test asserting a refusal here writes NOTHING to the
       on-disk attempt ledger (`_write_ledger` is only called on the audit-fired branch,
       lines 152-168 — this new stage runs strictly after that branch has already returned,
       so no code change should be needed here; the test exists to prove it, not to
       introduce new logic).
-- [ ] 2.10 RED-then-GREEN: add a test asserting an `argument`-mode block with the
+- [x] 2.10 RED-then-GREEN: add a test asserting an `argument`-mode block with the
       IDENTICAL binding and an identical verbatim draft is never checked — no
       `SOURCE_SECTION_VERBATIM` refusal is possible regardless of overlap.
-- [ ] 2.11 RED-then-GREEN: add a test asserting the `write` envelope reports
+- [x] 2.11 RED-then-GREEN: add a test asserting the `write` envelope reports
       `sourceFidelity: {"status": "measured", "sections": [...]}` for a PASSING
       transposition-mode block with at least one measured bound section — per-section
       floor, threshold, and longest observed run all present, whether or not the check
       refused (`transposition-fidelity`, "Requirement: The Floor And Threshold Are
       Reported, Never Inferred Silently").
-- [ ] 2.12 Add one `REFUSAL_CLASSIFICATION` entry for `SOURCE_SECTION_VERBATIM` in
+- [x] 2.12 Add one `REFUSAL_CLASSIFICATION` entry for `SOURCE_SECTION_VERBATIM` in
       `paper_cli.py` (`work-state` tier, per design.md's Refusal Codes table).
-- [ ] 2.13 Update `.claude/skills/paper-writing/SKILL.md`: one roster entry for
+- [x] 2.13 Update `.claude/skills/paper-writing/SKILL.md`: one roster entry for
       `SOURCE_SECTION_VERBATIM`, and a note on the new `write` stage's position (after
       contract-audit, beside and after the style tripwire, before `substitute`).
-- [ ] 2.14 Mutation: the backstop alone (`SOURCE_RUN_BACKSTOP` in place of
+- [x] 2.14 Mutation: the backstop alone (`SOURCE_RUN_BACKSTOP` in place of
       `max(floor, SOURCE_RUN_BACKSTOP)`); confirm the contract-licensed-floor test (2.3d)
       goes red — a licensed forty-token run wrongly refuses under the backstop alone.
       Restore.
-- [ ] 2.15 Mutation: the floor alone (`floor` in place of `max(floor,
+- [x] 2.15 Mutation: the floor alone (`floor` in place of `max(floor,
       SOURCE_RUN_BACKSTOP)`); confirm a near-zero-floor / six-token-idiom test goes red —
       a near-zero floor wrongly refuses a six-token idiom. Restore. (Add this idiom test
       first if 2.3 did not already cover it.)
-- [ ] 2.16 Mutation: raise the refusal's own effective minimum far above any real draft
+- [x] 2.16 Mutation: raise the refusal's own effective minimum far above any real draft
       length (for example `min_tokens=10_000` at the call site); confirm the verbatim-paste
       test (2.7) goes red, proving `SOURCE_SECTION_VERBATIM` is reachable under an
       unmutated implementation, not merely asserted never to fire. Restore.
-- [ ] 2.17 Mutation: wire the guard only into a read-only verb (e.g. `phases`) and have
+- [x] 2.17 Mutation: wire the guard only into a read-only verb (e.g. `phases`) and have
       `write_block` skip it; confirm the direct-`write` verbatim-paste test (2.7) fails —
       proving the guard is wired to the enforcing verb, not merely a reachable function.
       Restore.
-- [ ] 2.18 Mutation: mutate the stage guard's own condition from `contract.mode ==
+- [x] 2.18 Mutation: mutate the stage guard's own condition from `contract.mode ==
       MODE_TRANSPOSITION` to `contract.mode == MODE_ARGUMENT`; confirm BOTH the
       transposition-mode test (2.7) and the argument-mode test (2.10) go red — the
       transposition block that should be checked is no longer checked, and the argument
       block that should be exempt is now wrongly checked. Restore.
-- [ ] 2.19 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` and
+- [x] 2.19 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` and
       `tests/` for any block id, section title, document filename, paper id, or subject
       word introduced by this phase's new code, comments, docstrings, or fixtures. Confirm
       zero matches.
-- [ ] 2.20 Confirm `check_tripwire`'s own bytes are unchanged by this phase (`git diff` on
+- [x] 2.20 Confirm `check_tripwire`'s own bytes are unchanged by this phase (`git diff` on
       `paper_leak.py` shows only additions: `SOURCE_RUN_BACKSTOP`, `source_section_floor`,
       `check_source_section_verbatim` — no line inside `check_tripwire`/`tripwire_spans`/
       `overlap_against_set` moves). (`style-leak-detection`, "Requirement: Overlap Reads
       Only The Recorded Sample Set", scenario "A bound source section is never folded into
       `R`".)
-- [ ] 2.21 Run `.venv/bin/python -m unittest tests.test_paper_writing`; confirm green, no
+- [x] 2.21 Run `.venv/bin/python -m unittest tests.test_paper_writing`; confirm green, no
       new failures beyond the known pre-existing baseline.
 
 ## Phase 3 — WU3: Neutrality gate, roster re-measured, both suites

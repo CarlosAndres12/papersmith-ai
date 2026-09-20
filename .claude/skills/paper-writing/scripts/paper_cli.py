@@ -473,6 +473,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # document resolved and digested right now (`paper_declarations.
     # settled_round_licensing`, enforced inside `bind_section` itself) -----
     "BINDING_UNARGUED": WORK_STATE,
+    # --- the-tripwire-reaches-the-section-that-feeds-it, WU2: a
+    # transposition-mode block's draft pasting a run from its own bound
+    # source section beyond a self-calibrated threshold
+    # (`paper_leak.check_source_section_verbatim`, wired into `write_block`
+    # after the style tripwire and before `substitute`) ------------------
+    "SOURCE_SECTION_VERBATIM": WORK_STATE,
 }
 
 
