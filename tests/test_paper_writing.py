@@ -10010,6 +10010,41 @@ class _SeparationCorpusMixin:
         ],
     }
 
+    #: The worked example's own "branch B", scoring 5 (`tests.test_paper_
+    #: separation.ScoreCutTests.test_worked_example_branch_b_scores_5`):
+    #: 1 overlap + 2 orphans + 2 gaps -- strictly WORSE than round 1's 4.
+    _BRANCH_B = {
+        "lineage": "field-survey",
+        "assignments": [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["2. Alignment estimators"]},
+            {"block": "methods.block-b", "fact": "formulation",
+             "sections": ["2. Alignment estimators", "5. Open problems"]},
+            {"block": "methods.block-c", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+        ],
+    }
+
+    #: Task 4.1/4.3: a cut structurally DIFFERENT from `_ROUND_1` (the two
+    #: methods blocks' own claims are swapped, so canonicalization never
+    #: treats it as a byte-identical replay) that recomputes to the exact
+    #: SAME total, 4 -- one overlap on "2. Alignment estimators", the same
+    #: two orphans, one gap now attributed to `block-c` instead of
+    #: `block-b`. A concession naming this against round 1 is a TIE: not a
+    #: regression, but still nonzero, so it must still reach the
+    #: structural refusal next.
+    _TIE_SWAP = {
+        "lineage": "field-survey",
+        "assignments": [
+            {"block": "overview.block-a", "fact": "formulation",
+             "sections": ["1. Background on widget metrics"]},
+            {"block": "methods.block-b", "fact": "formulation",
+             "sections": ["2. Alignment estimators"]},
+            {"block": "methods.block-c", "fact": "formulation",
+             "sections": ["2. Alignment estimators", "4. Calibration procedure"]},
+        ],
+    }
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
@@ -10062,6 +10097,28 @@ class _SeparationCorpusMixin:
         return paper_declarations.read_separation_rounds(
             self.paper_dir, "proposals", "field-survey", "field-survey-r07.md",
         )
+
+    def _tamper_round_score(self, round_number: int, new_score: int) -> None:
+        """Task 4.7: overwrites a recorded round's stored `score` field on
+        disk, leaving its `assignments` byte-for-byte unchanged -- proving
+        the concession check recomputes from `assignments`, never trusts
+        the stored field. Rebuilt through the region's own `build_region_
+        bytes`/`replace_or_append` (the SAME path `_write_declarations`
+        uses), so the digest stays coherent and this is never mistaken
+        for `DECLARATIONS_HAND_EDITED`."""
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        body = record["body"]
+        for entry in body["records"]:
+            if entry["kind"] == "separation" and entry.get("round") == round_number:
+                entry["score"] = new_score
+        region_bytes, _digest = paper_region.build_region_bytes("declarations", body)
+        candidate = paper_region.replace_or_append(
+            pre, "declarations", region_bytes,
+            {"begin_start": record["begin_start"], "end_end": record["end_end"]},
+        )
+        tex_path.write_bytes(candidate)
 
     def _run_separate_subprocess(self, proposal_obj, *, expect_ok: bool) -> dict:
         """Task 3.11/3.12: a genuinely SEPARATE CLI invocation -- a real
@@ -10430,6 +10487,207 @@ class SeparationRoundPersistenceTests(_SeparationCorpusMixin, unittest.TestCase)
         second = self._run_separate_subprocess(conceding, expect_ok=True)
 
         self.assertEqual(second["result"]["total"], 0)
+
+
+class SeparationConcessionTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 4.1/4.6/4.7-4.10 (design.md Decision D/E, `source-separation-
+    review` spec, `Requirement: A Concession Is Verified By Recomputing
+    Both Cuts From Disk, Before The Structural Refusal`): `concedes_to_
+    round` recomputes BOTH totals from disk, every time -- an equal or
+    lower total is accepted, a strictly higher one refuses, and the
+    stored `score` field is never trusted."""
+
+    def _concede(self, cut: dict, round_number: int) -> dict:
+        proposal = dict(cut)
+        proposal["concedes_to_round"] = round_number
+        return proposal
+
+    def test_a_concession_that_reaches_zero_is_accepted(self) -> None:
+        try:
+            self._compute(self._ROUND_1)  # records round 1, scoring 4, and refuses
+        except Refused:
+            pass  # round 1's own refusal is already asserted by SeparationRoundPersistenceTests
+
+        result = self._compute(self._concede(self._BRANCH_A, 1))
+
+        self.assertEqual(result["total"], 0)
+
+    def test_a_concession_that_scores_worse_refuses_naming_both_totals(self) -> None:
+        try:
+            self._compute(self._ROUND_1)
+        except Refused:
+            pass  # round 1 records and refuses on structure; expected
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._concede(self._BRANCH_B, 1))
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_CONCESSION_REGRESSED")
+        self.assertIn("4", ctx.exception.detail)
+        self.assertIn("5", ctx.exception.detail)
+        # A regressed concession is never recorded (task 3.9/4.10): only
+        # round 1 exists afterward.
+        self.assertEqual(len(self._read_rounds()), 1)
+
+    def test_an_equal_total_concession_is_accepted_but_still_hits_structural_refusal(self) -> None:
+        """Task 4.1's own third case: a TIE is not a regression, yet the
+        cut is still nonzero, so it must still reach the structural
+        refusal next -- exactly the pass-through 4.3 proves."""
+        try:
+            self._compute(self._ROUND_1)
+        except Refused:
+            pass
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._concede(self._TIE_SWAP, 1))
+
+        self.assertNotEqual(ctx.exception.code, "SEPARATION_CONCESSION_REGRESSED")
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_OVERLAP")
+        self.assertEqual(len(self._read_rounds()), 2)
+
+    def test_mutation_off_by_one_weakening_survives_a_four_to_five_jump(self) -> None:
+        """Task 4.6: `submitted > prior` weakened to `submitted > prior +
+        1` must still catch a jump from 4 to 5 -- a lock that only catches
+        a LARGE jump is not the lock this requirement demands."""
+        proc = _run_against_mutant(
+            'if result["total"] > conceded_result["total"]:',
+            'if result["total"] > conceded_result["total"] + 1:',
+            "tests.test_paper_writing.SeparationConcessionTests"
+            ".test_a_concession_that_scores_worse_refuses_naming_both_totals",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_tampered_stored_score_does_not_change_the_refusal(self) -> None:
+        """Task 4.7/4.8: round 1's stored `score` overwritten to 0 on
+        disk, its `assignments` unchanged -- a conceding cut scoring 5
+        still refuses, naming 4 (recomputed from `assignments`) and 5,
+        never the tampered 0."""
+        try:
+            self._compute(self._ROUND_1)
+        except Refused:
+            pass
+        self._tamper_round_score(1, 0)
+        tampered = self._read_rounds()
+        self.assertEqual(tampered[0]["score"], 0)
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._concede(self._BRANCH_B, 1))
+
+        self.assertEqual(ctx.exception.code, "SEPARATION_CONCESSION_REGRESSED")
+        self.assertIn("4", ctx.exception.detail)
+        self.assertIn("5", ctx.exception.detail)
+        self.assertNotIn("scores 0", ctx.exception.detail)
+
+    def test_mutation_reading_the_stored_score_instead_of_recomputing(self) -> None:
+        """Task 4.9: the comparison mutated to trust the stored `score`
+        field (freshly tampered to 0 by 4.7's own fixture, real score 4)
+        instead of recomputing from `assignments` -- the message no
+        longer names 4, so the fixture above goes red."""
+        proc = _run_against_mutant(
+            "    conceded_claims, _unanchored = _claims_by_block(conceded_round[\"assignments\"], corpus)\n"
+            '    conceded_result = paper_separation.score_cut(claimable["titles"], conceded_claims)\n',
+            "    conceded_claims, _unanchored = _claims_by_block(conceded_round[\"assignments\"], corpus)\n"
+            '    conceded_result = {"total": conceded_round["score"]}\n',
+            "tests.test_paper_writing.SeparationConcessionTests"
+            ".test_a_tampered_stored_score_does_not_change_the_refusal",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_regressed_concession_resubmitted_identically_refuses_with_no_round_growth(self) -> None:
+        """Task 4.10: extends 3.9's own round-count assertions to a
+        REFUSED resubmission -- a regressed concession is never recorded,
+        so resubmitting it identically must refuse the same way with no
+        growth in round count."""
+        try:
+            self._compute(self._ROUND_1)
+        except Refused:
+            pass
+
+        branch_b = self._concede(self._BRANCH_B, 1)
+
+        for _ in range(2):
+            with self.assertRaises(Refused) as ctx:
+                self._compute(branch_b)
+            self.assertEqual(ctx.exception.code, "SEPARATION_CONCESSION_REGRESSED")
+
+        self.assertEqual(len(self._read_rounds()), 1)
+
+
+class SeparationConcessionOrderingTests(_SeparationCorpusMixin, unittest.TestCase):
+    """Task 4.3/4.4/4.5 (design.md Decision E): the concession check runs
+    BEFORE the structural refusal. Reversed, `SEPARATION_CONCESSION_
+    REGRESSED` becomes a refusal that cannot fire -- only a score-0 cut
+    could ever reach it."""
+
+    def test_the_concession_check_passes_a_nonregressed_cut_through_to_the_structural_refusal(
+        self,
+    ) -> None:
+        try:
+            self._compute(self._ROUND_1)
+        except Refused:
+            pass
+
+        with self.assertRaises(Refused) as ctx:
+            self._compute(self._concede(self._TIE_SWAP, 1))
+
+        # If the concession check MASKED the structural refusal (ran
+        # after it, or swallowed a nonregressed tie into a bare success),
+        # this would never raise a structural code at all.
+        self.assertEqual(ctx.exception.code, "SEPARATION_SECTION_OVERLAP")
+
+    def _concede(self, cut: dict, round_number: int) -> dict:
+        proposal = dict(cut)
+        proposal["concedes_to_round"] = round_number
+        return proposal
+
+    def test_mutation_running_the_structural_refusal_first_makes_the_concession_check_unreachable(
+        self,
+    ) -> None:
+        """Task 4.4's own load-bearing proof: swap the call order so the
+        structural refusal runs BEFORE the concession check -- the
+        `SEPARATION_CONCESSION_REGRESSED` fixture from `SeparationConcessionTests`
+        becomes structurally unreachable, since `_raise_separation_refusal`
+        always raises first for any nonzero total, and a branch-B-style
+        cut (total 5) never reaches the concession check at all."""
+        proc = _run_against_mutant(
+            '    _check_separation_concession(\n'
+            '        paper_dir, root.name, lineage, revision, concedes_to_round, result, claimable, corpus,\n'
+            '    )\n'
+            '    recorded_round = paper_declarations.record_separation_round(\n'
+            '        paper_dir, root.name, lineage, revision, document_digest, assignments, result["total"],\n'
+            '    )\n'
+            '    if result["total"] == 0:\n'
+            '        return {\n'
+            '            "total": 0, "unanchored": unanchored,\n'
+            '            "bind_invocations": [_bind_invocation(entry, lineage) for entry in assignments],\n'
+            '            "round": recorded_round["round"], "round_id": recorded_round["id"],\n'
+            '        }\n'
+            '    _raise_separation_refusal(result, recorded_round["id"])\n',
+            '    recorded_round = paper_declarations.record_separation_round(\n'
+            '        paper_dir, root.name, lineage, revision, document_digest, assignments, result["total"],\n'
+            '    )\n'
+            '    if result["total"] == 0:\n'
+            '        return {\n'
+            '            "total": 0, "unanchored": unanchored,\n'
+            '            "bind_invocations": [_bind_invocation(entry, lineage) for entry in assignments],\n'
+            '            "round": recorded_round["round"], "round_id": recorded_round["id"],\n'
+            '        }\n'
+            '    _raise_separation_refusal(result, recorded_round["id"])\n'
+            '    _check_separation_concession(\n'
+            '        paper_dir, root.name, lineage, revision, concedes_to_round, result, claimable, corpus,\n'
+            '    )\n',
+            "tests.test_paper_writing.SeparationConcessionTests"
+            ".test_a_concession_that_scores_worse_refuses_naming_both_totals",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 def _record_kinds_reachable_from(root_name: str) -> set:

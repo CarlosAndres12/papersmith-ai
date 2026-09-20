@@ -120,17 +120,17 @@ this file deletes a file, and no task edits anything under `sections/`.
 
 ## Phase 4: U4 — Concession Check, Precedence, `SEPARATION_CONCESSION_REGRESSED`
 
-- [ ] 4.1 RED: concession-recompute tests — `concedes_to_round: n` recomputes BOTH the conceding cut's total and round `n`'s total from disk, never trusting either stored score; an equal-or-lower total is accepted; a strictly higher total refuses `SEPARATION_CONCESSION_REGRESSED` naming both cuts and both totals.
-- [ ] 4.2 Implement the concession check in `cmd_separate`, using the round lookup from Phase 3; run 4.1 green.
-- [ ] 4.3 RED — ordering, its own explicit, separately-checkable task (Decision E): the concession check runs BEFORE the structural refusal. Construct a conceding cut whose recomputed total is nonzero but not worse than the round it abandons; assert the concession check passes it through to the structural refusal rather than masking it.
-- [ ] 4.4 Mutation (proves the ordering is load-bearing, not incidental): swap the call order so the structural refusal runs first; confirm the `SEPARATION_CONCESSION_REGRESSED` fixture from 4.1 becomes structurally unreachable under this mutation — the test exercising it goes red because the structural refusal now intercepts first. This is the ordering defect that is invisible on the happy path alone.
-- [ ] 4.5 Restore the correct ordering (concession check first); confirm 4.1 and 4.3 both green again.
-- [ ] 4.6 Mutation: `submitted > prior` → `submitted > prior + 1`; confirm the 4→5 fixture goes red (a check that only catches a large jump must not survive an off-by-one weakening).
-- [ ] 4.7 RED — stored score is not authority: overwrite a recorded round's stored `score` field to `0` on disk, leaving its `assignments` unchanged; a conceding cut scoring 5 against it still refuses `SEPARATION_CONCESSION_REGRESSED` naming 4 and 5, recomputed from `assignments`.
-- [ ] 4.8 Confirm the concession check recomputes strictly from `assignments`, never reading the stored `score` field for comparison; run 4.7 green.
-- [ ] 4.9 Mutation: change the comparison to read the stored `score` field instead of recomputing; confirm 4.7 goes red.
-- [ ] 4.10 Confirm a regressed concession is never recorded: resubmitting it identically refuses the same way with no growth in round count (extend 3.1's round-count assertions to a refused resubmission).
-- [ ] 4.11 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green — the `separate` negotiation loop is complete except the `bind` precondition (Phase 5).
+- [x] 4.1 RED: concession-recompute tests — `concedes_to_round: n` recomputes BOTH the conceding cut's total and round `n`'s total from disk, never trusting either stored score; an equal-or-lower total is accepted; a strictly higher total refuses `SEPARATION_CONCESSION_REGRESSED` naming both cuts and both totals.
+- [x] 4.2 Implement the concession check in `cmd_separate`, using the round lookup from Phase 3; run 4.1 green.
+- [x] 4.3 RED — ordering, its own explicit, separately-checkable task (Decision E): the concession check runs BEFORE the structural refusal. Construct a conceding cut whose recomputed total is nonzero but not worse than the round it abandons; assert the concession check passes it through to the structural refusal rather than masking it.
+- [x] 4.4 Mutation (proves the ordering is load-bearing, not incidental): swap the call order so the structural refusal runs first; confirm the `SEPARATION_CONCESSION_REGRESSED` fixture from 4.1 becomes structurally unreachable under this mutation — the test exercising it goes red because the structural refusal now intercepts first. This is the ordering defect that is invisible on the happy path alone.
+- [x] 4.5 Restore the correct ordering (concession check first); confirm 4.1 and 4.3 both green again.
+- [x] 4.6 Mutation: `submitted > prior` → `submitted > prior + 1`; confirm the 4→5 fixture goes red (a check that only catches a large jump must not survive an off-by-one weakening).
+- [x] 4.7 RED — stored score is not authority: overwrite a recorded round's stored `score` field to `0` on disk, leaving its `assignments` unchanged; a conceding cut scoring 5 against it still refuses `SEPARATION_CONCESSION_REGRESSED` naming 4 and 5, recomputed from `assignments`.
+- [x] 4.8 Confirm the concession check recomputes strictly from `assignments`, never reading the stored `score` field for comparison; run 4.7 green.
+- [x] 4.9 Mutation: change the comparison to read the stored `score` field instead of recomputing; confirm 4.7 goes red.
+- [x] 4.10 Confirm a regressed concession is never recorded: resubmitting it identically refuses the same way with no growth in round count (extend 3.1's round-count assertions to a refused resubmission).
+- [x] 4.11 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.test_paper_separation`; confirm green — the `separate` negotiation loop is complete except the `bind` precondition (Phase 5).
 
 ## Phase 5: U6 — Owner Amendment: `BINDING_UNARGUED` Precondition on `bind`
 
