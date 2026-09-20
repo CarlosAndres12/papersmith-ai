@@ -24,10 +24,6 @@
           "source": {
             "file": "sections/02-experimental-setup.md",
             "quote": "The dataset — when this section owns it"
-          },
-          "document": {
-            "lineage": "s41597-026-06758-7",
-            "section": ["Methods", "Data Records"]
           }
         }
       ],
