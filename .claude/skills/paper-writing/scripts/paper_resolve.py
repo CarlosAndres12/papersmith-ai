@@ -48,9 +48,12 @@ from impl_refusals import Refused  # noqa: E402
 #: bearing rather than merely present.
 OPENER: urllib.request.OpenerDirector = urllib.request.build_opener()
 
-#: The three connectors this CLI can resolve against. Never PubMed or
-#: bioRxiv -- this paper family is mathematics and machine learning
-#: (`proposal.md`, Approach).
+#: The three connectors this CLI resolves against, closed for what an
+#: identifier's own scheme demands, never for what any one paper is about:
+#: OpenAlex and Crossref resolve a DOI, arXiv resolves its own id space, and
+#: together they cover every identifier `resolve` accepts today. Widening
+#: this set is a module change made when a new identifier scheme needs a
+#: client, never a per-paper decision (`proposal.md`, Approach).
 RESOLVERS: tuple[str, ...] = ("openalex", "crossref", "arxiv")
 
 #: The connector roles `papersmith.yaml`'s `paper_writing.roles` maps.
