@@ -23,6 +23,16 @@ the SAME corpus assembly the six codes above reach `write` through — it
 MUST therefore also stop `write` before the readiness stage begins, under
 the identical rule: never reachable only from a read-only verb.
 
+`SECTION_BINDING_ABSENT` (U3b correctness repair) is the one code among the
+seven this `write` MUST reach through its own corpus assembly and NOWHERE
+ELSE: an undecided binding is reported (`source-section-binding`,
+`Corpus.undecided_bindings`) rather than refused everywhere else in the
+skill, so `write`'s own assembly is not merely the FIRST place this code is
+proven reachable — after U3b it is the ONLY place. This narrower rule does
+not weaken the requirement above; it sharpens it for exactly the one code
+whose unconditional form (U3's own shipped behaviour) forced an agent to
+invent a binding rather than leave any assembly refusing.
+
 #### Scenario: `write` refuses before drafting on an unresolved binding
 
 - GIVEN a block whose bindable requirement's bound section title is absent
@@ -51,6 +61,17 @@ the identical rule: never reachable only from a read-only verb.
 - THEN `write` performs its own assembly and refuses the same way, rather
   than proceeding on the assumption that only the read-only verb needs to
   check
+
+#### Scenario: An undecided binding reads fine and refuses only at `write`
+
+- GIVEN a block whose bindable requirement's source root is measured but
+  carries no `document` half at all — `source-section-binding` reports it
+  `undecided`, not broken
+- WHEN a read-only verb assembles the corpus, and separately `write` is
+  invoked for that exact block
+- THEN the read-only verb's assembly raises nothing, and `write` refuses
+  `SECTION_BINDING_ABSENT` naming the block and the fact id, before the
+  draft stage runs
 
 #### Scenario: `write` refuses when more than one `guidance/` folder is classed evidence
 

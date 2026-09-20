@@ -1200,8 +1200,17 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
     refuse on its own terms -- this gate only ever narrows what CAN
     proceed, it never invents a refusal for a condition it was not asked
     to police.
+
+    `enforce_bindings=True` (U3b correctness repair, design.md Decision
+    H): this is the ONLY `assemble_corpus` call in the whole skill that
+    passes it. Every read-only verb assembles the SAME corpus with the
+    default `False` and reports an unbound bindable entry as
+    `Corpus.undecided_bindings` rather than refusing -- drafting a block
+    without knowing which section feeds it is the one moment an
+    undecided binding must become `SECTION_BINDING_ABSENT` instead of a
+    report, so only `write`'s own gate ever turns it into one.
     """
-    corpus = paper_graph.assemble_corpus(sections_dir)
+    corpus = paper_graph.assemble_corpus(sections_dir, enforce_bindings=True)
     edge_set = paper_graph.collect_edges(corpus)
     waves = paper_graph.derive_waves(corpus, edge_set)
 

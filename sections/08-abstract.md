@@ -75,10 +75,6 @@
           "source": {
             "file": "sections/08-abstract.md",
             "quote": "The mathematical formulation"
-          },
-          "document": {
-            "lineage": "research-concept",
-            "section": "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia"
           }
         }
       ],

@@ -169,13 +169,49 @@ non-string list entry are all schema-shape errors, so they reuse
 already raises. Roster stays **139** — U2d adds no new code, only widens
 an existing key's accepted shape.
 
+### H — `SECTION_BINDING_ABSENT` refuses at `write`, never at assembly (U3b correctness repair)
+
+U3 shipped the obligation as unconditional the instant any verb assembled the corpus — including
+every read-only verb (`contract`, `phases`, `plan`). That left exactly two options the moment one
+real binding turned out to be genuinely undecided: invent a binding to keep the corpus assemblable,
+or leave the whole corpus refusing to assemble at all. Both happened during U3's own apply: two
+bindings (`introduction.block-4a`, `abstract.slot-3`) were transcribed on a guess the apply agent
+itself flagged low-confidence, specifically because leaving them unbound made `assemble_corpus`
+refuse outright. A repair that forces an agent to invent content about the paper being written is a
+worse defect than the unconditional-obligation gap it closed.
+
+| Option | Tradeoff | Decision |
+|---|---|---|
+| Report an undecided binding at read-time (`Corpus.undecided_bindings`, mirroring `source_roots`'s own `unmeasured` report), refuse only when `write` assembles its own corpus (`enforce_bindings=True`) | Every read-only verb keeps working on a corpus that honestly carries an undecided binding; `write` is the one moment drafting a block without knowing its own section would produce a false claim, so it is the only moment that must refuse; no invented binding is ever required just to keep the corpus assemblable | **Chosen** |
+| Keep the refusal unconditional at every assembly (U3's shipped behaviour) | Forces an invented binding (or a permanently unassemblable corpus) the moment any entry is genuinely undecided — exactly the defect this repair exists to close | Rejected |
+| Drop the obligation entirely, report `undecided` everywhere including `write` | `write` could then draft a block against a fact nobody has told it which section answers, silently producing prose with no traceable source — the whole point of `source-section-binding` | Rejected |
+
+`Corpus.undecided_bindings` is computed once, before `Corpus` itself is constructed (a frozen
+dataclass has nowhere to gain a field after the fact) — keyed by qualified block id, then fact id, to
+`{"state": "undecided", "root": <root name>}`. `assemble_corpus` gains one keyword-only parameter,
+`enforce_bindings: bool = False`; `_verify_source_section_bindings` takes the same flag and raises
+`SECTION_BINDING_ABSENT` (naming the SAME block and fact the old unconditional loop would have
+named first) only when it is `True`. `paper_cli._resolve_write_gate` — `write`'s own first statement,
+already the SAME corpus assembly every other `source-section-binding` code reaches `write` through —
+is the ONLY call site in the skill that passes `enforce_bindings=True`. Every other call site
+(`cmd_contract`, `compute_phases`, `cmd_plan`, `_resolve_write_gate`'s own read-only siblings) keeps
+the default, so a genuinely undecided binding never blocks reading the contract or seeing which wave
+is open — it blocks exactly the one act (drafting prose for that block) an undecided binding cannot
+honestly support. The raise site itself is unconditional in source (still reachable, still counted by
+`reachable_paper_refusal_codes()`); only WHEN it fires changed.
+
+`introduction.block-4a` and `abstract.slot-3`'s invented `document` halves are removed by this
+repair: both report `undecided` at read-time and refuse `SECTION_BINDING_ABSENT` at `write`, which is
+the truth — nobody has ruled which section of `research-concept` feeds either block, and the owner
+rules that, not an apply agent's guess.
+
 ## Refusal Codes — seven, and why the proposal's four became seven
 
 | Code | Condition | Tier |
 |---|---|---|
 | `SECTION_NOT_IN_SOURCE` | Named title is no heading in the current revision | work-state |
 | `SECTION_TITLE_AMBIGUOUS` | Title matches two or more headings | work-state |
-| `SECTION_BINDING_ABSENT` | Bindable fact, document-rooted, no `document` half (U3) | work-state |
+| `SECTION_BINDING_ABSENT` | Bindable fact, document-rooted, no `document` half — raised only when `write` assembles its own corpus (U3, refusal tier corrected at `write`-only by U3b, Decision H) | work-state |
 | `SOURCE_LINEAGE_UNRESOLVED` | Lineage resolves to zero or more than one revision/document | work-state |
 | `SOURCE_REVISIONS_UNDECLARED` | Document-rooted `PROSE` root carries no marker | work-state |
 | `MALFORMED_SOURCE_MARKER` | Marker not UTF-8 / not JSON / not an object / unknown or missing key / bad value | work-state |
@@ -194,8 +230,10 @@ conflate "which document" with "which root holds documents at all".
 
 Roster is **133 today** (the pre-change baseline, before U1 started); the count after each unit
 lands is re-derived with `reachable_paper_refusal_codes()`, never forecast — measured **139** after
-U2c, unchanged at **139** after U2d (a shape widening, no new raise site), and **140** after U3
-(`SECTION_BINDING_ABSENT`'s own raise site, unconditional from the moment it lands).
+U2c, unchanged at **139** after U2d (a shape widening, no new raise site), **140** after U3
+(`SECTION_BINDING_ABSENT`'s own raise site lands), and unchanged at **140** after U3b (the raise site
+is a static AST scan target regardless of the `enforce_bindings` gate around it — this repair changes
+WHEN the code fires, never WHETHER it is reachable in source).
 
 ## File Changes
 
@@ -203,12 +241,12 @@ U2c, unchanged at **139** after U2d (a shape widening, no new raise site), and *
 |---|---|---|
 | `scripts/paper_contract.py` | Modify | `_REQUIREMENT_OPTIONAL = ("document",)`, `_DOCUMENT_REQUIRED = ("lineage","section")`, `requirement_documents()` accessor |
 | `scripts/paper_declarations.py` | Modify | `source_root_status()`, `read_revisions_marker()`, `resolve_lineage()`, `bindable_facts()` derived off `FACT_SOURCE_ROOT`; U2c adds `SourceRootKind.INGESTED`, `_ingested_root_status()`, `resolve_ingested_document()`, and imports `paper_guidance` |
-| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg; U2c adds the per-kind dispatch inside `_verify_source_section_bindings` |
+| `scripts/paper_graph.py` | Modify | `BlockRecord.source_bindings: tuple = ()`; `Corpus.source_roots: dict`; `_verify_source_section_bindings`; `source_base` kwarg; U2c adds the per-kind dispatch inside `_verify_source_section_bindings`; U3b adds `Corpus.undecided_bindings: dict`, `_compute_undecided_bindings()`, and `assemble_corpus`'s `enforce_bindings` kwarg |
 | `scripts/paper_guidance.py` | Read | `read_markdown_outline`/`segment_markdown` reused unchanged; U2c additionally reuses `read_registry`/`ingested_papers`, unchanged |
-| `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it |
+| `scripts/paper_cli.py` | Modify | Seven codes into `REFUSAL_CLASSIFICATION` (U2c adds `EVIDENCE_ROOT_AMBIGUOUS`); `source_roots` in `plan`/`phases`/`contract`; `_resolve_write_gate` returns the corpus so `cmd_write` reports it; U3b passes `enforce_bindings=True` from `_resolve_write_gate` only |
 | `proposals/.paper-writing.json` | Create | `{"revisions":{"revision_prefix":"r","ordinal_digits":2}}` |
-| `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify | Bindings transcribed for every bindable requirement whose root is measured (`formulation`, `dataset`); prose bytes untouched below the header |
-| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests |
+| `sections/01-*.md`, `02-*.md`, `04-*.md`, `06-*.md`, `08-*.md` | Modify | Bindings transcribed for every bindable requirement whose root is measured (`formulation`, `dataset`); prose bytes untouched below the header; U3b removes the two invented `document` halves (`introduction.block-4a`, `abstract.slot-3`), prose bytes still untouched |
+| `tests/test_paper_contract.py`, `test_paper_writing.py`, `test_paper_decisions.py` | Modify | Shape, resolution, mutation proofs, synthetic `experiments/` fixture, `SECTION_BINDING_ABSENT` write-gate tests; U3b moves the assembly-time `SECTION_BINDING_ABSENT` test to an `undecided`-report assertion and retargets its mutation proof through `cmd_write` |
 
 ## Interfaces
 
@@ -261,6 +299,20 @@ def resolve_ingested_document(evidence_dir: Path, lineage: str) -> Path:
     `evidence_dir/<lineage>/<lineage>.md` -- identity, never an ordinal
     search. Refuses the SAME SOURCE_LINEAGE_UNRESOLVED on zero or more
     than one matching ingested document (U2c)."""
+
+
+# paper_graph.py (U3b)
+def assemble_corpus(
+    sections_dir: Path, *, source_base: Path | None = None, enforce_bindings: bool = False,
+) -> Corpus:
+    """`enforce_bindings=False` (every read-only verb's own default): an
+    undecided binding is reported in `Corpus.undecided_bindings`, never
+    raised. `enforce_bindings=True` (`_resolve_write_gate`'s own call,
+    the ONLY one in the skill): the SAME condition raises
+    SECTION_BINDING_ABSENT. `Corpus.undecided_bindings` -- qualified
+    block id -> {fact_id: {"state": "undecided", "root": str}} -- mirrors
+    `source_roots`'s own report shape rather than inventing a second
+    reporting convention."""
 ```
 
 `BlockRecord.source_bindings` is a tuple of `(fact_id, lineage, section_title)` triples — a tuple,
@@ -291,7 +343,7 @@ so an untracked fixture cannot pass on a no-op edit:
 |---|---|
 | `SECTION_NOT_IN_SOURCE` | Rename the bound heading in the fixture revision; the named `write` test must go red |
 | `SECTION_TITLE_AMBIGUOUS` | Duplicate the bound heading; the count-based lookup must refuse, not pick the first |
-| `SECTION_BINDING_ABSENT` | Delete the `document` half from one shipped entry |
+| `SECTION_BINDING_ABSENT` | Delete the `document` half from one shipped entry, invoked through `write` (U3b: the assembly-time raise moved to `write`-only, so the mutation proof must go through `cmd_write`, not `assemble_corpus` in isolation) |
 | `SOURCE_LINEAGE_UNRESOLVED` | Rename the newest revision to a foreign lineage (zero case); add `r021.md` (tie case) |
 | `SOURCE_REVISIONS_UNDECLARED` | Delete `proposals/.paper-writing.json` in the fixture root |
 | `MALFORMED_SOURCE_MARKER` | Add a sixth key to the marker; flip `ordinal_digits` to a string |
@@ -309,11 +361,14 @@ so an untracked fixture cannot pass on a no-op edit:
 | U2d | Owner ruling: `document.section` accepts one title or a non-empty list of unique titles (Decision G); `requirement_documents` expands a list into one triple per title | ~90 | yes |
 | **DP** | **Owner rules on any entry that cannot be anchored** | **blocking** | — |
 | U3 | Transcribe corpus bindings, obligation unconditional (`SECTION_BINDING_ABSENT`), refusal wired at `write`, ship `proposals/.paper-writing.json`, fixtures, roster re-derived | ~170 | yes |
+| U3b | Correctness repair: an undecided binding reports (`Corpus.undecided_bindings`, mirroring `source_roots`), `SECTION_BINDING_ABSENT` refuses at `write` ONLY (Decision H); removes the two invented bindings (`introduction.block-4a`, `abstract.slot-3`) U3's own apply transcribed under this same pressure | engine-only, well under budget (owner ruling: budget counts engine lines) | yes |
 
 Estimated total **~470 changed lines** against the 400-line budget — above the proposal's ~440
 because the marker reader and its two codes were added by the Question-1 ruling.
 `400-line budget risk: Medium`. **Two chained PRs recommended**: PR#1 `U1+U2` ≈ 300, PR#2 `U3` ≈ 170
 targeting PR#1's branch. U1 and U2 are inert without U3, so PR#1 ships green on the untouched corpus.
+U3b is a same-branch correctness repair on top of PR#2, reported and settled per the owner's own
+engine-lines-only budget ruling.
 
 ## Threat Matrix
 

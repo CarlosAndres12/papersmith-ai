@@ -14,8 +14,11 @@ revision on disk off a per-root `.paper-writing.json` marker's own declared
 revision grammar, section existence and ambiguity by title (checked
 independently per title when a binding names more than one), the report an
 unmeasured root produces versus the refusal a document-rooted but
-undeclared or malformed marker produces, and the property that a version
-bump whose bound titles survive costs no edit anywhere.
+undeclared or malformed marker produces, the property that a version
+bump whose bound titles survive costs no edit anywhere, and the report a
+bindable-but-not-yet-decided binding produces (`undecided`) versus the
+refusal that same binding produces the one time drafting actually depends
+on it (`write`).
 
 ## Requirements
 
@@ -48,11 +51,25 @@ by a special case naming them.
 - THEN it reports bindable, proving the test is membership in the mapping
   and not a hand-maintained list elsewhere
 
-### Requirement: A Bindable Fact With No Binding Refuses
+### Requirement: A Bindable Fact With No Binding Is Undecided, And Refuses Only At `write`
 
-A `requires_facts` entry naming a bindable fact but carrying no `document`
-half MUST refuse `SECTION_BINDING_ABSENT` naming the owning block and the
-fact id.
+A `requires_facts` entry naming a bindable fact whose source root is
+MEASURED but carrying no `document` half is **undecided**: assembling the
+corpus for a read-only purpose MUST NOT refuse for it, and MUST instead
+report it — the same shape `source_roots` already uses to report an
+unmeasured root, never a second, invented reporting convention. A bindable
+entry left undecided MUST refuse `SECTION_BINDING_ABSENT` naming the owning
+block and the fact id **only** at the one moment that undecided state would
+otherwise let a false claim through: `write` assembling the corpus for the
+block it is about to draft (`writing-orchestration`, `Requirement: Section
+Binding Resolution Gates write`). No other verb — read-only or otherwise —
+may turn an undecided binding into this refusal.
+
+An apply agent facing a genuinely undecided binding MUST NOT invent one to
+keep the corpus assemblable: reporting `undecided` at read-time, refusing
+only at `write`, exists precisely so nothing forces that invention. The
+obligation itself stays unconditional — it never consults a block's own
+`optional` flag — only WHEN it can fire changed.
 
 #### Scenario: A bound bindable entry parses
 
@@ -60,11 +77,20 @@ fact id.
 - WHEN the corpus is assembled
 - THEN it accepts the entry, pending its own resolution checks below
 
-#### Scenario: An unbound bindable entry refuses
+#### Scenario: An unbound bindable entry is reported undecided, not refused
 
-- GIVEN a `requires_facts` entry naming `formulation` with no `document` half
-- WHEN the corpus is assembled
-- THEN it refuses `SECTION_BINDING_ABSENT` naming the block and `formulation`
+- GIVEN a `requires_facts` entry naming `formulation` with no `document`
+  half, under a source root the corpus reports MEASURED
+- WHEN the corpus is assembled for a read-only purpose
+- THEN it accepts the entry with no refusal, and reports it `undecided`,
+  naming the block, the fact id, and the root
+
+#### Scenario: The same unbound entry refuses only when `write` assembles it
+
+- GIVEN the same unbound bindable entry
+- WHEN `write` assembles the corpus for the block that entry belongs to
+- THEN it refuses `SECTION_BINDING_ABSENT` naming the block and
+  `formulation`
 
 ### Requirement: Lineage Resolves To The Current Revision On Disk
 

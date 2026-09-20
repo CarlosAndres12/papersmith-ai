@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Estimated changed lines | ~470 (U1+U2 ≈ 300, U3 ≈ 170) |
+| Estimated changed lines | ~470 (U1+U2 ≈ 300, U3 ≈ 170) + U3b correctness repair (engine-only, well under budget) |
 | 400-line budget risk | Medium |
 | Chained PRs recommended | Yes |
 | Suggested split | PR 1: Phase 1+2 (U1+U2, ~300) → PR 2: Phase 3+4 (DP+U3, ~170) |
@@ -31,6 +31,7 @@ unchanged from design.md, which already priced the marker reader in.
 | 2d (U2d) | `document.section` accepts one title or a non-empty list of unique titles (design.md Decision G) | PR 2 | `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing` | N/A — shape only, still optional | revert `paper_contract.py` diff |
 | 3 (DP) | Owner rules on unanchorable entries | — | N/A — human decision | N/A | reversible; nothing lands until ruled |
 | 4 (U3) | Obligation unconditional, corpus transcribed, `write` wired for all six codes | PR 2 | full suite (both, see 4.12) | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write <bound-block-id>` | `git revert` U3's single commit |
+| 5 (U3b) | Correctness repair: undecided is reported (`Corpus.undecided_bindings`), `SECTION_BINDING_ABSENT` refuses at `write` only; removes the two invented bindings U3's own apply transcribed under the unconditional-obligation trap | PR 2 (same branch, engine-only lines) | `.venv/bin/python -m unittest tests.test_paper_writing.SourceSectionBindingCorpusTests tests.test_paper_writing.SourceSectionBindingWriteGateTests tests.test_paper_writing.SourceSectionBindingWriteGateMutationProofTests` | `.venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py write --section introduction --block block-4a --draft draft.json --audit audit.json` (refuses `SECTION_BINDING_ABSENT` before either file is opened) | `git revert` U3b's own commit(s); U3's transcribed bindings and fixtures are untouched |
 
 ## Phase 1 — U1: Entry shape, inert
 
@@ -119,3 +120,24 @@ unchanged from design.md, which already priced the marker reader in.
 - [x] 4.10 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for `research-concept`, `MIL-CREDA`, `s41597`, `Rényi`, section titles, and every new block id; zero NEW matches (pre-existing illustrative block-id mentions in comments predate this unit and are untouched).
 - [x] 4.11 Re-derive the refusal roster with `reachable_paper_refusal_codes()`; measured **140** (up from 139 after U2c/U2d).
 - [x] 4.12 Ran `npm test` (640/640) AND `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'` (4225 tests, 1 failure — the same known pre-existing `test_proposal_implementation.ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`, 3 skipped) from the repository root; confirmed zero new failures.
+
+## Phase 5 — U3b: Correctness repair, undecided is reported not invented
+
+U3's own apply agent faced exactly the trap `4.2` created: two entries had no owner-ruled or
+confidently-derived section, and the unconditional obligation left it invent-or-break. It invented
+(`introduction.block-4a`, `abstract.slot-3`, both flagged low-confidence in its own report). This
+phase removes the invention and closes the trap at its source: `SECTION_BINDING_ABSENT` refuses only
+where drafting actually depends on knowing the section — `write` — and reports `undecided`
+everywhere else, mirroring `source_roots`'s own report shape.
+
+- [x] 5.1 RED: add a failing test asserting a bindable, measured, unbound entry's `assemble_corpus()` call (no `enforce_bindings`) raises NOTHING and reports the entry in `Corpus.undecided_bindings` (`{"state": "undecided", "root": ...}`); confirm it fails against the still-unconditional U3 code before any production edit.
+- [x] 5.2 Add `Corpus.undecided_bindings: dict` and `_compute_undecided_bindings()` to `paper_graph.py`, computed before `Corpus` is constructed (a frozen dataclass has nowhere to gain a field after the fact); add `assemble_corpus`'s `enforce_bindings: bool = False` kwarg, threaded into `_verify_source_section_bindings`, which raises `SECTION_BINDING_ABSENT` (naming the same block/fact the old unconditional loop would have named first) only when `enforce_bindings=True`.
+- [x] 5.3 Wire `enforce_bindings=True` into `paper_cli._resolve_write_gate`'s own `assemble_corpus` call — the ONLY call site in the skill that passes it; every other call site (`cmd_contract`, `compute_phases`, `cmd_plan`, and `_resolve_write_gate`'s own siblings) keeps the default.
+- [x] 5.4 Move the assembly-time `SECTION_BINDING_ABSENT` test (task 4.1) into the read-time `undecided` assertion (5.1); the pre-existing `write`-gate test (`SourceSectionBindingWriteGateTests.test_write_refuses_section_binding_absent`, task 4.6) already proves the refusal at `write` and needed no change. A moved test, never a deleted one.
+- [x] 5.5 Retarget the mutation proof (task 4.3's `test_mutation_removing_the_absence_check_lets_an_unbound_fact_pass`) through `cmd_write` (`SourceSectionBindingWriteGateTests.test_write_refuses_section_binding_absent`) rather than the now-nonraising assembly path; confirm it still fails under the mutation.
+- [x] 5.6 Remove the two invented `document` halves from `sections/06-introduction.md` (`block-4a`) and `sections/08-abstract.md` (`slot-3`); verify prose bytes below the JSON header are byte-identical to `HEAD` for both files, and that no other block's binding changed.
+- [x] 5.7 Update `design.md` (Decision H), `specs/source-section-binding/spec.md` (undecided requirement/scenarios), and `specs/writing-orchestration/spec.md` (write-only reachability note + scenario) to describe the corrected behaviour; a spec still demanding the assembly-time refusal would contradict the code.
+- [x] 5.8 Re-derive the refusal roster with `reachable_paper_refusal_codes()`; confirm it stays **140** — the raise site is still a static AST scan target, only WHEN it fires changed.
+- [x] 5.9 Generality check: `rg` under `.claude/skills/paper-writing/scripts/` for the paper's own subject words, section titles, and block ids in every new comment/docstring this phase adds; zero new matches.
+- [x] 5.10 Report the corpus's remaining nine bindings to the owner, marked owner-ruled vs agent-derived, so the owner may strike any of them; remove none beyond the two named in 5.6.
+- [x] 5.11 Ran `.venv/bin/python -m unittest tests.test_paper_contract tests.test_paper_writing tests.test_paper_decisions` (732/732, green) AND the full baseline (`npm test`; `.venv/bin/python -m unittest discover -s tests -p 'test_*.py'`); confirmed zero new failures beyond the known pre-existing one.

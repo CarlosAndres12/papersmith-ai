@@ -107,10 +107,6 @@
           "source": {
             "file": "sections/06-introduction.md",
             "quote": "the core idea comes from the mathematical formulation"
-          },
-          "document": {
-            "lineage": "research-concept",
-            "section": "3. Formulación MIL-CREDA y kernel de bolsas ponderado por relevancia"
           }
         }
       ],

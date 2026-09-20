@@ -2422,7 +2422,7 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self,
     ) -> None:
         proc = _run_against_mutant(
-            "    _verify_source_section_bindings(corpus)\n",
+            "    _verify_source_section_bindings(corpus, enforce_bindings=enforce_bindings)\n",
             "",
             "tests.test_paper_writing.SourceSectionBindingCorpusTests"
             ".test_an_absent_title_refuses_section_not_in_source",
@@ -2430,23 +2430,31 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         )
         self._assert_guard_failed_under_mutation(proc)
 
-    def test_a_bindable_fact_with_no_document_half_refuses_section_binding_absent(
+    def test_a_bindable_fact_with_no_document_half_reports_undecided_at_read_time(
         self,
     ) -> None:
-        """U3: the obligation is unconditional -- a bindable fact whose
-        source root is MEASURED but carries no `document` half refuses,
-        naming the owning block and the fact id."""
+        """U3b correctness repair: a bindable fact whose source root is
+        MEASURED but carries no `document` half is `undecided` -- reported
+        in `Corpus.undecided_bindings`, the read-time counterpart
+        `source_roots` already established for an unmeasured root, never
+        raised. A read-only verb (plain `assemble_corpus`, the default
+        `enforce_bindings=False`) MUST succeed; `SECTION_BINDING_ABSENT`
+        moved to `write`'s own gate (`SourceSectionBindingWriteGateTests
+        .test_write_refuses_section_binding_absent`) -- this is the exact
+        assembly-time refusal U3 shipped, now proven ABSENT here so
+        nothing forces an agent to invent a binding just to keep the
+        corpus assemblable."""
         self._write_section("01-a.md", self._unbound_header("formulation"), self._BODY)
         proposals = self.base / "proposals"
         self._marker(proposals)
         (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
 
-        with self.assertRaises(Refused) as ctx:
-            paper_graph.assemble_corpus(self.sections_dir)
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
 
-        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
-        self.assertIn("a.only", ctx.exception.detail)
-        self.assertIn("formulation", ctx.exception.detail)
+        self.assertEqual(
+            corpus.undecided_bindings["a.only"]["formulation"]["state"], "undecided",
+        )
+        self.assertEqual(corpus.undecided_bindings["a.only"]["formulation"]["root"], "proposals")
 
     def test_a_bindable_fact_under_an_unmeasured_root_carries_no_obligation(self) -> None:
         """An unmeasured root is a normal state of a paper at an earlier
@@ -2507,11 +2515,18 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
 
     def test_mutation_removing_the_absence_check_lets_an_unbound_fact_pass(self) -> None:
+        """U3b: the obligation itself moved to `write`'s own gate, so the
+        mutation this guard must survive is proven there too, through the
+        REAL `cmd_write` root (`SourceSectionBindingWriteGateTests
+        .test_write_refuses_section_binding_absent`) -- mutating away
+        `_compute_undecided_bindings`'s own absence check must fail that
+        write-gate test, never merely the read-only assembly this class
+        already proves stays green on an unbound fact."""
         proc = _run_against_mutant(
             "            if fact_id not in bound_fact_ids:\n",
             "            if False:\n",
-            "tests.test_paper_writing.SourceSectionBindingCorpusTests"
-            ".test_a_bindable_fact_with_no_document_half_refuses_section_binding_absent",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_write_refuses_section_binding_absent",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
         )
         self._assert_guard_failed_under_mutation(proc)

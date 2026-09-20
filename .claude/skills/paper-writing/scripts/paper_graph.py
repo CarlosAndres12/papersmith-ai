@@ -135,9 +135,60 @@ class Corpus:
     #: `produces_facts`/`source_bindings` set, so every existing direct
     #: `Corpus(...)` construction site stays green.
     source_roots: dict = field(default_factory=dict)
+    #: (U3b correctness repair, `the-requirement-names-the-section-that-
+    #: feeds-it`) The read-time counterpart `source_roots` already
+    #: established for an unmeasured root, extended to an unbound binding:
+    #: every bindable `requires_facts` entry whose own source root is
+    #: MEASURED but carries no `document` half yet, reported here rather
+    #: than raised. Keyed by qualified block id -> `{fact_id: {"state":
+    #: "undecided", "root": root_name}}`; a fully-bound block never
+    #: appears here at all (a bound fact is already visible via
+    #: `BlockRecord.source_bindings`), the same parsimony a per-block
+    #: report can afford that `source_roots`'s own unconditional
+    #: per-root report cannot. `SECTION_BINDING_ABSENT` (`source-section-
+    #: binding` spec) turns an entry surviving here into a refusal ONLY
+    #: when `assemble_corpus` is called with `enforce_bindings=True` --
+    #: `write`'s own gate, and nowhere else (`writing-orchestration`
+    #: spec, `Requirement: Section Binding Resolution Gates write`).
+    #: Defaulted to `{}`, the same precedent `source_roots` sets.
+    undecided_bindings: dict = field(default_factory=dict)
 
 
-def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> Corpus:
+def _compute_undecided_bindings(blocks: dict, source_roots: dict) -> dict:
+    """Pure derivation of `Corpus.undecided_bindings` (U3b), computed
+    BEFORE `Corpus` is constructed: a frozen dataclass has nowhere to
+    gain this after the fact, so this runs from the same `blocks` dict
+    and the same `source_roots` dict `assemble_corpus` is about to hand
+    the constructor, one statement below.
+
+    Iterates blocks and their own `requires_facts` in the SAME order
+    `_verify_source_section_bindings`'s old unconditional obligation loop
+    used, so the first entry `enforce_bindings=True` raises on on any
+    given call is exactly the same entry that loop would have raised on
+    first -- moving the obligation off assembly-time changes WHEN it can
+    fire, never WHICH entry it names first.
+    """
+    undecided: dict = {}
+    for qualified_id, record in blocks.items():
+        bound_fact_ids = {fact_id for fact_id, _lineage, _title in record.source_bindings}
+        for fact_id in record.requires_facts:
+            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root is None:
+                continue
+            status = source_roots.get(root.name)
+            if status is None or status["state"] == "unmeasured":
+                continue
+            if fact_id not in bound_fact_ids:
+                undecided.setdefault(qualified_id, {})[fact_id] = {
+                    "state": "undecided",
+                    "root": root.name,
+                }
+    return undecided
+
+
+def assemble_corpus(
+    sections_dir: Path, *, source_base: Path | None = None, enforce_bindings: bool = False,
+) -> Corpus:
     """Parse every `*.md` under `sections_dir`, sorted by filename for
     reproducibility only. Refuses `ID_COLLISION` (work-state) when a raw
     block id equals any section id anywhere in the corpus — the one flat
@@ -169,6 +220,16 @@ def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> C
     computed once here (`Corpus.source_roots`) and then consumed by
     `_verify_source_section_bindings` below, which resolves and checks
     every `document`-bound `requires_facts` entry the parsed corpus names.
+
+    `enforce_bindings` (U3b correctness repair, design.md Decision H):
+    `False` (default) — a bindable, measured, unbound entry is reported
+    in `Corpus.undecided_bindings`, never raised; every read-only verb
+    keeps working on a corpus that still carries an undecided binding.
+    `True` — the SAME condition raises `SECTION_BINDING_ABSENT`. Only
+    `paper_cli._resolve_write_gate` (`write`'s own first statement) ever
+    passes `True`: drafting a block without knowing which section feeds
+    it is the one moment an undecided binding would otherwise force an
+    invented answer, so only that moment refuses.
     """
     sections: dict = {}
     bodies: dict = {}
@@ -215,17 +276,18 @@ def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> C
         root.name: paper_declarations.source_root_status(resolved_base, root)
         for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name)
     }
+    undecided_bindings = _compute_undecided_bindings(blocks, source_roots)
 
     corpus = Corpus(
         sections=sections, blocks=blocks, order_by_section=order_by_section,
-        source_roots=source_roots,
+        source_roots=source_roots, undecided_bindings=undecided_bindings,
     )
     _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
-    _verify_source_section_bindings(corpus)
+    _verify_source_section_bindings(corpus, enforce_bindings=enforce_bindings)
     declarations = _produces_facts_declarations(corpus)
     _verify_route_exclusivity(declarations)
     _verify_producer_duplication(declarations)
@@ -236,7 +298,7 @@ def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> C
     return corpus
 
 
-def _verify_source_section_bindings(corpus: Corpus) -> None:
+def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = False) -> None:
     """`source-section-binding` spec — every check a `document`-bound
     `requires_facts` entry (`BlockRecord.source_bindings`) is held to,
     against real disk. Inert for every entry with no `document` half (U1),
@@ -269,32 +331,31 @@ def _verify_source_section_bindings(corpus: Corpus) -> None:
        `SECTION_TITLE_AMBIGUOUS`, both naming the owning block and the
        title.
 
-    0. (U3, `the-requirement-names-the-section-that-feeds-it`) Before any
-       resolution runs: every `requires_facts` entry naming a BINDABLE
-       fact (`paper_declarations.is_bindable_fact`) whose own source root
-       `corpus.source_roots` reports MEASURED (`document-rooted`, never
-       `unmeasured`) MUST carry at least one `document` binding for that
-       fact id, or this refuses `SECTION_BINDING_ABSENT` naming the
-       owning block and the fact id. The obligation is UNCONDITIONAL —
-       it does not consult `BlockRecord.optional` — but it never fires
-       for a fact whose root is still `unmeasured`: an unmeasured root is
-       a paper at an earlier stage, never a fault (design.md Decision B).
+    0. (U3b correctness repair, `the-requirement-names-the-section-that-
+       feeds-it` — U3's own unconditional version of this step forced an
+       agent to INVENT two bindings rather than leave the corpus
+       assemblable at all, which the owner ruled worse than the defect it
+       fixed) `Corpus.undecided_bindings` already names every bindable,
+       measured, unbound entry (`_compute_undecided_bindings`, run before
+       this function, before `Corpus` even exists). `enforce_bindings=False`
+       (every read-only verb's own default) leaves that report as a
+       report: this step raises NOTHING for it. `enforce_bindings=True`
+       (`write`'s own gate, and ONLY `write`'s) turns the first entry
+       `Corpus.undecided_bindings` names, in the SAME block order the old
+       unconditional obligation loop used, into `SECTION_BINDING_ABSENT`
+       naming the owning block and the fact id — the obligation is still
+       UNCONDITIONAL at `write` and still never consults
+       `BlockRecord.optional`, it is merely no longer unconditional at
+       every OTHER verb too.
     """
-    for qualified_id, record in corpus.blocks.items():
-        bound_fact_ids = {fact_id for fact_id, _lineage, _title in record.source_bindings}
-        for fact_id in record.requires_facts:
-            root = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
-            if root is None:
-                continue
-            status = corpus.source_roots.get(root.name)
-            if status is None or status["state"] == "unmeasured":
-                continue
-            if fact_id not in bound_fact_ids:
-                raise Refused(
-                    "SECTION_BINDING_ABSENT",
-                    f"{qualified_id}: {fact_id!r} is bindable and its source root "
-                    f"{root.name!r} is measured, but carries no 'document' binding",
-                )
+    if enforce_bindings:
+        for qualified_id, facts in corpus.undecided_bindings.items():
+            fact_id, info = next(iter(facts.items()))
+            raise Refused(
+                "SECTION_BINDING_ABSENT",
+                f"{qualified_id}: {fact_id!r} is bindable and its source root "
+                f"{info['root']!r} is measured, but carries no 'document' binding",
+            )
 
     memo: dict = {}
     for qualified_id, record in corpus.blocks.items():
