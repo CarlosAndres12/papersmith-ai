@@ -50,68 +50,68 @@ Structural Sentences Are Typed".
 **This phase runs against an otherwise-unmodified tree until 0.3 is captured.** Do not
 touch `paper_style.py` or `paper_bindings.py` before the before-table exists.
 
-- [ ] 0.1 Create `tests/fixtures/math_fence_corpus/` — six invented markdown files, no
+- [x] 0.1 Create `tests/fixtures/math_fence_corpus/` — six invented markdown files, no
       product name, no real paper vocabulary: a `$$…$$` display fence, an inline `$…$`, a
       `\[…\]` display form, a `\begin{equation}…\end{equation}` form, an unpaired `$`, and
       plain prose with no math markers. (`style-leak-detection`, "Requirement: The
       Eight-Token Tripwire", Scenario "A `$$` display fence is excluded, body and all".)
-- [ ] 0.2 Write the M1 harness (a test module or a small script under `tests/`) that, for
+- [x] 0.2 Write the M1 harness (a test module or a small script under `tests/`) that, for
       every ordered pair `(styled, sample)` drawn from the fixture corpus, records
       `len(paper_style.normalize_tokens(styled))`, `len(paper_leak.tripwire_spans(styled,
       [sample]))`, and `paper_leak.overlap_against_set(styled, [sample])`. The harness must
       be executable and must produce a delta report naming every pair whose tripwire hit
       count changed and every file whose normalized token count changed (design.md,
       Measurement M1).
-- [ ] 0.3 **Execute M1 on the current, unmodified tree** (before either `strip_math` is
+- [x] 0.3 **Execute M1 on the current, unmodified tree** (before either `strip_math` is
       touched) and capture its output verbatim into
       `openspec/changes/the-tripwire-reaches-the-section-that-feeds-it/math-fence-blast-radius.md`
       as the **before-table**. State the exact command that produced it. Do not author any
       number in this file by hand.
-- [ ] 0.4 In the same run, execute M1 additionally over whatever document-sourced `.md`
+- [x] 0.4 In the same run, execute M1 additionally over whatever document-sourced `.md`
       this checkout happens to hold (ambient content), and record that result in the same
       file under a section explicitly marked `ambient, not asserted` — a fresh clone holds
       none of this, and no gate condition may depend on it (design.md, Decision A gate
       table, third row).
-- [ ] 0.5 RED: add a failing unit test asserting `paper_style.strip_math` excludes a `$$…$$`
+- [x] 0.5 RED: add a failing unit test asserting `paper_style.strip_math` excludes a `$$…$$`
       fence body entirely (not merely its delimiters), against the fixture corpus. Confirm
       it fails against the current, unmodified `_MATH_DISPLAY_RE`/`_MATH_INLINE_RE` pair
       (`paper_style.py` lines 33-48). (`style-leak-detection`, Scenario "A `$$` display
       fence is excluded, body and all".)
-- [ ] 0.6 Fix `paper_style.py`: add the `\$\$.*?\$\$|` alternative to `_MATH_DISPLAY_RE`
+- [x] 0.6 Fix `paper_style.py`: add the `\$\$.*?\$\$|` alternative to `_MATH_DISPLAY_RE`
       (design.md, Decision A — the exact regex is given there), ahead of the existing
       `\\\[.*?\\\]|\\begin{...}` alternatives, preserving the `\1` backreference to the
       environment group. Confirm 0.5 goes green.
-- [ ] 0.7 RED: add a failing unit test asserting `paper_bindings._strip_math` (lines
+- [x] 0.7 RED: add a failing unit test asserting `paper_bindings._strip_math` (lines
       140-152) carries the identical `$$` defect — a display equation containing a numeral
       inside a `structural`-typed sentence wrongly reaches `STRUCTURAL_CARRIES_CLAIM`
       today. Confirm it fails against the current, unmodified pattern.
       (`evidence-bound-drafting`, Scenario "A numeral inside a display-math fence does not
       refuse".)
-- [ ] 0.8 Fix `paper_bindings.py`: add the identical `$$` alternative to its own
+- [x] 0.8 Fix `paper_bindings.py`: add the identical `$$` alternative to its own
       `_MATH_DISPLAY_RE`. Do NOT merge the two implementations (design.md, Decision A: the
       local-import discipline `paper_leak` exists under forbids pulling `paper_style` into
       `paper_bindings`). Confirm 0.7 goes green.
-- [ ] 0.9 RED-then-GREEN: add the DERIVED cross-module sweep test — introspects every
+- [x] 0.9 RED-then-GREEN: add the DERIVED cross-module sweep test — introspects every
       module under `scripts/` for a callable literally named `strip_math` or `_strip_math`
       (never a two-item hand-maintained list) and asserts each excludes a `$$` fence.
       Confirm it is red before 0.6/0.8 land (both implementations still defective) and
       green after both land. (`style-leak-detection`, Scenario "Mutation — a third
       normalizer is caught by the derived sweep, never a hand-edited list".)
-- [ ] 0.10 **Execute M1 again**, on the tree with 0.6 and 0.8 applied, and append the
+- [x] 0.10 **Execute M1 again**, on the tree with 0.6 and 0.8 applied, and append the
       **after-table** plus the delta (every pair whose hit count changed, every file whose
       normalized token count changed) to `math-fence-blast-radius.md`. This is the gate:
       WU1 may not open until this file carries both executed tables (design.md, Work
       Units — "WU0 is the gate for everything after it").
-- [ ] 0.11 Mutation: drop the `$$` alternative from `paper_style.py`'s pattern; confirm the
+- [x] 0.11 Mutation: drop the `$$` alternative from `paper_style.py`'s pattern; confirm the
       display-fence unit test (0.5) goes red. Restore.
-- [ ] 0.12 Mutation: drop the same alternative from `paper_bindings.py`'s pattern; confirm
+- [x] 0.12 Mutation: drop the same alternative from `paper_bindings.py`'s pattern; confirm
       the cross-module sweep test (0.9) goes red — proving the sweep, not a hand-listed
       pair, is what catches drift. Restore.
-- [ ] 0.13 Generality sweep: `rg` under `.claude/skills/` and `tests/` for any literal from
+- [x] 0.13 Generality sweep: `rg` under `.claude/skills/` and `tests/` for any literal from
       the fixture corpus filenames bleeding into engine code (there should be none — the
       corpus is test-only). Confirm zero matches outside `tests/fixtures/math_fence_corpus/`
       and its own test module.
-- [ ] 0.14 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract`
+- [x] 0.14 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_contract`
       (or the narrower module/class once named) and confirm green with no new failures.
 
 ## Phase 1 — WU1: The wiring gap is closed

@@ -139,7 +139,8 @@ def resolve_bindings(bindings: list[Binding], evidence_ids: set, licensed_facts:
 
 _MATH_INLINE_RE = re.compile(r"\$[^$]*\$")
 _MATH_DISPLAY_RE = re.compile(
-    r"\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}", re.DOTALL
+    r"\$\$.*?\$\$|\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}",
+    re.DOTALL,
 )
 _LATEX_CMD_RE = re.compile(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?")
 _CITE_RE = re.compile(r"\\cite\w*")

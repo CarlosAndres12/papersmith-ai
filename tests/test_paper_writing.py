@@ -13,6 +13,7 @@ import argparse
 import ast
 import dataclasses
 import hashlib
+import importlib
 import inspect
 import json
 import os
@@ -4495,6 +4496,20 @@ class StructuralTypingTests(unittest.TestCase):
         ]
         paper_bindings.type_structural(bindings, contract_prose="This section discusses Transformer at length.")
 
+    def test_a_numeral_inside_a_display_math_fence_does_not_refuse(self) -> None:
+        """`evidence-bound-drafting` spec, Scenario "A numeral inside a
+        display-math fence does not refuse": a structural sentence whose
+        only numeral sits inside a `$$...$$` display fence must not trigger
+        `STRUCTURAL_CARRIES_CLAIM` -- `paper_bindings._strip_math` carries
+        the identical `$$` defect `paper_style.strip_math` does, and the two
+        implementations must not drift apart (design.md, Decision A)."""
+        bindings = [
+            paper_bindings.Binding(
+                sentence="This paragraph closes the section. $$ 42 $$", kind="structural", ref=None
+            )
+        ]
+        paper_bindings.type_structural(bindings, contract_prose="")
+
 
 class ModeAdmissibilityTests(unittest.TestCase):
     """`evidence-bound-drafting` spec, `Requirement: Mode-Admissible
@@ -6390,6 +6405,37 @@ class StyleLeakDetectionTests(unittest.TestCase):
         hits = paper_leak.tripwire_spans(styled, samples)
         self.assertEqual(hits, [])
 
+    def test_a_dollar_dollar_display_fence_is_excluded_body_and_all(self) -> None:
+        """`style-leak-detection` spec, Scenario "A `$$` display fence is
+        excluded, body and all": a sample in `R` and a styled draft `S`
+        share the identical equation body between `$$` fences and nothing
+        else -- normalization must exclude the fenced body in both, not
+        merely its delimiters, so no tokens from inside it ever reach the
+        tripwire (design.md, Decision A)."""
+        equation_body = "alpha x plus beta x squared plus gamma x cubed minus delta"
+        styled = f"Prefix prose shared with nothing else. $$ {equation_body} $$ Suffix unique to styled."
+        sample_span = f"Different prefix prose entirely. $$ {equation_body} $$ Suffix unique to sample."
+        samples = [{"reference": "sample", "span": sample_span}]
+        hits = paper_leak.tripwire_spans(styled, samples)
+        self.assertEqual(hits, [], hits)
+
+    def test_mutation_dropping_the_dollar_dollar_alternative_fails_the_display_fence_guard(self) -> None:
+        """`style-leak-detection` spec, Scenario "Mutation -- dropping the
+        display-fence alternative is caught": with the `$$...$$` alternative
+        removed from `paper_style._MATH_DISPLAY_RE`, the display-fence test
+        above must go red, proving the exclusion is load-bearing rather than
+        merely present."""
+        proc = _run_against_mutant(
+            r'r"\$\$.*?\$\$|',
+            'r"',
+            "tests.test_paper_writing.StyleLeakDetectionTests"
+            ".test_a_dollar_dollar_display_fence_is_excluded_body_and_all",
+            source_path=SKILL_SCRIPTS / "paper_style.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
     def test_overlap_ignores_text_in_the_reference_file_outside_r(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ref_file = Path(tmp) / "reference.md"
@@ -6405,6 +6451,70 @@ class StyleLeakDetectionTests(unittest.TestCase):
             styled = "UNRECORDED SECRET one two three four five six seven eight"
             self.assertEqual(paper_leak.overlap_against_set(styled, samples), 0)
             self.assertEqual(paper_leak.tripwire_spans(styled, samples), [])
+
+
+def _every_strip_math_callable() -> list[tuple[str, object]]:
+    """Every callable literally named `strip_math` or `_strip_math` in any
+    module under `scripts/`, discovered by introspection -- never a
+    hand-maintained list of exactly the two implementations known today
+    (`style-leak-detection` spec, Requirement: The Eight-Token Tripwire,
+    Scenario "Mutation -- a third normalizer is caught by the derived
+    sweep, never a hand-edited list"). Reusing `SKILL_SCRIPTS`, already
+    on `sys.path` at module import time, so a mutation test that pre-seeds
+    `sys.modules` for exactly one module still resolves this sweep to the
+    mutant for that module and to the real file for every sibling."""
+    found: list[tuple[str, object]] = []
+    for path in sorted(SKILL_SCRIPTS.glob("*.py")):
+        module = importlib.import_module(path.stem)
+        for candidate_name in ("strip_math", "_strip_math"):
+            candidate = getattr(module, candidate_name, None)
+            if callable(candidate):
+                found.append((f"{path.stem}.{candidate_name}", candidate))
+    return found
+
+
+class MathFenceExclusionSweepTests(unittest.TestCase):
+    """`style-leak-detection` spec, Requirement: The Eight-Token Tripwire --
+    the DERIVED cross-module sweep proving every `strip_math`/`_strip_math`
+    callable under `scripts/` excludes a `$$...$$` fence identically
+    (design.md, Decision A: "The class, not the instance")."""
+
+    _EQUATION_BODY = "alpha x plus beta x squared plus gamma x cubed minus delta"
+
+    def test_every_strip_math_callable_excludes_a_dollar_dollar_fence(self) -> None:
+        callables = _every_strip_math_callable()
+        self.assertGreaterEqual(
+            len(callables), 2,
+            "expected at least paper_style.strip_math and paper_bindings._strip_math",
+        )
+        text = f"Prefix prose. $$ {self._EQUATION_BODY} $$ Suffix prose."
+        for label, fn in callables:
+            stripped = fn(text)
+            stripped_words = set(re.findall(r"[a-zA-Z0-9']+", stripped))
+            for token in self._EQUATION_BODY.split():
+                self.assertNotIn(
+                    token, stripped_words,
+                    f"{label} left the whole word {token!r} from inside a $$ fence in its stripped output",
+                )
+
+    def test_mutation_dropping_the_alternative_in_paper_bindings_fails_the_derived_sweep(self) -> None:
+        """`style-leak-detection` spec, Scenario "Mutation -- a third
+        normalizer is caught by the derived sweep, never a hand-edited
+        list": with the `$$...$$` alternative removed from ONLY
+        `paper_bindings._strip_math`, the sweep test above must go red --
+        proving membership in the sweep is computed from every callable
+        actually found, not merely from a pair of names somebody remembered
+        to list."""
+        proc = _run_against_mutant(
+            r'r"\$\$.*?\$\$|',
+            'r"',
+            "tests.test_paper_writing.MathFenceExclusionSweepTests"
+            ".test_every_strip_math_callable_excludes_a_dollar_dollar_fence",
+            source_path=SKILL_SCRIPTS / "paper_bindings.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class ThreeDraftProofSetTests(unittest.TestCase):
