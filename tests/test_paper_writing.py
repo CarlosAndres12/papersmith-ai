@@ -13,6 +13,7 @@ import argparse
 import ast
 import dataclasses
 import hashlib
+import importlib
 import inspect
 import json
 import os
@@ -48,6 +49,7 @@ import paper_readiness  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
+import paper_source_span  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -1042,6 +1044,24 @@ class ModeWideningTests(unittest.TestCase):
             for block in header.blocks:
                 resolved = paper_contract.resolve_mode(header, block)
                 self.assertIsNotNone(resolved, (path.name, block["id"]))
+
+
+class ModeVocabularyConstantsTests(unittest.TestCase):
+    """`transposition-fidelity` spec, `Requirement: Only A Transposition-Mode
+    Block Is Checked...` (design.md, Decision D; tasks.md 2.5-2.6): `MODES`
+    stops being a bare literal tuple and is composed from two named
+    constants, so no string literal for a mode needs to be spelled again in
+    `paper_write.py`/`paper_leak.py`."""
+
+    def test_named_mode_constants_hold_their_string_values(self) -> None:
+        self.assertEqual(paper_vocabulary.MODE_TRANSPOSITION, "transposition")
+        self.assertEqual(paper_vocabulary.MODE_ARGUMENT, "argument")
+
+    def test_modes_is_composed_from_the_named_constants(self) -> None:
+        self.assertEqual(
+            paper_vocabulary.MODES,
+            (paper_vocabulary.MODE_TRANSPOSITION, paper_vocabulary.MODE_ARGUMENT),
+        )
 
 
 class RequirementEntryShapeTests(unittest.TestCase):
@@ -4495,6 +4515,20 @@ class StructuralTypingTests(unittest.TestCase):
         ]
         paper_bindings.type_structural(bindings, contract_prose="This section discusses Transformer at length.")
 
+    def test_a_numeral_inside_a_display_math_fence_does_not_refuse(self) -> None:
+        """`evidence-bound-drafting` spec, Scenario "A numeral inside a
+        display-math fence does not refuse": a structural sentence whose
+        only numeral sits inside a `$$...$$` display fence must not trigger
+        `STRUCTURAL_CARRIES_CLAIM` -- `paper_bindings._strip_math` carries
+        the identical `$$` defect `paper_style.strip_math` does, and the two
+        implementations must not drift apart (design.md, Decision A)."""
+        bindings = [
+            paper_bindings.Binding(
+                sentence="This paragraph closes the section. $$ 42 $$", kind="structural", ref=None
+            )
+        ]
+        paper_bindings.type_structural(bindings, contract_prose="")
+
 
 class ModeAdmissibilityTests(unittest.TestCase):
     """`evidence-bound-drafting` spec, `Requirement: Mode-Admissible
@@ -4770,7 +4804,8 @@ class ContractAuditTests(unittest.TestCase):
 
 def _write_contract(
     *, block_id="mm-proposal", citations_regime="resolution", mode="transposition",
-    requires_facts=(), evidence_set=(), style_set=(), disqualifiers=(_SAMPLE_DISQUALIFIER,),
+    requires_facts=(), evidence_set=(), style_set=(), source_sections=(),
+    disqualifiers=(_SAMPLE_DISQUALIFIER,),
 ) -> "paper_write.BlockContract":
     return paper_write.BlockContract(
         block_id=block_id,
@@ -4781,6 +4816,7 @@ def _write_contract(
         requires_facts=tuple(requires_facts),
         evidence_set=tuple(evidence_set),
         style_set=tuple(style_set),
+        source_sections=tuple(source_sections),
     )
 
 
@@ -4970,6 +5006,34 @@ class WritingPipelineTests(unittest.TestCase):
         self.assertEqual(result["status"], "written")
         self.assertEqual(result["styleChannel"]["status"], "measured")
 
+    def test_a_real_write_with_no_source_sections_reports_source_fidelity_unmeasured(self) -> None:
+        """`transposition-fidelity` spec, `Requirement: A Block With No
+        Measured Bound Section Reports Unmeasured, Never Refused`, scenario
+        "A block with no bound section reports unmeasured" (tasks.md 1.9):
+        WU1's own scope, wiring and the `unmeasured` report only -- no
+        verdict logic (`check_source_section_verbatim`) exists yet, that
+        is WU2's."""
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceFidelity"], {"status": "unmeasured"})
+
+    def test_a_real_write_with_a_bound_section_reports_source_fidelity_measured(self) -> None:
+        """The reachable non-empty branch, proven minimally: WU1 adds no
+        check and no refusal (tasks.md, orchestrator instruction), so only
+        the `status` differentiates "a bound section reached the pipeline"
+        from `unmeasured` -- the per-section floor/threshold/longest_run
+        shape is WU2's own scope (`check_source_section_verbatim`,
+        tasks.md 2.11)."""
+        section = {
+            "fact": "formulation", "lineage": "lumen-thesis", "title": "1. Intro",
+            "path": "irrelevant.md", "byte_start": 0, "byte_end": 10, "text": "# 1. Intro",
+        }
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=(section,))
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceFidelity"]["status"], "measured")
+
 
 class StyleChannelReportingTests(unittest.TestCase):
     """Ruling 2 (orchestrator, this change): an all-`noEquivalent` style set
@@ -4983,6 +5047,276 @@ class StyleChannelReportingTests(unittest.TestCase):
         recorded = [{"reference": "paperA", "span": "x"}]
         result = paper_write.style_channel_report(recorded, {"pass": True}, {"pass": True})
         self.assertEqual(result["status"], "measured")
+
+
+#: Invented, content-free filler words -- no digits, no number words
+#: (`paper_vocabulary.NUMBER_WORDS`), no comparatives
+#: (`paper_vocabulary.COMPARATIVES`) -- so a run built from them can be
+#: embedded inside a single `structural`-typed draft sentence in the
+#: `write_block` integration tests below without tripping `paper_bindings.
+#: type_structural`'s numeral/comparative checks the way a digit-suffixed
+#: token (`"clause1"`) would.
+_FILLER_WORDS: tuple[str, ...] = (
+    "willow", "cedar", "maple", "birch", "juniper", "cypress", "fern", "moss",
+    "lichen", "reed", "rush", "sedge", "clover", "thistle", "nettle",
+    "bramble", "hazel", "alder", "beech", "linden", "poplar", "sycamore",
+    "hemlock", "larch", "holly", "fennel", "sorrel", "mallow", "chicory",
+    "plantain", "bracken", "heather", "gorse", "bilberry", "hawthorn",
+    "blackthorn", "rowan", "hornbeam", "whitebeam", "sallow", "osier",
+    "spindle", "buckthorn", "dogwood",
+)
+
+
+def _n_token_run(n: int) -> str:
+    """A run of exactly `n` distinct, invented filler words -- calibrates
+    `source_section_floor`/`check_source_section_verbatim` against an exact
+    known run length, never borrowed from any real document."""
+    if n > len(_FILLER_WORDS):
+        raise ValueError(f"_FILLER_WORDS only holds {len(_FILLER_WORDS)} words; need {n}")
+    return " ".join(_FILLER_WORDS[:n])
+
+
+class SourceSectionVerbatimWriteGateTests(unittest.TestCase):
+    """`transposition-fidelity` spec, `Requirement: The Guard Fires Inside
+    write, Before Substitution, Never Only From A Read-Only Verb` +
+    `Requirement: Only A Transposition-Mode Block Is Checked...` (design.md,
+    Decisions C/D; tasks.md 2.7-2.11). WU1 wired the plumbing and the
+    `unmeasured` report only (`WritingPipelineTests` above); this class
+    proves the real verdict logic reaches an actual `write_block` call.
+    Every draft below is deliberately a single grammatical sentence (one
+    capitalised word, at the very start, and no digits, number words or
+    comparatives) so it clears `paper_bindings.type_structural`'s own
+    checks and the ONLY refusal in play is the one under test."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def _bound_section(self, text: str) -> dict:
+        return {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "path": "irrelevant.md",
+            "byte_start": 0, "byte_end": len(text), "text": text,
+        }
+
+    def _structural_draft(self, sentence: str) -> dict:
+        return {"latex": sentence, "bindings": [{"sentence": sentence, "binding": "structural"}]}
+
+    def test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Some framing text about the section itself. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        pre = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_transposed_draft_in_its_own_register_writes(self) -> None:
+        section = self._bound_section(
+            "The widget calibration procedure requires careful measurement "
+            "of every dial before the run starts."
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(
+            "Calibrating the widget takes patience, attention, and a steady hand."
+        )
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+    def test_a_refusal_here_writes_nothing_to_the_attempt_ledger(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIsNone(paper_write._read_ledger(self.paper_dir, "mm-proposal"))
+
+    def test_an_argument_mode_block_with_the_identical_binding_is_never_checked(self) -> None:
+        run = _n_token_run(17)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+    def test_a_passing_block_reports_per_section_floor_threshold_and_longest_run(self) -> None:
+        run = _n_token_run(16)
+        section = self._bound_section(f"Framing text. {run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition", source_sections=(section,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        entry = result["sourceFidelity"]["sections"][0]
+        self.assertEqual(entry["lineage"], "widget-study-r4")
+        self.assertEqual(entry["title"], "2. Widget Calibration")
+        self.assertEqual(entry["threshold"], 16)
+        self.assertEqual(entry["longest_run"], 16)
+        self.assertIn("floor", entry)
+
+    def test_a_contract_licensed_high_floor_is_visible_not_silent(self) -> None:
+        """Scenario "A contract-licensed high floor is visible, not silent":
+        a block whose own contract prose shares a forty-token run with its
+        bound section makes the guard inert for that run, and the envelope
+        reports a floor of forty and a threshold of forty."""
+        run = _n_token_run(40)
+        section = self._bound_section(f"Section framing text. {run} Section trailing text.")
+        bullet = f"A bullet stating that {run} plainly."
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition",
+            source_sections=(section,), disqualifiers=(bullet,),
+        )
+        draft = self._structural_draft(f"This passage states directly that {run} without changing anything.")
+        audit_account = {"verdicts": [{"bullet": bullet, "verdict": "clear"}]}
+        result = paper_write.write_block(self.paper_dir, contract, draft, audit_account)
+        self.assertEqual(result["status"], "written")
+        entry = result["sourceFidelity"]["sections"][0]
+        self.assertEqual(entry["floor"], 40)
+        self.assertEqual(entry["threshold"], 40)
+
+    def test_a_draft_failing_both_checks_names_style_overlap_first(self) -> None:
+        """`transposition-fidelity` spec, Scenario "A verbatim source-section
+        paste is a distinct refusal from a style leak": `write` runs the
+        style tripwire BEFORE this capability's own stage (design.md, Data
+        Flow), so a draft failing both always names `STYLE_OVERLAP`
+        deterministically -- never computed by widening either check's own
+        function or sample set."""
+        style_run = _n_token_run(9)
+        section_run = " ".join(_FILLER_WORDS[9:26])
+        style_sample = {"reference": "paperA", "span": style_run}
+        section = self._bound_section(f"Framing text. {section_run} Trailing text.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="transposition",
+            source_sections=(section,), style_set=(style_sample,),
+        )
+        draft = self._structural_draft(
+            f"This passage restates that {style_run} and separately that {section_run} plainly."
+        )
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(ctx.exception.code, "STYLE_OVERLAP")
+
+
+class SourceSectionVerbatimMutationProofTests(unittest.TestCase):
+    """`transposition-fidelity` spec, the five mutation scenarios
+    (tasks.md 2.14-2.18) -- each a mutation a weaker lock survives
+    (design.md, Testing Strategy: "Mutation per claim")."""
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_the_backstop_alone_fails_the_licensed_floor_guard(self) -> None:
+        """Scenario "Mutation -- the backstop alone is not enough without
+        the floor": `max(floor, SOURCE_RUN_BACKSTOP)` mutated to
+        `SOURCE_RUN_BACKSTOP` alone must make the contract-licensed
+        forty-token-run test go red -- it now wrongly refuses under the
+        sixteen-token backstop alone."""
+        proc = _run_against_mutant(
+            "        threshold = max(floor, SOURCE_RUN_BACKSTOP)",
+            "        threshold = SOURCE_RUN_BACKSTOP",
+            "tests.test_paper_writing.SourceSectionVerbatimTests"
+            ".test_a_contract_licensed_forty_token_floor_makes_the_guard_inert",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_the_floor_alone_fails_the_six_token_idiom_guard(self) -> None:
+        """Scenario "Mutation -- the floor alone is not enough without the
+        backstop": `max(floor, SOURCE_RUN_BACKSTOP)` mutated to `floor`
+        alone must make the near-zero-floor six-token-idiom test go red --
+        it now wrongly refuses a six-token idiom that shares nothing with
+        the contract prose."""
+        proc = _run_against_mutant(
+            "        threshold = max(floor, SOURCE_RUN_BACKSTOP)",
+            "        threshold = floor",
+            "tests.test_paper_writing.SourceSectionVerbatimTests"
+            ".test_a_six_token_idiom_does_not_refuse_under_the_real_backstop",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_raising_the_effective_minimum_fails_the_reachability_guard(self) -> None:
+        """Scenario "Mutation -- the refusal is reachable at all": raising
+        the check's own effective minimum far above any real draft length
+        must make the verbatim-paste `write` test go red, proving
+        `SOURCE_SECTION_VERBATIM` is reachable under an unmutated
+        implementation, not merely asserted never to fire."""
+        proc = _run_against_mutant(
+            "            min_tokens=threshold + 1,",
+            "            min_tokens=10_000,",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_leak.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_skipping_the_stage_in_write_block_fails_the_direct_write_guard(self) -> None:
+        """Scenario "Mutation -- wiring the guard only into a read-only verb
+        is caught": with `write_block` itself made to skip the new stage
+        (the shape a guard wired only onto a read-only verb would produce),
+        the direct-`write` verbatim-paste test must fail -- proving the
+        guard is wired to the enforcing verb, not merely a reachable
+        function."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if False and contract.mode == paper_vocabulary.MODE_TRANSPOSITION "
+            "and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_mode_check_flipped_fails_the_transposition_guard(self) -> None:
+        """Scenario "Mutation -- mode is derived, not assumed", transposition
+        half: the stage guard's own condition mutated from
+        `MODE_TRANSPOSITION` to `MODE_ARGUMENT` must make the
+        transposition-mode verbatim-paste test go red -- the transposition
+        block that should be checked is no longer checked."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if contract.mode == paper_vocabulary.MODE_ARGUMENT and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_a_verbatim_paste_refuses_before_substitute_and_main_tex_stays_unchanged",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_mode_check_flipped_fails_the_argument_exemption_guard(self) -> None:
+        """Scenario "Mutation -- mode is derived, not assumed", argument
+        half: the SAME mutation must also make the argument-mode exemption
+        test go red -- the argument block that should be exempt is now
+        wrongly checked."""
+        proc = _run_against_mutant(
+            "    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:",
+            "    if contract.mode == paper_vocabulary.MODE_ARGUMENT and contract.source_sections:",
+            "tests.test_paper_writing.SourceSectionVerbatimWriteGateTests"
+            ".test_an_argument_mode_block_with_the_identical_binding_is_never_checked",
+            source_path=SKILL_SCRIPTS / "paper_write.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
 
 
 # =====================================================================
@@ -6390,6 +6724,37 @@ class StyleLeakDetectionTests(unittest.TestCase):
         hits = paper_leak.tripwire_spans(styled, samples)
         self.assertEqual(hits, [])
 
+    def test_a_dollar_dollar_display_fence_is_excluded_body_and_all(self) -> None:
+        """`style-leak-detection` spec, Scenario "A `$$` display fence is
+        excluded, body and all": a sample in `R` and a styled draft `S`
+        share the identical equation body between `$$` fences and nothing
+        else -- normalization must exclude the fenced body in both, not
+        merely its delimiters, so no tokens from inside it ever reach the
+        tripwire (design.md, Decision A)."""
+        equation_body = "alpha x plus beta x squared plus gamma x cubed minus delta"
+        styled = f"Prefix prose shared with nothing else. $$ {equation_body} $$ Suffix unique to styled."
+        sample_span = f"Different prefix prose entirely. $$ {equation_body} $$ Suffix unique to sample."
+        samples = [{"reference": "sample", "span": sample_span}]
+        hits = paper_leak.tripwire_spans(styled, samples)
+        self.assertEqual(hits, [], hits)
+
+    def test_mutation_dropping_the_dollar_dollar_alternative_fails_the_display_fence_guard(self) -> None:
+        """`style-leak-detection` spec, Scenario "Mutation -- dropping the
+        display-fence alternative is caught": with the `$$...$$` alternative
+        removed from `paper_style._MATH_DISPLAY_RE`, the display-fence test
+        above must go red, proving the exclusion is load-bearing rather than
+        merely present."""
+        proc = _run_against_mutant(
+            r'r"\$\$.*?\$\$|',
+            'r"',
+            "tests.test_paper_writing.StyleLeakDetectionTests"
+            ".test_a_dollar_dollar_display_fence_is_excluded_body_and_all",
+            source_path=SKILL_SCRIPTS / "paper_style.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
     def test_overlap_ignores_text_in_the_reference_file_outside_r(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ref_file = Path(tmp) / "reference.md"
@@ -6405,6 +6770,190 @@ class StyleLeakDetectionTests(unittest.TestCase):
             styled = "UNRECORDED SECRET one two three four five six seven eight"
             self.assertEqual(paper_leak.overlap_against_set(styled, samples), 0)
             self.assertEqual(paper_leak.tripwire_spans(styled, samples), [])
+
+
+class SourceSectionVerbatimTests(unittest.TestCase):
+    """`transposition-fidelity` spec. `check_source_section_verbatim` is a
+    SIBLING of `check_tripwire` (`Requirement: The Verbatim Check Is A
+    Sibling, Never An Extension Of The Style Tripwire`) -- its own refusal
+    code, its own self-calibrated threshold, reusing `overlap_against_set`/
+    `tripwire_spans` verbatim rather than re-implementing the overlap/
+    hit-scan machinery (design.md, Decision B/C; tasks.md 2.1-2.4)."""
+
+    def test_source_run_backstop_is_sixteen(self) -> None:
+        self.assertEqual(paper_leak.SOURCE_RUN_BACKSTOP, 16)
+
+    def test_source_section_floor_reuses_overlap_against_set_verbatim(self) -> None:
+        shared_run = _n_token_run(9)
+        contract_prose = f"Unrelated framing prose. {shared_run} More unrelated prose."
+        section_text = f"Different framing sentence. {shared_run} Different trailing sentence."
+        self.assertEqual(
+            paper_leak.source_section_floor(contract_prose, section_text),
+            paper_leak.overlap_against_set(contract_prose, [{"span": section_text}]),
+        )
+        self.assertEqual(paper_leak.source_section_floor(contract_prose, section_text), 9)
+
+    def test_a_verbatim_paste_beyond_the_backstop_refuses(self) -> None:
+        """Scenario "A draft pasting its bound section verbatim refuses":
+        the contract prose shares almost nothing with the section (the
+        floor stays under the backstop), so the threshold is the
+        sixteen-token backstop; the draft reproduces a seventeen-token run
+        from the section, one token past it."""
+        section_text = (
+            "Some opening sentence about the widget calibration procedure. "
+            f"{_n_token_run(17)} A closing sentence about something else."
+        )
+        contract_prose = "The block's own contract prose shares almost nothing with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Opening sentence of the draft. {_n_token_run(17)} Closing sentence of the draft."
+
+        with self.assertRaises(Refused) as ctx:
+            paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        self.assertIn("formulation", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+        self.assertIn("willow", ctx.exception.detail)
+
+    def test_the_same_claim_in_different_words_passes(self) -> None:
+        """Scenario "The same claim in the paper's own register passes": no
+        normalized run longer than a handful of tokens is shared."""
+        section_text = (
+            "The widget calibration procedure requires careful measurement "
+            "of every dial before the run starts."
+        )
+        contract_prose = "Unrelated contract prose sharing nothing with the section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = "Calibrating the widget takes patience, attention, and a steady hand."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        self.assertEqual(report["sections"][0]["title"], "2. Widget Calibration")
+
+    def test_a_run_equal_to_the_threshold_passes(self) -> None:
+        """The strict-inequality half of `Requirement: The Threshold
+        Self-Calibrates...`: a run of EXACTLY sixteen tokens (the backstop,
+        against a near-zero floor) must pass, never refuse."""
+        run = _n_token_run(16)
+        section_text = f"Framing prose. {run} Trailing prose."
+        contract_prose = "The contract prose shares nothing at all with this section."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft framing. {run} Draft trailing."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        entry = report["sections"][0]
+        self.assertEqual(entry["threshold"], 16)
+        self.assertEqual(entry["longest_run"], 16)
+
+    def test_a_contract_licensed_forty_token_floor_makes_the_guard_inert(self) -> None:
+        """Scenario "A contract-licensed long run is not refused": the
+        block's own contract prose already carries the same forty-token run
+        from its bound section, so the floor is forty, above the backstop,
+        and reproducing that same run passes -- equal to, never strictly
+        above, its own threshold. The inertness is visible through the
+        reported floor (`Requirement: The Floor And Threshold Are Reported,
+        Never Inferred Silently`)."""
+        run = _n_token_run(40)
+        section_text = f"Section framing. {run} Section trailing."
+        contract_prose = f"Contract framing sentence. {run} Contract trailing sentence."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft framing sentence. {run} Draft trailing sentence."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        entry = report["sections"][0]
+        self.assertEqual(entry["floor"], 40)
+        self.assertEqual(entry["threshold"], 40)
+        self.assertEqual(entry["longest_run"], 40)
+
+    def test_a_six_token_idiom_does_not_refuse_under_the_real_backstop(self) -> None:
+        """The scenario mutation 2.15 falsifies: a block whose contract
+        prose shares near nothing with its section (floor near zero)
+        drafts a six-token idiom that also appears in the section -- under
+        the REAL `max(floor, SOURCE_RUN_BACKSTOP)` threshold this must NOT
+        refuse; the backstop alone is what protects it."""
+        idiom = _n_token_run(6)
+        section_text = f"Framing text. {idiom} Trailing text of the section."
+        contract_prose = "Contract prose sharing almost nothing with this section at all."
+        section = {
+            "fact": "formulation", "lineage": "widget-study-r4",
+            "title": "2. Widget Calibration", "text": section_text,
+        }
+        draft_latex = f"Draft prose. {idiom} Draft closing prose."
+        report = paper_leak.check_source_section_verbatim(draft_latex, contract_prose, [section])
+        self.assertEqual(report["sections"][0]["threshold"], 16)
+
+
+def _every_strip_math_callable() -> list[tuple[str, object]]:
+    """Every callable literally named `strip_math` or `_strip_math` in any
+    module under `scripts/`, discovered by introspection -- never a
+    hand-maintained list of exactly the two implementations known today
+    (`style-leak-detection` spec, Requirement: The Eight-Token Tripwire,
+    Scenario "Mutation -- a third normalizer is caught by the derived
+    sweep, never a hand-edited list"). Reusing `SKILL_SCRIPTS`, already
+    on `sys.path` at module import time, so a mutation test that pre-seeds
+    `sys.modules` for exactly one module still resolves this sweep to the
+    mutant for that module and to the real file for every sibling."""
+    found: list[tuple[str, object]] = []
+    for path in sorted(SKILL_SCRIPTS.glob("*.py")):
+        module = importlib.import_module(path.stem)
+        for candidate_name in ("strip_math", "_strip_math"):
+            candidate = getattr(module, candidate_name, None)
+            if callable(candidate):
+                found.append((f"{path.stem}.{candidate_name}", candidate))
+    return found
+
+
+class MathFenceExclusionSweepTests(unittest.TestCase):
+    """`style-leak-detection` spec, Requirement: The Eight-Token Tripwire --
+    the DERIVED cross-module sweep proving every `strip_math`/`_strip_math`
+    callable under `scripts/` excludes a `$$...$$` fence identically
+    (design.md, Decision A: "The class, not the instance")."""
+
+    _EQUATION_BODY = "alpha x plus beta x squared plus gamma x cubed minus delta"
+
+    def test_every_strip_math_callable_excludes_a_dollar_dollar_fence(self) -> None:
+        callables = _every_strip_math_callable()
+        self.assertGreaterEqual(
+            len(callables), 2,
+            "expected at least paper_style.strip_math and paper_bindings._strip_math",
+        )
+        text = f"Prefix prose. $$ {self._EQUATION_BODY} $$ Suffix prose."
+        for label, fn in callables:
+            stripped = fn(text)
+            stripped_words = set(re.findall(r"[a-zA-Z0-9']+", stripped))
+            for token in self._EQUATION_BODY.split():
+                self.assertNotIn(
+                    token, stripped_words,
+                    f"{label} left the whole word {token!r} from inside a $$ fence in its stripped output",
+                )
+
+    def test_mutation_dropping_the_alternative_in_paper_bindings_fails_the_derived_sweep(self) -> None:
+        """`style-leak-detection` spec, Scenario "Mutation -- a third
+        normalizer is caught by the derived sweep, never a hand-edited
+        list": with the `$$...$$` alternative removed from ONLY
+        `paper_bindings._strip_math`, the sweep test above must go red --
+        proving membership in the sweep is computed from every callable
+        actually found, not merely from a pair of names somebody remembered
+        to list."""
+        proc = _run_against_mutant(
+            r'r"\$\$.*?\$\$|',
+            'r"',
+            "tests.test_paper_writing.MathFenceExclusionSweepTests"
+            ".test_every_strip_math_callable_excludes_a_dollar_dollar_fence",
+            source_path=SKILL_SCRIPTS / "paper_bindings.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class ThreeDraftProofSetTests(unittest.TestCase):
@@ -7079,8 +7628,19 @@ class RefusalRosterTests(unittest.TestCase):
         set (`settled_round_licensing`). Reachable the instant `cmd_bind`
         (already a root) records through `bind_section`; no new import
         needed. Measured directly against `reachable_paper_refusal_
-        codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 152)
+        codes()`, never forecast.
+
+        Moved from 152 to 153 in WU2 of `the-tripwire-reaches-the-section-
+        that-feeds-it`: `paper_leak.py` (already imported, `# for the
+        roster derivation`) gains one new raise site,
+        `check_source_section_verbatim`'s own `SOURCE_SECTION_VERBATIM` --
+        a transposition-mode block's draft pasting a run from its own bound
+        source section beyond the self-calibrated `max(floor,
+        SOURCE_RUN_BACKSTOP)` threshold. Reachable through the
+        whole-module scan the moment the new raise site lands in an
+        already-imported module; no new import needed. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 153)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -8409,7 +8969,7 @@ class WriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_the_write_path_refusal(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.WriteGateTests"
             ".test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten",
@@ -8778,7 +9338,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_section_not_in_source(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_section_not_in_source",
@@ -8790,7 +9350,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_source_revisions_undeclared(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_source_revisions_undeclared",
@@ -8802,7 +9362,7 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_gate_call_fails_section_binding_absent(self) -> None:
         proc = _run_against_mutant(
-            '    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")\n',
+            '    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)\n',
             "",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_section_binding_absent",
@@ -10928,6 +11488,236 @@ class SeparateNeverRecordsABindingEndToEndTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+class WriteGateReturnsCorpusTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.2-1.3): `_resolve_write_gate` already builds the
+    `Corpus` its own `assemble_corpus(..., enforce_bindings=True)` call
+    returns, and until now discarded it. `cmd_write` cannot fill
+    `BlockContract.source_sections` from a corpus it was never handed back."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-write-gate-return-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [
+            {"id": "a", "requires_facts": [], "requires_declarations": [], "citations": "none"},
+        ]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "phase-a", "position": 1, "blocks": blocks})
+            + "\n---\n\nProse.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def test_resolve_write_gate_returns_the_assembled_corpus(self) -> None:
+        corpus = paper_cli._resolve_write_gate(self.paper_dir, self.sections_dir, "phase-a.a")
+
+        self.assertIsInstance(corpus, paper_graph.Corpus)
+        self.assertIn("phase-a.a", corpus.blocks)
+
+    def test_resolve_write_gate_returns_the_corpus_off_the_early_return_branch_too(self) -> None:
+        """A `qualified_id` the corpus's own waves do not contain (a
+        typo'd `--section`/`--block`, never declared anywhere) takes the
+        EARLY `return` inside `_resolve_write_gate` -- design.md Decision
+        E's own return value must hold on that branch too, not only the
+        gated one."""
+        corpus = paper_cli._resolve_write_gate(self.paper_dir, self.sections_dir, "no-such.block")
+
+        self.assertIsInstance(corpus, paper_graph.Corpus)
+
+
+class ResolveBoundSectionsTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.4-1.5): `paper_source_span.resolve_bound_
+    sections` turns a block's own `(fact, lineage, title)` triples into
+    the bound section's own bytes, via the landed `paper_graph.resolve_
+    section_index` -- never a second, independent resolution."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-resolve-bound-sections-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\nOpening prose.\n\n# 3. Something\n\nThe body of the third heading.\n",
+            encoding="utf-8",
+        )
+
+    def _corpus(self, entry: dict) -> "paper_graph.Corpus":
+        blocks = [{
+            "id": "only", "requires_facts": [entry],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        return paper_graph.assemble_corpus(self.sections_dir, paper_dir=self.paper_dir)
+
+    def test_a_bound_section_resolves_its_own_span(self) -> None:
+        corpus = self._corpus({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+        })
+
+        resolved = paper_source_span.resolve_bound_sections(corpus, "a.only")
+
+        self.assertEqual(len(resolved), 1)
+        entry = resolved[0]
+        self.assertEqual(entry["fact"], "formulation")
+        self.assertEqual(entry["lineage"], "lumen-thesis")
+        self.assertEqual(entry["title"], "3. Something")
+        self.assertEqual(entry["path"], str(self.proposals / "lumen-thesis-r21.md"))
+        self.assertIn("The body of the third heading.", entry["text"])
+        self.assertNotIn("Opening prose.", entry["text"])
+        body_bytes = (self.proposals / "lumen-thesis-r21.md").read_bytes()
+        self.assertEqual(
+            body_bytes[entry["byte_start"]:entry["byte_end"]].decode("utf-8"), entry["text"],
+        )
+
+    def test_a_block_with_no_document_binding_resolves_nothing(self) -> None:
+        corpus = self._corpus({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+        })
+
+        resolved = paper_source_span.resolve_bound_sections(corpus, "a.only")
+
+        self.assertEqual(resolved, ())
+
+
+class CmdWriteSourceSectionsWiringTests(unittest.TestCase):
+    """`transposition-fidelity` spec's own prerequisite plumbing (design.md
+    Decision E, tasks.md 1.8, 1.10): `cmd_write` must actually pass the
+    resolved bound sections into `BlockContract.source_sections`, never
+    merely resolve them and discard the result -- the exact defect this
+    change closes in `_resolve_write_gate` itself. Mocks `paper_write.
+    write_block` (never `paper_source_span.resolve_bound_sections`), so
+    the REAL corpus, REAL resolution and REAL CLI wiring all run; only the
+    drafting pipeline past that point is stubbed out."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-cmd-write-source-sections-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only",
+            "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/a.md", "quote": "The formulation, written here."},
+                "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        # `cmd_write` resolves a block's own contract file as literally
+        # `sections/<section-id>.md` (`section_path = sections_dir /
+        # f"{args.section}.md"`), unlike `assemble_corpus`'s own `*.md`
+        # glob -- named `a.md` here, matching `args.section="a"`, the same
+        # precedent `BindCliEndToEndTests` above already established.
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (self.proposals / "lumen-thesis-r21.md").write_text(
+            "# 1. Intro\n\nOpening prose.\n\n# 3. Something\n\nThe body of the third heading.\n",
+            encoding="utf-8",
+        )
+        (self.test_root / "draft.json").write_text(
+            json.dumps({"latex": "Draft body.", "bindings": []}), encoding="utf-8",
+        )
+        (self.test_root / "audit.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+
+    def _args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def test_cmd_write_fills_source_sections_from_the_resolved_corpus(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args())
+
+        contract = mocked_write_block.call_args[0][1]
+        self.assertEqual(len(contract.source_sections), 1)
+        section = contract.source_sections[0]
+        self.assertEqual(section["fact"], "formulation")
+        self.assertEqual(section["lineage"], "lumen-thesis")
+        self.assertEqual(section["title"], "3. Something")
+        self.assertIn("The body of the third heading.", section["text"])
+
+
+class CmdWriteSourceSectionsWiringMutationProofTests(unittest.TestCase):
+    """tasks.md 1.10: forcing `cmd_write` to always pass
+    `source_sections=()` regardless of what `resolve_bound_sections`
+    resolved must fail `CmdWriteSourceSectionsWiringTests.test_cmd_write_
+    fills_source_sections_from_the_resolved_corpus` -- proving the
+    resolved bindings actually have to arrive at `BlockContract` for
+    anything to change. Re-used, not duplicated, by WU2's own 'the
+    resolved bindings really arrive' mutation once the verdict logic
+    exists (design.md, Testing Strategy table)."""
+
+    def test_mutation_forcing_empty_source_sections_fails_the_wiring_test(self) -> None:
+        proc = _run_against_mutant(
+            "        source_sections=paper_source_span.resolve_bound_sections(corpus, qualified_id),\n",
+            "        source_sections=(),\n",
+            "tests.test_paper_writing.CmdWriteSourceSectionsWiringTests"
+            ".test_cmd_write_fills_source_sections_from_the_resolved_corpus",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class BlockContractSourceSectionsDefaultTests(unittest.TestCase):
+    """tasks.md 1.7: `BlockContract.source_sections` is defaulted, the same
+    `produces_facts`/`source_bindings` precedent, so every existing
+    `BlockContract(...)` construction site in this suite stays green with
+    no change of its own."""
+
+    def test_source_sections_defaults_to_an_empty_tuple(self) -> None:
+        contract = _write_contract(citations_regime="none")
+
+        self.assertEqual(contract.source_sections, ())
 
 
 if __name__ == "__main__":

@@ -53,13 +53,20 @@ CITATIONS_REGIMES: tuple[str, ...] = ("discovery", "resolution", "none")
 #: consumed.
 VERDICTS: tuple[str, ...] = ("holds", "does-not-hold", "insufficient")
 
-#: A block or section's drafting `mode` — exactly one of these two.
+#: A block or section's drafting `mode` — exactly one of these two, named
+#: once here so no string literal for a mode needs to be spelled again
+#: anywhere else (`transposition-fidelity` spec, `Requirement: Only A
+#: Transposition-Mode Block Is Checked, Mode Derived From The Contract On
+#: Disk, Never Listed`; `design.md`, Decision D). `transposition` admits
+#: only `fact`/`structural`/`resolution`-class evidence bindings; `argument`
+#: additionally admits `discovery`-class evidence (`evidence-bound-drafting`
+#: spec, `Requirement: Mode-Admissible Bindings`).
+MODE_TRANSPOSITION: str = "transposition"
+MODE_ARGUMENT: str = "argument"
+
 #: `the-writer-may-assert-only-what-it-was-given`, `section-contract` spec,
-#: `Requirement: Closed Mode Vocabulary And Transcription`. `transposition`
-#: admits only `fact`/`structural`/`resolution`-class evidence bindings;
-#: `argument` additionally admits `discovery`-class evidence
-#: (`evidence-bound-drafting` spec, `Requirement: Mode-Admissible Bindings`).
-MODES: tuple[str, ...] = ("transposition", "argument")
+#: `Requirement: Closed Mode Vocabulary And Transcription`.
+MODES: tuple[str, ...] = (MODE_TRANSPOSITION, MODE_ARGUMENT)
 
 #: The closed list `paper_bindings.py`'s structural typing (D3) checks a
 #: `structural` sentence against — any of these words, case-folded, makes

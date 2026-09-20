@@ -91,6 +91,7 @@ import paper_validate  # noqa: E402 -- no-claim-without-a-source-that-holds-it, 
 import paper_bindings  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: binding map reconciliation/resolution/typing/mode
 import paper_audit  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: verbatim Disqualifiers reconciliation
 import paper_write  # noqa: E402 -- the-writer-may-assert-only-what-it-was-given, WU1: the write pipeline and its attempt ledger
+import paper_source_span  # noqa: E402 -- the-tripwire-reaches-the-section-that-feeds-it, WU1: a block's own bound-section bytes, resolved from the write gate's own corpus
 import paper_style  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: style-reference resolution and R; for the roster derivation
 import paper_leak  # noqa: E402,F401 -- the-writer-may-assert-only-what-it-was-given, WU2: register/overlap proof and the eight-token tripwire; for the roster derivation
 import paper_latex  # noqa: E402,F401 -- a-diagram-that-compiles-or-says-why: the sole subprocess seam (latexmk), invocation, log parse, verdict; for the roster derivation
@@ -472,6 +473,12 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # document resolved and digested right now (`paper_declarations.
     # settled_round_licensing`, enforced inside `bind_section` itself) -----
     "BINDING_UNARGUED": WORK_STATE,
+    # --- the-tripwire-reaches-the-section-that-feeds-it, WU2: a
+    # transposition-mode block's draft pasting a run from its own bound
+    # source section beyond a self-calibrated threshold
+    # (`paper_leak.check_source_section_verbatim`, wired into `write_block`
+    # after the style tripwire and before `substitute`) ------------------
+    "SOURCE_SECTION_VERBATIM": WORK_STATE,
 }
 
 
@@ -1645,7 +1652,7 @@ def _refuse_on_incomplete_waves(
             )
 
 
-def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) -> None:
+def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) -> "paper_graph.Corpus":
     """`cmd_write`'s own phase gate (tasks.md 6b.1-6b.2; `specs/writing-
     phases/spec.md`, `Requirement: Phase N Is Gated On Phase N-1`, whose
     own scenarios name `write` -- the verb unit 6 left unwired). Runs
@@ -1653,6 +1660,18 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
     block`'s own attempt ledger is touched, and before any byte reaches
     `main.tex` -- a block must never burn a judge-cycle attempt on a
     refusal that has nothing to do with its draft.
+
+    Returns the `Corpus` it already assembles with `enforce_bindings=True`
+    (design.md, Decision E; `transposition-fidelity` spec's own
+    prerequisite plumbing). The archived predecessor that shipped this
+    gate's own File Changes row already claimed it "returns the corpus so
+    `cmd_write` reports it" -- the claim shipped, the return value did
+    not, until this change: `cmd_write` needs this corpus back to resolve
+    a block's own bound sections (`paper_source_span.resolve_bound_
+    sections`), never a second, independent assembly of the same corpus.
+    Returned on every path, including the early `return` below, since a
+    `qualified_id` outside every wave is still a real block `cmd_write`'s
+    own downstream lookup goes on to resolve.
 
     Resolves `qualified_id`'s own Kahn wave via `paper_graph.derive_
     waves` and calls `_refuse_on_incomplete_waves`, the SAME gate
@@ -1682,7 +1701,7 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
 
     wave_index = next((index for index, wave in enumerate(waves) if qualified_id in wave), None)
     if wave_index is None:
-        return
+        return corpus
 
     tex_path = paper_block.resolve_main_tex(paper_dir)
     status = paper_block.status(tex_path.read_bytes())
@@ -1692,6 +1711,7 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
         waves, corpus, opened_blocks, wave_index,
         blocked_label=f"{qualified_id!r} (wave {wave_index + 1})",
     )
+    return corpus
 
 
 def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:
@@ -1994,7 +2014,8 @@ def cmd_write(args: argparse.Namespace) -> dict:
     """
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
-    _resolve_write_gate(paper_dir, sections_dir, f"{args.section}.{args.block}")
+    qualified_id = f"{args.section}.{args.block}"
+    corpus = _resolve_write_gate(paper_dir, sections_dir, qualified_id)
 
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
 
@@ -2036,6 +2057,7 @@ def cmd_write(args: argparse.Namespace) -> dict:
         requires_facts=paper_contract.requirement_values(block["requires_facts"]),
         evidence_set=evidence_set,
         style_set=style_set,
+        source_sections=paper_source_span.resolve_bound_sections(corpus, qualified_id),
     )
     return paper_write.write_block(paper_dir, contract, draft, audit_account)
 
