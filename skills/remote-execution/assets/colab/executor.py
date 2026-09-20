@@ -25,14 +25,19 @@ exactly what it is: the evidence that completion happened is missing, not
 negative, so nothing here ever invents one early.
 
 Nothing here names the service, reads a credential, or knows the CLI
-exists: this file's whole world is one directory on one VM. S3's
-credential-material deletion hangs beside the `finally` below; this slice
-stages no such material, and deleting nothing is the correct S3-prep
-behavior.
+exists: this file's whole world is one directory on one VM. The S3
+credential material lives in this same boundary and nowhere else: a
+staged `git-askpass.sh` is made executable here (chmod 0o700 — the upload
+is a measured byte-copy and asserts no mode), both it and its token file
+are deleted best-effort after the execution attempt, BEFORE the manifest
+walk, and both names are excluded from the manifest at the top level as
+the fallback that covers a failed deletion or a notebook that never
+started.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +53,26 @@ EXECUTOR_FILENAME = "executor.py"
 CLONE_DIRNAME = "clone"
 VCS_DIRNAME = ".git"
 DEFAULT_KERNEL_NAME = "python3"
+
+# The credential material a credentialed submission stages beside this
+# executor (S3): an askpass script and the token file it reads. The names
+# are declared in THREE files by convention — the backend adapter (the
+# uploader and the fetch-time refusal), this file (chmod, deletion,
+# exclusion) and `assets/runner_bootstrap.py` (the clone's own use and
+# deletion) — deliberately not shared by import: nothing above the seam
+# may name the service, and the asset files are byte-copies, never
+# importers of each other.
+REPO_CREDENTIAL_ASKPASS_FILENAME = "git-askpass.sh"
+REPO_CREDENTIAL_TOKEN_FILENAME = "git-askpass-token"
+
+# The material files this executor deletes after the run and never lists.
+# Deletion is best-effort (a failure is recorded in `status.json`, never
+# fatal); this exclusion is the fallback that makes residue un-listable
+# even when the deletion fails, and it is also what covers `nbclient`
+# failing to start at all (cell 0 never ran, so nothing deleted anything).
+CREDENTIAL_MATERIAL_FILENAMES = frozenset(
+    {REPO_CREDENTIAL_ASKPASS_FILENAME, REPO_CREDENTIAL_TOKEN_FILENAME}
+)
 
 # The files the PROTOCOL itself owns in the working directory. Subtracted
 # from the manifest by name at the TOP level only: a file carrying one of
@@ -133,6 +158,10 @@ def manifest_entries(base: Path) -> list[str]:
     Two prunes, each a deliberate rule rather than a heuristic:
 
     - a TOP-LEVEL name in `PROTOCOL_FILENAMES` is protocol, not product;
+    - a TOP-LEVEL name in `CREDENTIAL_MATERIAL_FILENAMES` (S3) is the
+      staged askpass material — normally already deleted by the time this
+      runs, and excluded here so a residue from a failed deletion (or a
+      notebook that never started) can never be listed either;
     - anything under `clone/.git/` is the pinned input's VCS metadata —
       thousands of files that are not produced artifacts and that a
       per-file download would pay for one call at a time.
@@ -150,12 +179,56 @@ def manifest_entries(base: Path) -> list[str]:
             continue
         relative = path.relative_to(base)
         parts = relative.parts
-        if len(parts) == 1 and parts[0] in PROTOCOL_FILENAMES:
+        if len(parts) == 1 and (
+            parts[0] in PROTOCOL_FILENAMES
+            or parts[0] in CREDENTIAL_MATERIAL_FILENAMES
+        ):
             continue
         if len(parts) >= 2 and parts[0] == CLONE_DIRNAME and parts[1] == VCS_DIRNAME:
             continue
         entries.append(relative.as_posix())
     return sorted(entries)
+
+
+def _ensure_askpass_mode(base: Path) -> None:
+    """S3/D6: re-establish the askpass script's executable bit before the
+    notebook runs.
+
+    The upload is a measured byte-copy and asserts no mode, so the bit is
+    re-established here rather than assumed. A chmod failure raises, and
+    `run()` catches it on the same boundary as the notebook — so the run
+    fails with a clear `status.json["error"]` BEFORE any notebook starts,
+    rather than letting the clone die later on a non-executable askpass.
+    """
+    askpass = base / REPO_CREDENTIAL_ASKPASS_FILENAME
+    if askpass.is_file():
+        os.chmod(askpass, 0o700)
+
+
+def _delete_credential_material(path: Path) -> None:
+    """The single unlink site for the staged material, so a test can
+    inject one deletion failure without patching `Path.unlink` globally.
+    """
+    path.unlink(missing_ok=True)
+
+
+def _remove_credential_material(base: Path, errors: list[str]) -> None:
+    """Best-effort deletion of the staged material, after the execution
+    attempt — success or failure — and BEFORE the manifest walk (S3/D6).
+
+    Both names are attempted (`missing_ok` covers a credentialless run,
+    where neither was ever staged). A failed unlink is appended to the
+    caller's error list, which lands in `status.json["error"]`, and is
+    never fatal: the clone's own outcome must not be masked, and the
+    manifest exclusion is what bounds the residue either way.
+    """
+    for name in sorted(CREDENTIAL_MATERIAL_FILENAMES):
+        try:
+            _delete_credential_material(base / name)
+        except OSError as exc:
+            errors.append(
+                f"credential cleanup: {name}: {type(exc).__name__}: {exc}"
+            )
 
 
 def run(base: Path) -> int:
@@ -170,10 +243,16 @@ def run(base: Path) -> int:
     errors: list[str] = []
     exit_code = 0
     try:
+        _ensure_askpass_mode(base)
         execute_notebook(base)
     except BaseException as exc:  # noqa: BLE001 - the signal must survive any failure
         exit_code = 1
         errors.append(f"{type(exc).__name__}: {exc}")
+
+    # S3/D6's deletion point: after the attempt, before the manifest. The
+    # manifest walk below runs AFTER this so a successful deletion is
+    # reflected, and excludes both names anyway so a failed one is not.
+    _remove_credential_material(base, errors)
 
     try:
         _write_json(base / FILES_FILENAME, manifest_entries(base))

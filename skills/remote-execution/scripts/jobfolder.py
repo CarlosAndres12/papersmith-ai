@@ -1827,6 +1827,7 @@ def generate_job(
     environment_requirements: Sequence[str] | None = None,
     environment_index_url: str | None = None,
     local_budget_seconds: int | None = None,
+    repo_credential_path: str | Path | None = None,
 ) -> Path:
     """Generate one job folder, atomically, refusing to overwrite an
     existing one unless `regenerate=True`.
@@ -1900,6 +1901,14 @@ def generate_job(
     `localBudget` block is written at all — see `build_run_config()`'s
     own docstring for why that silence must never become a `0`.
 
+    `repo_credential_path` (S3) is forwarded verbatim into that same
+    condition set, where only the network-reaching `pin-published` probe
+    ever reads it: with a path, generation's reachability check
+    authenticates through the same askpass material a credentialed
+    runner clone uses, admits `https://` remotes only, and reads the
+    token at exactly one expression. Omitted (every pre-S3 caller), every
+    condition behaves exactly as before.
+
     `service` is validated against BOTH registries together (the
     union-of-registries rule): a service known to either registry is
     legal. An adapter that registers no metadata assembler — a backend
@@ -1944,6 +1953,10 @@ def generate_job(
         repo_url=repo_url,
         repo_ref=repo_ref,
         decision="generation",
+        # S3: the generation-time reachability probe meets the same
+        # credential-conditional behavior `submit`'s gate does; `None`
+        # (every pre-S3 caller) is byte-identical to today.
+        repo_credential_path=repo_credential_path,
     )
 
     clone_resolution = resolve_clone_paths(
@@ -2123,12 +2136,22 @@ def generate_job(
 # the probe is. No `HOME` (which is the whole of git's user-configuration
 # story: `~/.gitconfig` carries `credential.helper`, `url.*.insteadOf` and
 # `http.*.extraHeader`), no `SSH_AUTH_SOCK`, no askpass, no token. That is
-# not caution, it is the point of the check: `runner_bootstrap.py:166-170`
-# clones with no credential step anywhere in it, so the runner is an
-# anonymous client by construction. A probe that authenticated would
-# answer a question about a remote THIS operator can read and report it as
-# a question about a remote the RUNNER can clone — which is the same
-# defect this probe exists to close, moved one layer up.
+# not caution, it is the point of the check.
+#
+# One credential-conditional amendment (S3; D6), and it is an amendment
+# to this COMMENT, never to the tuple below. Credentialless, nothing
+# changes: `runner_bootstrap.py`'s clone carries no credential step
+# either, so a probe that authenticated would answer a question about a
+# remote THIS operator can read and report it as a question about a
+# remote the RUNNER can clone — the same defect this probe exists to
+# close, moved one layer up. With `--repo-credential`, both sides
+# authenticate with the SAME staged credential — the backend uploads the
+# askpass material beside the executor, `runner_bootstrap.py` clones with
+# it — and both transports are pinned to `https://` (SD14's scheme gate
+# below, SD15's re-check in the runner), so the probe's answer is again a
+# fact about the runner. The credential value travels through
+# `_run_git()`'s `extra_env`, a channel deliberately separate from this
+# allowlist: nothing here is widened by it.
 #
 # Both cases of every proxy variable: curl reads the lowercase spelling,
 # and a corporate environment commonly sets only that one. Admitting one
@@ -2149,6 +2172,23 @@ GIT_ENV_ALLOWLIST = (
     "GIT_SSL_CAINFO",
 )
 GIT_TIMEOUT_SECONDS = 120.0
+
+# The env name the probe's askpass script reads the credential VALUE from.
+# The value is handed to the git child through its environment — never
+# argv, never a file — so it dies with the child process. S3/D6: this
+# module's constant, and the script below is the only thing that reads it.
+REPO_CREDENTIAL_ENV_NAME = "PSMITH_REPO_CREDENTIAL"
+
+# The askpass script the credential-aware probe writes into its own scratch
+# `TemporaryDirectory()` (mode 0o700) and points `GIT_ASKPASS` at for the
+# one fetch call. It prints the value from the environment, so no token
+# file exists locally at all and the scratch directory dies with the call.
+REPO_CREDENTIAL_ASKPASS_SCRIPT = """#!/bin/sh
+# Answers git's credential prompts from the environment. Never a file:
+# the value dies with the child. One read site for the token exists in
+# this module, and this is the script it feeds.
+printf '%s' "$PSMITH_REPO_CREDENTIAL"
+"""
 
 # `pin-published`'s own budget (Finding 4 case A; Decision 13a) --
 # deliberately a SEPARATE constant from `GIT_TIMEOUT_SECONDS` above, never
@@ -2192,6 +2232,7 @@ def _run_git(
     *,
     cwd: str | Path,
     timeout: float = GIT_TIMEOUT_SECONDS,
+    extra_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The single composition point for every git invocation this module
     makes. `shell=False` with a list argv means a value carrying shell
@@ -2206,6 +2247,16 @@ def _run_git(
     needs to tell "the question could not be finished asking" apart from
     "the answer was no" can (Finding 4 case A) — every existing caller
     that only catches `JobFolderError` keeps catching this too.
+
+    `extra_env` (S3) is a caller-supplied mapping merged into the child's
+    environment AFTER the allowlist and `GIT_TERMINAL_PROMPT=0`. It is
+    deliberate that this is a separate channel from `GIT_ENV_ALLOWLIST`:
+    the allowlist is a statement about WHO the probe is (and is asserted
+    to stay empty of authorization-shaped names), while `extra_env` is an
+    explicit, per-call decision the caller made — the credential-aware
+    probe's askpass path and value. Entries are always passed by name,
+    never an `os.environ` passthrough, and the allowlist itself never
+    changes. `None` (every pre-S3 caller) is byte-identical to today.
 
     `GIT_TERMINAL_PROMPT=0` and `stdin=DEVNULL` make "this never blocks
     waiting for a human" true rather than hopeful, and they are set HERE
@@ -2226,6 +2277,8 @@ def _run_git(
     argv = ["git", *args]
     env = {name: os.environ[name] for name in GIT_ENV_ALLOWLIST if name in os.environ}
     env["GIT_TERMINAL_PROMPT"] = "0"
+    if extra_env:
+        env.update(extra_env)
     try:
         result = subprocess.run(
             argv,
@@ -2251,8 +2304,20 @@ def _run_git(
 def _looks_like_ssh_remote(repo_url: str) -> bool:
     """`ssh://…`, or scp-shaped `git@host:owner/repo.git`.
 
-    Used for ONE thing: enriching a refusal that has already happened.
-    It never decides whether to probe. See `_verify_commit_reachable()`.
+    Two uses, and they are deliberately different in kind (SD14):
+
+    * enriching a refusal that has already happened — its original use,
+      and the only one the credentialLESS probe has. It never decides
+      whether to probe: refusing SSH URLs on sight would be deciding
+      remote policy on the strength of a colon in a string;
+    * deciding an explicit refusal BEFORE the probe's scratch repository
+      exists — ONLY when a repository credential was supplied. With a
+      credential, the old "not refused on sight" reasoning is void: the
+      operator has declared a token path, so the runner will present one,
+      and `runner_bootstrap`'s clone has no SSH agent and no key, so a
+      credential cannot travel over SSH at all. In that one case an
+      SSH-shaped remote is refused by name; credentialless, this function
+      still never decides anything. See `_verify_commit_reachable()`.
     """
     lowered = repo_url.lower()
     if lowered.startswith("ssh://"):
@@ -2264,7 +2329,12 @@ def _looks_like_ssh_remote(repo_url: str) -> bool:
 
 
 def _verify_commit_reachable(
-    commit: str, repo_url: str, repo_ref: str, *, decision: str = "generation"
+    commit: str,
+    repo_url: str,
+    repo_ref: str,
+    *,
+    decision: str = "generation",
+    repo_credential_path: str | Path | None = None,
 ) -> None:
     """Confirm `commit` is actually fetchable from the declared `repo_url`
     — the exact operation a runner performs when it clones that remote and
@@ -2390,15 +2460,101 @@ def _verify_commit_reachable(
     like a local accident unless the message says so. Refusing SSH URLs
     on sight instead would be deciding remote policy on the strength of a
     colon in a string, and would refuse a working deploy-key setup.
+
+    `repo_credential_path` (S3/D6) is the ONE credential-conditional
+    behavior this function has; with `None` (every pre-S3 caller) the
+    function is byte-identical to today. With a path, the scheme decides
+    BEFORE the scratch repository is created:
+
+    * only `https://` is admissible. The credential is a bearer secret
+      git presents to whatever URL the remote names and to whatever
+      transport that URL selects, and this skill's runner-side clone
+      carries no SSH agent and no key, so a credential can never travel
+      over SSH. An SSH-shaped remote is refused by name, with its own
+      message — the credentialless "colon in a string" reasoning dies the
+      moment the operator has declared a token path, because the runner
+      will now present one. Every other scheme (`http://`, `file://`, a
+      bare local path) refuses naming the HTTPS-only rule. A
+      credentialless call keeps today's exact behavior, including the
+      enriched-refusal sentence, because that call's premise (an
+      anonymous probe standing in for an anonymous runner) is still true;
+    * the token is read at exactly ONE expression — a single
+      `read_text().strip()` — and handed to the fetch call's `extra_env`,
+      where it dies with the child. No token file is ever written
+      locally: the askpass script is mode 0o700 inside the probe's own
+      scratch `TemporaryDirectory()` and prints the value from its
+      environment. An unreadable path or an empty-after-strip value
+      refuses naming the path, before any network call — an empty
+      credential would be presented to git as an empty token, a
+      configuration accident this function must never launder into a
+      network question.
     """
+    if repo_credential_path is not None:
+        if repo_url.startswith("https://"):
+            try:
+                # The ONE read site (D6): these bytes fuel the fetch call's
+                # `extra_env` below and exist nowhere else — not on argv,
+                # not in a file, not in any refusal message.
+                credential_value = (
+                    Path(repo_credential_path).read_text(encoding="utf-8").strip()
+                )
+            except OSError as exc:
+                raise JobFolderError(
+                    f"{decision} refuses: the repository credential at "
+                    f"{repo_credential_path} could not be read: {exc}"
+                ) from exc
+            if not credential_value:
+                raise JobFolderError(
+                    f"{decision} refuses: the repository credential at "
+                    f"{repo_credential_path} is empty after stripping "
+                    "whitespace; refusing to hand git an empty credential"
+                )
+        elif _looks_like_ssh_remote(repo_url):
+            raise JobFolderError(
+                f"{decision} refuses: a repository credential was supplied, "
+                f"and the declared remote {repo_url!r} is an SSH-shaped URL. "
+                "With a credential only https:// remotes are admissible: the "
+                "credential is a bearer token git presents to the URL the "
+                "remote names, and the runner's own clone has no SSH agent "
+                "and no key, so a credential could never travel over SSH at "
+                "all. Declare the remote's https:// URL, or drop "
+                "--repo-credential."
+            )
+        else:
+            raise JobFolderError(
+                f"{decision} refuses: a repository credential was supplied, "
+                f"and the declared remote {repo_url!r} is not an https:// "
+                "URL. With a credential, only https:// remotes are "
+                "admissible: the token is a bearer secret git would "
+                "otherwise present to a transport that does not encrypt it. "
+                "Declare the remote's https:// URL, or drop "
+                "--repo-credential."
+            )
+    else:
+        credential_value = None
+
     try:
         with tempfile.TemporaryDirectory(prefix="jobfolder-probe-") as scratch:
             _run_git(["init", "-q"], cwd=scratch)
-            _run_git(
-                ["fetch", "--dry-run", "--depth", "1", repo_url, commit],
-                cwd=scratch,
-                timeout=PIN_PUBLISHED_TIMEOUT_SECONDS,
-            )
+            if credential_value is None:
+                _run_git(
+                    ["fetch", "--dry-run", "--depth", "1", repo_url, commit],
+                    cwd=scratch,
+                    timeout=PIN_PUBLISHED_TIMEOUT_SECONDS,
+                )
+            else:
+                askpass = Path(scratch) / "askpass.sh"
+                askpass.write_text(REPO_CREDENTIAL_ASKPASS_SCRIPT, encoding="utf-8")
+                os.chmod(askpass, 0o700)
+                _run_git(
+                    ["fetch", "--dry-run", "--depth", "1", repo_url, commit],
+                    cwd=scratch,
+                    timeout=PIN_PUBLISHED_TIMEOUT_SECONDS,
+                    extra_env={
+                        "GIT_ASKPASS": str(askpass),
+                        REPO_CREDENTIAL_ENV_NAME: credential_value,
+                    },
+                )
     except GitTimeoutError as exc:
         # A timeout is refused through its OWN branch, with its OWN
         # wording (Finding 4 case A): "the question could not be finished
@@ -2687,6 +2843,7 @@ def _refuse_unpublished_pin(
     repo_url: str,
     repo_ref: str,
     decision: str,
+    repo_credential_path: str | Path | None = None,
     **_unused: object,
 ) -> None:
     """Condition (3) — the declared remote must be able to serve the pin.
@@ -2697,8 +2854,20 @@ def _refuse_unpublished_pin(
     keyword-only shape, and so that `PIN_CONDITIONS` maps to callables
     rather than to a chain of `if` statements a later condition could be
     inserted into out of order.
+
+    `repo_credential_path` (S3) is threaded explicitly here rather than
+    absorbed by `**_unused`: this is the one condition the credential
+    applies to, and a parameter that rides the catch-all would make the
+    credential silently droppable by a future signature edit that looks
+    harmless.
     """
-    _verify_commit_reachable(commit, repo_url, repo_ref, decision=decision)
+    _verify_commit_reachable(
+        commit,
+        repo_url,
+        repo_ref,
+        decision=decision,
+        repo_credential_path=repo_credential_path,
+    )
 
 
 _PIN_CONDITION_CHECKS = {
@@ -2839,6 +3008,7 @@ def verify_pin_preconditions(
     repo_ref: str,
     decision: str,
     notebooks: Sequence[str] = (),
+    repo_credential_path: str | Path | None = None,
 ) -> None:
     """The one home for every condition a pin must satisfy before anything
     irreversible happens, and the ONLY thing either decision point calls.
@@ -2876,6 +3046,14 @@ def verify_pin_preconditions(
 
     This function never writes, stages, commits, pushes, stashes or
     fetches into `target`. It asks questions and refuses.
+
+    `repo_credential_path` (S3) exists for symmetry with the one
+    condition that reads it — `pin-published` — which is also the only
+    condition that ever reaches a network. It is threaded through the
+    SAME uniform keyword shape every condition already receives (each
+    ignores it unless it is `_refuse_unpublished_pin`), so the credential
+    travels on the same path as every other input and there is exactly
+    one place (`_verify_commit_reachable`) that interprets it.
     """
     validate_commit_shape(commit, source=f"{decision}")
     resolved_target = resolve_target(target)
@@ -2892,6 +3070,7 @@ def verify_pin_preconditions(
             repo_url=repo_url,
             repo_ref=repo_ref,
             decision=decision,
+            repo_credential_path=repo_credential_path,
         )
 
 

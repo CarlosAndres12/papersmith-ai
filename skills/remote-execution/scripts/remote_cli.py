@@ -787,7 +787,9 @@ def _verify_launch_authorization(
     )
 
 
-def _gate_job_folder_pin(resolved_entrypoint: Path) -> None:
+def _gate_job_folder_pin(
+    resolved_entrypoint: Path, *, repo_credential_path: str | Path | None = None
+) -> None:
     """Put a job-folder submission's own declared pin through the same
     three conditions `generate-job` enforces — BEFORE the digest walk, the
     plan, `adapter.submit()` and `LEDGER.append()`.
@@ -853,6 +855,9 @@ def _gate_job_folder_pin(resolved_entrypoint: Path) -> None:
         repo_url=repo["url"],
         repo_ref=repo["ref"],
         decision="submission",
+        # S3: the submit-time probe meets the same credential-conditional
+        # behavior generation's does; `None` (no flag) is unchanged.
+        repo_credential_path=repo_credential_path,
     )
 
 
@@ -1021,6 +1026,7 @@ def cmd_submit(
     smoke: bool = False,
     units: Sequence[str] | None = None,
     consent: str | None = None,
+    repo_credential_path: str | Path | None = None,
 ) -> dict:
     """Guard, resolve a product, plan, submit, and record — the whole submit
     path, in this order.
@@ -1145,6 +1151,13 @@ def cmd_submit(
     that function's four-step resolution order, and the one step no
     earlier version of this function ever exposed a way to reach.
 
+    `repo_credential_path` (S3) is `--repo-credential`'s parsed path and
+    is forwarded into `_gate_job_folder_pin()` alone — the adapter that
+    stages the credential was already constructed with it by the CLI's
+    dispatch branch, under the carrier gate that ran there. Omitted (no
+    flag), every branch below is byte-identical to before the flag
+    existed.
+
     `worker` is now OPTIONAL. `None` (no `--worker` on the CLI) hands the
     choice to `packer.select()`, which walks `adapter.workers()` in
     declared order and returns the first healthy one with capacity —
@@ -1169,7 +1182,13 @@ def cmd_submit(
     resolved_product = product_for(
         target, resolved_entrypoint, explicit=product, command="submit"
     )
-    _gate_job_folder_pin(resolved_entrypoint)
+    # `repo_credential_path` is threaded straight into the pin gate so the
+    # SUBMIT-time `pin-published` probe behaves credential-identically to
+    # generation's; the adapter itself already carries the path, handed to
+    # it by `_construct_adapter()`.
+    _gate_job_folder_pin(
+        resolved_entrypoint, repo_credential_path=repo_credential_path
+    )
     relative_entrypoint = _relative_entrypoint(
         target, resolved_entrypoint, resolved_product
     )
@@ -1542,14 +1561,16 @@ def cmd_fetch(
        (`OSError: [Errno 66] Directory not empty`) is the wrong place to
        notice — the guard runs here, before the network call, not after
        it. Default: refuse cleanly, naming the existing path and the way
-       out (`--force`). `force=True` REMOVES the existing `final_dest`
-       tree (`shutil.rmtree`) before the fetch proceeds, so the fresh
-       download replaces it outright — this is a destructive overwrite of
-       whatever the earlier fetch left there, stated here so it is never
-       an implicit side effect of passing the flag. A duplicate `returned`
-       ledger event, if one is ever appended for the same submission id
-       regardless, is harmless: `fold()` has no accumulator for it —
-       `terminal_by_id[submissionId]` is an overwrite by an
+       out (`--force`). `force=True` means "the destination is already
+       materialized, replace it" — and the replacement is DELAYED to
+       step 6: nothing destructive runs here. The old tree survives until
+       the adapter has actually returned a complete materialization in
+       `.partial/`, so a fetch that fails mid-download or comes back
+       `complete=False` leaves the previous artifact intact rather than
+       trading a working artifact for a `.partial/` (D15). A duplicate
+       `returned` ledger event, if one is ever appended for the same
+       submission id regardless, is harmless: `fold()` has no accumulator
+       for it — `terminal_by_id[submissionId]` is an overwrite by an
        equal-kind event and `verdicts[submissionId]` recomputes the
        identical value under the identical key.
     1. `<final_dest>.partial/` is a DIFFERENT fact from step 0's, and it
@@ -1596,7 +1617,10 @@ def cmd_fetch(
        bytes to disk — a network drop, a killed process, a raised
        exception from inside the adapter itself. Nothing before this line
        has touched the filesystem at all, and nothing after it runs unless
-       this call returns normally.
+       this call returns normally. With `--force` and an existing
+       destination, that destination is still completely intact at this
+       point: its removal is step 6's, gated on this call returning a
+       complete materialization.
     5. `Fetched.complete` is checked before anything else happens. `False`
        means the backend itself considers the result unfinished — this
        function returns without renaming and without appending anything,
@@ -1609,7 +1633,11 @@ def cmd_fetch(
        `.partial/` directory into its final name. This is the one line
        that turns "an artifact happens to exist on disk" into "the
        artifact is at the path this call promises callers", and it runs
-       before the ledger is touched.
+       before the ledger is touched. With `--force` and an existing
+       destination, THIS is where the old tree is removed — immediately
+       before the rename, only once `complete=True` has actually landed
+       (D15) — never step 0's pre-fetch `shutil.rmtree()` the flag used to
+       run.
     7. `LEDGER.append()` runs LAST, only after the rename above has
        already succeeded. If the process is killed at any point before
        this line, the submission reads back as `pending` on the next fold
@@ -1701,7 +1729,12 @@ def cmd_fetch(
                 f"already fetched at {final_dest} -- pass --force to "
                 "remove the existing directory and re-fetch"
             )
-        shutil.rmtree(final_dest)
+        # NO pre-emptive `shutil.rmtree` here (D15). The previous fetch's
+        # tree survives until a successful materialization has actually
+        # landed in `.partial/` and `complete=True` was returned — see
+        # step 6 below, where the removal happens immediately before the
+        # rename. A fetch that fails mid-download, or comes back
+        # `complete=False`, must leave the existing artifact intact.
 
     observed_concurrency = state.pending_for(submission["worker"])
     staleness = _job_folder_staleness(Path(entrypoint).resolve())
@@ -1711,6 +1744,8 @@ def cmd_fetch(
     if not fetched.complete:
         # Not renamed, not recorded: the ledger's own state stays exactly
         # `pending`, which is the one state a retry can safely start from.
+        # The existing `final_dest` (when `--force` was given) is
+        # untouched — the removal above deliberately did not run.
         return {
             "verdict": verdict,
             "complete": False,
@@ -1720,6 +1755,11 @@ def cmd_fetch(
             "arbitration": arbitration,
         }
 
+    # D15: the destructive step runs HERE, after the adapter has returned
+    # a complete materialization and never before — so `--force` can only
+    # ever destroy a previous artifact once its replacement is on disk.
+    if final_dest.exists():
+        shutil.rmtree(final_dest)
     final_dest.parent.mkdir(parents=True, exist_ok=True)
     os.replace(str(partial_dest), str(final_dest))
 
@@ -2219,9 +2259,11 @@ def cmd_readiness(*, job_dir: str | Path, worker: str) -> dict:
 def _construct_adapter(
     adapter_cls: type["ADAPTER.Adapter"],
     credentials_provider: Callable[[str], "ADAPTER.CredentialHandle"],
+    repo_credential_path: str | Path | None = None,
 ) -> "ADAPTER.Adapter":
     """Construct a registered adapter, handing it a credential provider only
-    when its own constructor is written to accept one.
+    when its own constructor is written to accept one — and, since S3, the
+    operator's repo-credential PATH under the same introspection.
 
     The `Adapter` ABC constrains exactly six operations and nothing about
     `__init__` — a second adapter genuinely may take no arguments at all
@@ -2232,17 +2274,31 @@ def _construct_adapter(
     falling back on a bare `TypeError`, is what keeps a GENUINE defect
     inside a compliant adapter's own `__init__` from being swallowed as
     "this adapter must not want credentials".
+
+    `repo_credential_path` is passed only when the constructor declares it
+    (or takes `**kwargs`), exactly the same rule; both may be passed
+    together. It reaches the adapter as the PATH, never the bytes: the
+    bytes are read by the adapter at its own single staging expression.
+    A caller that supplies it to a class that cannot accept it is already
+    impossible from the CLI (`REPO_CREDENTIAL_CARRIER` refuses first), so
+    the introspection here is a second, structural belt on the same
+    observation the gate makes.
     """
     try:
         parameters = inspect.signature(adapter_cls).parameters
     except (TypeError, ValueError):
         parameters = {}
-    accepts_credentials = "credentials" in parameters or any(
+    accepts_var_keyword = any(
         p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()
     )
-    if accepts_credentials:
-        return adapter_cls(credentials=credentials_provider)
-    return adapter_cls()
+    kwargs: dict[str, object] = {}
+    if "credentials" in parameters or accepts_var_keyword:
+        kwargs["credentials"] = credentials_provider
+    if repo_credential_path is not None and (
+        "repo_credential_path" in parameters or accepts_var_keyword
+    ):
+        kwargs["repo_credential_path"] = repo_credential_path
+    return adapter_cls(**kwargs)
 
 
 def _accounts_cli_for(adapter_cls: type["ADAPTER.Adapter"]) -> Path | None:
@@ -2261,6 +2317,36 @@ def _accounts_cli_for(adapter_cls: type["ADAPTER.Adapter"]) -> Path | None:
     nor `--credential-dir` supplied.
     """
     return getattr(adapter_cls, "CREDENTIAL_CLI", None)
+
+
+def _repo_credential_carrier(adapter_cls: type["ADAPTER.Adapter"]) -> bool:
+    """Whether a resolved backend declares it can stage a runner-side repo
+    credential — read off the class exactly the way `_accounts_cli_for()`
+    reads `CREDENTIAL_CLI`, so this module still never names a backend.
+
+    `REPO_CREDENTIAL_CARRIER` is an ordinary class attribute, not one of
+    the `Adapter` ABC's six operations, and a backend that never declares
+    one is read as `False` here. That default is the point (S3/D6): a
+    credential handed to a non-carrier would authenticate this process's
+    own reachability probe while the runner that probe stands in for
+    still could not clone — the credential would make the answer MORE
+    wrong, not less. So `--repo-credential` on a non-carrier refuses
+    before any probe runs, and a non-carrier's inability is declared by
+    that omission rather than by an edit to its own module.
+    """
+    return bool(getattr(adapter_cls, "REPO_CREDENTIAL_CARRIER", False))
+
+
+def _uncarried_repo_credential(backend: str) -> "RemoteCLIError":
+    """The refusal both dispatch branches raise for a non-carrier."""
+    return RemoteCLIError(
+        f"--repo-credential was given, but the {backend!r} backend does not "
+        "declare REPO_CREDENTIAL_CARRIER = True: it has no runner-side "
+        "credential path, so a credential could authenticate only this "
+        "process's own probe while the runner that probe stands in for "
+        "still could not clone. Refusing before any probe runs — drop "
+        "--repo-credential for this backend."
+    )
 
 
 ADAPTERS_DIRNAME = "adapters"
@@ -2398,6 +2484,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "parsed argv -- never a config key, an environment variable, or "
         "any switch that outlives this process.",
     )
+    submit.add_argument(
+        "--repo-credential", dest="repo_credential", type=Path, default=None,
+        help="path to a token file for the job's private repository: the "
+        "credential-aware reachability probe and the runner's own clone "
+        "both authenticate with it (staged for the runner by the backend, "
+        "never written into the job folder, never on argv). Only backends "
+        "declaring REPO_CREDENTIAL_CARRIER accept it, and with it only "
+        "https:// remotes are admissible. Omitted, every probe stays "
+        "anonymous, exactly as before.",
+    )
 
     status = subparsers.add_parser(
         "status", help="report the fold for one product's ledger; resolves nothing"
@@ -2532,6 +2628,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     generate_job.add_argument("--repo-url", required=True)
     generate_job.add_argument("--repo-ref", required=True)
+    generate_job.add_argument(
+        "--repo-credential", dest="repo_credential", type=Path, default=None,
+        help="path to a token file for the job's private repository: with "
+        "it, generation's reachability probe authenticates through the "
+        "same askpass material a credentialed runner clone will use, and "
+        "only https:// remotes are admissible. Only services declaring "
+        "REPO_CREDENTIAL_CARRIER accept it. Omitted, every probe stays "
+        "anonymous, exactly as before.",
+    )
     generate_job.add_argument(
         "--clone-path", dest="clone_paths", action="append", default=[],
         help="repeatable: one declared clone path, relative to the clone's own root",
@@ -2772,6 +2877,18 @@ def main(argv: list[str] | None = None) -> int:
         except KeyError as exc:
             return _refused(exc)
 
+        # S3/D6: the carrier gate runs HERE — immediately after the class is
+        # resolved, before `CREDENTIALS.provider()`, before
+        # `_construct_adapter()`, before `cmd_submit()` and therefore before
+        # any reachability probe could authenticate. A backend that does not
+        # declare the carrier attribute has no runner-side credential path,
+        # so the flag is refused rather than quietly authenticating a probe
+        # whose runner still cannot clone.
+        if args.repo_credential is not None and not _repo_credential_carrier(
+            adapter_cls
+        ):
+            return _refused(_uncarried_repo_credential(args.backend))
+
         provider = CREDENTIALS.provider(
             accounts_cli=_accounts_cli_for(adapter_cls), override=args.credential_dir
         )
@@ -2781,11 +2898,14 @@ def main(argv: list[str] | None = None) -> int:
                 entrypoint=args.entrypoint,
                 worker=args.worker,
                 requested=args.requested,
-                adapter=_construct_adapter(adapter_cls, provider),
+                adapter=_construct_adapter(
+                    adapter_cls, provider, args.repo_credential
+                ),
                 product=args.product,
                 smoke=args.smoke,
                 units=args.units,
                 consent=args.consent,
+                repo_credential_path=args.repo_credential,
             )
         except (RemoteCLIError, PACKER.PackerError, LEDGER.LedgerError,
                 ADAPTER.AdapterError, JOBFOLDER.JobFolderError) as exc:
@@ -2993,6 +3113,20 @@ def main(argv: list[str] | None = None) -> int:
         # service at all — asked an empty registry and refused a correct
         # invocation.
         _load_backend_module(args.service)
+        # S3/D6: the same carrier gate as `submit`'s, and it must run before
+        # `generate_job()` — generation runs the same reachability probe, so
+        # a credential here would authenticate it while the runner that probe
+        # stands in for still could not clone. Resolved only when the flag is
+        # actually given, so the credentialless path keeps its existing
+        # registry semantics exactly (a service known only to the metadata
+        # registry still generates, as before).
+        if args.repo_credential is not None:
+            try:
+                adapter_cls = ADAPTER.resolve(args.service)
+            except KeyError as exc:
+                return _refused(exc)
+            if not _repo_credential_carrier(adapter_cls):
+                return _refused(_uncarried_repo_credential(args.service))
         try:
             destination = JOBFOLDER.generate_job(
                 target=args.target,
@@ -3002,6 +3136,7 @@ def main(argv: list[str] | None = None) -> int:
                 commit=args.commit,
                 repo_url=args.repo_url,
                 repo_ref=args.repo_ref,
+                repo_credential_path=args.repo_credential,
                 clone_paths=args.clone_paths,
                 run_module=args.run_module,
                 run_function=args.run_function,

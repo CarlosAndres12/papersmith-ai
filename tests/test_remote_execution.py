@@ -3205,6 +3205,98 @@ class FetchTests(unittest.TestCase):
             self.assertEqual((dest / "result.txt").read_text(encoding="utf-8"), "ok")
             self.assertEqual(ledger_path.read_text(encoding="utf-8"), lines_before)
 
+    def test_fetch_force_destroys_only_after_successful_materialization(self) -> None:
+        """D15: with `--force` and an existing destination, the old tree is
+        removed only after the adapter has actually returned a complete
+        materialization. A fetch that raises (case 1) or reports
+        `complete=False` (case 2) leaves the previous artifact and the
+        ledger untouched; the success path still replaces outright.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target, notebook, ledger_path, dest = self._pending_fetch_fixture(tmp)
+
+            REMOTE_CLI.cmd_fetch(
+                target=target,
+                entrypoint=notebook,
+                submission_id="s1",
+                dest=dest,
+                adapter=FakeAdapter(worker_id="w1", capacity=2),
+                source_digest=lambda t, n: "d" * 64,
+            )
+            self.assertEqual((dest / "result.txt").read_text(encoding="utf-8"), "ok")
+            dest_bytes = {
+                path.relative_to(dest): path.read_bytes()
+                for path in dest.rglob("*")
+                if path.is_file()
+            }
+            lines_before = ledger_path.read_text(encoding="utf-8")
+            partial_dest = dest.with_name(dest.name + REMOTE_CLI.PARTIAL_SUFFIX)
+
+            # Case 1: the adapter crashes mid-fetch. Under the old
+            # pre-emptive rmtree the destination would already be gone.
+            with self.assertRaises(ConnectionError):
+                REMOTE_CLI.cmd_fetch(
+                    target=target,
+                    entrypoint=notebook,
+                    submission_id="s1",
+                    dest=dest,
+                    adapter=CrashingFetchAdapter(worker_id="w1", capacity=2),
+                    source_digest=lambda t, n: "d" * 64,
+                    force=True,
+                )
+            self.assertEqual(
+                {
+                    path.relative_to(dest): path.read_bytes()
+                    for path in dest.rglob("*")
+                    if path.is_file()
+                },
+                dest_bytes,
+                "a failed force-fetch must leave the existing artifact intact",
+            )
+            self.assertEqual(ledger_path.read_text(encoding="utf-8"), lines_before)
+            self.assertTrue((partial_dest / "partial.bin").is_file())
+            shutil.rmtree(partial_dest)
+
+            # Case 2: the adapter reports the result unfinished.
+            result = REMOTE_CLI.cmd_fetch(
+                target=target,
+                entrypoint=notebook,
+                submission_id="s1",
+                dest=dest,
+                adapter=IncompleteFetchAdapter(worker_id="w1", capacity=2),
+                source_digest=lambda t, n: "d" * 64,
+                force=True,
+            )
+            self.assertFalse(result["complete"])
+            self.assertEqual(
+                {
+                    path.relative_to(dest): path.read_bytes()
+                    for path in dest.rglob("*")
+                    if path.is_file()
+                },
+                dest_bytes,
+                "an incomplete force-fetch must leave the existing artifact intact",
+            )
+            self.assertEqual(ledger_path.read_text(encoding="utf-8"), lines_before)
+            self.assertTrue((partial_dest / "still-running.bin").is_file())
+            shutil.rmtree(partial_dest)
+
+            # Case 3: a complete materialization still replaces the
+            # destination, including removing bytes a merge would leave.
+            (dest / "stale-leftover.txt").write_text("stale", encoding="utf-8")
+            result = REMOTE_CLI.cmd_fetch(
+                target=target,
+                entrypoint=notebook,
+                submission_id="s1",
+                dest=dest,
+                adapter=FakeAdapter(worker_id="w1", capacity=2),
+                source_digest=lambda t, n: "d" * 64,
+                force=True,
+            )
+            self.assertTrue(result["complete"])
+            self.assertEqual((dest / "result.txt").read_text(encoding="utf-8"), "ok")
+            self.assertFalse((dest / "stale-leftover.txt").exists())
+
     def test_observed_concurrency_reflects_actual_pending_not_the_grant(self) -> None:
         """(packer attempts 2, service actually runs 1 → recorded 1):
         `plan()` grants capacity for two concurrent jobs on this worker, but
@@ -11569,7 +11661,8 @@ class ProbeAuthorityTests(unittest.TestCase):
 
     `assets/runner_bootstrap.py:70` builds its git child's environment
     from `("PATH",)` and nothing else, and `:166-170` clones with no
-    credential step anywhere in it. A runner is therefore an anonymous
+    credential step anywhere in it (unless the job staged the S3
+    credential material, below). A runner is therefore an anonymous
     client by construction. If this probe authenticates — a credential
     helper, an agent socket, a `HOME` carrying `.gitconfig` and
     `.git-credentials` — then it answers a question about a remote *this
@@ -11593,6 +11686,20 @@ class ProbeAuthorityTests(unittest.TestCase):
     type. Both are inert for the local `rev-parse`/`cat-file`/`diff`
     calls, which is why they belong at the shared point and not at one
     call site.
+
+    One credential-conditional amendment (S3), recorded here because this
+    class's premise would read as false the moment `--repo-credential`
+    exists: with that flag the probe authenticates — because the RUNNER
+    will, from the same staged material (the backend uploads it beside
+    the executor, and `clone_repo()` clones with it) — and both
+    transports are pinned to `https://` (`_verify_commit_reachable()`'s
+    scheme gate here, `clone_repo()`'s re-check there). The allowlist
+    above is untouched by that route by design: the credential rides
+    `_run_git()`'s `extra_env`, a per-call channel separate from
+    `GIT_ENV_ALLOWLIST`, which is exactly why this class's own allowlist
+    assertions stay green. Credentialless, the anonymous-by-construction
+    argument above is unchanged and the probe behaves exactly as it did
+    before the flag existed.
     """
 
     # Names that would make the probe someone rather than anyone. `HOME`
@@ -20323,6 +20430,32 @@ class PushSurfaceHookTests(unittest.TestCase):
     for a human, not this script's own existence.
     """
 
+    def setUp(self) -> None:
+        # `_load_push_surfaces()` execs every adapter module to read its
+        # declared constant — and colab.py's own bottom line registers
+        # itself again, so the scan REPLACES the shared registry's entry
+        # for "colab" with a second copy's class. Harmless in the hook's
+        # own short-lived process; not harmless here, where this suite
+        # runs in one process and `ColabAdapterSeamTests` asserts the
+        # ORIGINAL copy stays registered. Snapshot before every test in
+        # this class, restore after, so the scans leave no trace on
+        # global state.
+        self._registry_snapshots = {
+            name: dict(getattr(ADAPTER, name))
+            for name in (
+                "_REGISTRY",
+                "_METADATA_REGISTRY",
+                "_DEFAULT_ACCELERATOR_REGISTRY",
+                "_DECLARED_CAPACITY_REGISTRY",
+            )
+        }
+
+    def tearDown(self) -> None:
+        for name, snapshot in self._registry_snapshots.items():
+            registry = getattr(ADAPTER, name)
+            registry.clear()
+            registry.update(snapshot)
+
     def test_push_surfaces_are_read_from_the_real_adapter_not_hardcoded(self) -> None:
         surfaces = PUSH_SURFACE_HOOK._load_push_surfaces()
         self.assertIn("kernels_push", surfaces)
@@ -21846,6 +21979,596 @@ class ColabSessionLifecycleTests(unittest.TestCase):
                     adapter.poll(bad)
 
 
+class ColabRepoCredentialTests(unittest.TestCase):
+    """Slice S3's repo-credential route, offline end to end.
+
+    Two halves, each asserted against the mechanism it actually owns: the
+    backend-neutral PROBE side (`jobfolder._verify_commit_reachable` —
+    the HTTPS-only scheme gate, the SSH-by-name refusal that only fires
+    with a credential, the one token read, the 0o700 askpass script, the
+    env-never-argv channel), and the backend side (`colab.py`'s staging,
+    `runner_bootstrap.py`'s clone-time use and deletion, `executor.py`'s
+    chmod/deletion/exclusion, `remote_cli`'s carrier gate and D15's
+    force ordering).
+    """
+
+    def _adapter(self, sim: _ColabCLISimulator, **kwargs: object) -> "COLAB.ColabAdapter":
+        return COLAB.ColabAdapter(
+            colab_executable=str(sim.executable),
+            remote_root=str(sim.remote_root),
+            **kwargs,
+        )
+
+    def _job_folder(self, root: Path, *, name: str = "search-a", config: dict | None = None) -> Path:
+        """The same generated shape `ColabSessionLifecycleTests` uses, plus
+        the `product` field `product_for()`'s job-folder step reads (the
+        ledger phase below goes through a real `cmd_fetch`).
+        """
+        folder = root / "tools" / "colab" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        payload = config if config is not None else {
+            "schemaVersion": 1,
+            "commit": "c" * 40,
+            "product": "FEM-TOLLA",
+            "repo": {
+                "url": "https://example.invalid/repo.git",
+                "ref": "refs/heads/main",
+            },
+            "clonePaths": ["src/pkg"],
+            "run": {"module": "pkg.harness", "function": "run", "kwargs": {}},
+        }
+        (folder / "run-config.json").write_text(json.dumps(payload), encoding="utf-8")
+        (folder / "runner.ipynb").write_text(
+            json.dumps(_colab_trivial_notebook()), encoding="utf-8"
+        )
+        return folder
+
+    def _expected_session_name(self, folder: Path) -> str:
+        commit = json.loads(
+            (folder / "run-config.json").read_text(encoding="utf-8")
+        )["commit"]
+        digest = COLAB._digest8((folder / "runner.ipynb").read_bytes(), commit, "full")
+        return "psmith-%s-%s" % (COLAB._slugify(folder.name), digest)
+
+    def _fast_knobs(self) -> dict:
+        return {
+            "exec": {
+                "launch.py": {"stdout": json.dumps({"launched_pid": 4242}) + "\n"}
+            }
+        }
+
+    def _submit(self, adapter: "COLAB.ColabAdapter", folder: Path) -> "ADAPTER.Submission":
+        return adapter.submit(
+            ADAPTER.Job(
+                entrypoint=folder / "runner.ipynb",
+                run_config={},
+                worker="colab",
+            )
+        )
+
+    def _credential_file(self, root: Path, token: str = "s3-token-value") -> Path:
+        path = root / "operator-token"
+        path.write_text(token + "\n", encoding="utf-8")
+        return path
+
+    # -- the carrier gate --------------------------------------------------
+
+    def test_colab_repo_credential_flag_refuses_on_non_carrier(self) -> None:
+        """D6's "before any probe would authenticate": `--repo-credential`
+        on a backend that declares no `REPO_CREDENTIAL_CARRIER` refuses in
+        the dispatch branch itself, for BOTH commands that run the probe —
+        and the probe is patched to explode if it is ever reached.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            entrypoint = target / "tools" / "kaggle" / "job" / "runner.ipynb"
+            entrypoint.parent.mkdir(parents=True)
+            entrypoint.write_text("{}", encoding="utf-8")
+            credential = self._credential_file(Path(tmp))
+
+            invocations = (
+                [
+                    "submit",
+                    "--target", str(target),
+                    "--entrypoint", str(entrypoint),
+                    "--backend", "kaggle",
+                    "--repo-credential", str(credential),
+                    "--consent", "x",
+                ],
+                [
+                    "generate-job",
+                    "--target", str(target),
+                    "--service", "kaggle",
+                    "--job-name", "job",
+                    "--product", "FEM-TOLLA",
+                    "--repo-url", "https://example.invalid/repo.git",
+                    "--repo-ref", "refs/heads/main",
+                    "--repo-credential", str(credential),
+                    "--run-module", "pkg.harness",
+                    "--run-function", "run",
+                ],
+            )
+            with unittest.mock.patch.object(
+                JOBFOLDER,
+                "_verify_commit_reachable",
+                side_effect=AssertionError("the probe must never be reached"),
+            ), unittest.mock.patch.object(
+                # A no-op here on purpose: the real side-loader execs
+                # `adapters/<name>.py` a SECOND time and re-registers its
+                # classes, which would replace the suite's own top-level
+                # `kaggle.py` registration and break identity assertions
+                # elsewhere in this file. The gate under test lives in the
+                # dispatch branch, not in the loader.
+                REMOTE_CLI,
+                "_load_backend_module",
+            ):
+                for argv in invocations:
+                    with self.subTest(command=argv[0]):
+                        stderr = io.StringIO()
+                        with contextlib.redirect_stderr(stderr):
+                            status = REMOTE_CLI.main(argv)
+                        self.assertEqual(status, 1)
+                        message = stderr.getvalue()
+                        self.assertIn("--repo-credential", message)
+                        self.assertIn("REPO_CREDENTIAL_CARRIER", message)
+                        self.assertIn("kaggle", message)
+
+    # -- the probe's credential path (SD14) --------------------------------
+
+    def test_colab_probe_askpass_env_only_with_credential_and_token_never_on_argv(self) -> None:
+        token = "s3-probe-token-value"
+        with tempfile.TemporaryDirectory() as tmp:
+            credential = self._credential_file(Path(tmp), token)
+            recorded: list[dict] = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                entry: dict = {"args": list(args), "extra_env": extra_env}
+                if extra_env and "GIT_ASKPASS" in extra_env:
+                    script = Path(extra_env["GIT_ASKPASS"])
+                    entry["askpass_is_file"] = script.is_file()
+                    entry["askpass_mode"] = script.stat().st_mode & 0o777
+                    entry["askpass_content"] = script.read_text(encoding="utf-8")
+                    entry["askpass_parent"] = str(script.parent)
+                recorded.append(entry)
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(JOBFOLDER, "_run_git", side_effect=fake_run_git):
+                JOBFOLDER._verify_commit_reachable(
+                    "a" * 40, "https://example.invalid/repo.git", "main"
+                )
+                credentialless = list(recorded)
+                recorded.clear()
+                JOBFOLDER._verify_commit_reachable(
+                    "a" * 40,
+                    "https://example.invalid/repo.git",
+                    "main",
+                    repo_credential_path=str(credential),
+                )
+
+            self.assertTrue(credentialless, "the credentialless probe must still run")
+            for entry in credentialless:
+                self.assertIsNone(entry["extra_env"])
+            self.assertNotIn("GIT_ASKPASS", JOBFOLDER.GIT_ENV_ALLOWLIST)
+            self.assertNotIn(
+                JOBFOLDER.REPO_CREDENTIAL_ENV_NAME, JOBFOLDER.GIT_ENV_ALLOWLIST
+            )
+
+            self.assertEqual(len(recorded), 2, "init then fetch")
+            init_call, fetch_call = recorded
+            self.assertIsNone(init_call["extra_env"])
+            self.assertEqual(
+                fetch_call["extra_env"]["PSMITH_REPO_CREDENTIAL"], token
+            )
+            self.assertTrue(fetch_call["askpass_is_file"])
+            self.assertEqual(fetch_call["askpass_mode"], 0o700)
+            self.assertEqual(
+                fetch_call["askpass_content"], JOBFOLDER.REPO_CREDENTIAL_ASKPASS_SCRIPT
+            )
+            self.assertIn("jobfolder-probe-", fetch_call["askpass_parent"])
+            for entry in recorded:
+                self.assertNotIn(token, " ".join(entry["args"]))
+
+    def test_colab_probe_refuses_ssh_remote_only_when_credential_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credential = self._credential_file(Path(tmp))
+            calls: list[list] = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                calls.append(list(args))
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(JOBFOLDER, "_run_git", side_effect=fake_run_git):
+                # Credentialless: today's behavior, asserted — SD14 must
+                # not change it. An SSH-shaped URL that the probe can
+                # serve is still probed.
+                JOBFOLDER._verify_commit_reachable(
+                    "a" * 40, "git@host:owner/repo.git", "main"
+                )
+                self.assertEqual(len(calls), 2, "init + fetch, unchanged")
+
+                for remote in ("git@host:owner/repo.git", "ssh://git@host/owner/repo.git"):
+                    with self.subTest(remote=remote):
+                        calls.clear()
+                        with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                            JOBFOLDER._verify_commit_reachable(
+                                "a" * 40,
+                                remote,
+                                "main",
+                                repo_credential_path=str(credential),
+                            )
+                        self.assertEqual(
+                            calls, [], "the refusal must land before the scratch repo"
+                        )
+                        message = str(ctx.exception)
+                        self.assertIn("SSH", message)
+                        self.assertIn("https://", message)
+                        self.assertIn("--repo-credential", message)
+
+    def test_colab_probe_refuses_non_https_remotes_with_credential(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            credential = self._credential_file(Path(tmp))
+            calls: list[list] = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                calls.append(list(args))
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(JOBFOLDER, "_run_git", side_effect=fake_run_git):
+                for remote in ("http://host/owner/repo.git", "file:///tmp/repo.git"):
+                    with self.subTest(remote=remote):
+                        calls.clear()
+                        with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                            JOBFOLDER._verify_commit_reachable(
+                                "a" * 40,
+                                remote,
+                                "main",
+                                repo_credential_path=str(credential),
+                            )
+                        self.assertEqual(
+                            calls, [], "the scheme gate precedes the scratch repo"
+                        )
+                        self.assertIn(
+                            "only https:// remotes are admissible",
+                            str(ctx.exception),
+                        )
+
+                # https:// proceeds to the fetch, with the credential env.
+                calls.clear()
+                JOBFOLDER._verify_commit_reachable(
+                    "a" * 40,
+                    "https://example.invalid/repo.git",
+                    "main",
+                    repo_credential_path=str(credential),
+                )
+                self.assertEqual(len(calls), 2)
+                self.assertEqual(calls[1][0], "fetch")
+
+                # Credentialless, the same non-https remote still probes.
+                calls.clear()
+                JOBFOLDER._verify_commit_reachable(
+                    "a" * 40, "http://host/owner/repo.git", "main"
+                )
+                self.assertEqual(
+                    len(calls), 2, "SD14 must be a no-op without a credential"
+                )
+
+    def test_repo_credential_empty_or_unreadable_refuses_at_both_sites(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            empty = root / "empty-token"
+            empty.write_text("   \n", encoding="utf-8")
+            missing = root / "no-such-token"
+
+            for label, path, expected in (
+                ("empty", empty, "empty"),
+                ("missing", missing, "could not be read"),
+            ):
+                with self.subTest(site="probe", case=label):
+                    with self.assertRaises(JOBFOLDER.JobFolderError) as ctx:
+                        JOBFOLDER._verify_commit_reachable(
+                            "a" * 40,
+                            "https://example.invalid/repo.git",
+                            "main",
+                            repo_credential_path=str(path),
+                        )
+                    self.assertIn(str(path), str(ctx.exception))
+                    self.assertIn(expected, str(ctx.exception))
+
+                with self.subTest(site="submit", case=label):
+                    with tempfile.TemporaryDirectory() as other:
+                        sim = _ColabCLISimulator(other)
+                        sim.scenario(**self._fast_knobs())
+                        folder = self._job_folder(Path(other))
+                        adapter = self._adapter(sim, repo_credential_path=str(path))
+                        with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                            self._submit(adapter, folder)
+                        self.assertIn(str(path), str(ctx.exception))
+                        self.assertIn(expected, str(ctx.exception))
+                        self.assertEqual(
+                            sim.invocations(),
+                            [],
+                            "a bad credential must refuse before any CLI call, "
+                            "upload or session check",
+                        )
+
+    # -- the token's negative space (SD16) ---------------------------------
+
+    def test_colab_repo_credential_never_reaches_argv_or_logs(self) -> None:
+        """The full credentialed submit against the simulator, then a real
+        `cmd_fetch` over a real ledger: both material files ARE uploaded
+        (askpass verbatim, token stripped); the token bytes appear in NO
+        recorded invocation argv, NOT in the uploaded `run-config.json`,
+        NOT in the job folder, NOT in the ledger, and NOT in the fetch
+        result.
+        """
+        token = "colab-token-do-not-log"
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            (target / "FEM-TOLLA").mkdir()
+            sim = _ColabCLISimulator(tmp)
+            sim.scenario(**self._fast_knobs())
+            folder = self._job_folder(target)
+            credential = self._credential_file(Path(tmp), token)
+            original_config = (folder / "run-config.json").read_bytes()
+            folder_snapshot = {
+                path.relative_to(folder): path.read_bytes()
+                for path in folder.rglob("*")
+                if path.is_file()
+            }
+
+            adapter = self._adapter(sim, repo_credential_path=str(credential))
+            submission = self._submit(adapter, folder)
+            session_name = submission.id.split("/", 1)[1]
+            session_dir = sim.session_dir(session_name)
+
+            self.assertEqual(
+                (session_dir / COLAB.REPO_CREDENTIAL_ASKPASS_FILENAME).read_text(
+                    encoding="utf-8"
+                ),
+                COLAB.REPO_CREDENTIAL_ASKPASS_SOURCE,
+            )
+            self.assertEqual(
+                (session_dir / COLAB.REPO_CREDENTIAL_TOKEN_FILENAME).read_text(
+                    encoding="utf-8"
+                ),
+                token,
+                "the staged token must be the stripped value, no trailing newline",
+            )
+
+            recorded = sim.invocations()
+            serialized = json.dumps(recorded)
+            self.assertNotIn(token, serialized)
+            for tokens in recorded:
+                self.assertNotIn(token, " ".join(tokens))
+
+            self.assertEqual(
+                (session_dir / "run-config.json").read_bytes(),
+                original_config,
+                "S3 must not change run-config.json's uploaded bytes",
+            )
+            self.assertEqual(
+                {
+                    path.relative_to(folder): path.read_bytes()
+                    for path in folder.rglob("*")
+                    if path.is_file()
+                },
+                folder_snapshot,
+                "the job folder is never written",
+            )
+
+            # The ledger phase: seed the sim's session state, append the
+            # real `submitted` event, and fetch through the real CLI path
+            # so the returned event's own file can be scanned too.
+            ledger_path = (
+                target.resolve() / "FEM-TOLLA" / REMOTE_CLI.LEDGER_DIRNAME
+                / REMOTE_CLI.LEDGER_FILENAME
+            )
+            _append_pending_submission(
+                ledger_path,
+                entrypoint="tools/colab/search-a/runner.ipynb",
+                submission_id=submission.id,
+                worker="colab",
+                source_digest="d" * 64,
+            )
+            (session_dir / "logs").mkdir(exist_ok=True)
+            (session_dir / "logs" / "out.txt").write_text("result\n", encoding="utf-8")
+            (session_dir / "files.json").write_text(
+                json.dumps(["logs/out.txt"]), encoding="utf-8"
+            )
+            (session_dir / "status.json").write_text(
+                json.dumps({"exitCode": 0, "finishedAt": "t"}), encoding="utf-8"
+            )
+
+            result = REMOTE_CLI.cmd_fetch(
+                target=target,
+                entrypoint=folder / "runner.ipynb",
+                submission_id=submission.id,
+                dest=Path(tmp) / "fetched",
+                adapter=adapter,
+                source_digest=lambda resolved, product: "d" * 64,
+            )
+            self.assertTrue(result["complete"])
+            self.assertNotIn(token, ledger_path.read_text(encoding="utf-8"))
+            self.assertNotIn(token, json.dumps(result, default=str))
+            self.assertNotIn(
+                token,
+                (Path(tmp) / "fetched" / "logs" / "out.txt").read_text(encoding="utf-8"),
+            )
+
+    # -- the runner's clone-time use (SD15) --------------------------------
+
+    def _clone_config(self, url: str = "https://example.invalid/repo.git") -> dict:
+        return {
+            "repo": {"url": url, "ref": "refs/heads/main"},
+            "commit": "c" * 40,
+            "clonePaths": ["src"],
+        }
+
+    def test_colab_runner_bootstrap_uses_askpass_only_when_material_is_present_and_deletes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            askpass = base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_ASKPASS_FILENAME
+            askpass.write_text("#!/bin/sh\ncat token\n", encoding="utf-8")
+            token_file = base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_TOKEN_FILENAME
+            token_file.write_text("tok", encoding="utf-8")
+
+            calls: list[tuple[list, object]] = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                calls.append((list(args), extra_env))
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(
+                RUNNER_BOOTSTRAP, "_run_git", side_effect=fake_run_git
+            ):
+                RUNNER_BOOTSTRAP.clone_repo(
+                    self._clone_config(), base / "clone", askpass=askpass
+                )
+
+            self.assertTrue(calls)
+            for args, extra_env in calls:
+                self.assertEqual(
+                    extra_env, {"GIT_ASKPASS": str(askpass.resolve())}
+                )
+            self.assertFalse(askpass.exists(), "the script must be deleted")
+            self.assertFalse(token_file.exists(), "the token must be deleted")
+            self.assertEqual(RUNNER_BOOTSTRAP.GIT_ENV_ALLOWLIST, ("PATH",))
+
+        # A raised clone failure still deletes the material.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            askpass = base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_ASKPASS_FILENAME
+            askpass.write_text("#!/bin/sh\n", encoding="utf-8")
+            token_file = base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_TOKEN_FILENAME
+            token_file.write_text("tok", encoding="utf-8")
+
+            def failing_run_git(args, *, cwd, timeout=None, extra_env=None):
+                if list(args)[:1] == ["fetch"]:
+                    raise RUNNER_BOOTSTRAP.BootstrapError("injected clone failure")
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(
+                RUNNER_BOOTSTRAP, "_run_git", side_effect=failing_run_git
+            ):
+                with self.assertRaises(RUNNER_BOOTSTRAP.BootstrapError):
+                    RUNNER_BOOTSTRAP.clone_repo(
+                        self._clone_config(), base / "clone", askpass=askpass
+                    )
+            self.assertFalse(askpass.exists())
+            self.assertFalse(token_file.exists())
+
+        # Material absent (the credentialless / non-carrier path): no
+        # GIT_ASKPASS anywhere, and nothing to delete.
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            calls = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                calls.append((list(args), extra_env))
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(
+                RUNNER_BOOTSTRAP, "_run_git", side_effect=fake_run_git
+            ):
+                RUNNER_BOOTSTRAP.clone_repo(self._clone_config(), base / "clone")
+
+            self.assertTrue(calls)
+            for args, extra_env in calls:
+                self.assertTrue(
+                    extra_env is None or "GIT_ASKPASS" not in extra_env,
+                    f"a credentialless clone leaked an askpass: {extra_env}",
+                )
+
+    def test_colab_runner_bootstrap_refuses_non_https_url_when_material_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            askpass = base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_ASKPASS_FILENAME
+            askpass.write_text("#!/bin/sh\n", encoding="utf-8")
+            (base / RUNNER_BOOTSTRAP.REPO_CREDENTIAL_TOKEN_FILENAME).write_text(
+                "tok", encoding="utf-8"
+            )
+            calls: list[list] = []
+
+            def fake_run_git(args, *, cwd, timeout=None, extra_env=None):
+                calls.append(list(args))
+                return unittest.mock.Mock(returncode=0, stdout="", stderr="")
+
+            with unittest.mock.patch.object(
+                RUNNER_BOOTSTRAP, "_run_git", side_effect=fake_run_git
+            ):
+                with self.assertRaises(RUNNER_BOOTSTRAP.BootstrapError) as ctx:
+                    RUNNER_BOOTSTRAP.clone_repo(
+                        self._clone_config("http://host/owner/repo.git"),
+                        base / "clone",
+                        askpass=askpass,
+                    )
+                self.assertEqual(
+                    calls, [], "the URL gate must precede the first git call"
+                )
+                self.assertIn("https://", str(ctx.exception))
+
+                # The same config over https clones.
+                calls.clear()
+                RUNNER_BOOTSTRAP.clone_repo(
+                    self._clone_config(), base / "clone", askpass=askpass
+                )
+                self.assertTrue(calls)
+
+    # -- fetch's credential-material refusal (SD15's boundary) -------------
+
+    def test_colab_fetch_refuses_credential_material_names(self) -> None:
+        name = "psmith-x-00000000"
+        submission_id = "colab/" + name
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _ColabCLISimulator(tmp)
+            session_dir = sim.session_dir(name)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            sim.seed_session(name)
+            (session_dir / "files.json").write_text(
+                json.dumps([COLAB.REPO_CREDENTIAL_TOKEN_FILENAME]), encoding="utf-8"
+            )
+            (session_dir / "status.json").write_text(
+                json.dumps({"exitCode": 0, "finishedAt": "t"}), encoding="utf-8"
+            )
+            adapter = self._adapter(sim)
+            with self.assertRaises(COLAB.ColabAdapterError) as ctx:
+                adapter.fetch(submission_id, Path(tmp) / "out")
+            self.assertIn(COLAB.REPO_CREDENTIAL_TOKEN_FILENAME, str(ctx.exception))
+            self.assertNotIn(
+                "download",
+                sim.subcommands(),
+                "the refusal must land before any download",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            sim = _ColabCLISimulator(tmp)
+            session_dir = sim.session_dir(name)
+            session_dir.mkdir(parents=True, exist_ok=True)
+            sim.seed_session(name)
+            (session_dir / "sub").mkdir(parents=True)
+            (session_dir / "sub" / COLAB.REPO_CREDENTIAL_ASKPASS_FILENAME).write_text(
+                "#!/bin/sh\nproduct\n", encoding="utf-8"
+            )
+            (session_dir / "files.json").write_text(
+                json.dumps(["sub/" + COLAB.REPO_CREDENTIAL_ASKPASS_FILENAME]),
+                encoding="utf-8",
+            )
+            (session_dir / "status.json").write_text(
+                json.dumps({"exitCode": 0, "finishedAt": "t"}), encoding="utf-8"
+            )
+            adapter = self._adapter(sim)
+            destination = Path(tmp) / "out"
+            fetched = adapter.fetch(submission_id, destination)
+            self.assertTrue(fetched.complete)
+            self.assertTrue(
+                (destination / "sub" / COLAB.REPO_CREDENTIAL_ASKPASS_FILENAME).is_file(),
+                "the same basename under a subdirectory is a product",
+            )
+
+
 class ColabExecutorAssetTests(unittest.TestCase):
     """`assets/colab/executor.py`'s own logic, driven in-process with the
     execute step replaced (the real execution is the round-trip test's
@@ -21953,6 +22676,95 @@ class ColabExecutorAssetTests(unittest.TestCase):
                     "clone/src/pkg/mod.py",
                 ],
             )
+
+
+    def test_colab_executor_deletes_credential_material_and_never_lists_it(self) -> None:
+        """S3/D6 on the VM side: the staged askpass is chmodded 0o700
+        before the notebook, both material files are deleted after the
+        attempt and before the manifest, and a failed deletion is
+        recorded without ever making the material listable.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._base(tmp)
+            askpass = base / COLAB_EXECUTOR.REPO_CREDENTIAL_ASKPASS_FILENAME
+            askpass.write_text("#!/bin/sh\n", encoding="utf-8")
+            os.chmod(askpass, 0o644)
+            token_file = base / COLAB_EXECUTOR.REPO_CREDENTIAL_TOKEN_FILENAME
+            token_file.write_text("tok", encoding="utf-8")
+
+            observed: dict = {}
+
+            def execute(target: Path) -> None:
+                observed["mode"] = askpass.stat().st_mode & 0o777
+                observed["present_during_notebook"] = (
+                    askpass.is_file() and token_file.is_file()
+                )
+                (target / COLAB_EXECUTOR.EXECUTED_NOTEBOOK_FILENAME).write_text(
+                    "{}", encoding="utf-8"
+                )
+
+            with unittest.mock.patch.object(COLAB_EXECUTOR, "execute_notebook", execute):
+                exit_code = COLAB_EXECUTOR.run(base)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(observed["mode"], 0o700)
+            self.assertTrue(
+                observed["present_during_notebook"],
+                "the notebook's own clone needs the material while it runs",
+            )
+            self.assertFalse(askpass.exists(), "deleted after the attempt")
+            self.assertFalse(token_file.exists(), "deleted after the attempt")
+            self.assertEqual(
+                json.loads(
+                    (base / COLAB_EXECUTOR.FILES_FILENAME).read_text(encoding="utf-8")
+                ),
+                ["runner.executed.ipynb"],
+            )
+            status = json.loads(
+                (base / COLAB_EXECUTOR.STATUS_FILENAME).read_text(encoding="utf-8")
+            )
+            self.assertNotIn("error", status)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = self._base(tmp)
+            askpass = base / COLAB_EXECUTOR.REPO_CREDENTIAL_ASKPASS_FILENAME
+            askpass.write_text("#!/bin/sh\n", encoding="utf-8")
+            token_file = base / COLAB_EXECUTOR.REPO_CREDENTIAL_TOKEN_FILENAME
+            token_file.write_text("tok", encoding="utf-8")
+
+            real_delete = COLAB_EXECUTOR._delete_credential_material
+
+            def failing_delete(path: Path) -> None:
+                if path.name == COLAB_EXECUTOR.REPO_CREDENTIAL_ASKPASS_FILENAME:
+                    raise OSError("injected deletion failure")
+                real_delete(path)
+
+            def execute(target: Path) -> None:
+                (target / COLAB_EXECUTOR.EXECUTED_NOTEBOOK_FILENAME).write_text(
+                    "{}", encoding="utf-8"
+                )
+
+            with unittest.mock.patch.object(
+                COLAB_EXECUTOR, "_delete_credential_material", failing_delete
+            ):
+                with unittest.mock.patch.object(
+                    COLAB_EXECUTOR, "execute_notebook", execute
+                ):
+                    exit_code = COLAB_EXECUTOR.run(base)
+
+            self.assertEqual(exit_code, 0, "a cleanup failure is never fatal")
+            manifest = json.loads(
+                (base / COLAB_EXECUTOR.FILES_FILENAME).read_text(encoding="utf-8")
+            )
+            self.assertNotIn(
+                COLAB_EXECUTOR.REPO_CREDENTIAL_ASKPASS_FILENAME, manifest
+            )
+            self.assertNotIn(COLAB_EXECUTOR.REPO_CREDENTIAL_TOKEN_FILENAME, manifest)
+            status = json.loads(
+                (base / COLAB_EXECUTOR.STATUS_FILENAME).read_text(encoding="utf-8")
+            )
+            self.assertIn("credential cleanup", status["error"])
+            self.assertIn("injected deletion failure", status["error"])
 
 
 if __name__ == "__main__":

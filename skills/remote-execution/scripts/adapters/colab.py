@@ -16,20 +16,28 @@ even reach — never by convention:
    the one thing it shells out to is the official `colab` command line
    (`google-colab-cli`), which is the service's own headless client.
 
-2. Colab authentication is the CLI's own business, read by the CLI's own
-   child process: it resolves `~/.config/colab-cli/token.json` from the
-   `HOME` this adapter forwards, and this module never opens that file,
-   never learns a path to it, and never sees a token value. There is no
-   `credentials` parameter on this adapter and no `CREDENTIAL_CLI` class
-   attribute, so `remote_cli._construct_adapter()` never hands it a
-   credential provider at all.
+   2. Colab authentication is the CLI's own business, read by the CLI's own
+    child process: it resolves `~/.config/colab-cli/token.json` from the
+    `HOME` this adapter forwards, and this module never opens that file,
+    never learns a path to it, and never sees a token value. There is no
+    `credentials` parameter on this adapter and no `CREDENTIAL_CLI` class
+    attribute, so `remote_cli._construct_adapter()` never hands it a
+    credential provider at all.
 
    The CLI's own session STATE file (`~/.config/colab-cli/sessions.json`)
-   is credential-grade too, and for a measured reason: it carries a live
-   per-session access token beside the session record (spike S0). Nothing
-   here reads it, copies it or prints it — every session fact this module
-   uses comes from the CLI's own stdout, and the only environment this
-   module ever forwards is `PATH` and `HOME`.
+    is credential-grade too, and for a measured reason: it carries a live
+    per-session access token beside the session record (spike S0). Nothing
+    here reads it, copies it or prints it — every session fact this module
+    uses comes from the CLI's own stdout, and the only environment this
+    module ever forwards is `PATH` and `HOME`.
+
+   The repo-credential route (S3) does not change any of that: the
+   operator's token file arrives as `repo_credential_path`, and its bytes
+   are read at exactly ONE expression in this module — `submit()`'s
+   staging, below — then written into a per-call temp directory and
+   uploaded as `git-askpass-token` (0o600, stripped, no trailing
+   newline). The path is what `remote_cli` threads; the bytes never touch
+   argv, `run-config.json`, the job folder, the ledger or any log.
 
 3. Every subprocess call is `shell=False` with a list argv, an explicit
    timeout, and that same two-variable environment. A non-zero exit, an
@@ -38,14 +46,12 @@ even reach — never by convention:
    or `Fetched` the service never confirmed.
 
 Slice status, stated so a refusal is never a mystery: this file owns the
-S1 surface (registration, the static worker, `list_active()`, `cancel()`)
-and the S2 session lifecycle (`submit()`, `poll()`, `fetch()` — uploads,
+S1 surface (registration, the static worker, `list_active()`, `cancel()`),
+the S2 session lifecycle (`submit()`, `poll()`, `fetch()` — uploads,
 the detached launch, the `/content/.psmith/<session>/` sentinel protocol,
-downloads, release). Two things land later by plan: the repo-credential
-route (S3: `--repo-credential`, `REPO_CREDENTIAL_CARRIER`, the askpass
-material) and the accelerator mapping (S4, D13) — a run-config declaring
-an `accelerator` block is refused by `submit()` naming that slice, never
-silently run on CPU.
+downloads, release), and the S3 repo-credential route
+(`REPO_CREDENTIAL_CARRIER`, the `repo_credential_path` constructor
+parameter, the staged askpass material).
 
 Measured against `google-colab-cli` 0.6.0, live (spike S0; evidence in
 `proposals/colab-cli-spike/findings.md`):
@@ -188,6 +194,39 @@ LAUNCH_ASSET = "launch.py"
 EXECUTOR_ASSET = "executor.py"
 READ_STATE_ASSET = "read_state.py"
 
+# The credential material a credentialed submission stages beside the
+# executor (S3): an askpass script (uploaded verbatim; the executor makes
+# it executable) and the token file it prints. The names are declared in
+# THREE files by convention — this one (the uploader and the fetch-time
+# refusal), `assets/colab/executor.py` (chmod, deletion, manifest
+# exclusion) and `assets/runner_bootstrap.py` (the clone's own use and
+# deletion) — deliberately not shared by import, for the same reason no
+# module above the seam may name a backend.
+REPO_CREDENTIAL_ASKPASS_FILENAME = "git-askpass.sh"
+REPO_CREDENTIAL_TOKEN_FILENAME = "git-askpass-token"
+
+# The two names `fetch()` refuses to download: the executor deletes this
+# material after the run and excludes it from its manifest, so a manifest
+# naming either one at the top level is a manifest this protocol never
+# produces.
+CREDENTIAL_MATERIAL_FILENAMES = frozenset(
+    {REPO_CREDENTIAL_ASKPASS_FILENAME, REPO_CREDENTIAL_TOKEN_FILENAME}
+)
+
+# The askpass script uploaded as `git-askpass.sh`: prints the staged token
+# file's bytes for whichever prompt git asks. HTTPS token auth on the
+# hosts this skill targets accepts the token as the username with any
+# password, so one answer serves both prompts (recorded in the slice
+# plan's §4, and verified live only at S5's credential differential —
+# until then this is a unit-asserted convention, never an assumption
+# dressed as a measurement).
+REPO_CREDENTIAL_ASKPASS_SOURCE = """#!/bin/sh
+# Prints the staged repo credential for both prompts git may ask. HTTPS
+# token auth on the hosts this skill targets accepts the token as the
+# username with any password, so one answer serves both prompts.
+cat "$(dirname "$0")/git-askpass-token"
+"""
+
 # The tokens a hand-typed launch would carry without ever routing through
 # `remote_cli.py submit`. Read by `hooks/refuse_offpath_push.py`; a second
 # service is covered by declaring its own tuple beside its own adapter,
@@ -313,6 +352,15 @@ def _append_note(exc: BaseException, note: str) -> None:
 class ColabAdapter(ADAPTER.Adapter):
     """The official `colab` CLI, behind the seam's six operations."""
 
+    # Read off the CLASS by `remote_cli` exactly the way it reads
+    # `CREDENTIAL_CLI` — an ordinary class attribute, never one of the
+    # ABC's six operations, so this module still never has to be named by
+    # anything above the seam. A backend that can stage a runner-side repo
+    # credential declares it; a backend that cannot declares nothing, and
+    # `--repo-credential` refuses there rather than authenticating a probe
+    # whose runner still could not clone (S3/D6).
+    REPO_CREDENTIAL_CARRIER = True
+
     def __init__(
         self,
         *,
@@ -325,6 +373,7 @@ class ColabAdapter(ADAPTER.Adapter):
         subprocess_slack: float = COLAB_SUBPROCESS_SLACK_SECONDS,
         remote_root: str = DEFAULT_REMOTE_ROOT,
         assets_dir: Path | None = None,
+        repo_credential_path: str | Path | None = None,
     ) -> None:
         self._colab_executable = colab_executable
         self._control_timeout = timeout
@@ -339,6 +388,42 @@ class ColabAdapter(ADAPTER.Adapter):
             if assets_dir is not None
             else Path(__file__).resolve().parents[2] / "assets" / "colab"
         )
+        # The PATH, never the bytes: the token itself is read at the one
+        # staging expression in `submit()`, and a `None` here (every
+        # credentialless caller) makes the whole route inert.
+        self._repo_credential_path = (
+            Path(repo_credential_path) if repo_credential_path is not None else None
+        )
+
+    # -- the repo credential (S3) ------------------------------------------
+
+    def _read_repo_credential(self) -> str:
+        """The ONE expression in this module that reads the credential
+        bytes (D6's two-site rule: here and `jobfolder`'s probe env
+        builder, nothing else skill-wide).
+
+        `.strip()` because a trailing newline in a token file is an
+        editing artifact, and an unreadable-or-empty value refuses HERE,
+        naming the path — an empty credential would be uploaded as a
+        token that is nothing but whitespace, a configuration accident
+        this method must not launder into a VM-side clone failure after
+        quota is spent.
+        """
+        path = self._repo_credential_path
+        assert path is not None, "_read_repo_credential called with no path"
+        try:
+            value = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ColabAdapterError(
+                f"the repository credential at {path} could not be read: {exc}"
+            ) from exc
+        if not value:
+            raise ColabAdapterError(
+                f"the repository credential at {path} is empty after "
+                "stripping whitespace; refusing to stage an empty credential "
+                "(git would present it as the token)"
+            )
+        return value
 
     # -- the subprocess boundary ------------------------------------------
 
@@ -775,8 +860,17 @@ class ColabAdapter(ADAPTER.Adapter):
     def submit(self, job: "ADAPTER.Job") -> "ADAPTER.Submission":
         """The full session lifecycle, in the parent plan's own order:
         job-folder checks → `new` → endpoint → keep-alive → remote mkdir →
-        uploads → dependency probe (install only what is missing) → the
-        detached launch → the submission receipt.
+        uploads (plus the credential material, when one is configured —
+        after the three payload uploads, before the probe) → dependency
+        probe (install only what is missing) → the detached launch → the
+        submission receipt.
+
+        The credential bytes are read ONCE, before any network call at
+        all (S3/D6): a bad path refuses before a session is even checked
+        for, let alone uploaded to. The bytes are then written into the
+        same per-call temp dir the rendered helpers use — never into the
+        job folder, never into `run-config.json` — and both files die
+        with the call after being uploaded.
 
         Everything after the `new` INVOCATION sits inside one cleanup
         boundary: any failure attempts a stop, and a cleanup that itself
@@ -832,6 +926,16 @@ class ColabAdapter(ADAPTER.Adapter):
         digest = _digest8(entrypoint_bytes, commit, mode)
         session_name = f"{SESSION_NAME_PREFIX}{_slugify(entrypoint.parent.name)}-{digest}"
 
+        # S3/D6: the credential bytes are read once, here — before the
+        # session pre-check and before any upload — so a bad path refuses
+        # while refusing still costs nothing, and the stripped value is
+        # carried in this local until it is written into the temp dir.
+        credential_token = (
+            self._read_repo_credential()
+            if self._repo_credential_path is not None
+            else None
+        )
+
         self._refuse_existing_session(session_name)
 
         if job.run_config:
@@ -874,6 +978,30 @@ class ColabAdapter(ADAPTER.Adapter):
                 self._upload(self._assets_dir / EXECUTOR_ASSET, f"{self._session_dir(session_name)}/{EXECUTOR_ASSET}", session_name)
                 self._upload(staged_run_config, f"{self._session_dir(session_name)}/{RUN_CONFIG_FILENAME}", session_name)
                 self._upload(entrypoint, f"{self._session_dir(session_name)}/{entrypoint.name}", session_name)
+
+                # S3/D6 staging: the askpass script (verbatim) and the
+                # token file (stripped bytes, 0o600, no trailing newline)
+                # go up AFTER the payload and BEFORE the probe. The local
+                # copies live in `tmp` and die with this call; the job
+                # folder and `run-config.json` are never written.
+                if credential_token is not None:
+                    askpass_local = tmp / REPO_CREDENTIAL_ASKPASS_FILENAME
+                    askpass_local.write_text(
+                        REPO_CREDENTIAL_ASKPASS_SOURCE, encoding="utf-8"
+                    )
+                    token_local = tmp / REPO_CREDENTIAL_TOKEN_FILENAME
+                    token_local.write_bytes(credential_token.encode("utf-8"))
+                    os.chmod(token_local, 0o600)
+                    self._upload(
+                        askpass_local,
+                        f"{self._session_dir(session_name)}/{REPO_CREDENTIAL_ASKPASS_FILENAME}",
+                        session_name,
+                    )
+                    self._upload(
+                        token_local,
+                        f"{self._session_dir(session_name)}/{REPO_CREDENTIAL_TOKEN_FILENAME}",
+                        session_name,
+                    )
 
                 self._ensure_dependencies(probe_helper, session_name)
                 self._launch(launcher, session_name)
@@ -949,11 +1077,13 @@ class ColabAdapter(ADAPTER.Adapter):
 
         The manifest is downloaded entry by entry (the CLI has no
         directory transfer), each entry validated as a relative,
-        non-escaping path first. The release runs only AFTER the
-        downloads, and only for a run whose `status.json` exists —
-        whatever its exit code, because the run is over either way; a
-        session gone at read time is a refusal naming it, and a refusal
-        to stop fails the fetch only after the bytes are already local.
+        non-escaping path first — and refused outright when it names this
+        protocol's own staged credential material at the top level
+        (S3/D6). The release runs only AFTER the downloads, and only for
+        a run whose `status.json` exists — whatever its exit code,
+        because the run is over either way; a session gone at read time
+        is a refusal naming it, and a refusal to stop fails the fetch
+        only after the bytes are already local.
         """
         session_name = self._session_name_from(submission_id)
         into = Path(into)
@@ -989,6 +1119,21 @@ class ColabAdapter(ADAPTER.Adapter):
                 raise ColabAdapterError(
                     f"{submission_id!r}: manifest entry {entry!r} is not a "
                     "safe relative path; refusing before any download"
+                )
+            # S3/D6, defense in depth: the executor deletes the staged
+            # askpass material after the run and excludes both names from
+            # its manifest at the top level, so a manifest naming either
+            # one is a shape this protocol never produces — refusing here
+            # keeps a credential file from being downloaded even if a
+            # future executor regressed. The same basename under a
+            # subdirectory is a product of the run, not protocol material,
+            # and does NOT refuse.
+            if candidate.parts[0] in CREDENTIAL_MATERIAL_FILENAMES:
+                raise ColabAdapterError(
+                    f"{submission_id!r}: manifest entry {entry!r} names this "
+                    "protocol's own credential material; the executor deletes "
+                    "both staged names after the run and never lists them, so "
+                    "refusing before any download"
                 )
 
         materialized: list[str] = []

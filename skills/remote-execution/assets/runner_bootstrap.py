@@ -9,7 +9,11 @@ never baked in at generation time. Ten responsibilities, in order:
 1. read `run-config.json`; validate schema/version
 2. sparse-clone the pinned commit: `git init`, `remote add`,
    `sparse-checkout set <clonePaths>`, `fetch --depth 1 origin <commit>`,
-   `checkout FETCH_HEAD`
+   `checkout FETCH_HEAD`. When the job staged a repository credential
+   beside this cell (`git-askpass.sh`, S3), every clone call carries
+   `GIT_ASKPASS` pointing at it, a non-`https://` `repo.url` refuses
+   before the first git call, and both material files are deleted in a
+   `finally` immediately after the clone attempt
 3. `sys.path.insert(0, <clone>/src)`
 4. install the declared build: `sys.executable -m pip install`, list
    argv, against `run-config.json`'s additive `environment.install`
@@ -109,6 +113,19 @@ REQUIRED_RUN_CONFIG_FIELDS = ("schemaVersion", "commit", "repo", "clonePaths", "
 GIT_ENV_ALLOWLIST = ("PATH",)
 GIT_TIMEOUT_SECONDS = 120.0
 
+# The credential material a credentialed submission stages beside the
+# executor (S3): an askpass script and the token file it reads. The names
+# are declared in THREE files by convention — the backend adapter (the
+# uploader and the fetch-time refusal), the executor asset (chmod,
+# deletion, manifest exclusion) and this one (the clone's own use and
+# deletion) — deliberately not shared by import: no module above the seam
+# may name a backend, and the asset files are byte-copies, never importers
+# of each other. `git-askpass.sh` prints the token file's bytes for
+# whichever prompt git asks; HTTPS token auth on the hosts this skill
+# targets accepts the token as the username with any password.
+REPO_CREDENTIAL_ASKPASS_FILENAME = "git-askpass.sh"
+REPO_CREDENTIAL_TOKEN_FILENAME = "git-askpass-token"
+
 
 def _config_path(base_dir: str | Path | None) -> Path:
     base = Path(base_dir) if base_dir is not None else Path.cwd()
@@ -176,6 +193,7 @@ def _run_git(
     *,
     cwd: str | Path,
     timeout: float = GIT_TIMEOUT_SECONDS,
+    extra_env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """The single composition point for every git invocation this cell
     makes. `shell=False` with a list argv means a value carrying shell
@@ -184,9 +202,19 @@ def _run_git(
     `GIT_ENV_ALLOWLIST` alone, never this process's own `os.environ`
     forwarded wholesale. A non-zero exit or an expired timeout raises
     `BootstrapError` rather than being silently ignored.
+
+    `extra_env` (S3) is a caller-supplied mapping merged into the child's
+    environment AFTER the allowlist — the credential-aware clone's
+    `GIT_ASKPASS`, and never anything else. It is a separate channel from
+    `GIT_ENV_ALLOWLIST` on purpose: the allowlist stays `("PATH",)`, and
+    the askpass path is an explicit per-call decision rather than a
+    widening of it. `None` (every credentialless clone) means the child's
+    environment is built exactly as it was before this parameter existed.
     """
     argv = ["git", *args]
     env = {name: os.environ[name] for name in GIT_ENV_ALLOWLIST if name in os.environ}
+    if extra_env:
+        env.update(extra_env)
     try:
         result = subprocess.run(
             argv,
@@ -208,11 +236,33 @@ def _run_git(
     return result
 
 
-def clone_repo(run_config: Mapping[str, Any], clone_dir: str | Path) -> Path:
+def clone_repo(
+    run_config: Mapping[str, Any],
+    clone_dir: str | Path,
+    *,
+    askpass: str | Path | None = None,
+) -> Path:
     """Sparse-clone the declared repo at the pinned commit — responsibility
     2 — every step through `_run_git()` alone: `init`, `remote add`,
     `sparse-checkout set <clonePaths>`, `fetch --depth 1 origin <commit>`,
     `checkout FETCH_HEAD`.
+
+    `askpass` (S3) is the absolute path to the staged `git-askpass.sh`
+    when — and only when — the submission carried a repository credential.
+    With it, every git call this function makes carries
+    `GIT_ASKPASS=<that path>` through `_run_git()`'s `extra_env`, and
+    `run-config.json`'s `repo.url` must be `https://` — refused BEFORE the
+    first git call otherwise, because a hand-edited config can bypass
+    generation and a credential can only travel over TLS (the runner has
+    no SSH agent and no key). The two material files are deleted in a
+    `finally` immediately after the clone attempt, success or failure:
+    that is D6's deletion point — before anything else in cell 0 proceeds
+    — and a failed unlink is a printed `warning:` line, never a raise,
+    because the clone's own outcome must not be masked and the executor's
+    own fallback deletion plus its manifest exclusion already bound the
+    residue. `None` (every credentialless job, and every run of a backend
+    that stages no credential material) is byte-identical to before this
+    parameter existed: no `GIT_ASKPASS`, no deletion, no URL gate.
     """
     clone_dir = Path(clone_dir)
     clone_dir.mkdir(parents=True, exist_ok=True)
@@ -220,11 +270,46 @@ def clone_repo(run_config: Mapping[str, Any], clone_dir: str | Path) -> Path:
     commit = run_config["commit"]
     clone_paths = list(run_config["clonePaths"])
 
-    _run_git(["init"], cwd=clone_dir)
-    _run_git(["remote", "add", "origin", repo["url"]], cwd=clone_dir)
-    _run_git(["sparse-checkout", "set", *clone_paths], cwd=clone_dir)
-    _run_git(["fetch", "--depth", "1", "origin", commit], cwd=clone_dir)
-    _run_git(["checkout", "FETCH_HEAD"], cwd=clone_dir)
+    askpass_path: Path | None = Path(askpass) if askpass is not None else None
+    if askpass_path is not None:
+        url = str(repo.get("url", ""))
+        if not url.startswith("https://"):
+            raise BootstrapError(
+                f"repo credential refused: run-config.json's repo.url "
+                f"{url!r} is not an https:// URL, and a staged repository "
+                "credential can only travel over HTTPS — the runner's clone "
+                "has no SSH agent and no key. Refusing before any git call."
+            )
+        clone_env: Mapping[str, str] | None = {
+            "GIT_ASKPASS": str(askpass_path.resolve())
+        }
+    else:
+        clone_env = None
+
+    def _git(args: Sequence[str]) -> subprocess.CompletedProcess:
+        return _run_git(args, cwd=clone_dir, extra_env=clone_env)
+
+    try:
+        _git(["init"])
+        _git(["remote", "add", "origin", repo["url"]])
+        _git(["sparse-checkout", "set", *clone_paths])
+        _git(["fetch", "--depth", "1", "origin", commit])
+        _git(["checkout", "FETCH_HEAD"])
+    finally:
+        if askpass_path is not None:
+            for material in (
+                askpass_path,
+                askpass_path.parent / REPO_CREDENTIAL_TOKEN_FILENAME,
+            ):
+                try:
+                    material.unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(
+                        f"warning: could not delete credential material "
+                        f"{material}: {exc}"
+                    )
     return clone_dir
 
 
@@ -708,7 +793,18 @@ def bootstrap(
     base = Path(base_dir) if base_dir is not None else Path.cwd()
     try:
         run_config = load_run_config(base)
-        clone_dir = clone_repo(run_config, base / CLONE_DIRNAME)
+        # S3/D6: the credential material is discovered by NAME at the
+        # session-dir convention — `exec -f` has no argv/env channel, so
+        # nothing can be injected through a process environment. Inert on
+        # every credentialless run: a run-config with no staged askpass
+        # beside it passes `None` and behaves exactly as before this
+        # existed.
+        askpass = base / REPO_CREDENTIAL_ASKPASS_FILENAME
+        clone_dir = clone_repo(
+            run_config,
+            base / CLONE_DIRNAME,
+            askpass=askpass if askpass.is_file() else None,
+        )
         src_dir = add_clone_to_path(clone_dir)
         install_environment(run_config)
         modules = declared_modules(run_config)
