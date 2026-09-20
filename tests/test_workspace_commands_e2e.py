@@ -20,8 +20,10 @@ import json
 import os
 import shutil
 import signal
+import stat as stat_module
 import subprocess
 import unittest
+import warnings as _warnings
 from pathlib import Path
 from unittest import mock
 
@@ -523,6 +525,233 @@ class RenderedSetLifecycleTests(unittest.TestCase):
         result = upgrade_module.upgrade(workspace)
         self.assertEqual(victim.read_text(encoding="utf-8"), "must survive\n")
         self.assertNotIn(escape, result["removed"])
+
+
+class DamagedWorkspaceTotalityTests(unittest.TestCase):
+    """Every managed path a damaged workspace can put in the way of a command.
+
+    These are the residuals the Change B review left as pre-existing: the
+    version marker, the write path, ``audit``'s read, and the workspace config.
+    Each one previously either blocked forever or escaped as an untyped
+    exception, and each is now closed by the same regular-file gate — a guarded
+    read alone is not enough, because ``open(2)`` on a FIFO never returns and
+    ``Path.is_file`` re-raises EACCES on CPython 3.11-3.13.
+    """
+
+    @contextlib.contextmanager
+    def _alarm(self, message: str, seconds: int = 15):
+        """Turn a regression into a failure instead of a hung suite."""
+        if not hasattr(signal, "setitimer"):
+            self.skipTest("setitimer unavailable")
+
+        def _blocked(signum, frame):
+            raise AssertionError(message)
+
+        previous = signal.signal(signal.SIGALRM, _blocked)
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+
+    @contextlib.contextmanager
+    def _recorded_warnings(self):
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always")
+            yield caught
+
+    def test_a_fifo_at_the_version_marker_never_blocks(self) -> None:
+        """The marker is a managed path, so it takes the same gate as the rest."""
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        marker = workspace / ".papersmith" / "version"
+        marker.unlink()
+        os.mkfifo(marker)
+
+        with self._alarm("a read blocked on a FIFO version marker"):
+            rc, out, _ = capture(["status", str(workspace), "--json"])
+            self.assertEqual(rc, SUCCESS)
+            payload = json.loads(out)
+        self.assertEqual(payload["framework"]["workspace_version"], "unknown")
+        self.assertFalse(payload["framework"]["version_match"])
+
+    def test_a_non_utf8_version_marker_is_a_default_not_a_traceback(self) -> None:
+        """``UnicodeDecodeError`` is not an ``OSError``, so the old guard missed it."""
+        workspace = make_workspace(new_tmp(self))
+        (workspace / ".papersmith" / "version").write_bytes(b"\xff\xfe not utf-8")
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertEqual(json.loads(out)["framework"]["workspace_version"], "unknown")
+
+    def test_upgrade_skips_a_rendered_path_occupied_by_a_fifo(self) -> None:
+        """``apply_generated`` writes, so a FIFO there would block the write half.
+
+        The write path runs after the kit copy has already mutated the workspace,
+        so a hang or an abort here is worse than one on a read: it strands a
+        half-synchronized workspace. The path is reported and left alone.
+        """
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        managed.unlink()
+        os.mkfifo(managed)
+
+        with self._alarm("upgrade blocked writing a FIFO"):
+            with self._recorded_warnings() as caught:
+                result = upgrade_module.upgrade(workspace)
+        self.assertNotIn("CLAUDE.md", result["changed_files"])
+        self.assertIn("CLAUDE.md", result["unsynchronized"],
+                      "a skipped write is surfaced to the caller, not only warned")
+        stat_mode = managed.lstat().st_mode
+        self.assertTrue(stat_module.S_ISFIFO(stat_mode), "the FIFO is left as it was")
+        self.assertTrue(any("CLAUDE.md" in str(entry.message) for entry in caught),
+                        "a skipped write is reported, not swallowed")
+
+    def test_a_skipped_write_never_disappears_from_the_baseline(self) -> None:
+        """The rewrite must not lose a path the live map omits.
+
+        ``workspace_framework_files`` drops any path it cannot hash, so a
+        baseline rewritten after a skip would lose the path from *both* sides of
+        ``status``'s comparison and report a false "no drift" for a managed path
+        that was never synchronized. The baseline keeps a marker instead, so
+        ``status`` and ``audit`` agree.
+        """
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        managed.unlink()
+        os.mkfifo(managed)
+
+        with self._alarm("upgrade blocked writing a FIFO"):
+            with self._recorded_warnings():
+                upgrade_module.upgrade(workspace)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("CLAUDE.md", json.loads(out)["framework"]["drifted_files"],
+                      "status must not report a false 'no drift' for a skipped path")
+
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        self.assertIn("CLAUDE.md", out)
+
+    def test_a_written_but_unhashable_path_stays_visible_as_drift(self) -> None:
+        """A write can succeed and still leave the path unhashable.
+
+        A write-only regular file is overwritten successfully, so it is *not*
+        "unsynchronized" — yet ``workspace_framework_files`` still cannot read it
+        back. Sweeping the whole render set, rather than only the paths reported
+        as unsynchronized, is what keeps this out of a false "no drift"; the
+        FIFO case alone would pass either way.
+        """
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores file permission bits")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        os.chmod(managed, 0o200)
+        self.addCleanup(os.chmod, managed, 0o644)
+
+        with self._recorded_warnings():
+            result = upgrade_module.upgrade(workspace)
+        self.assertNotIn("CLAUDE.md", result["unsynchronized"],
+                         "the write succeeded, so this is not a skip")
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("CLAUDE.md", json.loads(out)["framework"]["drifted_files"],
+                      "an unhashable managed path is drift, not silence")
+
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        self.assertIn("CLAUDE.md", out)
+
+    def test_a_directory_at_a_rendered_path_is_reported_not_fatal(self) -> None:
+        """``write_bytes`` on a directory raised ``IsADirectoryError`` untyped."""
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        managed.unlink()
+        managed.mkdir()
+        (managed / "keep.txt").write_text("user data\n", encoding="utf-8")
+
+        with self._recorded_warnings() as caught:
+            result = upgrade_module.upgrade(workspace)
+        self.assertTrue((managed / "keep.txt").is_file(), "user data is untouched")
+        self.assertNotIn("CLAUDE.md", result["changed_files"])
+        self.assertTrue(any("CLAUDE.md" in str(entry.message) for entry in caught))
+
+    def test_audit_agrees_with_status_on_an_unreadable_rendered_file(self) -> None:
+        """A mode-000 *regular* file: the gate passes, the read does not.
+
+        ``is_regular_file`` cannot see a mode that denies reading, so the read
+        itself is guarded too. ``audit`` used to traceback on exactly the path
+        ``status`` reported as drift.
+        """
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores file permission bits")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "CLAUDE.md"
+        os.chmod(managed, 0o000)
+        self.addCleanup(os.chmod, managed, 0o644)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("CLAUDE.md", json.loads(out)["framework"]["drifted_files"])
+
+        rc, out, _ = capture(["audit", str(workspace), "--check-drift"])
+        self.assertEqual(rc, DRIFT_ERROR)
+        self.assertIn("CLAUDE.md", out)
+
+    def test_a_non_utf8_workspace_config_is_a_typed_error(self) -> None:
+        """A config read is a user error, never an untyped decode traceback."""
+        workspace = make_workspace(new_tmp(self))
+        (workspace / ".papersmith" / "config.json").write_bytes(b"\xff\xfe not utf-8")
+
+        with self.assertRaises(UserError):
+            status_module.status(workspace)
+        rc, _, err = capture(["status", str(workspace)])
+        self.assertEqual(rc, USER_ERROR)
+        self.assertIn("config.json", err)
+
+    def test_a_non_utf8_papersmith_yaml_is_a_typed_error(self) -> None:
+        workspace = make_workspace(new_tmp(self))
+        (workspace / "papersmith.yaml").write_bytes(b"\xff\xfe not utf-8")
+
+        with self.assertRaises(UserError):
+            status_module.status(workspace)
+        rc, _, err = capture(["status", str(workspace)])
+        self.assertEqual(rc, USER_ERROR)
+        self.assertIn("papersmith.yaml", err)
+
+    def test_a_damaged_run_ledger_is_reported_not_fatal(self) -> None:
+        """``is_file`` short-circuits a FIFO, but not an unreadable or non-UTF-8 file.
+
+        The FIFO case was already safe here — the existence check returns before
+        any open — so the guard belongs on the read: a mode-000 or non-UTF-8
+        ledger aborted a command whose contract is explicitly best-effort.
+        """
+        workspace = make_workspace(new_tmp(self))
+        ledger_path = workspace / ".papersmith" / "runs_ledger.jsonl"
+        ledger_path.write_text('{"exit": 0}\n', encoding="utf-8")
+
+        # The decode half needs no permission bits, so it runs even as root.
+        ledger_path.write_bytes(b"\xff\xfe not utf-8")
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertEqual(json.loads(out)["tests"]["recorded_runs"], 0,
+                         "a damaged ledger is reported as absent, not as a crash")
+
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores file permission bits; the read half is unreachable")
+        os.chmod(ledger_path, 0o000)
+        self.addCleanup(os.chmod, ledger_path, 0o644)
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        json.loads(out)
 
 
 class TargetCommandTests(unittest.TestCase):

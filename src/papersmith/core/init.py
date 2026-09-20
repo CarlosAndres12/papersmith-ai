@@ -10,7 +10,13 @@ from typing import Sequence
 
 from .. import __version__
 from ..errors import SourceError, UserError
-from ..generators import ALL_TOOLS, apply_generated, context_for_workspace
+from ..generators import (
+    ALL_TOOLS,
+    UNSYNCHRONIZED,
+    apply_generated,
+    context_for_workspace,
+    render_files,
+)
 from ..kit import resolve_and_validate
 from ..render import render_package_template
 from ..schema import REMOTE_CHOICES, REMOTE_TARGETS, validate_tools
@@ -172,7 +178,9 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
     # Render exactly the declared tool set: the payload the CLI validated and
     # stored above is the same set every later consumer resolves through
     # ``generators.workspace_tools``.
-    generated = apply_generated(root, context_for_workspace(root), tools)
+    unsynchronized: list[str] = []
+    context = context_for_workspace(root)
+    generated = apply_generated(root, context, tools, skipped=unsynchronized)
     warnings: list[str] = []
     if run_npm:
         warning = _run_npm_install(root)
@@ -183,6 +191,12 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
     config.load_workspace_config(root)
     config.load_papersmith_yaml(root)
     framework_files = manifest.workspace_framework_files(root, kit_root)
+    for relpath in render_files(root, context, tools):
+        # Any rendered path the baseline cannot hash — non-regular, never
+        # written, or written but still unreadable — is recorded with a marker,
+        # so ``status`` reports it as drift instead of losing it in the rewrite.
+        if relpath not in framework_files:
+            framework_files[relpath] = UNSYNCHRONIZED
     manifest.write_manifest(root, version, framework_files, kind="workspace")
     return {
         "workspace": str(root),

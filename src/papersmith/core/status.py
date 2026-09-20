@@ -11,16 +11,22 @@ from .. import __version__
 from ..bridges.node import call_engine, ensure_node_engine
 from ..bridges.python import run_script
 from ..errors import PapersmithError, UserError
+from ..generators import is_regular_file, read_workspace_version
 from ..kit import resolve_and_validate
 from . import config, manifest
 
 
 def _read_ledger(root: Path) -> list[dict[str, Any]]:
     path = root / ".papersmith" / "runs_ledger.jsonl"
-    if not path.is_file():
+    if not is_regular_file(path):
+        return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Best-effort: a damaged ledger is reported as absent, not as a crash.
         return []
     entries: list[dict[str, Any]] = []
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -142,7 +148,7 @@ def status(workspace: str | Path = ".") -> dict[str, Any]:
     yaml = config.load_papersmith_yaml(root)
     kit_root = resolve_and_validate()
     kit_version = manifest.kit_version(kit_root)
-    workspace_version = (root / ".papersmith" / "version").read_text(encoding="utf-8").strip()
+    workspace_version = read_workspace_version(root, "unknown")
     current_files = manifest.workspace_framework_files(root, kit_root)
     stored_files = stored.get("files", {})
     drifted = sorted({

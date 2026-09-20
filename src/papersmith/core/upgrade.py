@@ -6,7 +6,13 @@ from pathlib import Path
 from typing import Sequence
 
 from ..errors import SourceError, UserError
-from ..generators import apply_generated, context_for_workspace, is_regular_file, render_files
+from ..generators import (
+    UNSYNCHRONIZED,
+    apply_generated,
+    context_for_workspace,
+    is_regular_file,
+    render_files,
+)
 from ..kit import resolve_and_validate
 from ..schema import validate_tools
 from . import config, manifest
@@ -107,7 +113,8 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
     # Rendered files are framework-owned projections. Context is read after
     # raw agent/config files have been synchronized so the new roster appears.
     context = context_for_workspace(root)
-    generated = apply_generated(root, context, active_tools)
+    unsynchronized: list[str] = []
+    generated = apply_generated(root, context, active_tools, skipped=unsynchronized)
     for relpath in generated:
         if relpath not in changed:
             changed.append(relpath)
@@ -149,8 +156,18 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
         # strand the file untracked forever.
         target = root / relpath
         framework_files[relpath] = (
-            manifest.sha256_file(target) if is_regular_file(target) else "unreadable"
+            manifest.sha256_file(target) if is_regular_file(target) else UNSYNCHRONIZED
         )
+    for relpath in current_render:
+        # Every rendered path this run was responsible for must be accounted for
+        # in the baseline. ``workspace_framework_files`` omits any path it cannot
+        # hash — non-regular, never written, or written but still unreadable (a
+        # write-only file) — and an omission on both sides of ``status``'s
+        # comparison is a false "no drift". Sweeping the whole render set, rather
+        # than only the paths reported as unsynchronized, is what makes this
+        # total: a write can succeed and still leave the path unhashable.
+        if relpath not in framework_files:
+            framework_files[relpath] = UNSYNCHRONIZED
     manifest.write_manifest(root, version, framework_files, kind="workspace")
     return {
         "workspace": str(root),
@@ -160,6 +177,7 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
         "preserved_files": preserved,
         "removed": removed,
         "stranded": stranded,
+        "unsynchronized": unsynchronized,
         "warnings": [
             "package.json changed; run npm install in the workspace"
             if "package.json" in changed else ""
@@ -185,4 +203,6 @@ def run_cli(args) -> int:
     for warning in result["warnings"]:
         if warning:
             print(f"Warning: {warning}")
+    for relpath in result["unsynchronized"]:
+        print(f"Warning: could not write '{relpath}'; it stays reported as drift")
     return 0

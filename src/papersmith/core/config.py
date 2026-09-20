@@ -21,7 +21,7 @@ def read_json(path: Path) -> dict:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise UserError(f"missing configuration file: {path}") from None
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise UserError(f"corrupted JSON file {path}: {exc}") from None
     if not isinstance(data, dict):
         raise UserError(f"configuration file {path} must contain a JSON object")
@@ -44,6 +44,6 @@ def load_papersmith_yaml(workspace: Path, *, require_compute: bool = True) -> di
         data = loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise UserError(f"missing workspace configuration: {path}") from None
-    except (OSError, YamlliteError) as exc:
+    except (OSError, UnicodeDecodeError, YamlliteError) as exc:
         raise UserError(f"invalid workspace YAML {path}: {exc}") from None
     return validate_papersmith_yaml(data, require_compute=require_compute)

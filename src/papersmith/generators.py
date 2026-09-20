@@ -32,6 +32,13 @@ TOOL_OUTPUTS = {
     "antigravity": (".antigravity/rules.md",),
 }
 
+#: Baseline marker for a managed path a run could not synchronize or remove.
+#: A sha256 digest is 64 hex characters, so this cannot collide with one, and
+#: ``workspace_framework_files`` omits such a path from the live map — the
+#: comparison therefore always mismatches and ``status`` reports it as drift
+#: instead of losing it when the baseline is rewritten.
+UNSYNCHRONIZED = "unsynchronized"
+
 
 def _frontmatter_value(value: str) -> str:
     value = value.strip()
@@ -72,6 +79,37 @@ def is_regular_file(path: Path) -> bool:
         return path.is_file()
     except OSError:
         return False
+
+
+def _exists(path: Path) -> bool:
+    """True when anything at all occupies ``path``.
+
+    ``Path.exists`` follows symlinks — a dangling one reports ``False`` — and
+    re-raises EACCES. This must not raise, and must not be fooled by a dangling
+    link, or a write would land on the link's target instead of being reported.
+    """
+    try:
+        path.lstat()
+    except OSError:
+        return False
+    return True
+
+
+def read_workspace_version(workspace: Path, default: str) -> str:
+    """Read ``.papersmith/version`` without ever raising or blocking.
+
+    The marker is a framework-managed path like any other, so it passes the same
+    regular-file gate: a FIFO here would block every context derivation, and a
+    non-UTF-8 marker would escape as an untyped ``UnicodeDecodeError`` from a
+    read whose callers are all fail-soft.
+    """
+    path = workspace / ".papersmith" / "version"
+    if not is_regular_file(path):
+        return default
+    try:
+        return path.read_text(encoding="utf-8").strip() or default
+    except (OSError, UnicodeDecodeError):
+        return default
 
 
 def collect_agents(workspace: Path) -> list[dict[str, str]]:
@@ -228,16 +266,11 @@ def collect_commands(workspace: Path, *,
 def context_for_workspace(workspace: Path) -> dict[str, Any]:
     config = load_workspace_config(workspace)
     yaml = load_papersmith_yaml(workspace)
-    version_path = workspace / ".papersmith" / "version"
-    try:
-        version = version_path.read_text(encoding="utf-8").strip()
-    except OSError:
-        version = str(yaml.get("version", "1"))
     return {
         "name": yaml.get("name", config["project_name"]),
         "title": yaml.get("title", config["project_name"]),
         "topic": yaml.get("topic", "unspecified"),
-        "version": version,
+        "version": read_workspace_version(workspace, str(yaml.get("version", "1"))),
         "tools": ", ".join(config["active_tools"]),
         "agents": _agents_block(workspace),
     }
@@ -321,24 +354,78 @@ def render_files(workspace: Path, context: dict[str, Any] | None = None,
 
 def apply_generated(workspace: Path, context: dict[str, Any] | None = None,
                     tools: list[str] | tuple[str, ...] = ALL_TOOLS, *,
-                    warnings: list[str] | None = None) -> list[str]:
+                    warnings: list[str] | None = None,
+                    skipped: list[str] | None = None) -> list[str]:
+    """Write every rendered file, never blocking on a damaged workspace.
+
+    Every target passes the same regular-file gate the readers use. A rendered
+    path occupied by a directory, socket, device, FIFO or dangling symlink is
+    reported and skipped rather than opened: a write to a FIFO would block
+    forever, and a device would accept unbounded bytes. An unsearchable parent
+    is reported too, instead of aborting the run part-way through, after the kit
+    copy has already mutated the workspace.
+
+    A skipped path is left exactly as it was and named in ``skipped``, so its
+    caller can keep it in the manifest baseline: ``workspace_framework_files``
+    omits a path it cannot hash, so a baseline rewritten without it would drop
+    the path from both sides of the comparison and ``status`` would report a
+    false "no drift".
+    """
     changed: list[str] = []
+    unsynchronized: list[str] = []
     for relpath, content in render_files(workspace, context, tools, warnings=warnings).items():
         path = workspace / relpath
         encoded = content.encode("utf-8")
-        if not path.is_file() or path.read_bytes() != encoded:
+        if is_regular_file(path):
+            try:
+                if path.read_bytes() == encoded:
+                    continue
+            except OSError:
+                pass  # Present but unreadable: try to overwrite it below.
+        elif _exists(path):
+            unsynchronized.append(relpath)
+            continue
+        try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(encoded)
-            changed.append(relpath)
+        except OSError:
+            unsynchronized.append(relpath)
+            continue
+        changed.append(relpath)
+    if skipped is not None:
+        skipped.extend(unsynchronized)
+    if unsynchronized:
+        reported = [f"skipping '{relpath}': not written" for relpath in unsynchronized]
+        if warnings is not None:
+            warnings.extend(reported)
+        else:
+            # One aggregated warning for the same reason collect_commands emits
+            # one: the default filter dedupes by (module, line), so per-path
+            # warnings would silently drop all but the first.
+            _warnings.warn("\n".join(reported), UserWarning, stacklevel=2)
     return changed
 
 
 def check_generated(workspace: Path, context: dict[str, Any] | None = None,
                     tools: list[str] | tuple[str, ...] = ALL_TOOLS, *,
                     warnings: list[str] | None = None) -> list[str]:
+    """Rendered paths whose on-disk bytes are not verifiably current.
+
+    Anything that is not a readable regular file counts as drift: the same gate
+    the readers use, plus a guarded read, so this answers the same way
+    ``status`` does for that path instead of raising where ``status`` reports.
+    """
     drifted: list[str] = []
     for relpath, content in render_files(workspace, context, tools, warnings=warnings).items():
         path = workspace / relpath
-        if not is_regular_file(path) or path.read_bytes() != content.encode("utf-8"):
+        if not is_regular_file(path):
+            drifted.append(relpath)
+            continue
+        try:
+            if path.read_bytes() != content.encode("utf-8"):
+                drifted.append(relpath)
+        except OSError:
+            # A regular file whose mode denies the read: present, but not
+            # verifiably current, which is drift.
             drifted.append(relpath)
     return drifted
