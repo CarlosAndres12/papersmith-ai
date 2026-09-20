@@ -394,6 +394,21 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "FACT_PRODUCER_ABSENT": WORK_STATE,
     "PRODUCER_CHAIN_ABSENT": WORK_STATE,
     "PRODUCED_FACT_UNDECLARABLE": WORK_STATE,
+    # --- the-requirement-names-the-section-that-feeds-it, U1+U2: the
+    # `document: {lineage, section}` half of a `requires_facts` entry
+    # (`paper_contract.py`'s own grammar widening adds no new code --
+    # `MALFORMED_HEADER` is reused verbatim) and its resolution against
+    # real disk, wired into `assemble_corpus` (`paper_graph.py`'s new
+    # `_verify_source_section_bindings`) and the marker reader it calls
+    # (`paper_declarations.read_revisions_marker`/`resolve_lineage`).
+    # `SECTION_BINDING_ABSENT` (the obligation itself) is U3-only and lands
+    # with the write-gate wiring, not here -- U1/U2 are inert: a binding is
+    # accepted but never demanded ------------------------------------------
+    "MALFORMED_SOURCE_MARKER": WORK_STATE,
+    "SOURCE_REVISIONS_UNDECLARED": WORK_STATE,
+    "SOURCE_LINEAGE_UNRESOLVED": WORK_STATE,
+    "SECTION_NOT_IN_SOURCE": WORK_STATE,
+    "SECTION_TITLE_AMBIGUOUS": WORK_STATE,
 }
 
 

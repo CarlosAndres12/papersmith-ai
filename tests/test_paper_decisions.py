@@ -291,6 +291,25 @@ class GuidanceRegistryTests(unittest.TestCase):
             paper_guidance.read_registry(self.guidance_dir)
         self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
 
+    def test_a_source_root_shaped_marker_refuses_as_an_unknown_key(self) -> None:
+        """`the-requirement-names-the-section-that-feeds-it`,
+        `source-section-binding` spec, `Requirement: The Marker Grammar Is
+        Validated, And Disjoint From guidance/'s`: `guidance/`'s own
+        reader (`_MARKER_ALLOWED_KEYS = ("class",)`) MUST NOT silently
+        accept a source-root-shaped marker (`{"revisions": {...}}`) --
+        regression proof only, no production edit expected here, since
+        `_MARKER_ALLOWED_KEYS` already excludes `revisions`."""
+        self._write_marker(
+            "prior-papers",
+            {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
+        self.assertIn("revisions", ctx.exception.detail)
+
     def test_marker_that_is_not_an_object_refuses_malformed(self) -> None:
         target = self.guidance_dir / "prior-papers"
         target.mkdir(parents=True)
@@ -2858,7 +2877,12 @@ class CouplingsMutationTests(unittest.TestCase):
 #: these 18 codes was read off the live roster on 2026-09-19 (`paper_cli.
 #: REFUSAL_CLASSIFICATION` held exactly 127 keys at the time), never
 #: guessed from the code's name alone -- the same discipline `REFUSAL_
-#: CLASSIFICATION` itself holds every reachable code to.
+#: CLASSIFICATION` itself holds every reachable code to. `MALFORMED_
+#: SOURCE_MARKER` was pinned separately on 2026-09-19, added by `the-
+#: requirement-names-the-section-that-feeds-it` U1+U2 (roster moved 133 ->
+#: 138) — design.md's own words: "qualifier-led, which the measured roster
+#: admits for exactly this family: the three existing `MALFORMED_*` codes
+#: are all shape checks, and so is this."
 #:
 #: - `CITE_WITHOUT_ENTRY`, `ENTRY_WITHOUT_CITE`: an opposite-direction PAIR
 #:   naming the same relational condition (a `\\cite{}` key with no bib
@@ -2871,13 +2895,14 @@ class CouplingsMutationTests(unittest.TestCase):
 #:   subject) trails.
 #: - `SHARED_COMPONENT`: the predicate `SHARED` leads; `COMPONENT` trails.
 #: - `MALFORMED_FIGURE_OBLIGATION`, `MALFORMED_GUIDANCE_MARKER`,
-#:   `MALFORMED_HEADER`: the predicate `MALFORMED` leads. Contrast the six
-#:   OTHER shipped codes where `MALFORMED` correctly TRAILS a leading
-#:   subject and need no pin: `MARKER_MALFORMED`, `REGION_MALFORMED`,
-#:   `CONDITION_MALFORMED`, `COUPLINGS_RECORD_MALFORMED`, `CITE_KEY_
-#:   MALFORMED`, `BLOCK_ID_MALFORMED` -- the same WORD is subject-first in
-#:   six codes and predicate-first in these three, which is exactly why
-#:   this guard pins CODE NAMES, never a word-anywhere-in-the-code rule.
+#:   `MALFORMED_HEADER`, `MALFORMED_SOURCE_MARKER`: the predicate
+#:   `MALFORMED` leads. Contrast the six OTHER shipped codes where
+#:   `MALFORMED` correctly TRAILS a leading subject and need no pin:
+#:   `MARKER_MALFORMED`, `REGION_MALFORMED`, `CONDITION_MALFORMED`,
+#:   `COUPLINGS_RECORD_MALFORMED`, `CITE_KEY_MALFORMED`, `BLOCK_ID_
+#:   MALFORMED` -- the same WORD is subject-first in six codes and
+#:   predicate-first in these four, which is exactly why this guard pins
+#:   CODE NAMES, never a word-anywhere-in-the-code rule.
 #: - `NOT_AN_OBSERVABLE_FACT`: the negation `NOT` leads with no subject
 #:   noun ahead of it at all (contrast the many codes where `NOT` trails
 #:   the subject correctly, e.g. `ENTRY_NOT_INGESTED`, `PHASE_NOT_READY`).
@@ -2897,6 +2922,7 @@ _SUBJECT_FIRST_EXCEPTIONS = frozenset({
     "CITE_WITHOUT_ENTRY", "ENTRY_WITHOUT_CITE",
     "EXCLUDED_COMPONENT", "SHARED_COMPONENT",
     "MALFORMED_FIGURE_OBLIGATION", "MALFORMED_GUIDANCE_MARKER", "MALFORMED_HEADER",
+    "MALFORMED_SOURCE_MARKER",
     "NOT_AN_OBSERVABLE_FACT", "NOTHING_TO_ADOPT", "UNBOUND_SENTENCE",
     "UNKNOWN_CITATIONS_REGIME", "UNKNOWN_CONDITION_TYPE", "UNKNOWN_DECLARATION",
     "UNKNOWN_FACT", "UNKNOWN_GUIDANCE_CLASS", "UNKNOWN_MODE", "UNKNOWN_ROLE",

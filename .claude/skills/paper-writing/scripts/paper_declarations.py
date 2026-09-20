@@ -46,7 +46,9 @@ Public surface:
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -645,6 +647,159 @@ FACT_SOURCE_ROOT: dict = {
     "implementation": "implementation",
     "results": "implementation",
 }
+
+
+#: Per-root revision marker (`source-section-binding` spec, `Requirement:
+#: The Marker Grammar Is Validated, And Disjoint From guidance/'s`; design.md
+#: Decision A). Same filename `paper_guidance.py`'s own `guidance/` marker
+#: uses (`_MARKER_NAME`) but a DISJOINT key set — `revisions` here,
+#: `class` there — so a marker read by the wrong reader refuses loudly
+#: rather than being silently half-understood.
+_SOURCE_MARKER_NAME = ".paper-writing.json"
+_SOURCE_MARKER_TOP_KEY = "revisions"
+_SOURCE_MARKER_REQUIRED = ("revision_prefix", "ordinal_digits")
+
+
+def read_revisions_marker(root: Path) -> dict | None:
+    """`root / '.paper-writing.json'`'s own `{"revisions": {"revision_
+    prefix": str, "ordinal_digits": int}}` declaration, or `None` when the
+    marker file does not exist at all — an ABSENT marker is a distinct,
+    legitimate state (`SOURCE_REVISIONS_UNDECLARED`, the caller's concern,
+    never this reader's).
+
+    Refuses `MALFORMED_SOURCE_MARKER` (work-state) naming the offending
+    file and the missing, unknown, or wrong-typed key when the marker
+    EXISTS but is not valid UTF-8, not valid JSON, not a JSON object, is
+    missing the top-level `revisions` key, carries any other top-level key,
+    is missing `revision_prefix`/`ordinal_digits`, carries an unknown
+    nested key, or gives either required key the wrong type. A
+    `guidance/`-shaped marker (`{"class": ...}`) refuses naming `revisions`
+    as missing, rather than silently accepting `class` — the disjoint-key
+    requirement, checked missing-before-unknown so the ABSENT key is always
+    named first, the same ordering `paper_contract._validate_document_
+    object` uses."""
+    marker_path = root / _SOURCE_MARKER_NAME
+    if not marker_path.is_file():
+        return None
+    try:
+        raw_text = marker_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
+    try:
+        obj = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+    if not isinstance(obj, dict):
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: must be a JSON object")
+    if _SOURCE_MARKER_TOP_KEY not in obj:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: missing required key {_SOURCE_MARKER_TOP_KEY!r}",
+        )
+    unknown = [key for key in obj if key != _SOURCE_MARKER_TOP_KEY]
+    if unknown:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: carries unknown key {unknown[0]!r}"
+        )
+    revisions = obj[_SOURCE_MARKER_TOP_KEY]
+    if not isinstance(revisions, dict):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} must be an object",
+        )
+    missing = [key for key in _SOURCE_MARKER_REQUIRED if key not in revisions]
+    if missing:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} missing {missing[0]!r}",
+        )
+    unknown_nested = [key for key in revisions if key not in _SOURCE_MARKER_REQUIRED]
+    if unknown_nested:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: {_SOURCE_MARKER_TOP_KEY!r} carries unknown key {unknown_nested[0]!r}",
+        )
+    revision_prefix = revisions["revision_prefix"]
+    if not isinstance(revision_prefix, str):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: 'revision_prefix' must be a string"
+        )
+    ordinal_digits = revisions["ordinal_digits"]
+    if not isinstance(ordinal_digits, int) or isinstance(ordinal_digits, bool):
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER", f"{marker_path}: 'ordinal_digits' must be an integer"
+        )
+    return {"revision_prefix": revision_prefix, "ordinal_digits": ordinal_digits}
+
+
+def source_root_status(base: Path, root_name: str) -> dict:
+    """`{"state": "document-rooted"|"unmeasured", "path": Path|None,
+    "documents": int, "reason": str|None}` (design.md, Interfaces).
+    Document-rooted iff `base / root_name` is a directory holding at least
+    one `*.md` file — a property computed on disk, never keyed by a fact
+    id (`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses`; design.md Decision B). An absent root
+    and a root holding no `*.md` (e.g. only `.gitkeep`) both report
+    `unmeasured` — the SAME report, never a refusal; only a document-rooted
+    root missing its OWN marker refuses (`SOURCE_REVISIONS_UNDECLARED`,
+    the caller's concern, checked one layer up)."""
+    path = base / root_name
+    if not path.is_dir():
+        return {
+            "state": "unmeasured", "path": None, "documents": 0,
+            "reason": f"{root_name!r} is not a directory under {base}",
+        }
+    documents = sorted(path.glob("*.md"))
+    if not documents:
+        return {
+            "state": "unmeasured", "path": path, "documents": 0,
+            "reason": f"{path} holds no '*.md' documents",
+        }
+    return {"state": "document-rooted", "path": path, "documents": len(documents), "reason": None}
+
+
+def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
+    """The single highest-ordinal revision file under `root` matching
+    `lineage`, per `marker`'s own declared `revision_prefix`/
+    `ordinal_digits` — never a pattern literal (`source-section-binding`
+    spec, `Requirement: Lineage Resolves To The Current Revision On Disk`;
+    design.md Decision D). The regex is composed as
+    `^{lineage}-{prefix}\\d{{digits,}}\\.md$`, so the ordinal capture group
+    admits any digit COUNT at or above the declared minimum — two files
+    whose ordinal-bearing suffix differs only in leading-zero padding
+    (e.g. a two-digit and a three-digit spelling of the same prefix) parse
+    to the SAME integer ordinal.
+
+    Candidates are grouped by their PARSED integer ordinal; the winner is
+    the highest one. Gaps between ordinals are irrelevant (an intermediate
+    ordinal missing entirely never blocks resolving a later one). Refuses
+    `SOURCE_LINEAGE_UNRESOLVED` naming the lineage and the root on ZERO
+    candidates, and naming the lineage, the root, and every tied candidate
+    when the highest ordinal is shared by more than one file (two
+    spellings of the same ordinal) — covering both "did not resolve to
+    exactly one revision" cases under this one code, never a seventh."""
+    prefix = marker["revision_prefix"]
+    digits = marker["ordinal_digits"]
+    pattern = re.compile(rf"^{re.escape(lineage)}-{re.escape(prefix)}(\d{{{digits},}})\.md$")
+    candidates = []
+    for entry in sorted(root.glob("*.md")):
+        match = pattern.match(entry.name)
+        if match:
+            candidates.append((int(match.group(1)), entry))
+    if not candidates:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} resolved to no file under {root} "
+            f"(pattern {pattern.pattern!r})",
+        )
+    max_ordinal = max(ordinal for ordinal, _path in candidates)
+    winners = sorted(path.name for ordinal, path in candidates if ordinal == max_ordinal)
+    if len(winners) > 1:
+        raise Refused(
+            "SOURCE_LINEAGE_UNRESOLVED",
+            f"lineage {lineage!r} under {root} ties at ordinal {max_ordinal}: {winners}",
+        )
+    return root / winners[0]
 
 
 def is_bindable_fact(fact_id: str) -> bool:

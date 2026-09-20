@@ -44,50 +44,50 @@ unchanged from design.md, which already priced the marker reader in.
 
 **Marker grammar — `MALFORMED_SOURCE_MARKER`**
 
-- [ ] 2.1 RED: add failing marker-grammar tests in `tests/test_paper_writing.py` for `MALFORMED_SOURCE_MARKER` (non-UTF-8, non-JSON, non-object, missing `revisions`, missing `revision_prefix`/`ordinal_digits`, unknown key at either level, wrong-typed value).
-- [ ] 2.2 Add `read_revisions_marker()` to `.claude/skills/paper-writing/scripts/paper_declarations.py`; refuse `MALFORMED_SOURCE_MARKER` naming the offending file and key, per 2.1.
-- [ ] 2.3 Mutation: add a sixth key to a fixture marker; separately flip `ordinal_digits` to a string; confirm both refuse `MALFORMED_SOURCE_MARKER`.
+- [x] 2.1 RED: add failing marker-grammar tests in `tests/test_paper_writing.py` for `MALFORMED_SOURCE_MARKER` (non-UTF-8, non-JSON, non-object, missing `revisions`, missing `revision_prefix`/`ordinal_digits`, unknown key at either level, wrong-typed value).
+- [x] 2.2 Add `read_revisions_marker()` to `.claude/skills/paper-writing/scripts/paper_declarations.py`; refuse `MALFORMED_SOURCE_MARKER` naming the offending file and key, per 2.1.
+- [x] 2.3 Mutation: add a sixth key to a fixture marker; separately flip `ordinal_digits` to a string; confirm both refuse `MALFORMED_SOURCE_MARKER`.
 
 **Disjoint-key cross-check with `guidance/`'s own marker (both directions)**
 
-- [ ] 2.4 RED: add a failing test asserting the source-root reader (`read_revisions_marker()`) refuses a `guidance/`-shaped marker (`{"class": "style-reference"}`), naming `revisions` as missing — `MALFORMED_SOURCE_MARKER`.
-- [ ] 2.5 RED: add a test asserting `.claude/skills/paper-writing/scripts/paper_guidance.py`'s existing `resolve_guidance_dir` reader refuses a source-root-shaped marker (`{"revisions": {...}}`) as an unknown key — `MALFORMED_GUIDANCE_MARKER`. This is a regression proof: `_MARKER_ALLOWED_KEYS = ("class",)` already excludes `revisions`, so no production edit is expected here — only the test is new.
-- [ ] 2.6 Run 2.4 and 2.5 green; confirm neither reader was widened to accept the other's key set (each refuses loudly on the other's shape, per `source-section-binding`'s disjoint-key requirement).
+- [x] 2.4 RED: add a failing test asserting the source-root reader (`read_revisions_marker()`) refuses a `guidance/`-shaped marker (`{"class": "style-reference"}`), naming `revisions` as missing — `MALFORMED_SOURCE_MARKER`.
+- [x] 2.5 RED: add a test asserting `.claude/skills/paper-writing/scripts/paper_guidance.py`'s existing `resolve_guidance_dir` reader refuses a source-root-shaped marker (`{"revisions": {...}}`) as an unknown key — `MALFORMED_GUIDANCE_MARKER`. This is a regression proof: `_MARKER_ALLOWED_KEYS = ("class",)` already excludes `revisions`, so no production edit is expected here — only the test is new.
+- [x] 2.6 Run 2.4 and 2.5 green; confirm neither reader was widened to accept the other's key set (each refuses loudly on the other's shape, per `source-section-binding`'s disjoint-key requirement).
 
 **Marker-driven resolution, no literal — generality**
 
-- [ ] 2.7 RED: add a failing test asserting a marker declaring `{"revisions": {"revision_prefix": "v", "ordinal_digits": 3}}` resolves lineage `lineage` to `lineage-v007.md` — the marker's own declared values drive resolution, never a literal.
-- [ ] 2.8 Confirm `resolve_lineage()` (2.14 below) composes its regex only from the marker's declared `revision_prefix`/`ordinal_digits`; `rg` under `.claude/skills/paper-writing/scripts/` confirms no revision-pattern literal governs resolution.
+- [x] 2.7 RED: add a failing test asserting a marker declaring `{"revisions": {"revision_prefix": "v", "ordinal_digits": 3}}` resolves lineage `lineage` to `lineage-v007.md` — the marker's own declared values drive resolution, never a literal.
+- [x] 2.8 Confirm `resolve_lineage()` (2.14 below) composes its regex only from the marker's declared `revision_prefix`/`ordinal_digits`; `rg` under `.claude/skills/paper-writing/scripts/` confirms no revision-pattern literal governs resolution.
 
 **Undeclared marker — `SOURCE_REVISIONS_UNDECLARED`**
 
-- [ ] 2.9 RED: add a failing test asserting a document-rooted root (contains `*.md`) carrying no `.paper-writing.json` marker refuses `SOURCE_REVISIONS_UNDECLARED` naming the root.
-- [ ] 2.10 RED: add a failing test distinguishing the two outcomes: a document-rooted root that HAD a marker, now deleted, MUST refuse `SOURCE_REVISIONS_UNDECLARED` — it MUST NOT degrade to the `unmeasured` report, which is reserved only for a root that is not document-rooted at all (e.g. `experiments/` holding only `.gitkeep`).
-- [ ] 2.11 Wire `SOURCE_REVISIONS_UNDECLARED` into `source_root_status()`/`_verify_source_section_bindings()` (`paper_declarations.py`/`paper_graph.py`): document-rooted + no marker refuses; only a non-document-rooted root reports `unmeasured`; these two outcomes are never collapsible.
-- [ ] 2.12 Mutation (design.md Testing Strategy): delete `proposals/.paper-writing.json` in the fixture root; confirm `SOURCE_REVISIONS_UNDECLARED` fires and the outcome is never `unmeasured`.
+- [x] 2.9 RED: add a failing test asserting a document-rooted root (contains `*.md`) carrying no `.paper-writing.json` marker refuses `SOURCE_REVISIONS_UNDECLARED` naming the root.
+- [x] 2.10 RED: add a failing test distinguishing the two outcomes: a document-rooted root that HAD a marker, now deleted, MUST refuse `SOURCE_REVISIONS_UNDECLARED` — it MUST NOT degrade to the `unmeasured` report, which is reserved only for a root that is not document-rooted at all (e.g. `experiments/` holding only `.gitkeep`).
+- [x] 2.11 Wire `SOURCE_REVISIONS_UNDECLARED` into `source_root_status()`/`_verify_source_section_bindings()` (`paper_declarations.py`/`paper_graph.py`): document-rooted + no marker refuses; only a non-document-rooted root reports `unmeasured`; these two outcomes are never collapsible.
+- [x] 2.12 Mutation (design.md Testing Strategy): delete `proposals/.paper-writing.json` in the fixture root; confirm `SOURCE_REVISIONS_UNDECLARED` fires and the outcome is never `unmeasured`.
 
 **Unmeasured-root report**
 
-- [ ] 2.13 RED: add failing `source_root_status()` tests (document-rooted; root holding only `.gitkeep`; root absent) for the `unmeasured` report.
-- [ ] 2.14 Add `source_root_status(base, root_name)` to `paper_declarations.py`; add `Corpus.source_roots: dict` to `.claude/skills/paper-writing/scripts/paper_graph.py`, echoed by every corpus-reading verb.
+- [x] 2.13 RED: add failing `source_root_status()` tests (document-rooted; root holding only `.gitkeep`; root absent) for the `unmeasured` report.
+- [x] 2.14 Add `source_root_status(base, root_name)` to `paper_declarations.py`; add `Corpus.source_roots: dict` to `.claude/skills/paper-writing/scripts/paper_graph.py`, echoed by every corpus-reading verb.
 
 **Lineage resolution — `SOURCE_LINEAGE_UNRESOLVED`**
 
-- [ ] 2.15 RED: add failing `resolve_lineage()` tests — max ordinal, gap-tolerant, zero-candidate foreign lineage refuses, tie between two ordinal spellings refuses naming both candidates.
-- [ ] 2.16 Add `resolve_lineage(root, lineage, marker)` to `paper_declarations.py`; refuse `SOURCE_LINEAGE_UNRESOLVED` naming the lineage, the root, and every candidate found on zero or >1 matches.
-- [ ] 2.17 Mutation: rename the newest fixture revision to a foreign lineage (zero case); add `research-concept-r021.md` beside `research-concept-r21.md` (tie case); confirm both refuse, naming both candidates on the tie.
+- [x] 2.15 RED: add failing `resolve_lineage()` tests — max ordinal, gap-tolerant, zero-candidate foreign lineage refuses, tie between two ordinal spellings refuses naming both candidates.
+- [x] 2.16 Add `resolve_lineage(root, lineage, marker)` to `paper_declarations.py`; refuse `SOURCE_LINEAGE_UNRESOLVED` naming the lineage, the root, and every candidate found on zero or >1 matches.
+- [x] 2.17 Mutation: rename the newest fixture revision to a foreign lineage (zero case); add `research-concept-r021.md` beside `research-concept-r21.md` (tie case); confirm both refuse, naming both candidates on the tie.
 
 **Section existence/ambiguity — `SECTION_NOT_IN_SOURCE` / `SECTION_TITLE_AMBIGUOUS`**
 
-- [ ] 2.18 RED: add failing section existence/ambiguity tests against `segment_markdown` headings of a resolved fixture revision.
-- [ ] 2.19 Add `_verify_source_section_bindings()` to `paper_graph.py`, called once per `assemble_corpus`, memoizing one `{title: count}` per distinct `(root, lineage)`; refuse `SECTION_NOT_IN_SOURCE` / `SECTION_TITLE_AMBIGUOUS`.
-- [ ] 2.20 Mutation: rename the bound heading in a fixture revision (expect `SECTION_NOT_IN_SOURCE`); duplicate the bound heading (expect `SECTION_TITLE_AMBIGUOUS`).
+- [x] 2.18 RED: add failing section existence/ambiguity tests against `segment_markdown` headings of a resolved fixture revision.
+- [x] 2.19 Add `_verify_source_section_bindings()` to `paper_graph.py`, called once per `assemble_corpus`, memoizing one `{title: count}` per distinct `(root, lineage)`; refuse `SECTION_NOT_IN_SOURCE` / `SECTION_TITLE_AMBIGUOUS`.
+- [x] 2.20 Mutation: rename the bound heading in a fixture revision (expect `SECTION_NOT_IN_SOURCE`); duplicate the bound heading (expect `SECTION_TITLE_AMBIGUOUS`).
 
 **Source base and version-bump freedom**
 
-- [ ] 2.21 Add `source_base: Path | None = None` kwarg to `assemble_corpus` (default `sections_dir.parent`); add a synthetic `experiments/`-only-`.gitkeep`-style fixture proving unmeasured with zero edits to any existing minimal fixture.
-- [ ] 2.22 Integration test: fixture adds a `…-r22.md` revision preserving a bound title; assert the corpus assembles byte-identically untouched (success criterion 4).
-- [ ] 2.23 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`; confirm green; bindings still optional (U3 not landed).
+- [x] 2.21 Add `source_base: Path | None = None` kwarg to `assemble_corpus` (default `sections_dir.parent`); add a synthetic `experiments/`-only-`.gitkeep`-style fixture proving unmeasured with zero edits to any existing minimal fixture.
+- [x] 2.22 Integration test: fixture adds a `…-r22.md` revision preserving a bound title; assert the corpus assembles byte-identically untouched (success criterion 4).
+- [x] 2.23 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`; confirm green; bindings still optional (U3 not landed).
 
 ## Phase 3 — DP: Owner decision point (BLOCKING, before Phase 4)
 

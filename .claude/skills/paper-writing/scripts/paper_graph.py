@@ -13,12 +13,13 @@ from __future__ import annotations
 import heapq
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_contract  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_guidance  # noqa: E402
 import paper_verify  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
@@ -122,9 +123,18 @@ class Corpus:
     sections: dict
     blocks: dict
     order_by_section: dict
+    #: `source-section-binding` spec, `Requirement: An Unmeasured Root Is
+    #: Reported, Never Silently Passed`; design.md Decision B. Every root
+    #: in `set(paper_declarations.FACT_SOURCE_ROOT.values())`, each mapped
+    #: to `paper_declarations.source_root_status`'s own report — "the guard
+    #: is off for this root" is always on screen, echoed by every corpus-
+    #: reading verb wired against it. Defaulted to `{}`, the same precedent
+    #: `produces_facts`/`source_bindings` set, so every existing direct
+    #: `Corpus(...)` construction site stays green.
+    source_roots: dict = field(default_factory=dict)
 
 
-def assemble_corpus(sections_dir: Path) -> Corpus:
+def assemble_corpus(sections_dir: Path, *, source_base: Path | None = None) -> Corpus:
     """Parse every `*.md` under `sections_dir`, sorted by filename for
     reproducibility only. Refuses `ID_COLLISION` (work-state) when a raw
     block id equals any section id anywhere in the corpus — the one flat
@@ -146,6 +156,15 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     (`_verify_block_subunits`) — `section_bodies` (section id -> its own
     body) is built in the SAME loop as `bodies`, from the same read,
     keyed by `header.section` rather than a filename.
+
+    `source_base` (`source-section-binding` spec; design.md Decision C):
+    the directory `paper_declarations.FACT_SOURCE_ROOT`'s roots
+    (`proposals/`, `experiments/`, ...) are resolved under. `None` derives
+    `sections_dir.parent` — the real repository root under this skill's
+    shipped layout. Every root's `document-rooted`/`unmeasured` status is
+    computed once here (`Corpus.source_roots`) and then consumed by
+    `_verify_source_section_bindings` below, which resolves and checks
+    every `document`-bound `requires_facts` entry the parsed corpus names.
     """
     sections: dict = {}
     bodies: dict = {}
@@ -187,12 +206,22 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
             )
             order_by_section[section_id].append(qualified_id)
 
-    corpus = Corpus(sections=sections, blocks=blocks, order_by_section=order_by_section)
+    resolved_base = source_base if source_base is not None else sections_dir.parent
+    source_roots = {
+        root_name: paper_declarations.source_root_status(resolved_base, root_name)
+        for root_name in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()))
+    }
+
+    corpus = Corpus(
+        sections=sections, blocks=blocks, order_by_section=order_by_section,
+        source_roots=source_roots,
+    )
     _verify_input_partition(corpus, bodies)
     _verify_after_transcription(corpus, bodies)
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
+    _verify_source_section_bindings(corpus)
     declarations = _produces_facts_declarations(corpus)
     _verify_route_exclusivity(declarations)
     _verify_producer_duplication(declarations)
@@ -201,6 +230,74 @@ def assemble_corpus(sections_dir: Path) -> Corpus:
     _verify_producer_reachability(corpus, declarations)
     _verify_producer_chain_rows(corpus, declarations, section_bodies)
     return corpus
+
+
+def _verify_source_section_bindings(corpus: Corpus) -> None:
+    """`source-section-binding` spec — every check a `document`-bound
+    `requires_facts` entry (`BlockRecord.source_bindings`) is held to,
+    against real disk. Inert for every entry with no `document` half (U1),
+    and inert for every root `corpus.source_roots` reports `unmeasured`
+    (design.md Decision B: an unmeasured root is reported, never a
+    refusal) — resolution only ever runs against a `document-rooted` root.
+
+    For each `(root, lineage)` pair the corpus's bindings actually name,
+    under a document-rooted root:
+
+    1. `paper_declarations.read_revisions_marker` — `None` (absent marker)
+       refuses `SOURCE_REVISIONS_UNDECLARED` naming the root; a malformed
+       marker propagates `MALFORMED_SOURCE_MARKER` from the reader itself.
+    2. `paper_declarations.resolve_lineage` — refuses
+       `SOURCE_LINEAGE_UNRESOLVED` on zero or tied candidates.
+    3. The resolved revision is segmented once (`paper_guidance.
+       segment_markdown`) into a `{title: count}` memo, keyed by
+       `(root, lineage)` — one file read per distinct pair for the WHOLE
+       corpus (design.md Decision E), never one per binding. Every binding
+       naming that pair is then a dict lookup: a zero count refuses
+       `SECTION_NOT_IN_SOURCE`, a count above one refuses
+       `SECTION_TITLE_AMBIGUOUS`, both naming the owning block and the
+       title.
+    """
+    memo: dict = {}
+    for qualified_id, record in corpus.blocks.items():
+        for fact_id, lineage, section_title in record.source_bindings:
+            root_name = paper_declarations.FACT_SOURCE_ROOT.get(fact_id)
+            if root_name is None:
+                continue
+            status = corpus.source_roots.get(root_name)
+            if status is None or status["state"] == "unmeasured":
+                continue
+
+            memo_key = (root_name, lineage)
+            if memo_key not in memo:
+                marker = paper_declarations.read_revisions_marker(status["path"])
+                if marker is None:
+                    raise Refused(
+                        "SOURCE_REVISIONS_UNDECLARED",
+                        f"{root_name!r} is document-rooted but carries no "
+                        f"'.paper-writing.json' marker",
+                    )
+                revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)
+                body = revision_path.read_text(encoding="utf-8")
+                outline = paper_guidance.segment_markdown(body)
+                counts: dict = {}
+                for heading in outline["headings"]:
+                    counts[heading["title"]] = counts.get(heading["title"], 0) + 1
+                memo[memo_key] = (revision_path, counts)
+
+            revision_path, counts = memo[memo_key]
+            count = counts.get(section_title, 0)
+            if count == 0:
+                raise Refused(
+                    "SECTION_NOT_IN_SOURCE",
+                    f"{qualified_id}: section {section_title!r} is not a heading in "
+                    f"{revision_path.name} (lineage {lineage!r})",
+                )
+            if count > 1:
+                raise Refused(
+                    "SECTION_TITLE_AMBIGUOUS",
+                    f"{qualified_id}: section {section_title!r} matches {count} headings in "
+                    f"{revision_path.name} (lineage {lineage!r})",
+                )
 
 
 def _verify_input_partition(corpus: Corpus, bodies: dict) -> None:

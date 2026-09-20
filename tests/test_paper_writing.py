@@ -1547,6 +1547,596 @@ class SourceBindingsFieldTests(unittest.TestCase):
         self.assertEqual(corpus.blocks["a.only"].source_bindings, ())
 
 
+class SourceRevisionsMarkerGrammarTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: The Marker Grammar Is
+    Validated, And Disjoint From guidance/'s`: `paper_declarations.
+    read_revisions_marker` -- UTF-8 JSON, exactly one top-level key
+    (`revisions`), an object holding exactly `revision_prefix` (string) and
+    `ordinal_digits` (integer), both required, no other key admitted at
+    either level."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def _marker(self, text: str) -> None:
+        (self.root / ".paper-writing.json").write_text(text, encoding="utf-8")
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_an_absent_marker_reads_as_none(self) -> None:
+        self.assertIsNone(paper_declarations.read_revisions_marker(self.root))
+
+    def test_a_valid_marker_parses(self) -> None:
+        self._marker('{"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}')
+
+        marker = paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(marker, {"revision_prefix": "r", "ordinal_digits": 2})
+
+    def test_a_non_json_marker_refuses_malformed_source_marker(self) -> None:
+        self._marker("{not valid json")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+
+    def test_a_non_object_marker_refuses(self) -> None:
+        self._marker("[1, 2, 3]")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+
+    def test_a_non_utf8_marker_refuses(self) -> None:
+        (self.root / ".paper-writing.json").write_bytes(b"\xff\xfe\x00\x01")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+
+    def test_a_marker_missing_the_top_level_key_refuses_naming_revisions(self) -> None:
+        self._marker('{"other": true}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("revisions", ctx.exception.detail)
+
+    def test_a_marker_with_an_unknown_top_level_key_refuses(self) -> None:
+        self._marker(
+            '{"revisions": {"revision_prefix": "r", "ordinal_digits": 2}, "extra": 1}'
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("extra", ctx.exception.detail)
+
+    def test_a_marker_missing_revision_prefix_refuses_naming_it(self) -> None:
+        self._marker('{"revisions": {"ordinal_digits": 2}}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("revision_prefix", ctx.exception.detail)
+
+    def test_a_marker_missing_ordinal_digits_refuses_naming_it(self) -> None:
+        self._marker('{"revisions": {"revision_prefix": "r"}}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("ordinal_digits", ctx.exception.detail)
+
+    def test_a_marker_with_an_unknown_nested_key_refuses(self) -> None:
+        self._marker(
+            '{"revisions": {"revision_prefix": "r", "ordinal_digits": 2, "sixth": 1}}'
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("sixth", ctx.exception.detail)
+
+    def test_a_marker_with_a_wrong_typed_ordinal_digits_refuses_naming_it(self) -> None:
+        self._marker('{"revisions": {"revision_prefix": "r", "ordinal_digits": "2"}}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("ordinal_digits", ctx.exception.detail)
+
+    def test_a_marker_with_a_wrong_typed_revision_prefix_refuses_naming_it(self) -> None:
+        self._marker('{"revisions": {"revision_prefix": 7, "ordinal_digits": 2}}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("revision_prefix", ctx.exception.detail)
+
+    def test_a_guidance_shaped_marker_refuses_naming_revisions_as_missing(self) -> None:
+        """`Requirement: The Marker Grammar Is Validated, And Disjoint From
+        guidance/'s`: `guidance/`'s own `{"class": "style-reference"}`
+        shape MUST NOT be silently accepted by the source-root reader."""
+        self._marker('{"class": "style-reference"}')
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("revisions", ctx.exception.detail)
+
+    def test_mutation_a_sixth_key_in_the_marker_breaks_the_unknown_key_guard(self) -> None:
+        proc = _run_against_mutant(
+            'unknown = [key for key in obj if key != _SOURCE_MARKER_TOP_KEY]\n'
+            '    if unknown:\n'
+            '        raise Refused(\n'
+            '            "MALFORMED_SOURCE_MARKER", f"{marker_path}: carries unknown key '
+            '{unknown[0]!r}"\n'
+            '        )\n',
+            "",
+            "tests.test_paper_writing.SourceRevisionsMarkerGrammarTests"
+            ".test_a_marker_with_an_unknown_top_level_key_refuses",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_wrong_typed_ordinal_digits_breaks_the_type_guard(self) -> None:
+        proc = _run_against_mutant(
+            'if not isinstance(ordinal_digits, int) or isinstance(ordinal_digits, bool):',
+            "if False:",
+            "tests.test_paper_writing.SourceRevisionsMarkerGrammarTests"
+            ".test_a_marker_with_a_wrong_typed_ordinal_digits_refuses_naming_it",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+
+class SourceRootStatusTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses` / design.md Decision B: a root is
+    document-rooted iff it resolves to a directory under the source base
+    holding at least one `*.md` file -- a property computed on disk, never
+    keyed by a fact id."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def test_an_absent_root_is_unmeasured(self) -> None:
+        status = paper_declarations.source_root_status(self.base, "does-not-exist")
+
+        self.assertEqual(status["state"], "unmeasured")
+        self.assertIsNone(status["path"])
+
+    def test_a_root_holding_only_a_gitkeep_is_unmeasured(self) -> None:
+        root = self.base / "experiments"
+        root.mkdir()
+        (root / ".gitkeep").write_text("", encoding="utf-8")
+
+        status = paper_declarations.source_root_status(self.base, "experiments")
+
+        self.assertEqual(status["state"], "unmeasured")
+        self.assertIsNotNone(status["reason"])
+
+    def test_a_root_holding_a_markdown_document_is_document_rooted(self) -> None:
+        root = self.base / "proposals"
+        root.mkdir()
+        (root / "research-concept-r21.md").write_text("# Title\n", encoding="utf-8")
+
+        status = paper_declarations.source_root_status(self.base, "proposals")
+
+        self.assertEqual(status["state"], "document-rooted")
+        self.assertEqual(status["path"], root)
+        self.assertEqual(status["documents"], 1)
+        self.assertIsNone(status["reason"])
+
+
+class SourceLineageResolutionTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: Lineage Resolves To The
+    Current Revision On Disk` / design.md Decision D: highest ordinal wins,
+    gap-tolerant; a tie between two spellings of one ordinal refuses."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.marker = {"revision_prefix": "r", "ordinal_digits": 2}
+
+    def _revision(self, name: str) -> None:
+        (self.root / name).write_text("# placeholder\n", encoding="utf-8")
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_resolves_to_the_highest_ordinal(self) -> None:
+        for ordinal in (14, 15, 21):
+            self._revision(f"research-concept-r{ordinal:02d}.md")
+
+        resolved = paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+
+        self.assertEqual(resolved.name, "research-concept-r21.md")
+
+    def test_gaps_between_ordinals_are_irrelevant(self) -> None:
+        for ordinal in (1, 21):
+            self._revision(f"research-concept-r{ordinal:02d}.md")
+
+        resolved = paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+
+        self.assertEqual(resolved.name, "research-concept-r21.md")
+
+    def test_a_foreign_lineage_with_zero_candidates_refuses(self) -> None:
+        self._revision("other-concept-r21.md")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+        self.assertIn("research-concept", ctx.exception.detail)
+
+    def test_a_tie_between_two_spellings_of_one_ordinal_refuses_naming_both(self) -> None:
+        self._revision("research-concept-r21.md")
+        self._revision("research-concept-r021.md")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.resolve_lineage(self.root, "research-concept", self.marker)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+        self.assertIn("research-concept-r21.md", ctx.exception.detail)
+        self.assertIn("research-concept-r021.md", ctx.exception.detail)
+
+    def test_the_markers_own_declared_prefix_and_digits_drive_resolution_never_a_literal(
+        self,
+    ) -> None:
+        self._revision("lineage-v007.md")
+        marker = {"revision_prefix": "v", "ordinal_digits": 3}
+
+        resolved = paper_declarations.resolve_lineage(self.root, "lineage", marker)
+
+        self.assertEqual(resolved.name, "lineage-v007.md")
+
+    def test_no_revision_pattern_literal_governs_resolution(self) -> None:
+        """design.md Decision A / success criterion 5: the regex is
+        composed only from the marker's own declared values -- `rg` under
+        `scripts/` for a bare `-r\\d` style literal finds nothing."""
+        source = (SKILL_SCRIPTS / "paper_declarations.py").read_text(encoding="utf-8")
+        self.assertNotIn('"-r"', source)
+        self.assertNotIn("'-r'", source)
+
+    def test_mutation_picking_the_first_match_instead_of_the_max_ordinal_breaks_the_guard(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "    max_ordinal = max(ordinal for ordinal, _path in candidates)",
+            "    max_ordinal = candidates[0][0]",
+            "tests.test_paper_writing.SourceLineageResolutionTests"
+            ".test_resolves_to_the_highest_ordinal",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_allowing_a_tie_to_pass_breaks_the_tie_guard(self) -> None:
+        proc = _run_against_mutant(
+            "    if len(winners) > 1:",
+            "    if False:",
+            "tests.test_paper_writing.SourceLineageResolutionTests"
+            ".test_a_tie_between_two_spellings_of_one_ordinal_refuses_naming_both",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+
+class SourceSectionBindingCorpusTests(unittest.TestCase):
+    """`source-section-binding` spec: the corpus-level checks
+    `paper_graph._verify_source_section_bindings` performs, wired into
+    `assemble_corpus` -- `SOURCE_REVISIONS_UNDECLARED`, `SECTION_NOT_IN_
+    SOURCE`, `SECTION_TITLE_AMBIGUOUS`, the unmeasured-root report, the
+    injectable `source_base`, and the free version bump."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.sections_dir = self.base / "sections"
+        self.sections_dir.mkdir()
+
+    def _write_section(self, filename: str, header: dict, body: str) -> None:
+        (self.sections_dir / filename).write_bytes(
+            b"---\n" + json.dumps(header).encode("utf-8") + b"\n---\n" + body.encode("utf-8")
+        )
+
+    def _bound_header(self, section_title: str, *, lineage: str = "research-concept") -> dict:
+        return {
+            "section": "a", "position": 1,
+            "blocks": [{
+                "id": "only",
+                "requires_facts": [{
+                    "value": "formulation",
+                    "source": {
+                        "file": "sections/01-a.md",
+                        "quote": "The formulation, written here.",
+                    },
+                    "document": {"lineage": lineage, "section": section_title},
+                }],
+                "requires_declarations": [], "citations": "none",
+            }],
+        }
+
+    _BODY = (
+        "The formulation, written here.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+
+    def _marker(self, root: Path, prefix: str = "r", digits: int = 2) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        (root / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": prefix, "ordinal_digits": digits}}),
+            encoding="utf-8",
+        )
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_a_document_rooted_root_with_no_marker_refuses_source_revisions_undeclared(
+        self,
+    ) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+        self.assertIn("proposals", ctx.exception.detail)
+
+    def test_deleting_the_marker_never_degrades_to_unmeasured(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- resolves cleanly
+
+        (proposals / ".paper-writing.json").unlink()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+
+    def test_an_unbound_entry_under_an_empty_root_reports_unmeasured_not_undeclared(self) -> None:
+        """`experiments/` holding only `.gitkeep` (design.md Decision B):
+        never `SOURCE_REVISIONS_UNDECLARED`, since the root is not
+        document-rooted at all -- there is nothing to have declared a
+        marker for."""
+        self._write_section(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [{
+                        "value": "experimental-design",
+                        "source": {
+                            "file": "sections/01-a.md",
+                            "quote": "The design, written here.",
+                        },
+                    }],
+                    "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "The design, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+        experiments = self.base / "experiments"
+        experiments.mkdir()
+        (experiments / ".gitkeep").write_text("", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.source_roots["experiments"]["state"], "unmeasured")
+
+    def test_a_resolved_binding_parses_with_no_refusal(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n\n# 5. Closing\n", encoding="utf-8",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_an_absent_title_refuses_section_not_in_source(self) -> None:
+        self._write_section("01-a.md", self._bound_header("9. Missing"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+        self.assertIn("a.only", ctx.exception.detail)
+        self.assertIn("9. Missing", ctx.exception.detail)
+
+    def test_an_ambiguous_title_refuses_section_title_ambiguous(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 3. Something\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_TITLE_AMBIGUOUS")
+        self.assertIn("a.only", ctx.exception.detail)
+
+    def test_a_lineage_that_does_not_resolve_refuses_source_lineage_unresolved(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "other-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_LINEAGE_UNRESOLVED")
+
+    def test_a_malformed_marker_refuses_malformed_source_marker(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+        (proposals / ".paper-writing.json").write_text('{"class": "style-reference"}', encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+
+    def test_a_minimal_fixture_with_no_source_roots_at_all_stays_green(self) -> None:
+        """design.md Decision C, direct mitigation for the proposal's top
+        risk: every EXISTING minimal fixture (no `proposals/`/`experiments/`
+        at all under the source base) must keep assembling with zero
+        edits -- every root simply reports unmeasured."""
+        self._write_section(
+            "01-a.md",
+            {
+                "section": "a", "position": 1,
+                "blocks": [{
+                    "id": "only",
+                    "requires_facts": [], "requires_declarations": [], "citations": "none",
+                }],
+            },
+            "Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing
+
+        self.assertEqual(corpus.source_roots["proposals"]["state"], "unmeasured")
+
+    def test_source_base_defaults_to_sections_dir_parent(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # no source_base passed
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_source_base_is_injectable(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        other_base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other_base, ignore_errors=True)
+        proposals = other_base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text("# 3. Something\n", encoding="utf-8")
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir, source_base=other_base)
+
+        self.assertIn("a.only", corpus.blocks)
+
+    def test_publishing_a_survived_revision_costs_no_edit(self) -> None:
+        """Success criterion 4: a new revision whose bound section title
+        survives resolves with no edit to any binding, and the corpus
+        assembles byte-identically untouched."""
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+
+        first = paper_graph.assemble_corpus(self.sections_dir)
+        self.assertIn("a.only", first.blocks)
+
+        (proposals / "research-concept-r22.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n\n# 7. New appendix\n", encoding="utf-8",
+        )
+
+        second = paper_graph.assemble_corpus(self.sections_dir)  # raises nothing -- no edit made
+
+        self.assertIn("a.only", second.blocks)
+
+    def test_publishing_a_revision_that_drops_the_bound_title_refuses_by_name(self) -> None:
+        self._write_section("01-a.md", self._bound_header("3. Something"), self._BODY)
+        proposals = self.base / "proposals"
+        self._marker(proposals)
+        (proposals / "research-concept-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n", encoding="utf-8",
+        )
+        paper_graph.assemble_corpus(self.sections_dir)  # raises nothing at r21
+
+        (proposals / "research-concept-r22.md").write_text(
+            "# 1. Intro\n\n# 3.1 Something Split\n\n# 3.2 Something Else\n", encoding="utf-8",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "SECTION_NOT_IN_SOURCE")
+
+    def test_mutation_wiring_the_guard_only_behind_a_condition_is_caught(self) -> None:
+        """Static proof the call is a direct statement of `assemble_corpus`'s
+        own body, mirroring `RequirementTranscriptionMutationTests`'s own
+        `test_the_call_is_a_direct_statement_never_guarded`."""
+        source = (SKILL_SCRIPTS / "paper_graph.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        assemble = next(
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "assemble_corpus"
+        )
+        direct_call_names = {
+            stmt.value.func.id
+            for stmt in assemble.body
+            if isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Name)
+        }
+        self.assertIn("_verify_source_section_bindings", direct_call_names)
+
+    def test_mutation_removing_the_verifier_call_flips_section_existence_from_green_to_red(
+        self,
+    ) -> None:
+        proc = _run_against_mutant(
+            "    _verify_source_section_bindings(corpus)\n",
+            "",
+            "tests.test_paper_writing.SourceSectionBindingCorpusTests"
+            ".test_an_absent_title_refuses_section_not_in_source",
+            source_path=SKILL_SCRIPTS / "paper_graph.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+
 class RequirementTranscriptionMutationTests(unittest.TestCase):
     """Mutation proof the gate is load-bearing (design.md, Testing
     Strategy, 'Mutation — unconditional': 'the `assemble_corpus` call line
@@ -5397,8 +5987,26 @@ class RefusalRosterTests(unittest.TestCase):
         Reachable the instant `paper_cli.cmd_declare` resolves a non-empty
         `produced_by` tuple for the given fact id, which the shipped corpus
         already does for four facts. Measured directly against
-        `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 133)
+        `reachable_paper_refusal_codes()`, never forecast. Moved from 133
+        to 138 in U1+U2 of `the-requirement-names-the-section-that-feeds-
+        it`: `paper_graph.py` gains `_verify_source_section_bindings`,
+        called from `assemble_corpus` (an already-imported module) --
+        `SOURCE_REVISIONS_UNDECLARED` (a document-rooted root carries no
+        marker), `SOURCE_LINEAGE_UNRESOLVED` (a lineage resolves to zero or
+        more than one revision), `SECTION_NOT_IN_SOURCE` and `SECTION_
+        TITLE_AMBIGUOUS` (a bound title matches zero or more than one
+        heading) -- four new raise sites. `paper_declarations.py` (already
+        imported) gains `read_revisions_marker`'s own `MALFORMED_SOURCE_
+        MARKER` -- one more. `paper_contract.py`'s own `document` grammar
+        widening adds no new code: `MALFORMED_HEADER` is reused verbatim,
+        the identical shape `after`/`mode`/`figure` already use. All five
+        are reachable the instant their raise sites exist, no new import
+        needed, since every one of these three modules was already
+        imported by `paper_cli.py`. `SECTION_BINDING_ABSENT` (the sixth
+        code this change ships) is U3-only and moves this count again only
+        once that unit's write-gate wiring lands. Measured directly
+        against `reachable_paper_refusal_codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 138)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
