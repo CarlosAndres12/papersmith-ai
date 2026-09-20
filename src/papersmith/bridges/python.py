@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from ..core.exit_codes import map_child_rc
+from ..core import fs
 from ..errors import ExecutionError, SourceError, UserError
 
 
@@ -22,7 +23,7 @@ def interpreter_for(workspace: Path, *, prefer_micromamba: bool = False) -> list
     """
     mamba = workspace / ".micromamba" / "bin" / "micromamba"
     env_dir = workspace / ".micromamba" / "envs" / "papersmith"
-    if prefer_micromamba and mamba.is_file() and env_dir.is_dir():
+    if prefer_micromamba and fs.is_regular_file(mamba) and fs.is_dir(env_dir):
         return [str(mamba), "run", "-n", "papersmith", "python"]
     return [sys.executable]
 
@@ -35,7 +36,7 @@ def run_script(workspace: Path, script: str | Path, args: Sequence[str] = (), *,
     script_path = Path(script)
     if not script_path.is_absolute():
         script_path = root / script_path
-    if not script_path.is_file():
+    if not fs.is_regular_file(script_path):
         raise SourceError(f"missing skill script: {script_path}")
     command = interpreter_for(root, prefer_micromamba=prefer_micromamba)
     command.extend([str(script_path), *(str(item) for item in args)])

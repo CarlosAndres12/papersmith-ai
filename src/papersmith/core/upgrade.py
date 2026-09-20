@@ -10,12 +10,12 @@ from ..generators import (
     UNSYNCHRONIZED,
     apply_generated,
     context_for_workspace,
-    is_regular_file,
+    read_workspace_version,
     render_files,
 )
 from ..kit import resolve_and_validate
 from ..schema import validate_tools
-from . import config, manifest
+from . import config, fs, manifest
 
 #: Dynamic rendered outputs — one file per discovered skill, so their membership
 #: cannot be enumerated by a static list. Only paths under these prefixes that
@@ -68,18 +68,30 @@ def _orphaned(root: Path, previous_managed: set[str], current_render: set[str]) 
     return sorted(eligible)
 
 
-def _copy_if_needed(workspace: Path, kit_root: Path, relpath: str, *, force: bool) -> bool:
+def _copy_if_needed(workspace: Path, kit_root: Path, relpath: str, *, force: bool,
+                    unsynchronized: list[str]) -> bool:
+    """Synchronize one kit file; return whether it was written.
+
+    A destination that cannot be written — a FIFO a copy would block on, a
+    directory, an unsearchable parent — is appended to ``unsynchronized``
+    instead of aborting a run that has already synchronized earlier files.
+    """
     source = kit_root / relpath
     destination = workspace / relpath
-    if not source.is_file():
+    if not fs.is_regular_file(source):
         raise SourceError(f"kit manifest names a missing source file: {source}")
     if manifest.is_preserved(relpath):
         return False
-    if not force and destination.is_file() and (
-        manifest.sha256_file(destination) == manifest.sha256_file(source)
-    ):
+    if not force:
+        # A guarded hash, not a bare one: a regular file whose mode denies the
+        # read makes ``sha256_file`` raise, and this runs inside the repair
+        # command, after earlier kit files have already been written.
+        current = manifest.sha256_if_readable(destination)
+        if current is not None and current == manifest.sha256_if_readable(source):
+            return False
+    if not manifest.copy_kit_file(kit_root, relpath, workspace):
+        unsynchronized.append(relpath)
         return False
-    manifest.copy_kit_file(kit_root, relpath, workspace)
     return True
 
 
@@ -97,12 +109,14 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
     active_tools = validate_tools(list(tools) if tools is not None else workspace_config["active_tools"])
     changed: list[str] = []
     preserved: list[str] = []
+    unsynchronized: list[str] = []
 
     for relpath in sorted(kit_files):
         if manifest.is_preserved(relpath):
             preserved.append(relpath)
             continue
-        if _copy_if_needed(root, kit_root, relpath, force=force):
+        if _copy_if_needed(root, kit_root, relpath, force=force,
+                           unsynchronized=unsynchronized):
             changed.append(relpath)
 
     if tools is not None:
@@ -113,7 +127,6 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
     # Rendered files are framework-owned projections. Context is read after
     # raw agent/config files have been synchronized so the new roster appears.
     context = context_for_workspace(root)
-    unsynchronized: list[str] = []
     generated = apply_generated(root, context, active_tools, skipped=unsynchronized)
     for relpath in generated:
         if relpath not in changed:
@@ -125,14 +138,24 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
     # below — reading it afterwards would compare the new baseline with itself
     # and find nothing.
     current_render = set(render_files(root, context, active_tools))
+    deliverable = manifest.synchronized_paths(root, kit_root, context, active_tools)
     removed: list[str] = []
     stranded: list[str] = []
     for relpath in _orphaned(root, set(stored["files"]), current_render):
         target = root / relpath
+        if not fs.exists(target):
+            # Already gone. Nothing to delete and nothing to retry: recording it
+            # as stranded would re-mark it on every run, and a marker the live
+            # map can never show is drift that no upgrade can ever clear.
+            removed.append(relpath)
+            continue
+        if not fs.is_regular_file(target):
+            # Present but not something this run will delete — a directory, or a
+            # FIFO the user left there. Reported and retried; removing it clears
+            # the report.
+            stranded.append(relpath)
+            continue
         try:
-            if not is_regular_file(target):
-                stranded.append(relpath)
-                continue
             target.unlink()
         except OSError:
             # A read-only parent or a refusing filesystem must not abort the run
@@ -142,11 +165,14 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
             continue
         removed.append(relpath)
 
-    version_path = root / ".papersmith" / "version"
-    if not version_path.is_file() or version_path.read_text(encoding="utf-8").strip() != version:
-        version_path.parent.mkdir(parents=True, exist_ok=True)
-        version_path.write_text(version + "\n", encoding="utf-8")
-        changed.append(".papersmith/version")
+    # The marker is a managed path like any other, so it takes the same gate on
+    # both sides: reading a FIFO would block, and writing one would block too —
+    # in the command whose whole job is to repair a damaged workspace.
+    if read_workspace_version(root, "") != version:
+        if fs.write_text(root / ".papersmith" / "version", version + "\n"):
+            changed.append(".papersmith/version")
+        else:
+            unsynchronized.append(".papersmith/version")
 
     framework_files = manifest.workspace_framework_files(root, kit_root)
     for relpath in stranded:
@@ -155,17 +181,15 @@ def upgrade(workspace: str | Path = ".", *, tools: Sequence[str] | None = None,
         # as drift and lets a later upgrade retry the removal; dropping it would
         # strand the file untracked forever.
         target = root / relpath
-        framework_files[relpath] = (
-            manifest.sha256_file(target) if is_regular_file(target) else UNSYNCHRONIZED
-        )
-    for relpath in current_render:
-        # Every rendered path this run was responsible for must be accounted for
+        framework_files[relpath] = manifest.sha256_if_readable(target) or UNSYNCHRONIZED
+    for relpath in deliverable:
+        # Every managed path this run was responsible for must be accounted for
         # in the baseline. ``workspace_framework_files`` omits any path it cannot
         # hash — non-regular, never written, or written but still unreadable (a
         # write-only file) — and an omission on both sides of ``status``'s
-        # comparison is a false "no drift". Sweeping the whole render set, rather
-        # than only the paths reported as unsynchronized, is what makes this
-        # total: a write can succeed and still leave the path unhashable.
+        # comparison is a false "no drift". Sweeping the whole managed universe,
+        # rather than only the paths reported as unsynchronized, is what makes
+        # this total: a write can succeed and still leave the path unhashable.
         if relpath not in framework_files:
             framework_files[relpath] = UNSYNCHRONIZED
     manifest.write_manifest(root, version, framework_files, kind="workspace")

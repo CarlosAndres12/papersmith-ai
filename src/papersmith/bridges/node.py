@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Iterable
 
+from ..core import fs
 from ..errors import ExecutionError, SourceError, UserError
 
 
@@ -18,7 +19,7 @@ def node_binary() -> str | None:
 
 def engine_path(workspace: Path) -> Path:
     path = workspace / "skills" / "proposal-deliberation" / "cli.mjs"
-    if not path.is_file():
+    if not fs.is_regular_file(path):
         raise SourceError(f"missing deliberation engine: {path}")
     return path
 
@@ -28,7 +29,7 @@ def ensure_node_engine(workspace: Path) -> tuple[str, Path]:
     if node is None:
         raise UserError("node is required for deliberate; install Node.js >=20")
     engine = engine_path(workspace)
-    if not (workspace / "node_modules" / "jiti").is_dir():
+    if not fs.is_dir(workspace / "node_modules" / "jiti"):
         raise UserError(
             "workspace node dependencies are missing; run npm install before deliberate"
         )

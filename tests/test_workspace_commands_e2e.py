@@ -30,10 +30,12 @@ from unittest import mock
 from papersmith.bridges import audit as audit_module
 from papersmith.cli import main
 from papersmith.core import ledger as run_ledger
+from papersmith.core import manifest as manifest_module
 from papersmith.core import status as status_module
 from papersmith.core import upgrade as upgrade_module
 from papersmith.core.exit_codes import DRIFT_ERROR, SUCCESS, USER_ERROR
 from papersmith.errors import UserError
+from papersmith.kit import resolve_and_validate
 
 from workspace_series import (
     FIXTURE_PDF,
@@ -752,6 +754,223 @@ class DamagedWorkspaceTotalityTests(unittest.TestCase):
         rc, out, _ = capture(["status", str(workspace), "--json"])
         self.assertEqual(rc, SUCCESS)
         json.loads(out)
+
+
+    def test_a_fifo_at_a_config_read_is_a_typed_error(self) -> None:
+        """The config reads are the one path every command takes.
+
+        ``generators`` imports ``core.config``, so this gate could not live in
+        ``generators`` and be imported from there: it moved to ``core.fs`` to sit
+        below both. Without it a FIFO here blocks every command in the tool.
+        """
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        for relpath in (".papersmith/config.json", "papersmith.yaml"):
+            with self.subTest(relpath=relpath):
+                target = workspace / relpath
+                original = target.read_bytes()
+                target.unlink()
+                os.mkfifo(target)
+                try:
+                    with self._alarm(f"a read blocked on a FIFO {relpath}"):
+                        rc, _, err = capture(["status", str(workspace)])
+                        self.assertEqual(rc, USER_ERROR)
+                        self.assertIn(target.name, err)
+                        rc, _, _ = capture(["upgrade", str(workspace)])
+                        self.assertEqual(rc, USER_ERROR)
+                finally:
+                    target.unlink()
+                    target.write_bytes(original)
+
+    def test_a_non_utf8_manifest_is_a_typed_error(self) -> None:
+        """``status`` reads the manifest before the config the earlier fix typed."""
+        workspace = make_workspace(new_tmp(self))
+        (workspace / ".papersmith" / "manifest.json").write_bytes(b"\xff\xfe not utf-8")
+
+        rc, _, err = capture(["status", str(workspace)])
+        self.assertEqual(rc, USER_ERROR)
+        self.assertIn("manifest.json", err)
+
+    def test_a_non_utf8_kit_manifest_is_a_typed_error(self) -> None:
+        kit = new_tmp(self) / "kit"
+        kit.mkdir()
+        (kit / "kit-manifest.json").write_bytes(b"\xff\xfe not utf-8")
+
+        with self.assertRaises(UserError):
+            manifest_module.load_kit_manifest(kit)
+
+    def test_upgrade_never_blocks_on_a_fifo_version_marker(self) -> None:
+        """The repair command must tolerate the marker every reader now tolerates."""
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        marker = workspace / ".papersmith" / "version"
+        marker.unlink()
+        os.mkfifo(marker)
+
+        with self._alarm("upgrade blocked writing the version marker"):
+            rc, _, _ = capture(["upgrade", str(workspace)])
+            self.assertEqual(rc, SUCCESS)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn(".papersmith/version", json.loads(out)["framework"]["drifted_files"],
+                      "an unwritable marker stays visible instead of vanishing")
+
+    def test_upgrade_never_blocks_on_a_fifo_kit_path(self) -> None:
+        """Kit synchronization runs *before* rendering, so it needs its own gate."""
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "package.json"
+        self.assertTrue(managed.is_file(), "fixture needs a kit-managed path")
+        managed.unlink()
+        os.mkfifo(managed)
+
+        with self._alarm("upgrade blocked copying over a FIFO"):
+            rc, _, _ = capture(["upgrade", str(workspace)])
+            self.assertEqual(rc, SUCCESS)
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("package.json", json.loads(out)["framework"]["drifted_files"])
+
+    def test_recording_a_run_never_blocks_on_a_fifo_ledger(self) -> None:
+        """Bookkeeping must not fail a run whose own outcome is already decided."""
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("mkfifo unavailable")
+        workspace = make_workspace(new_tmp(self))
+        ledger_path = workspace / ".papersmith" / "runs_ledger.jsonl"
+        if ledger_path.exists():
+            ledger_path.unlink()
+        os.mkfifo(ledger_path)
+
+        with self._alarm("recording a run blocked on a FIFO ledger"):
+            self.assertFalse(run_ledger.append(workspace, {"profile": "smoke", "exit": 0}))
+
+    def test_an_unsearchable_scan_directory_never_breaks_status(self) -> None:
+        """The scan helpers are best-effort too: they report, they never abort."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores directory permission bits")
+        workspace = make_workspace(new_tmp(self))
+        for relpath in ("implementations", "kaggle-inbox"):
+            with self.subTest(relpath=relpath):
+                target = workspace / relpath
+                target.mkdir(exist_ok=True)
+                os.chmod(target, 0o000)
+                self.addCleanup(os.chmod, target, 0o755)
+                rc, out, _ = capture(["status", str(workspace), "--json"])
+                self.assertEqual(rc, SUCCESS)
+                json.loads(out)
+
+
+    def test_a_preserved_path_never_becomes_permanent_drift(self) -> None:
+        """A run never delivers a preserved path, so it must not demand one.
+
+        ``guidance/**`` belongs to the user. Recording a marker for one the
+        workspace does not have turns a self-clearing report into a permanent
+        one: ``upgrade`` skips preserved paths on every run, so no command could
+        ever clear it.
+        """
+        workspace = make_workspace(new_tmp(self))
+        kit_root = resolve_and_validate()
+        preserved = sorted(relpath for relpath in manifest_module.kit_files(kit_root)
+                           if manifest_module.is_preserved(relpath))
+        self.assertTrue(preserved, "the kit must ship a preserved path for this fixture")
+        victim = preserved[0]
+        (workspace / victim).unlink()
+
+        with self._recorded_warnings():
+            upgrade_module.upgrade(workspace)
+
+        manifest_path = workspace / ".papersmith" / "manifest.json"
+        stored = json.loads(manifest_path.read_text(encoding="utf-8"))["files"]
+        self.assertNotEqual(stored.get(victim), "unsynchronized",
+                            "a user-owned path is not the framework's to demand")
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertNotIn(victim, json.loads(out)["framework"]["drifted_files"])
+
+    def test_an_unreadable_kit_path_is_reported_not_fatal(self) -> None:
+        """The kit fast path hashes the destination, and a mode-000 file raises.
+
+        That hash is inside the repair command and runs after earlier kit files
+        have been written, so an untyped ``PermissionError`` here aborts a
+        half-synchronized workspace.
+        """
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores file permission bits")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / "package.json"
+        self.assertTrue(managed.is_file(), "fixture needs a kit-managed path")
+        os.chmod(managed, 0o000)
+        self.addCleanup(os.chmod, managed, 0o644)
+
+        with self._recorded_warnings():
+            result = upgrade_module.upgrade(workspace)
+        self.assertIn("package.json", result["unsynchronized"])
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertIn("package.json", json.loads(out)["framework"]["drifted_files"])
+
+
+    def test_an_already_deleted_orphan_clears_instead_of_stranding(self) -> None:
+        """An orphan the user already removed must clear, not be retried forever.
+
+        The orphan predicate selects stored dynamic keys without testing
+        existence, so treating "absent" as "undeletable" re-marks the path on
+        every run: a marker the live map can never show is drift no ``upgrade``
+        can clear. Deleting the generated command yourself is the natural thing
+        to do after removing a local skill.
+        """
+        workspace = make_workspace(new_tmp(self))
+        ghost = workspace / "skills/zz-ghost"
+        ghost.mkdir()
+        (ghost / "SKILL.md").write_text(
+            '---\nname: zz-ghost\ndescription: "Trigger: orphan fixture."\n---\n',
+            encoding="utf-8",
+        )
+        with self._recorded_warnings():
+            upgrade_module.upgrade(workspace)
+        shutil.rmtree(ghost)
+        for harness in (".opencode/commands", ".claude/commands"):
+            (workspace / harness / "zz-ghost.md").unlink()
+
+        with self._recorded_warnings():
+            result = upgrade_module.upgrade(workspace)
+        self.assertEqual(result["stranded"], [], "an absent path is already removed")
+        self.assertIn(".opencode/commands/zz-ghost.md", result["removed"])
+
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual(rc, SUCCESS)
+        self.assertEqual([p for p in json.loads(out)["framework"]["drifted_files"]
+                          if "zz-ghost" in p], [],
+                         "the report clears and does not come back")
+        with self._recorded_warnings():
+            upgrade_module.upgrade(workspace)
+        rc, out, _ = capture(["status", str(workspace), "--json"])
+        self.assertEqual([p for p in json.loads(out)["framework"]["drifted_files"]
+                          if "zz-ghost" in p], [])
+
+    def test_a_read_only_managed_write_is_a_typed_error(self) -> None:
+        """A bare ``write_text`` mid-run escaped as an uncaught PermissionError.
+
+        ``upgrade`` writes the config and then the manifest, both after the kit
+        copy has already mutated the workspace, so an untyped crash there leaves
+        a half-synchronized tree and no diagnosis.
+        """
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root ignores file permission bits")
+        workspace = make_workspace(new_tmp(self))
+        managed = workspace / ".papersmith" / "manifest.json"
+        os.chmod(managed, 0o444)
+        self.addCleanup(os.chmod, managed, 0o644)
+
+        rc, _, err = capture(["upgrade", str(workspace)])
+        self.assertEqual(rc, USER_ERROR)
+        self.assertIn("manifest.json", err)
 
 
 class TargetCommandTests(unittest.TestCase):

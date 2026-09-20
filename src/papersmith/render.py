@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .core import fs
 from .errors import UserError
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
@@ -25,7 +26,7 @@ def render_template(text: str, context: dict[str, Any]) -> str:
 
 def package_template_path(name: str) -> Path:
     path = Path(__file__).resolve().parent / "templates" / name
-    if not path.is_file():
+    if not fs.is_regular_file(path):
         raise UserError(f"missing papersmith template: {path}")
     return path
 

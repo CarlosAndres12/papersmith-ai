@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from .core import fs
 from .errors import SourceError
 
 KIT_DIR_NAME = "_kit"
@@ -52,14 +53,14 @@ def _dev_checkout(start_file: Path) -> Path | None:
 
 def _looks_like_checkout(root: Path) -> bool:
     return (
-        (root / "skills").is_dir()
-        and (root / "scripts" / "setup_env.py").is_file()
-        and (root / "CLAUDE.md").is_file()
+        fs.is_dir(root / "skills")
+        and fs.is_regular_file(root / "scripts" / "setup_env.py")
+        and fs.is_regular_file(root / "CLAUDE.md")
     )
 
 
 def validate_kit_root(root: Path) -> Path:
-    if not (root / "skills").is_dir():
+    if not fs.is_dir(root / "skills"):
         raise SourceError(
             f"kit root {root} has no skills/ directory — point PAPERSMITH_KIT_ROOT "
             "at a papersmith-ai checkout or reinstall the package"

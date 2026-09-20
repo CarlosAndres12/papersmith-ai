@@ -10,13 +10,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..core import fs
 from ..errors import UserError
 from .server import Server, catalog
 
 
 def _workspace(raw: str | None) -> Path:
     root = Path(raw).expanduser().resolve() if raw else Path.cwd().resolve()
-    if not root.is_dir():
+    if not fs.is_dir(root):
         raise UserError(f"workspace is not a directory: {root}")
     return root
 

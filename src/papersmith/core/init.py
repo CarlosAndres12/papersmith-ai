@@ -15,12 +15,11 @@ from ..generators import (
     UNSYNCHRONIZED,
     apply_generated,
     context_for_workspace,
-    render_files,
 )
 from ..kit import resolve_and_validate
 from ..render import render_package_template
 from ..schema import REMOTE_CHOICES, REMOTE_TARGETS, validate_tools
-from . import config
+from . import config, fs
 from . import manifest
 
 DEFAULT_AGENT_MODELS = {
@@ -66,17 +65,24 @@ def _create_topology(root: Path) -> None:
         "kaggle-inbox/.gitkeep",
     ):
         path = root / relpath
-        if not path.exists():
-            path.write_text("", encoding="utf-8")
+        if not fs.exists(path):
+            fs.write_text(path, "")
 
 
 def _copy_kit(root: Path, kit_root: Path) -> list[str]:
+    """Copy every kit file into a fresh workspace, or fail loudly.
+
+    ``init`` builds a workspace or refuses; unlike ``upgrade`` it has no
+    partially-synchronized workspace to protect, so an unwritable destination is
+    an error rather than something to report and continue past.
+    """
     copied: list[str] = []
     for relpath in sorted(manifest.kit_files(kit_root)):
         source = kit_root / relpath
-        if not source.is_file():
+        if not fs.is_regular_file(source):
             raise SourceError(f"kit manifest names a missing source file: {source}")
-        manifest.copy_kit_file(kit_root, relpath, root)
+        if not manifest.copy_kit_file(kit_root, relpath, root):
+            raise UserError(f"could not write {root / relpath}")
         copied.append(relpath)
     return copied
 
@@ -152,10 +158,14 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
         raise UserError("topic must be a non-empty string")
 
     root = Path(destination).expanduser().resolve()
-    if root.exists():
-        if not root.is_dir():
+    if fs.exists(root):
+        if not fs.is_dir(root):
             raise UserError(f"destination is not a directory: {root}")
-        if any(root.iterdir()):
+        try:
+            populated = any(root.iterdir())
+        except OSError as exc:
+            raise UserError(f"destination is not readable: {root}: {exc}") from None
+        if populated:
             raise UserError(f"destination must be empty: {root}")
     else:
         root.mkdir(parents=True, exist_ok=True)
@@ -172,6 +182,8 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
     stamp = config.utc_timestamp()
     workspace_config = _default_config(name, tools, target, stamp)
     config.write_json(root / ".papersmith" / "config.json", workspace_config)
+    # The destination is absent or empty by contract, so no damaged path can
+    # occupy these yet; unlike ``upgrade`` there is nothing to gate against.
     (root / ".papersmith" / "version").write_text(version + "\n", encoding="utf-8")
     (root / ".papersmith" / "runs_ledger.jsonl").touch()
 
@@ -191,8 +203,8 @@ def initialize(destination: str | Path, *, title: str = "Untitled Paper",
     config.load_workspace_config(root)
     config.load_papersmith_yaml(root)
     framework_files = manifest.workspace_framework_files(root, kit_root)
-    for relpath in render_files(root, context, tools):
-        # Any rendered path the baseline cannot hash — non-regular, never
+    for relpath in manifest.synchronized_paths(root, kit_root, context, tools):
+        # Any managed path the baseline cannot hash — non-regular, never
         # written, or written but still unreadable — is recorded with a marker,
         # so ``status`` reports it as drift instead of losing it in the rewrite.
         if relpath not in framework_files:

@@ -12,6 +12,7 @@ import warnings as _warnings
 from pathlib import Path
 from typing import Any
 
+from .core import fs
 from .core.config import load_papersmith_yaml, load_workspace_config
 from .errors import UserError
 from .render import render_package_template
@@ -51,50 +52,6 @@ def _frontmatter_value(value: str) -> str:
     return value
 
 
-def _is_dir(path: Path) -> bool:
-    """``Path.is_dir`` treating an unstatable path as absent.
-
-    ``Path.is_dir`` re-raises anything but ENOENT/ENOTDIR, so an unsearchable
-    directory (EACCES) would escape the fail-soft contract of the collectors
-    that call this.
-    """
-    try:
-        return path.is_dir()
-    except OSError:
-        return False
-
-
-def is_regular_file(path: Path) -> bool:
-    """True when ``path`` is a regular file the framework may read.
-
-    Two distinct hazards fold into ``False``. ``Path.is_file`` re-raises every
-    errno but ENOENT/ENOTDIR/EBADF/ELOOP, so on CPython 3.11-3.13 an unsearchable
-    directory (EACCES) would escape; and a non-regular but openable path — a FIFO,
-    or a symlink to a character device — would make a subsequent read block
-    forever. Both are "there is nothing to read here", not an error.
-
-    This is the gate every managed-path read must pass before it opens a file.
-    """
-    try:
-        return path.is_file()
-    except OSError:
-        return False
-
-
-def _exists(path: Path) -> bool:
-    """True when anything at all occupies ``path``.
-
-    ``Path.exists`` follows symlinks — a dangling one reports ``False`` — and
-    re-raises EACCES. This must not raise, and must not be fooled by a dangling
-    link, or a write would land on the link's target instead of being reported.
-    """
-    try:
-        path.lstat()
-    except OSError:
-        return False
-    return True
-
-
 def read_workspace_version(workspace: Path, default: str) -> str:
     """Read ``.papersmith/version`` without ever raising or blocking.
 
@@ -103,13 +60,8 @@ def read_workspace_version(workspace: Path, default: str) -> str:
     non-UTF-8 marker would escape as an untyped ``UnicodeDecodeError`` from a
     read whose callers are all fail-soft.
     """
-    path = workspace / ".papersmith" / "version"
-    if not is_regular_file(path):
-        return default
-    try:
-        return path.read_text(encoding="utf-8").strip() or default
-    except (OSError, UnicodeDecodeError):
-        return default
+    text = fs.read_text(workspace / ".papersmith" / "version")
+    return text.strip() if text and text.strip() else default
 
 
 def collect_agents(workspace: Path) -> list[dict[str, str]]:
@@ -122,14 +74,14 @@ def collect_agents(workspace: Path) -> list[dict[str, str]]:
     """
     agents: list[dict[str, str]] = []
     agent_dir = workspace / ".claude" / "agents"
-    if not _is_dir(agent_dir):
+    if not fs.is_dir(agent_dir):
         return agents
     try:
         candidates = sorted(agent_dir.glob("*.md"))
     except OSError:
         return agents
     for path in candidates:
-        if not is_regular_file(path):
+        if not fs.is_regular_file(path):
             agents.append({"name": path.stem, "description": ""})
             continue
         try:
@@ -195,7 +147,7 @@ def _skill_command(skill_dir: Path) -> tuple[dict[str, str] | None, str | None]:
     """Return ``(entry, None)`` or ``(None, skip_reason)`` — never raises."""
     name = skill_dir.name
     skill_file = skill_dir / "SKILL.md"
-    if not is_regular_file(skill_file):
+    if not fs.is_regular_file(skill_file):
         return None, "missing SKILL.md"
     try:
         lines = skill_file.read_text(encoding="utf-8").splitlines()
@@ -236,7 +188,7 @@ def collect_commands(workspace: Path, *,
     """
     commands: list[dict[str, str]] = []
     skills_dir = workspace / "skills"
-    if not _is_dir(skills_dir):
+    if not fs.is_dir(skills_dir):
         return commands
     try:
         skill_dirs = sorted(skills_dir.iterdir())
@@ -244,7 +196,7 @@ def collect_commands(workspace: Path, *,
         return commands
     skipped: list[str] = []
     for skill_dir in skill_dirs:
-        if not _is_dir(skill_dir) or skill_dir.name.startswith("_"):
+        if not fs.is_dir(skill_dir) or skill_dir.name.startswith("_"):
             continue
         entry, reason = _skill_command(skill_dir)
         if entry is None:
@@ -376,13 +328,13 @@ def apply_generated(workspace: Path, context: dict[str, Any] | None = None,
     for relpath, content in render_files(workspace, context, tools, warnings=warnings).items():
         path = workspace / relpath
         encoded = content.encode("utf-8")
-        if is_regular_file(path):
+        if fs.is_regular_file(path):
             try:
                 if path.read_bytes() == encoded:
                     continue
             except OSError:
                 pass  # Present but unreadable: try to overwrite it below.
-        elif _exists(path):
+        elif fs.exists(path):
             unsynchronized.append(relpath)
             continue
         try:
@@ -418,7 +370,7 @@ def check_generated(workspace: Path, context: dict[str, Any] | None = None,
     drifted: list[str] = []
     for relpath, content in render_files(workspace, context, tools, warnings=warnings).items():
         path = workspace / relpath
-        if not is_regular_file(path):
+        if not fs.is_regular_file(path):
             drifted.append(relpath)
             continue
         try:

@@ -11,19 +11,15 @@ from .. import __version__
 from ..bridges.node import call_engine, ensure_node_engine
 from ..bridges.python import run_script
 from ..errors import PapersmithError, UserError
-from ..generators import is_regular_file, read_workspace_version
+from ..generators import read_workspace_version
 from ..kit import resolve_and_validate
-from . import config, manifest
+from . import config, fs, manifest
 
 
 def _read_ledger(root: Path) -> list[dict[str, Any]]:
-    path = root / ".papersmith" / "runs_ledger.jsonl"
-    if not is_regular_file(path):
-        return []
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        # Best-effort: a damaged ledger is reported as absent, not as a crash.
+    """Best-effort: a damaged ledger is reported as absent, not as a crash."""
+    text = fs.read_text(root / ".papersmith" / "runs_ledger.jsonl")
+    if text is None:
         return []
     entries: list[dict[str, Any]] = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -48,9 +44,11 @@ def _proposal_status(root: Path) -> dict[str, Any]:
         latest = response.get("latest")
         stage = "none"
         if isinstance(latest, str):
-            if (root / "proposals" / "deliberated" / latest).is_file():
+            # ``latest`` comes from the engine, so it is data, not a trusted
+            # path: gate the probes instead of letting a damaged tree abort.
+            if fs.is_regular_file(root / "proposals" / "deliberated" / latest):
                 stage = "deliberated"
-            elif (root / "proposals" / "accepted" / latest).is_file():
+            elif fs.is_regular_file(root / "proposals" / "accepted" / latest):
                 stage = "accepted"
             else:
                 stage = "draft"
@@ -73,28 +71,36 @@ def _proposal_status(root: Path) -> dict[str, Any]:
 
 def _implementation_status(root: Path) -> list[dict[str, Any]]:
     directory = root / "implementations"
-    if not directory.is_dir():
+    if not fs.is_dir(directory):
+        return []
+    try:
+        candidates = sorted(directory.iterdir())
+    except OSError:
         return []
     entries: list[dict[str, Any]] = []
-    for path in sorted(directory.iterdir()):
+    for path in candidates:
         if path.name.startswith(".") or path.name == ".gitkeep":
             continue
-        if not path.is_dir():
+        if not fs.is_dir(path):
             continue
         tests_dir = path / "tests"
+        try:
+            test_files = len(list(tests_dir.glob("test_*.py"))) if fs.is_dir(tests_dir) else 0
+        except OSError:
+            test_files = 0
         entries.append({
             "name": path.name,
             "path": path.relative_to(root).as_posix(),
-            "has_pyproject": (path / "pyproject.toml").is_file(),
-            "has_src": (path / "src").is_dir(),
-            "test_files": len(list(tests_dir.glob("test_*.py"))) if tests_dir.is_dir() else 0,
+            "has_pyproject": fs.is_regular_file(path / "pyproject.toml"),
+            "has_src": fs.is_dir(path / "src"),
+            "test_files": test_files,
         })
     return entries
 
 
 def _account_status(root: Path) -> dict[str, Any]:
     script = root / "skills" / "kaggle-accounts" / "scripts" / "accounts_cli.py"
-    if not script.is_file():
+    if not fs.is_regular_file(script):
         return {"available": False, "count": 0, "warning": "accounts skill is missing"}
     try:
         result = run_script(root, script, ["list", "--json"], timeout=30)
@@ -117,11 +123,20 @@ def _account_status(root: Path) -> dict[str, Any]:
 
 
 def _inbox_status(root: Path) -> dict[str, Any]:
+    """Best-effort: an unreadable inbox is reported as empty, not as a crash."""
     inbox = root / "kaggle-inbox"
-    if not inbox.is_dir():
+    if not fs.is_dir(inbox):
         return {"files": 0, "job_directories": 0}
-    files = [path for path in inbox.rglob("*") if path.is_file() and path.name != ".gitkeep"]
-    jobs = [path for path in inbox.iterdir() if path.is_dir() and not path.name.startswith(".")]
+    try:
+        files = [p for p in inbox.rglob("*")
+                 if fs.is_regular_file(p) and p.name != ".gitkeep"]
+    except OSError:
+        files = []
+    try:
+        jobs = [p for p in inbox.iterdir()
+                if fs.is_dir(p) and not p.name.startswith(".")]
+    except OSError:
+        jobs = []
     return {"files": len(files), "job_directories": len(jobs)}
 
 
@@ -129,7 +144,7 @@ def _runtime_status(root: Path) -> dict[str, Any]:
     import os
     import sys
     node = shutil.which("node") is not None
-    micromamba = (root / ".micromamba" / "bin" / "micromamba").is_file() or shutil.which("micromamba") is not None
+    micromamba = fs.is_regular_file(root / ".micromamba" / "bin" / "micromamba") or shutil.which("micromamba") is not None
     llama = shutil.which("llama-server") is not None or os.environ.get("LLAMA_CPP_BINARY") is not None
     return {
         "node": node,

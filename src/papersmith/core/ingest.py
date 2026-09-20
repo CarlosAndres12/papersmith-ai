@@ -16,6 +16,7 @@ from typing import Any
 from ..bridges.python import mapped_returncode, run_script
 from ..core.exit_codes import EXECUTION_ERROR, USER_ERROR
 from ..errors import ExecutionError, UserError
+from . import fs
 
 
 def _timestamp() -> str:
@@ -97,7 +98,7 @@ def _openreview_pdf(url: str) -> tuple[str, str]:
 def _unique_destination(directory: Path, stem: str) -> Path:
     candidate = directory / f"{stem}.pdf"
     number = 2
-    while candidate.exists():
+    while fs.exists(candidate):
         candidate = directory / f"{stem}-{number}.pdf"
         number += 1
     return candidate
@@ -140,14 +141,14 @@ def refresh_index(workspace: str | Path) -> dict:
 
 def ingest(source: str, workspace: str | Path = ".", *, ocr: bool = False) -> dict:
     root = Path(workspace).expanduser().resolve()
-    if not (root / ".papersmith" / "manifest.json").is_file():
+    if not fs.is_regular_file(root / ".papersmith" / "manifest.json"):
         raise UserError(f"not a papersmith workspace: {root}")
     classified = classify_source(source)
     reference = root / "guidance" / "reference-papers"
     reference.mkdir(parents=True, exist_ok=True)
     if classified["kind"] == "file":
         original = Path(source).expanduser().resolve()
-        if not original.is_file():
+        if not fs.is_regular_file(original):
             raise UserError(f"PDF does not exist: {original}")
         pdf = original if original.parent == reference else _unique_destination(reference, classified["slug"])
         if pdf != original:

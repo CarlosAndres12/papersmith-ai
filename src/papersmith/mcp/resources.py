@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..core import fs
 from .bridge import ChildPlan, redact, run_plan
 from .registry import ToolRefusal
 
@@ -46,17 +47,18 @@ def _read_status(workspace: Path) -> str:
 
 
 def _read_config(workspace: Path) -> str:
-    path = workspace / "papersmith.yaml"
-    if not path.is_file():
-        raise ToolRefusal("RESOURCE_UNAVAILABLE", "papersmith.yaml is absent")
-    return redact(path.read_text(encoding="utf-8"))
+    text = fs.read_text(workspace / "papersmith.yaml")
+    if text is None:
+        raise ToolRefusal("RESOURCE_UNAVAILABLE", "papersmith.yaml is absent or unreadable")
+    return redact(text)
 
 
 def _read_runs(workspace: Path) -> str:
     path = workspace / ".papersmith" / "runs_ledger.jsonl"
-    if not path.is_file():
+    text = fs.read_text(path)
+    if text is None:
         return "[]"
-    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    lines = [line for line in text.splitlines() if line.strip()]
     events: list[object] = []
     for line in lines[-RUNS_TAIL_LIMIT:]:
         try:
@@ -92,10 +94,10 @@ def _read_contract(workspace: Path) -> str:
 
 
 def _read_refs(workspace: Path) -> str:
-    path = workspace / "paper" / "refs.bib"
-    if not path.is_file():
-        raise ToolRefusal("RESOURCE_UNAVAILABLE", "paper/refs.bib is absent")
-    return path.read_text(encoding="utf-8")
+    text = fs.read_text(workspace / "paper" / "refs.bib")
+    if text is None:
+        raise ToolRefusal("RESOURCE_UNAVAILABLE", "paper/refs.bib is absent or unreadable")
+    return text
 
 
 RESOURCES: tuple[ResourceSpec, ...] = (

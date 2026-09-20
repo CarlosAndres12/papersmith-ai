@@ -7,12 +7,12 @@ from pathlib import Path
 from ..core import manifest
 from ..core.exit_codes import DRIFT_ERROR, SUCCESS
 from ..errors import UserError
+from ..core import fs
 from ..generators import (
     ALL_TOOLS,
     TOOL_OUTPUTS,
     check_generated,
     context_for_workspace,
-    is_regular_file,
     workspace_tools,
 )
 from ..kit import resolve_and_validate
@@ -39,7 +39,7 @@ def _surplus_static_files(root: Path, active: tuple[str, ...]) -> list[str]:
         if tool in active:
             continue
         for relpath in (*TOOL_OUTPUTS.get(tool, ()), *_EXTRA_STATIC.get(tool, ())):
-            if is_regular_file(root / relpath):
+            if fs.is_regular_file(root / relpath):
                 found.append(relpath)
     return sorted(set(found))
 
@@ -47,7 +47,7 @@ def _surplus_static_files(root: Path, active: tuple[str, ...]) -> list[str]:
 def execute(workspace: str | Path, *, check_drift: bool = False) -> int:
     root = Path(workspace).expanduser().resolve()
     spec = root / "skills/skill-audit/references/probes/skill-audit.subcommands.json"
-    if not spec.is_file():
+    if not fs.is_regular_file(spec):
         raise UserError(f"missing structural audit probe: {spec}")
     result = run_script(
         root,
