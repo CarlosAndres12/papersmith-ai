@@ -11,9 +11,9 @@ service's own vocabulary well enough to translate it into the seam's.
 Structural guarantees, held by what this file's own dependency graph can
 even reach — never by convention:
 
-1. This module imports `importlib`, `os`, `re`, `subprocess`, `sys` and
-   `pathlib` — nothing else. It names no packaged SDK, and the one thing it
-   shells out to is the official `colab` command line
+1. This module imports `hashlib`, `json`, `os`, `re`, `subprocess`, `sys`,
+   `tempfile` and `pathlib` — nothing else. It names no packaged SDK, and
+   the one thing it shells out to is the official `colab` command line
    (`google-colab-cli`), which is the service's own headless client.
 
 2. Colab authentication is the CLI's own business, read by the CLI's own
@@ -39,26 +39,34 @@ even reach — never by convention:
 
 Slice status, stated so a refusal is never a mystery: this file owns the
 S1 surface (registration, the static worker, `list_active()`, `cancel()`)
-and refuses the session lifecycle — `submit()`, `poll()`, `fetch()` —
-until implementation slice S2 lands it (uploads, detached launch, the
-`/content/.psmith/<session>/` sentinel protocol, downloads, release).
+and the S2 session lifecycle (`submit()`, `poll()`, `fetch()` — uploads,
+the detached launch, the `/content/.psmith/<session>/` sentinel protocol,
+downloads, release). Two things land later by plan: the repo-credential
+route (S3: `--repo-credential`, `REPO_CREDENTIAL_CARRIER`, the askpass
+material) and the accelerator mapping (S4, D13) — a run-config declaring
+an `accelerator` block is refused by `submit()` naming that slice, never
+silently run on CPU.
 
 Measured against `google-colab-cli` 0.6.0, live (spike S0; evidence in
 `proposals/colab-cli-spike/findings.md`):
     [name] m-... | Hardware: CPU | Variant: DEFAULT          (sessions)
     [psmith-s0] m-... | Hardware: CPU | Variant: DEFAULT | Status: IDLE
     [colab] Session 'x' not found.                            (stop, exit 0)
+    [colab] Creating session 'x'... / [colab] Session READY.  (new, exit 0)
 Run with any Python 3.10+ (stdlib-only):
     python3 -m unittest tests.test_remote_execution
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+import tempfile
+from pathlib import Path, PurePosixPath
 
 
 def _load_adapter_seam():
@@ -97,6 +105,20 @@ class ColabAdapterError(ADAPTER.AdapterError):
     """
 
 
+class ColabTransportError(ColabAdapterError):
+    """The RETRYABLE half of this adapter's refusals: the request died in
+    flight (an expired subprocess timeout, or the CLI's own
+    `Connection was lost.` transport message) rather than the service
+    answering with a state.
+
+    Only idempotent READS are retried on this class, once (S0 obligation
+    4: `exec` can hang after `Connection was lost`, and retry-once is
+    justified for reads alone). A launch is never retried — a second
+    launch could spawn a second executor — and neither is `new`, an
+    upload, an install or a stop.
+    """
+
+
 # The one worker this backend exposes: the operator's own Colab account.
 WORKER_ID = "colab"
 
@@ -113,12 +135,58 @@ COLAB_WORKER_CAPACITY = 1
 # never be reported as a submission this adapter issued.
 SESSION_NAME_PREFIX = "psmith-"
 
-# The CONTROL-PLANE budget: `sessions` and `stop` are small requests whose
-# answer the service produces immediately, so two minutes is already
-# generous and failing fast is the correct behaviour. Transfer and
-# in-kernel budgets are deliberately separate kinds of number and land
-# with the session-lifecycle slice that uses them.
-SUBPROCESS_TIMEOUT_SECONDS = 120.0
+# The job-folder slug's own cap, chosen against the measured accepted
+# name length (a 56-character name was accepted live; this construction's
+# own maximum is 6 + 40 + 1 + 8 = 55).
+SESSION_SLUG_MAX_CHARS = 40
+SESSION_NAME_MAX_CHARS = 55
+
+# The VM-side root every session's directory lives under, from the parent
+# plan's protocol §4. A constructor parameter (below) rather than a bare
+# literal, because it is the VM's mount root and the offline suite
+# executes the REAL rendered templates against a temp directory standing
+# in for it — no path literal here is test-only, and the production
+# default is exactly the plan's.
+DEFAULT_REMOTE_ROOT = "/content/.psmith"
+
+# The token the two RENDERED asset templates carry in place of their
+# session directory (`assets/colab/launch.py`, `read_state.py`), and the
+# inline mkdir source below. `exec -f` has no argument channel, so the
+# directory is substituted into the source before the file is executed.
+SESSION_DIR_TOKEN = "__SESSION_DIR__"
+
+# Timeout classes (parent plan D7), each its own named number:
+#   control   — `sessions`, `status`, `stop`: small requests whose answer
+#               the service produces immediately; failing fast is right.
+#   new       — provisioning a machine, measured at ~14 s live.
+#   transfer  — per-file upload/download, sized for real artifacts.
+#   install   — `colab install`: its own operation class, same magnitude
+#               as a transfer because it moves packages and runs pip.
+#   kernel    — the `--timeout` every in-kernel helper execution passes to
+#               `exec`, and the subprocess timeout is that plus slack.
+COLAB_CONTROL_TIMEOUT_SECONDS = 120.0
+COLAB_NEW_TIMEOUT_SECONDS = 300.0
+COLAB_TRANSFER_TIMEOUT_SECONDS = 1800.0
+COLAB_INSTALL_TIMEOUT_SECONDS = 1800.0
+COLAB_KERNEL_TIMEOUT_SECONDS = 600.0
+COLAB_SUBPROCESS_SLACK_SECONDS = 30.0
+
+# The three distributions `executor.py` needs on the VM (measured present
+# live; the probe exists for the machines where they are not).
+PROBE_PACKAGES = ("nbclient", "nbformat", "jupyter_client")
+
+# The two job-folder names this adapter knows: `run-config.json` beside
+# the entrypoint is what makes a submission shaped like this backend's
+# protocol at all, and `runner.ipynb` is the entrypoint's own fixed name
+# (jobfolder.py's constants, duplicated here the way kaggle.py duplicates
+# its own — this module may not import jobfolder).
+RUN_CONFIG_FILENAME = "run-config.json"
+RUNNER_FILENAME = "runner.ipynb"
+
+# The rendered/uploaded assets under `assets/colab/`.
+LAUNCH_ASSET = "launch.py"
+EXECUTOR_ASSET = "executor.py"
+READ_STATE_ASSET = "read_state.py"
 
 # The tokens a hand-typed launch would carry without ever routing through
 # `remote_cli.py submit`. Read by `hooks/refuse_offpath_push.py`; a second
@@ -132,21 +200,114 @@ PUSH_SURFACE: tuple[str, ...] = ("colab new", "colab exec", "colab run", "colab 
 # A machine whose name the CLI can no longer resolve is rendered `[?]`;
 # it is deliberately NOT converted into a submission id below — there is
 # no name to address it by.
-_SESSION_LINE_RE = re.compile(r"^\[(?P<name>[^\]]+)\]\s+\S+")
+_SESSION_LINE_RE = re.compile(r"^\[(?P<name>[^\]]+)\]\s+(?P<endpoint>\S+)\s*\|")
+
+# The names a session may carry: lowercase alphanumerics and hyphens,
+# starting with an alphanumeric. This module GENERATES exactly this shape
+# (`SESSION_NAME_PREFIX` + slug + digest), so a submission id that does
+# not match cannot have come from here — and the name is substituted into
+# rendered sources, so accepting an arbitrary string from argv would be
+# accepting an injection into a file executed on the VM. Refused at the
+# boundary, before any substitution (ledger S2-J7).
+_SESSION_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+# The inline helper sources: rendered per submission into the temp dir,
+# exactly like the two asset templates, and for the same reason — they
+# must know their session directory and `exec -f` cannot tell them.
+_MKDIR_SOURCE = '''\
+"""Create the session's remote directory (rendered per submission)."""
+import json
+from pathlib import Path
+
+SESSION_DIR = Path("__SESSION_DIR__")
 
 
-def _lifecycle_refusal(action: str) -> ColabAdapterError:
-    """The one refusal every not-yet-wired lifecycle operation raises,
-    naming the slice that owns it so the gap is a placeholder with an
-    owner, never a mystery. Nothing was launched, no session was created.
+def main() -> None:
+    SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    print(json.dumps({"created": str(SESSION_DIR), "exists": SESSION_DIR.is_dir()}))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+_PROBE_SOURCE = '''\
+"""Report the executor's three dependencies without importing them
+(rendered per submission; an import would be the failure it reports)."""
+import json
+from importlib import metadata
+
+PACKAGES = ("nbclient", "nbformat", "jupyter_client")
+
+
+def main() -> None:
+    found = {}
+    for package in PACKAGES:
+        try:
+            found[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            found[package] = None
+    print(json.dumps(found))
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def _slugify(text: str) -> str:
+    """A deterministic slug from raw text — never a lookup, never state
+    kept anywhere in this process. Used on the job folder's own name
+    (`entrypoint.parent.name`), which is the one fact that separates two
+    generated job folders before their bytes are hashed.
     """
-    return ColabAdapterError(
-        f"{action} is not wired yet: the Colab session lifecycle "
-        "(new → remote dirs → uploads → detached launch → sentinel polling → "
-        "downloads → release) lands with implementation slice S2. This "
-        "adapter refuses rather than half-implement it — nothing was "
-        "launched and no session was created."
-    )
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug[:SESSION_SLUG_MAX_CHARS] or "job"
+
+
+def _mode_token(run_config) -> str:
+    """The submit-time mode, as it enters the session name's digest.
+    `run_config` is the in-memory job's opaque mapping; `--smoke` is the
+    one mode `cmd_submit` ever sets (`"smoke"`), everything else is a
+    full run. The mode is NOT persisted in `run-config.json`, which is
+    exactly why it must be hashed here: a rehearsal and a full run of the
+    same job folder are different submissions and must never collide on
+    one session name.
+    """
+    return "smoke" if run_config.get("mode") == "smoke" else "full"
+
+
+def _digest8(entrypoint_bytes: bytes, commit: str, mode: str) -> str:
+    """The submission digest: `sha256(entrypoint bytes NUL commit NUL
+    mode)[:8]`. The NUL separators are this construction's own
+    disambiguation of the parent plan's "entrypoint bytes + commit +
+    mode" prose — recorded as a refinement in the slice plan (SD1) — so
+    two different triples can never hash the same concatenated byte
+    string.
+    """
+    joined = b"\0".join((entrypoint_bytes, commit.encode("utf-8"), mode.encode("utf-8")))
+    return hashlib.sha256(joined).hexdigest()[:8]
+
+
+def _escape_source_literal(text: str) -> str:
+    """Escape a value for inclusion inside a double-quoted Python literal
+    in a rendered source file. The session directory is composed of this
+    module's own validated parts (prefixed name, VM root), so this is
+    belt-and-braces rather than the load-bearing check — the load-bearing
+    check is `_SESSION_NAME_RE` at the boundary.
+    """
+    return text.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _append_note(exc: BaseException, note: str) -> None:
+    """Append a cleanup note to a refusal about to be re-raised, without
+    changing its type and without ever swallowing it: the caller sees the
+    original failure AND the fact that cleanup also failed.
+    """
+    if exc.args and isinstance(exc.args[0], str):
+        exc.args = (f"{exc.args[0]} [{note}]", *exc.args[1:])
+    else:
+        exc.args = (*exc.args, note)
 
 
 class ColabAdapter(ADAPTER.Adapter):
@@ -156,10 +317,28 @@ class ColabAdapter(ADAPTER.Adapter):
         self,
         *,
         colab_executable: str = "colab",
-        timeout: float = SUBPROCESS_TIMEOUT_SECONDS,
+        timeout: float = COLAB_CONTROL_TIMEOUT_SECONDS,
+        new_timeout: float = COLAB_NEW_TIMEOUT_SECONDS,
+        transfer_timeout: float = COLAB_TRANSFER_TIMEOUT_SECONDS,
+        install_timeout: float = COLAB_INSTALL_TIMEOUT_SECONDS,
+        kernel_timeout: float = COLAB_KERNEL_TIMEOUT_SECONDS,
+        subprocess_slack: float = COLAB_SUBPROCESS_SLACK_SECONDS,
+        remote_root: str = DEFAULT_REMOTE_ROOT,
+        assets_dir: Path | None = None,
     ) -> None:
         self._colab_executable = colab_executable
-        self._timeout = timeout
+        self._control_timeout = timeout
+        self._new_timeout = new_timeout
+        self._transfer_timeout = transfer_timeout
+        self._install_timeout = install_timeout
+        self._kernel_timeout = kernel_timeout
+        self._subprocess_slack = subprocess_slack
+        self._remote_root = remote_root.rstrip("/")
+        self._assets_dir = (
+            Path(assets_dir)
+            if assets_dir is not None
+            else Path(__file__).resolve().parents[2] / "assets" / "colab"
+        )
 
     # -- the subprocess boundary ------------------------------------------
 
@@ -193,14 +372,14 @@ class ColabAdapter(ADAPTER.Adapter):
     ) -> subprocess.CompletedProcess:
         """One subprocess boundary for every child this adapter starts.
 
-        `timeout=None` means `self._timeout`, the control-plane budget.
-        A timeout or a missing executable is a refusal, and the refusal
-        for a missing executable names the exact install command — this
-        skill's `## Environment` section in `SKILL.md` is where a reader
-        would look, and the sentence lives here, in the one file this
-        skill lets name a service.
+        `timeout=None` means the control-plane budget. A timeout is a
+        `ColabTransportError` (the request died in flight — retry-eligible
+        for reads alone), and a missing executable is a refusal naming the
+        exact install command: this skill's `## Environment` section in
+        `SKILL.md` is where a reader would look, and the sentence lives
+        here, in the one file this skill lets name a service.
         """
-        effective_timeout = self._timeout if timeout is None else timeout
+        effective_timeout = self._control_timeout if timeout is None else timeout
         try:
             return subprocess.run(
                 argv,
@@ -211,7 +390,7 @@ class ColabAdapter(ADAPTER.Adapter):
                 env=self._env_for(),
             )
         except subprocess.TimeoutExpired as exc:
-            raise ColabAdapterError(
+            raise ColabTransportError(
                 f"{argv[0]} timed out after {effective_timeout}s: refusing to "
                 "guess at a state this process never confirmed"
             ) from exc
@@ -227,6 +406,359 @@ class ColabAdapter(ADAPTER.Adapter):
                 )
             raise ColabAdapterError(f"could not run {argv[0]}: {exc}{remedy}") from exc
 
+    def _run_read(
+        self,
+        argv: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
+        """`_run`, with the ONE retry this adapter ever performs: an
+        idempotent read that died in flight is retried once, then
+        refused. The transport class is explicit — an expired subprocess
+        timeout, or the CLI's own `Connection was lost.` message in the
+        child's output — and nothing about a state the service actually
+        ANSWERED is ever retried into a different answer.
+        """
+        retried = False
+        while True:
+            try:
+                result = self._run(argv, timeout=timeout)
+            except ColabTransportError:
+                if retried:
+                    raise
+                retried = True
+                continue
+            combined = f"{result.stdout}\n{result.stderr}".lower()
+            if not retried and "connection was lost" in combined:
+                retried = True
+                continue
+            return result
+
+    def _parse_json_line(self, result: subprocess.CompletedProcess, action: str) -> dict:
+        """Read the one compact JSON line a helper execution prints as its
+        LAST non-empty output line. The CLI's own surrounding prose is
+        tolerated, never parsed; a non-zero exit, no output, a final line
+        that is not JSON, or JSON that is not an object are each a
+        refusal — never a half-read state.
+        """
+        if result.returncode != 0:
+            raise ColabAdapterError(
+                f"{action} refused (exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        lines = [line for line in result.stdout.splitlines() if line.strip()]
+        if not lines:
+            raise ColabAdapterError(
+                f"{action} printed nothing this adapter can read: "
+                f"{result.stderr.strip()}"
+            )
+        try:
+            payload = json.loads(lines[-1])
+        except json.JSONDecodeError as exc:
+            raise ColabAdapterError(
+                f"{action}: the last output line is not JSON ({exc}): "
+                f"{lines[-1]!r}"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ColabAdapterError(
+                f"{action}: the JSON line is {type(payload).__name__}, not an object"
+            )
+        return payload
+
+    # -- session vocabulary -----------------------------------------------
+
+    def _session_dir(self, session_name: str) -> str:
+        return f"{self._remote_root}/{session_name}"
+
+    def _session_name_from(self, submission_id: str) -> str:
+        """Split `"<worker>/<session-name>"` and validate BOTH halves: the
+        worker must be this adapter's own, and the name must match the
+        shape this adapter generates (`SESSION_NAME_PREFIX` + slug +
+        digest). The name is substituted into rendered sources that run
+        on the VM, so anything else is refused here, before any
+        substitution (ledger S2-J7).
+        """
+        worker, separator, session_name = submission_id.partition("/")
+        if not separator or not session_name:
+            raise ColabAdapterError(
+                f"{submission_id!r} is not '<worker>/<session-name>'; "
+                "refusing to guess which session this names"
+            )
+        if worker != WORKER_ID:
+            raise ColabAdapterError(
+                f"{submission_id!r} names worker {worker!r}, but this adapter "
+                f"issues ids for {WORKER_ID!r} only"
+            )
+        if (
+            len(session_name) > SESSION_NAME_MAX_CHARS
+            or not session_name.startswith(SESSION_NAME_PREFIX)
+            or _SESSION_NAME_RE.match(session_name) is None
+        ):
+            raise ColabAdapterError(
+                f"{submission_id!r} carries {session_name!r}, which is not a "
+                "session name this adapter generates; refusing before that "
+                "name could reach a rendered source"
+            )
+        return session_name
+
+    def _status_line(self, stdout: str, session_name: str) -> tuple[str, str] | None:
+        """The measured status line for `session_name`, or `None` when the
+        output carries no such line. Returns `(line, endpoint)`.
+        """
+        for line in stdout.splitlines():
+            match = _SESSION_LINE_RE.match(line.strip())
+            if match is None:
+                continue
+            if match.group("name") != session_name:
+                continue
+            return line.strip(), match.group("endpoint")
+        return None
+
+    @staticmethod
+    def _looks_like_not_found(result: subprocess.CompletedProcess) -> bool:
+        """The CLI's own "no such session" family, matched on OUTPUT and
+        never on the exit code (measured: `stop` on an unknown session
+        exits 0 — S0 obligation 3).
+        """
+        combined = f"{result.stdout}\n{result.stderr}".lower()
+        return "not found" in combined
+
+    # -- rendering and helper execution -----------------------------------
+
+    def _render(self, source: str, session_name: str) -> str:
+        return source.replace(
+            SESSION_DIR_TOKEN, _escape_source_literal(self._session_dir(session_name))
+        )
+
+    def _render_asset(self, asset_name: str, session_name: str, destination: Path) -> Path:
+        """Render one `assets/colab/` template for this submission into
+        `destination`. A missing asset is a refusal naming the path —
+        never an empty file that would run as a no-op helper.
+        """
+        asset = self._assets_dir / asset_name
+        try:
+            source = asset.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise ColabAdapterError(
+                f"cannot read the {asset_name!r} template at {asset}: {exc}"
+            ) from exc
+        destination.write_text(self._render(source, session_name), encoding="utf-8")
+        return destination
+
+    def _write_helper(self, source: str, destination: Path, session_name: str) -> Path:
+        destination.write_text(self._render(source, session_name), encoding="utf-8")
+        return destination
+
+    def _exec_result(
+        self,
+        helper: Path,
+        session_name: str,
+        *,
+        retry_read: bool = False,
+    ) -> subprocess.CompletedProcess:
+        """One in-kernel helper execution: `exec -f <rendered file>`, with
+        the kernel budget passed to the CLI explicitly (the CLI's own
+        default is 30 s — never reachable from here) and the subprocess
+        timeout set to that budget plus slack, so the CLI's own timeout
+        fires first and its message is the one a caller reads.
+        """
+        argv = [
+            self._colab_executable,
+            "exec",
+            "-s",
+            session_name,
+            "-f",
+            str(helper),
+            "--timeout",
+            str(self._kernel_timeout),
+        ]
+        timeout = self._kernel_timeout + self._subprocess_slack
+        runner = self._run_read if retry_read else self._run
+        return runner(argv, timeout=timeout)
+
+    # -- lifecycle pieces --------------------------------------------------
+
+    def _refuse_existing_session(self, session_name: str) -> None:
+        """S0 obligation 1: `colab new` on an existing name REPLACES the
+        machine and orphans the old one, which has no CLI release path
+        and burns compute until idle reclaim. The listing is read BEFORE
+        `new`, and a name already on it is a refusal — never a replace.
+        """
+        result = self._run_read([self._colab_executable, "sessions"])
+        if result.returncode != 0:
+            raise ColabAdapterError(
+                f"colab sessions refused (exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        for line in result.stdout.splitlines():
+            match = _SESSION_LINE_RE.match(line.strip())
+            if match is None or match.group("name") != session_name:
+                continue
+            raise ColabAdapterError(
+                f"a session named {session_name!r} already exists on this "
+                "account, and `colab new` would REPLACE it — silently "
+                "orphaning the running machine, which has no CLI release "
+                "path. Fetch, stop, or let that session expire before "
+                "resubmitting this same job."
+            )
+
+    def _new_session(self, session_name: str) -> None:
+        """Provision one machine, requiring the measured positive
+        confirmation (`Session READY`) rather than a bare exit code.
+        """
+        result = self._run(
+            [self._colab_executable, "new", "-s", session_name],
+            timeout=self._new_timeout,
+        )
+        combined = f"{result.stdout}\n{result.stderr}"
+        if result.returncode != 0 or "session ready" not in combined.lower():
+            raise ColabAdapterError(
+                f"`new` for {session_name!r} did not report READY "
+                f"(exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    def _endpoint_for(self, session_name: str) -> str:
+        """The `m-…` endpoint token from the measured `status` line. An
+        unparseable endpoint refuses the launch BEFORE any upload: a
+        session without keep-alive idles out mid-run and wastes the run.
+        """
+        result = self._run_read(
+            [self._colab_executable, "status", "-s", session_name]
+        )
+        if self._looks_like_not_found(result):
+            raise ColabAdapterError(
+                f"the session {session_name!r} vanished between `new` and "
+                "`status`; refusing to launch into a machine this process "
+                "cannot observe"
+            )
+        found = self._status_line(result.stdout, session_name)
+        if found is None:
+            raise ColabAdapterError(
+                f"colab status for {session_name!r} printed no line this "
+                f"adapter can read (exit {result.returncode}): "
+                f"{result.stdout.strip() or result.stderr.strip()}"
+            )
+        return found[1]
+
+    def _spawn_keep_alive(self, endpoint: str, session_name: str) -> None:
+        """Best-effort keep-alive, detached, output to DEVNULL (parent
+        plan D9). A spawn failure is deliberately NOT a refusal: the plan
+        calls this best-effort, the session is already usable, and the
+        endpoint above was the load-bearing parse. The invocation shape
+        is the plan's (`keep-alive <endpoint> <name>`); the live daemon
+        probe measured on this CLI was the module-form of the same hidden
+        command, and S5 verifies this form against the real service
+        (ledger S2-J5).
+        """
+        argv = [self._colab_executable, "keep-alive", endpoint, session_name]
+        try:
+            subprocess.Popen(
+                argv,
+                env=self._env_for(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            return
+
+    def _upload(self, local: Path, remote: str, session_name: str) -> None:
+        if not local.is_file():
+            raise ColabAdapterError(
+                f"cannot upload {local}: not a readable regular file"
+            )
+        result = self._run(
+            [
+                self._colab_executable,
+                "upload",
+                "-s",
+                session_name,
+                str(local),
+                remote,
+            ],
+            timeout=self._transfer_timeout,
+        )
+        if result.returncode != 0:
+            raise ColabAdapterError(
+                f"upload of {local.name!r} refused (exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    def _ensure_dependencies(self, probe: Path, session_name: str) -> None:
+        """D10: probe, install only what is missing, re-probe once, and
+        refuse a still-broken runtime — after a stop, never before one.
+        """
+        payload = self._parse_json_line(
+            self._exec_result(probe, session_name), f"dependency probe for {session_name!r}"
+        )
+        missing = [package for package in PROBE_PACKAGES if payload.get(package) is None]
+        if not missing:
+            return
+        install = self._run(
+            [self._colab_executable, "install", "-s", session_name, *missing],
+            timeout=self._install_timeout,
+        )
+        if install.returncode != 0:
+            raise ColabAdapterError(
+                f"installing {missing!r} on {session_name!r} refused "
+                f"(exit {install.returncode}): "
+                f"{install.stderr.strip() or install.stdout.strip()}"
+            )
+        reparsed = self._parse_json_line(
+            self._exec_result(probe, session_name),
+            f"dependency re-probe for {session_name!r}",
+        )
+        still = [package for package in PROBE_PACKAGES if reparsed.get(package) is None]
+        if still:
+            raise ColabAdapterError(
+                f"the VM still cannot import {still!r} after `colab install`; "
+                "refusing to launch a run that would die in its executor. "
+                "Install them yourself (`colab install -s "
+                f"{session_name} {' '.join(still)}`) and resubmit"
+            )
+
+    def _launch(self, launcher: Path, session_name: str) -> None:
+        """Run the rendered launcher and require its receipt line. Never
+        retried: a retry could spawn a second executor.
+        """
+        payload = self._parse_json_line(
+            self._exec_result(launcher, session_name),
+            f"launch for {session_name!r}",
+        )
+        if not isinstance(payload.get("launched_pid"), int):
+            raise ColabAdapterError(
+                f"the launcher for {session_name!r} did not report a pid: "
+                f"{payload!r}"
+            )
+
+    def _stop_session(self, session_name: str) -> None:
+        """`colab stop -s <session>`, output-interpreted (measured:
+        unknown sessions print "not found" and exit 0 — the exit code is
+        not truth, S0 obligation 3).
+        """
+        argv = [self._colab_executable, "stop", "-s", session_name]
+        result = self._run(argv)
+        if self._looks_like_not_found(result):
+            return
+        if result.returncode != 0:
+            raise ColabAdapterError(
+                f"stop for {session_name!r} refused (exit {result.returncode}): "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+
+    def _stop_session_quietly(self, session_name: str) -> str:
+        """Best-effort cleanup for a failure path: attempt the stop and
+        return a note describing a FAILED cleanup, or `""` when the stop
+        succeeded or the session was already gone. Never raises — the
+        caller is already unwinding a primary failure.
+        """
+        try:
+            self._stop_session(session_name)
+        except ColabAdapterError as exc:
+            return f"session cleanup also failed: {exc}"
+        return ""
+
     # -- the seam's six operations ----------------------------------------
 
     def workers(self) -> list["ADAPTER.Worker"]:
@@ -241,43 +773,278 @@ class ColabAdapter(ADAPTER.Adapter):
         return [ADAPTER.Worker(id=WORKER_ID, capacity=COLAB_WORKER_CAPACITY)]
 
     def submit(self, job: "ADAPTER.Job") -> "ADAPTER.Submission":
-        raise _lifecycle_refusal("submit")
+        """The full session lifecycle, in the parent plan's own order:
+        job-folder checks → `new` → endpoint → keep-alive → remote mkdir →
+        uploads → dependency probe (install only what is missing) → the
+        detached launch → the submission receipt.
+
+        Everything after the `new` INVOCATION sits inside one cleanup
+        boundary: any failure attempts a stop, and a cleanup that itself
+        fails is appended to the refusal rather than swallowing it (the
+        parent plan's D9 says "any failure after `colab new`", which
+        includes `new`'s own timeouts and its missing-READY case — the
+        ledger's S2-J2). The stop is a measured no-op when no session
+        exists, so the boundary can start at the invocation without
+        inventing a session that was never created.
+        """
+        entrypoint = Path(job.entrypoint)
+        run_config_path = entrypoint.parent / RUN_CONFIG_FILENAME
+        if not run_config_path.is_file():
+            raise ColabAdapterError(
+                f"{entrypoint} has no {RUN_CONFIG_FILENAME} sibling: this "
+                "backend admits only the generated job-folder shape, and a "
+                "bare notebook has no session protocol to run. Generate one "
+                "with `generate-job --service colab` and submit its "
+                f"{RUNNER_FILENAME}"
+            )
+        try:
+            run_config_text = run_config_path.read_text(encoding="utf-8")
+            parsed_run_config = json.loads(run_config_text)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ColabAdapterError(
+                f"cannot read {run_config_path}: {exc}"
+            ) from exc
+        if not isinstance(parsed_run_config, dict):
+            raise ColabAdapterError(
+                f"{run_config_path} is not a JSON object; refusing to guess "
+                "at a run configuration"
+            )
+        commit = parsed_run_config.get("commit")
+        if not isinstance(commit, str) or not commit:
+            raise ColabAdapterError(
+                f"{run_config_path} carries no usable 'commit' string; the "
+                "submission digest is built from it and a guessed pin would "
+                "name the wrong session"
+            )
+        if parsed_run_config.get("accelerator") is not None:
+            raise ColabAdapterError(
+                "this run-config declares an 'accelerator' block, and this "
+                "backend's declared-architecture mapping lands with "
+                "implementation slice S4 (planned decision D13). Refusing "
+                "rather than silently running the job on CPU."
+            )
+        try:
+            entrypoint_bytes = entrypoint.read_bytes()
+        except OSError as exc:
+            raise ColabAdapterError(f"cannot read {entrypoint}: {exc}") from exc
+
+        mode = _mode_token(job.run_config)
+        digest = _digest8(entrypoint_bytes, commit, mode)
+        session_name = f"{SESSION_NAME_PREFIX}{_slugify(entrypoint.parent.name)}-{digest}"
+
+        self._refuse_existing_session(session_name)
+
+        if job.run_config:
+            merged = dict(parsed_run_config)
+            merged.update(dict(job.run_config))
+            staged_run_config_text = json.dumps(merged)
+        else:
+            staged_run_config_text = run_config_text
+
+        with tempfile.TemporaryDirectory(prefix="psmith-colab-session-") as raw_tmp:
+            tmp = Path(raw_tmp)
+            # Both rendered templates are materialized here (parent plan
+            # §4's submit step 5); `poll()`/`fetch()` render their own
+            # read_state copies at their own call sites, each inside a
+            # temp dir that dies with the call.
+            launcher = self._render_asset(LAUNCH_ASSET, session_name, tmp / LAUNCH_ASSET)
+            self._render_asset(READ_STATE_ASSET, session_name, tmp / READ_STATE_ASSET)
+            mkdir_helper = self._write_helper(_MKDIR_SOURCE, tmp / "remote-mkdir.py", session_name)
+            probe_helper = self._write_helper(
+                _PROBE_SOURCE, tmp / "dependency-probe.py", session_name
+            )
+            staged_run_config = tmp / RUN_CONFIG_FILENAME
+            staged_run_config.write_text(staged_run_config_text, encoding="utf-8")
+
+            try:
+                self._new_session(session_name)
+                endpoint = self._endpoint_for(session_name)
+                self._spawn_keep_alive(endpoint, session_name)
+
+                payload = self._parse_json_line(
+                    self._exec_result(mkdir_helper, session_name),
+                    f"remote mkdir for {session_name!r}",
+                )
+                if payload.get("exists") is not True:
+                    raise ColabAdapterError(
+                        f"the remote mkdir helper did not confirm the session "
+                        f"directory: {payload!r}"
+                    )
+
+                self._upload(self._assets_dir / EXECUTOR_ASSET, f"{self._session_dir(session_name)}/{EXECUTOR_ASSET}", session_name)
+                self._upload(staged_run_config, f"{self._session_dir(session_name)}/{RUN_CONFIG_FILENAME}", session_name)
+                self._upload(entrypoint, f"{self._session_dir(session_name)}/{entrypoint.name}", session_name)
+
+                self._ensure_dependencies(probe_helper, session_name)
+                self._launch(launcher, session_name)
+            except BaseException as exc:  # noqa: BLE001 - D9's cleanup boundary
+                note = self._stop_session_quietly(session_name)
+                if note:
+                    _append_note(exc, note)
+                raise
+
+        return ADAPTER.Submission(id=f"{job.worker}/{session_name}", worker=job.worker)
 
     def poll(self, submission_id: str) -> "ADAPTER.Status":
-        raise _lifecycle_refusal("poll")
+        """One honest status, translated into the seam's vocabulary, never
+        the service's own text (the parent plan's D8 table, exactly).
+
+        A session gone mid-flight is `unknown` — evidence is MISSING, not
+        negative — including the case where it vanishes between the
+        `status` read and the state read (ledger S2-J6). `status` and the
+        state read are the two idempotent reads this adapter retries
+        once; neither is ever retried into a different answer, because
+        the same input is re-asked, not a new question.
+        """
+        session_name = self._session_name_from(submission_id)
+        status_result = self._run_read(
+            [self._colab_executable, "status", "-s", session_name]
+        )
+        if self._looks_like_not_found(status_result):
+            return ADAPTER.Status(state="unknown", detail="session not found")
+        found = self._status_line(status_result.stdout, session_name)
+        if found is None:
+            raise ColabAdapterError(
+                f"colab status for {submission_id!r} printed no line this "
+                f"adapter can read (exit {status_result.returncode}): "
+                f"{status_result.stdout.strip() or status_result.stderr.strip()}"
+            )
+        line = found[0]
+
+        with tempfile.TemporaryDirectory(prefix="psmith-colab-read-") as raw_tmp:
+            reader = self._render_asset(
+                READ_STATE_ASSET, session_name, Path(raw_tmp) / READ_STATE_ASSET
+            )
+            read_result = self._exec_result(reader, session_name, retry_read=True)
+        if self._looks_like_not_found(read_result):
+            return ADAPTER.Status(state="unknown", detail="session not found")
+        payload = self._parse_json_line(read_result, f"state read for {submission_id!r}")
+
+        status = payload.get("status")
+        if status is not None:
+            if not isinstance(status, dict):
+                raise ColabAdapterError(
+                    f"{submission_id!r}: status.json is not a JSON object: {status!r}"
+                )
+            exit_code = status.get("exitCode")
+            if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+                raise ColabAdapterError(
+                    f"{submission_id!r}: status.json carries no usable "
+                    f"exitCode: {status!r}"
+                )
+            if exit_code == 0:
+                return ADAPTER.Status(state="complete", detail=line)
+            return ADAPTER.Status(state="failed", detail=f"unit process exited {exit_code}")
+
+        launch = payload.get("launch")
+        if launch is not None:
+            pid = launch.get("pid") if isinstance(launch, dict) else None
+            return ADAPTER.Status(state="running", detail=f"pid {pid}")
+        return ADAPTER.Status(state="queued", detail=line)
 
     def fetch(self, submission_id: str, into: Path) -> "ADAPTER.Fetched":
-        raise _lifecycle_refusal("fetch")
+        """Materialize the run's working-directory capture under `into`,
+        completely or as completely as it exists, then release the
+        session when the run is terminal (the parent plan's D9/D12).
+
+        The manifest is downloaded entry by entry (the CLI has no
+        directory transfer), each entry validated as a relative,
+        non-escaping path first. The release runs only AFTER the
+        downloads, and only for a run whose `status.json` exists —
+        whatever its exit code, because the run is over either way; a
+        session gone at read time is a refusal naming it, and a refusal
+        to stop fails the fetch only after the bytes are already local.
+        """
+        session_name = self._session_name_from(submission_id)
+        into = Path(into)
+        into.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(prefix="psmith-colab-read-") as raw_tmp:
+            reader = self._render_asset(
+                READ_STATE_ASSET, session_name, Path(raw_tmp) / READ_STATE_ASSET
+            )
+            read_result = self._exec_result(reader, session_name, retry_read=True)
+        if self._looks_like_not_found(read_result):
+            raise ColabAdapterError(
+                f"the session for {submission_id!r} no longer exists; it may "
+                "already have been released by a terminal fetch, or stopped "
+                "outside this skill. The ledger's own fold is the completion "
+                "authority — this call will not invent one."
+            )
+        payload = self._parse_json_line(read_result, f"state read for {submission_id!r}")
+
+        manifest = payload.get("files")
+        if manifest is None:
+            entries: list[str] = []
+        elif isinstance(manifest, list) and all(isinstance(entry, str) for entry in manifest):
+            entries = list(manifest)
+        else:
+            raise ColabAdapterError(
+                f"{submission_id!r}: files.json is not a list of strings: "
+                f"{manifest!r}"
+            )
+        for entry in entries:
+            candidate = PurePosixPath(entry)
+            if candidate.is_absolute() or not candidate.parts or ".." in candidate.parts:
+                raise ColabAdapterError(
+                    f"{submission_id!r}: manifest entry {entry!r} is not a "
+                    "safe relative path; refusing before any download"
+                )
+
+        materialized: list[str] = []
+        for entry in sorted(entries):
+            local = into / entry
+            local.parent.mkdir(parents=True, exist_ok=True)
+            remote = f"{self._session_dir(session_name)}/{entry}"
+            result = self._run(
+                [
+                    self._colab_executable,
+                    "download",
+                    "-s",
+                    session_name,
+                    remote,
+                    str(local),
+                ],
+                timeout=self._transfer_timeout,
+            )
+            if result.returncode != 0:
+                raise ColabAdapterError(
+                    f"download of {entry!r} for {submission_id!r} refused "
+                    f"(exit {result.returncode}): "
+                    f"{result.stderr.strip() or result.stdout.strip()}"
+                )
+            materialized.append(entry)
+
+        status = payload.get("status")
+        complete = False
+        terminal = status is not None
+        if terminal:
+            if not isinstance(status, dict):
+                raise ColabAdapterError(
+                    f"{submission_id!r}: status.json is not a JSON object: {status!r}"
+                )
+            exit_code = status.get("exitCode")
+            if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+                raise ColabAdapterError(
+                    f"{submission_id!r}: status.json carries no usable "
+                    f"exitCode: {status!r}"
+                )
+            complete = exit_code == 0
+
+        if terminal:
+            self._stop_session(session_name)
+
+        return ADAPTER.Fetched(path=into, complete=complete, files=tuple(sorted(materialized)))
 
     def cancel(self, submission_id: str) -> None:
         """`colab stop -s <session>`, addressed by the session name the
-        submission id carries.
-
-        An already-gone session is a no-op, and the measured reason is
-        why this method reads OUTPUT rather than the exit code: stopping
-        an unknown session prints `Session 'x' not found.` and exits 0
-        (spike S0) — a bare `returncode != 0` check would read that as
-        success and a genuine failure as whatever its prose said. No
-        caller in the nine-command roster invokes this operation on its
-        own initiative (`reconcile` reports orphans, never cancels them);
-        it exists for an explicit caller and for tests.
+        submission id carries. No caller in the nine-command roster
+        invokes this operation on its own initiative (`reconcile` reports
+        orphans, never cancels them); it exists for an explicit caller
+        and for tests.
         """
-        _worker, sep, session_name = submission_id.partition("/")
-        if not sep or not session_name:
-            raise ColabAdapterError(
-                f"{submission_id!r} is not '<worker>/<session-name>'; "
-                "refusing to guess which session to stop"
-            )
-        argv = [self._colab_executable, "stop", "-s", session_name]
-        result = self._run(argv)
-        combined = f"{result.stdout}\n{result.stderr}"
-        if "not found" in combined.lower():
-            return
-        if result.returncode != 0:
-            raise ColabAdapterError(
-                f"stop for {submission_id!r} refused (exit {result.returncode}): "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
+        session_name = self._session_name_from(submission_id)
+        self._stop_session(session_name)
 
     def list_active(self, worker: str) -> list[str]:
         """Submission ids this adapter issued whose sessions still exist,
