@@ -1,6 +1,6 @@
 ---
 name: paper-writing
-description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), see which writing phase is unlocked and which blocks still gate the next one, open the empty section/block skeleton once from two structural decisions inferred off disk thereafter, assemble a block's own redactor packet (contract prose plus reference heading outlines, never reference prose), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, phases, skeleton, order, declare, observe, plan, resolve, bib build, validate, write, render, place, couplings, verify, packet. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
+description: "Trigger: create or re-enter the paper/ tree, write into a named block of paper/main.tex without touching anything else in the file, read what sections/*.md declares about itself (ids, requirements, writing order), see which writing phase is unlocked and which blocks still gate the next one, open the empty section/block skeleton once from two structural decisions inferred off disk thereafter, assemble a block's own redactor packet (contract prose plus reference heading outlines, never reference prose, plus -- for a transposition-mode block -- its own bound source sections), record/reopen a declaration or fact resolution and see the paper's overall plan, resolve a citation's metadata against OpenAlex/Crossref/arXiv, rebuild refs.bib from cached resolved metadata, validate a citation's verdict and placement before writing a block, judge an already-drafted, already-audited block against its own evidence set and contract before it ever reaches main.tex, compile a standalone diagram and prove it against the contract's own figure: obligation, or check whether the cross-section couplings (contribution list, chain, the gap, diagram disjointness, future-work/limitations), citation integrity and contract currency still hold. Stdlib-only, keyless, fail-closed CLI (paper_cli.py) — scaffold, status, open, substitute, contract, readiness, phases, skeleton, order, declare, observe, plan, resolve, bib build, validate, write, render, place, couplings, verify, packet. Offline except `resolve`, which sits behind a config role that can be emptied; `render` is the one other path that reaches outside this process, invoking `latexmk` as a child."
 ---
 
 # Paper Writing
@@ -800,18 +800,20 @@ says nothing about THIS observation.
 ## The redactor's own context: `packet`
 
 Before delegating to the `redactor` agent, the orchestrating agent needs to
-hand it a block's own contract prose plus whatever reference material the
-`style-sampler` might draw equivalent style from — `packet` assembles
-exactly that, read-only.
+hand it a block's own contract prose, whatever reference material the
+`style-sampler` might draw equivalent style from, and — for a
+`transposition`-mode block — the block's own bound source sections
+(`the-redactor-receives-the-section-it-must-transpose`) — `packet`
+assembles exactly that, read-only.
 
 ```bash
 .venv/bin/python .claude/skills/paper-writing/scripts/paper_cli.py packet \
-    --section 06-introduction --block block-1
+    --section 06-introduction --block block-1 --paper paper
 ```
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `packet --section <id> --block <id> [--sections <dir>] [--guidance <dir>]` | Read-only: the block's own contract prose verbatim, plus a heading OUTLINE (`{title, level, byte_start, byte_end}`) per ingested paper under every `style-reference`-classed `guidance/` root | `GUIDANCE_MARKDOWN_UNREADABLE` |
+| `packet --section <id> --block <id> [--sections <dir>] [--guidance <dir>] [--paper <dir>]` | Read-only: the block's own contract prose verbatim, a heading OUTLINE (`{title, level, byte_start, byte_end}`) per ingested paper under every `style-reference`-classed `guidance/` root, and — for a `transposition`-mode block only — its own bound source sections (`source_sections`, `{fact, lineage, title, path, byte_start, byte_end, text}`) plus a sibling `source_sections_state` | `GUIDANCE_MARKDOWN_UNREADABLE`, `PAPER_OUTSIDE_REPOSITORY`, plus (for a `transposition`-mode block, via corpus assembly) every code the `write` row's corpus-assembly column already lists — see "Corpus codes newly reachable from `packet`" below |
 
 **The packet carries no reference prose at all — a structural leak guard,
 never an instructional one.** Each `references` entry is an outline of
@@ -830,6 +832,58 @@ nothing to `references` — over the shipped corpus, where no category
 folder is classified yet, `packet` against a real block returns
 `references: []`; that is the honest, expected answer to "nothing has been
 classified," not an error.
+
+### `source_sections_state`: a closed four-value vocabulary, never a silent empty list
+
+`packet` never refuses on account of a missing or unresolved bound section
+— an absent or unreadable paper root, a block with no binding decided, and
+a non-`transposition` block are all NAMED STATES, not refusals. `state` is
+one of:
+
+| `state` | meaning | `source_sections` | `reason` |
+| --- | --- | --- | --- |
+| `resolved` | every declared/recorded triple produced bytes | non-empty | `None` |
+| `unbound` | the block names no `(fact, lineage, title)` triple at all — nothing to look for | `[]` | names the absence |
+| `unmeasured` | a triple exists and could not be resolved — could not look; `unresolved` names each undecided triple | possibly partial | names the flag, root, or absent `mode` declaration that would answer it |
+| `not-applicable` | the block's own mode is not `transposition` | `[]` | names the actual mode |
+
+`unbound` and `unmeasured` both report an empty `source_sections`, but the
+envelope is never the same: `state` alone distinguishes "this block has no
+bound section" from "I could not look." An `argument`-mode block's other
+three packet keys (`block`, `section`, `contract`, `references`) stay
+byte-identical to a packet assembled with no `--paper` at all — the fifth
+key only ever WIDENS what a `transposition`-mode block's packet carries,
+never anything else.
+
+### Corpus codes newly reachable from `packet` (`transposition`-mode blocks only)
+
+`packet` assembles a corpus (`paper_graph.assemble_corpus`, read-only,
+`enforce_bindings=False`) ONLY for a `transposition`-mode block — an
+`argument`-mode or mode-less block's packet touches no corpus at all and
+inherits nothing. For a `transposition`-mode block, seventeen shipped
+codes become reachable from `packet` for the first time: `ID_COLLISION`,
+`SOURCE_BINDING_CONFLICT`, `SOURCE_REVISIONS_UNDECLARED`,
+`SECTION_NOT_IN_SOURCE`, `SECTION_TITLE_AMBIGUOUS`,
+`INPUT_PARTITION_ABSENT`, `SPAN_NOT_IN_SOURCE`, `FACT_ROUTE_AMBIGUOUS`,
+`FACT_PRODUCER_DUPLICATE`, `FACT_SELF_REQUIRED`, `FACT_PRODUCER_ABSENT`,
+`PRODUCER_CHAIN_ABSENT`, `CHAIN_ROW_UNRESOLVED`, `CHAIN_ROW_UNBACKED`,
+`BLOCK_SUBUNIT_UNDECLARED`, `UNIT_HEADING_AMBIGUOUS`, and
+`DECLARATIONS_HAND_EDITED` — every one of these was already reachable from
+`write`'s own corpus assembly before this capability existed; none is new
+to the codebase (`design.md` category B). `PAPER_OUTSIDE_REPOSITORY` is
+reachable on EVERY `packet` invocation, `transposition`-mode or not
+(category C) — the one refusal `packet` gains that is an invocation
+defect, never a state of the world.
+
+**Widened blast radius, never new reachability.** `assemble_corpus` parses
+every `sections/*.md` under `sections_dir`, not only the block's own file.
+For a `transposition`-mode block, `MALFORMED_HEADER` and
+`MALFORMED_FIGURE_OBLIGATION` can therefore be raised by an UNRELATED
+section file's own defect — an accepted consequence of assembling one
+corpus for the whole paper (`design.md` category D), never a defect of the
+requested block's own binding. An `argument`-mode block's packet never
+touches the corpus at all, so the identical unrelated defect never
+surfaces for it.
 
 ## The whole cut is argued before any section is claimed: `separate` and `bind`
 

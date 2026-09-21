@@ -1,16 +1,14 @@
-# Redactor Packet Specification
+# Delta for Redactor Packet
 
-## Purpose
+## RENAMED Requirements
 
-Before a block is drafted, the redactor needs two things and nothing else:
-its own section's contract prose, and how every reference paper under
-`guidance/` wrote the same section — for register, never for content. This
-capability assembles that packet from existing machinery
-(`paper_guidance.read_registry`, `paper_style.resolve_style_set`, the
-`style-sampler` agent, `paper_leak`'s tripwires) and guards it against
-becoming a content channel in disguise.
+### Requirement: The Packet Carries Contract Prose Plus Same-Section Style Extracts → The Packet Carries Contract Prose, Same-Section Style Extracts, And The Block's Own Bound Source Sections
 
-## Requirements
+(Reason: the packet grows from two parts to three, and a heading that undercounts what a requirement demands is how a document outlives its mechanism; the rename is declared here rather than folded into the MODIFIED block because the composer matches MODIFIED against canonical heading text, applies RENAMED first, and refuses an unapplied delta rather than guessing a rename from prose.)
+
+(Migration: none — no consumer reads this heading, it names a requirement rather than a symbol, and `openspec/specs/redactor-packet/spec.md` is the only file carrying the old text.)
+
+## MODIFIED Requirements
 
 ### Requirement: The Packet Carries Contract Prose, Same-Section Style Extracts, And The Block's Own Bound Source Sections
 
@@ -95,43 +93,3 @@ no state vocabulary.)
   rather than resolving this block's binding — an accepted consequence of
   assembling one corpus for the whole paper, not a defect of this block's
   own binding
-### Requirement: The Leak Tripwires Gate The Packet, Not Only The Draft
-
-Before a packet is handed to the redactor, the same guards
-`style-leak-detection` already defines — the eight-token `STYLE_OVERLAP`
-tripwire, register-distance, and relative-overlap proofs — MUST be capable
-of running against the packet's own extracts, using exactly the recorded
-sample set `R` `style-channel` already requires. The packet MUST NOT be
-assembled from any reference material outside `R`.
-
-#### Scenario: A packet built from recorded samples passes the tripwire
-
-- GIVEN a packet whose extracts are exactly the sample set `R` a
-  `style-sampler` run recorded
-- WHEN the leak tripwire is checked against the packet
-- THEN it reports no `STYLE_OVERLAP` violation attributable to material
-  outside `R`
-
-#### Scenario: A packet is refused if it draws from outside R
-
-- GIVEN an attempt to add reference material to the packet that was not
-  part of the recorded sample set `R`
-- WHEN the packet is assembled
-- THEN it refuses rather than admitting reference text unmeasured by the
-  leak tripwires
-
-### Requirement: An Unreadable Ingested Paper Refuses During Outline Assembly
-
-Assembling a `style-reference`-classed paper's heading outline MUST refuse
-`GUIDANCE_MARKDOWN_UNREADABLE` (work-state) when that paper's ingested
-`.md` cannot be read or is not valid UTF-8, rather than silently omitting
-that reference or reporting an empty outline as if the file had no
-headings.
-
-#### Scenario: An unreadable ingested markdown file refuses assembly
-
-- GIVEN a `style-reference`-classed `guidance/` root with one ingested
-  paper whose `.md` file cannot be read as UTF-8
-- WHEN the packet is assembled
-- THEN it refuses `GUIDANCE_MARKDOWN_UNREADABLE`, naming the unreadable
-  file, and writes nothing
