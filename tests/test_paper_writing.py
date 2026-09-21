@@ -12425,6 +12425,38 @@ class PlanSourceRootsTests(unittest.TestCase):
 
         self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "undeclared")
 
+    def test_a_malformed_marker_refuses_through_the_position_verb(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement: Absence
+        Is A Reported State; A Broken Seal Refuses Where The Marker Is Read`,
+        scenario `A malformed marker still refuses through the position verb`.
+
+        Absence and malformation are different outcomes and must stay
+        different: an unfilled root REPORTS `undeclared` and `plan` succeeds,
+        while a marker that does not parse REFUSES and `plan` does not return
+        a report at all. Collapsing the two would let a broken declaration
+        read as an unfilled one, and the operator would see a root waiting to
+        be declared rather than one whose declaration is unreadable.
+
+        The verify pass that closed this change flagged this scenario as
+        behaviourally correct but carried by NO test -- the exact shape that
+        let this change's own predecessor ship a ticked task whose work was
+        half done. Asserted here by calling the reporting verb and reading
+        what it does, never by asserting the reader alone refuses.
+        """
+        proposals = self.forge_root / "proposals"
+        proposals.mkdir()
+        (proposals / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r",
+                                      "ordinal_digits": "two"}}),
+            encoding="utf-8")
+
+        with self.assertRaises(Refused) as caught:
+            paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(caught.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("ordinal_digits", caught.exception.detail)
+
     def test_a_prose_root_with_a_valid_unsealed_marker_reports_declared_unsealed(self) -> None:
         """S2 widens the three-value vocabulary `declared` split into
         `declared-sealed`/`declared-unsealed` (design.md Decision C/I;
