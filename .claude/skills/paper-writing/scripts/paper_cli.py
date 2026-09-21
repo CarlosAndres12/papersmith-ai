@@ -1875,8 +1875,20 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
     without knowing which section feeds it is the one moment an
     undecided binding must become `SECTION_BINDING_ABSENT` instead of a
     report, so only `write`'s own gate ever turns it into one.
+
+    `enforce_for_block=qualified_id` (U4 correctness repair, design.md:
+    "the block this `write` call names, nothing else"): scopes that
+    refusal to the block THIS call is actually about to draft. A sibling
+    block elsewhere in the corpus carrying its own undecided binding --
+    optional, unopened, or simply not yet reached -- stays visible in
+    `Corpus.undecided_bindings` but no longer blocks writing a block that
+    never named it. `qualified_id` is already resolved above this
+    function's own call site (`cmd_write`), so this thread-through adds
+    no new resolution, only narrows which entry can raise.
     """
-    corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir, enforce_bindings=True)
+    corpus = paper_graph.assemble_corpus(
+        sections_dir, paper_dir=paper_dir, enforce_bindings=True, enforce_for_block=qualified_id,
+    )
     edge_set = paper_graph.collect_edges(corpus)
     waves = paper_graph.derive_waves(corpus, edge_set)
 
@@ -3147,7 +3159,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sections", default=None,
         help="override sections/ location; must resolve inside the repository root",
     )
-    p_write.add_argument("--section", required=True, help="the sections/<id>.md stem this block belongs to")
+    p_write.add_argument("--section", required=True, help="the section id this block's contract declares in its own header (e.g. 'introduction'), never the sections/*.md filename stem ('06-introduction') -- a stem refuses SECTION_UNKNOWN")
     p_write.add_argument("--block", required=True, help="block id to write")
     p_write.add_argument(
         "--draft", required=True,
@@ -3199,7 +3211,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_render.add_argument(
         "--section", default=None,
-        help="run obligation checks after compiling: the sections/<id>.md stem --block belongs to",
+        help="run obligation checks after compiling: the section id this block's contract declares in its own header (e.g. 'introduction'), never the sections/*.md filename stem ('06-introduction') -- a stem refuses SECTION_UNKNOWN",
     )
     p_render.add_argument(
         "--block", default=None, help="the block id whose figure: obligation to check after compiling",
@@ -3257,7 +3269,7 @@ def build_parser() -> argparse.ArgumentParser:
              "paper's heading outline (offsets only, never reference prose), plus -- for a "
              "transposition-mode block -- its own bound source sections",
     )
-    p_packet.add_argument("--section", required=True, help="the sections/<id>.md stem this block belongs to")
+    p_packet.add_argument("--section", required=True, help="the section id this block's contract declares in its own header (e.g. 'introduction'), never the sections/*.md filename stem ('06-introduction') -- a stem refuses SECTION_UNKNOWN")
     p_packet.add_argument("--block", required=True, help="block id to assemble the packet for")
     p_packet.add_argument(
         "--sections", default=None,

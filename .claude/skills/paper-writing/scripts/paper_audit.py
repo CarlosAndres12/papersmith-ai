@@ -29,10 +29,20 @@ _DISQUALIFIERS_HEADING = "## Disqualifiers"
 
 def extract_disqualifiers(body_text: str, *, source_name: str = "<contract>") -> list[str]:
     """Every bullet under the first `## Disqualifiers` heading, literal text,
-    stripped of its leading `- ` marker only — never paraphrased, never
-    special-cased (`contract-audit` spec, `Requirement: Verbatim
-    Disqualifier Extraction`). Refuses `DISQUALIFIERS_ABSENT` naming
-    `source_name` when no such heading exists anywhere in `body_text`."""
+    stripped of its leading `- ` marker, with any wrapped continuation
+    lines rejoined onto it separated by a single space — never
+    paraphrased, never special-cased (`contract-audit` spec, `Requirement:
+    Verbatim Disqualifier Extraction`: "the exact bullet text is what the
+    audit evaluates against, byte for byte"). A bullet is prose that may
+    wrap across source lines; stopping at the first line break would hand
+    the audit a fragment of the bullet's own text rather than the bullet,
+    which can invert a multi-clause rule's meaning. A continuation line is
+    any non-empty, indented line that does not itself start a new bullet
+    (stripped form beginning `- ` or `* `) — that check is what still lets
+    a nested bullet start its own entry instead of being swallowed into the
+    one above it. A blank line does not end the list; only a `## ` heading
+    does. Refuses `DISQUALIFIERS_ABSENT` naming `source_name` when no such
+    heading exists anywhere in `body_text`."""
     lines = body_text.splitlines()
     heading_index = None
     for index, line in enumerate(lines):
@@ -48,8 +58,10 @@ def extract_disqualifiers(body_text: str, *, source_name: str = "<contract>") ->
         stripped = line.strip()
         if stripped.startswith("## "):
             break
-        if stripped.startswith("- "):
+        if stripped.startswith("- ") or stripped.startswith("* "):
             bullets.append(stripped[2:].strip())
+        elif stripped and line != line.lstrip() and bullets:
+            bullets[-1] = f"{bullets[-1]} {stripped}"
     return bullets
 
 
