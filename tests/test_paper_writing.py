@@ -9804,6 +9804,68 @@ class SourceSectionBindingWriteGateScopeTests(unittest.TestCase):
         )
         self.assertEqual(corpus.undecided_bindings["b.bound"]["formulation"]["root"], "proposals")
 
+    def test_the_read_time_report_agrees_with_the_real_gate_for_every_block(self) -> None:
+        """The whole point of `_write_gate_state`: an operator must be able
+        to see, WITHOUT spending a redactor and a contract-auditor run,
+        whether `write` will refuse this block. That is only worth anything
+        if the report and the gate agree, so this derives BOTH sides from
+        the same fixture corpus and compares them block by block -- never a
+        hand-listed expectation, which would pass while the two drift.
+
+        `_resolve_write_gate` is the real thing `write` runs. A gate code it
+        raises must show up as `state: blocked` carrying that same code; a
+        block it lets through must report `clear`. `PHASE_NOT_READY` is
+        excluded from the comparison on purpose: it is a wave-ordering
+        refusal, not one of the two gates this report covers, and it is
+        already the one refusal `phases` has always surfaced itself.
+        """
+        corpus = paper_graph.assemble_corpus(self.sections_dir, paper_dir=self.paper_dir)
+        guidance_dir = self.test_root / "guidance"
+        self.assertTrue(corpus.blocks, "fixture corpus parsed no blocks to compare")
+
+        for qualified_id in sorted(corpus.blocks):
+            report = paper_cli._write_gate_state(corpus, guidance_dir, qualified_id)
+            try:
+                paper_cli._resolve_write_gate(self.paper_dir, self.sections_dir, qualified_id)
+            except Refused as refusal:
+                if refusal.code == "PHASE_NOT_READY":
+                    continue
+                self.assertEqual(
+                    report["state"], "blocked",
+                    f"{qualified_id}: the gate raises {refusal.code} but the "
+                    f"read-time report calls it clear",
+                )
+                self.assertIn(
+                    refusal.code, [entry["code"] for entry in report["blockers"]],
+                    f"{qualified_id}: the gate raises {refusal.code}, absent "
+                    f"from the report's own blockers {report['blockers']}",
+                )
+            else:
+                self.assertEqual(
+                    report["state"], "clear",
+                    f"{qualified_id}: the gate raises nothing but the "
+                    f"read-time report calls it {report['blockers']}",
+                )
+
+    def test_the_sibling_with_its_own_unbound_fact_is_reported_blocked(self) -> None:
+        """The concrete half of the agreement above: `b.bound` carries its
+        OWN undecided binding, so the report must name it -- and
+        `a.structural`, which can never carry one, must stay clear. Without
+        this pair the agreement test above would still pass over a corpus
+        where every block happened to fall on the same side."""
+        corpus = paper_graph.assemble_corpus(self.sections_dir, paper_dir=self.paper_dir)
+        guidance_dir = self.test_root / "guidance"
+
+        blocked = paper_cli._write_gate_state(corpus, guidance_dir, "b.bound")
+        self.assertEqual(blocked["state"], "blocked")
+        self.assertEqual(
+            [entry["code"] for entry in blocked["blockers"]], ["SECTION_BINDING_ABSENT"],
+        )
+        self.assertIn("formulation", blocked["blockers"][0]["detail"])
+
+        clear = paper_cli._write_gate_state(corpus, guidance_dir, "a.structural")
+        self.assertEqual(clear, {"state": "clear", "blockers": []})
+
 
 class SourceRevisionsUndeclaredByteIdentityTests(unittest.TestCase):
     """`source-section-binding` spec, `Requirement: A Document-Rooted
@@ -10195,10 +10257,21 @@ class ReadinessPhasesReadOnlyTests(unittest.TestCase):
 
     def test_mutation_a_write_inside_compute_phases_fails_the_manifest_guard(self) -> None:
         proc = _run_against_mutant(
-            "def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:",
-            "def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:\n"
+            # Anchored on `compute_phases`'s first two BODY statements, not
+            # on its `def` line and not on its docstring. The `def` line was
+            # the original anchor and silently unmatched the day the
+            # signature went multi-line to take `guidance_dir`; anchoring on
+            # the docstring opener instead injects the write INSIDE the
+            # docstring, where it is a string literal that never runs and
+            # the mutation passes green. The first body statement alone is
+            # not unique in this file (a sibling assembles the same corpus
+            # at a deeper indent), so the `edge_set` line disambiguates.
+            "    corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir)\n"
+            "    edge_set = paper_graph.collect_edges(corpus)",
             "    tex = paper_dir / 'main.tex'\n"
-            "    tex.write_bytes(tex.read_bytes() + b'x')",
+            "    tex.write_bytes(tex.read_bytes() + b'x')\n"
+            "    corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir)\n"
+            "    edge_set = paper_graph.collect_edges(corpus)",
             "tests.test_paper_writing.ReadinessPhasesReadOnlyTests"
             ".test_phases_writes_nothing_including_when_it_refuses",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
