@@ -1,5 +1,13 @@
 # Delta for Redactor Packet
 
+## RENAMED Requirements
+
+### Requirement: The Packet Carries Contract Prose Plus Same-Section Style Extracts → The Packet Carries Contract Prose, Same-Section Style Extracts, And The Block's Own Bound Source Sections
+
+(Reason: the packet grows from two parts to three, and a heading that undercounts what a requirement demands is how a document outlives its mechanism; the rename is declared here rather than folded into the MODIFIED block because the composer matches MODIFIED against canonical heading text, applies RENAMED first, and refuses an unapplied delta rather than guessing a rename from prose.)
+
+(Migration: none — no consumer reads this heading, it names a requirement rather than a symbol, and `openspec/specs/redactor-packet/spec.md` is the only file carrying the old text.)
+
 ## MODIFIED Requirements
 
 ### Requirement: The Packet Carries Contract Prose, Same-Section Style Extracts, And The Block's Own Bound Source Sections
