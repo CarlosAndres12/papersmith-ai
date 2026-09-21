@@ -316,7 +316,7 @@ under `.claude/skills/`."
       and this change's own new test code for any lineage name, method name,
       or researcher's folder name; confirm zero matches outside invented
       fixture literals.
-- [ ] 7.4 Run `.venv/bin/python -m unittest discover -s tests -p
+- [x] 7.4 Run `.venv/bin/python -m unittest discover -s tests -p
       "test_*.py"` (chunked if the project's own known ~650s discover time
       exceeds the foreground timeout, per the precedent change's own
       recorded chunking) AND `npm test`. Both. Confirm `npm test` is
