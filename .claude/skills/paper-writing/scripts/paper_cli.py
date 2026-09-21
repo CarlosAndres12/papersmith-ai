@@ -1659,16 +1659,20 @@ def _compute_provenance_report(
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
     """The pure aggregation `plan` reports: every `guidance/` folder's
     `{"class": ..., "declaration": ...}` (widened from a bare class string
-    -- design.md Decision I); the whole `declarations` region body (fill
-    and fixed state, per record); every written block's provenance state —
-    `current`, `drifted`, or `unprovenanced`; and, since this unit,
-    `sourceRoots`: one entry per distinct `paper_declarations.
-    FACT_SOURCE_ROOT` root naming its `state`/`documents`/`reason`
-    (`paper_declarations.source_root_status`) plus its `declaration`
-    (`paper_declarations.declaration_state`) (design.md, `plan Aggregates
-    Registry, Declarations, and Provenance`; `specs/source-declaration-
-    authoring/spec.md`, `Requirement: The Position Report Names Every
-    Declarable Root's And Every Guidance Folder's Declaration State`).
+    -- design.md Decision I; `declaration` is `paper_guidance.
+    declaration_state`'s own `'undeclared'`|`'declared-unsealed'`|
+    `'declared-sealed'` vocabulary, tasks.md 5.15 -- the SAME vocabulary
+    `sourceRoots` uses below, never a second, 2-value spelling of the same
+    concept); the whole `declarations` region body (fill and fixed state,
+    per record); every written block's provenance state — `current`,
+    `drifted`, or `unprovenanced`; and, since this unit, `sourceRoots`: one
+    entry per distinct `paper_declarations.FACT_SOURCE_ROOT` root naming
+    its `state`/`documents`/`reason` (`paper_declarations.
+    source_root_status`) plus its `declaration` (`paper_declarations.
+    declaration_state`) (design.md, `plan Aggregates Registry, Declarations,
+    and Provenance`; `specs/source-declaration-authoring/spec.md`,
+    `Requirement: The Position Report Names Every Declarable Root's And
+    Every Guidance Folder's Declaration State`).
 
     Never writes — `read_registry`, `read_region` and `status` are all
     read-only, and `drift` only compares digests. Takes `paper_dir` and
@@ -1697,10 +1701,17 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     against a value that no longer holds; `plan` never rewrites `main.tex`
     or either region under any of this, unchanged from before.
     """
+    # `guidance`'s own declaration state uses the IDENTICAL four-value
+    # vocabulary `sourceRoots` uses below -- `paper_guidance.
+    # declaration_state` (tasks.md 5.15), never a second, 2-value
+    # "undeclared"/"declared" spelling of the same concept
+    # (`specs/source-declaration-authoring/spec.md`, `Requirement: The
+    # Position Report Names Every Declarable Root's And Every Guidance
+    # Folder's Declaration State`).
     guidance_report = {
         folder: {
             "class": klass,
-            "declaration": "undeclared" if klass == "unclassified" else "declared",
+            "declaration": paper_guidance.declaration_state(guidance_dir / folder),
         }
         for folder, klass in paper_guidance.read_registry(guidance_dir).items()
     }

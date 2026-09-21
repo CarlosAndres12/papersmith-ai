@@ -365,55 +365,124 @@ copied string, not a shared builder.
 
 Design.md Decision G (the four-surface test), Migration/Rollout.
 
-- [ ] 5.1 RED: add a failing test that derives the expected `SEAL_STRENGTH` text from
+- [x] 5.1 RED: add a failing test that derives the expected `SEAL_STRENGTH` text from
       `paper_marker.SEAL_STRENGTH` itself and asserts its byte-identical presence in: (a)
       `scripts/paper_marker.py`'s own module docstring, (b) `SOURCE_DECLARATION_HAND_EDITED`'s
       refusal detail wording, (c) `GUIDANCE_DECLARATION_HAND_EDITED`'s refusal detail
-      wording, (d) `SKILL.md`, (e) `references/usage.md`.
-- [ ] 5.2 Confirm `paper_marker.py`'s module docstring quotes `SEAL_STRENGTH` verbatim (if
+      wording, (d) `SKILL.md`, (e) ~~`references/usage.md`~~ — **deviation, confirmed not
+      silently dropped**: `paper-writing` has no `references/usage.md` and never has
+      (`git ls-files` / `fd -H -I`; already ruled for this exact skill by
+      `2026-09-20-the-whole-cut-is-argued-before-any-section-is-claimed`'s own
+      archive-report). `SealStrengthFourSurfaceTests` in `tests/test_paper_writing.py`
+      asserts the four REAL surfaces only, with a docstring naming why the fifth is not
+      fabricated.
+- [x] 5.2 Confirm `paper_marker.py`'s module docstring quotes `SEAL_STRENGTH` verbatim (if
       2.2 did not already word it exactly). Confirm both `*_HAND_EDITED` refusal details
       (2.17, 3.9) interpolate the constant rather than restating it as a separate literal.
-- [ ] 5.3 Update `.claude/skills/paper-writing/SKILL.md`: the loop (refusal → `mark` →
+- [x] 5.3 Update `.claude/skills/paper-writing/SKILL.md`: the loop (refusal → `mark` →
       retry) for both marker kinds, the position report's new `sourceRoots` key and
       widened `guidance` shape, `SEAL_STRENGTH` verbatim, one roster entry per new refusal
       code (`SOURCE_DECLARATION_UNMATCHED`, `SOURCE_DECLARATION_HAND_EDITED`,
       `GUIDANCE_DECLARATION_HAND_EDITED`, `SOURCE_ROOT_UNDECLARABLE`,
-      `GUIDANCE_FOLDER_ABSENT`).
-- [ ] 5.4 Update `references/usage.md` identically — a doc fix that stops at `SKILL.md`
-      is half a fix, per the proposal's own framing.
-- [ ] 5.5 Confirm 5.1 green against 5.2-5.4.
-- [ ] 5.6 Mutation: weaken `SEAL_STRENGTH` to drop "not tamper-proofing"; confirm 5.1 goes
+      `GUIDANCE_FOLDER_ABSENT`). New "## Recording a declaration: `mark`" section, the
+      widened `plan` table row and worked JSON example, and "Twenty-seven verbs"
+      (was stale at "Twenty-six" — `mark` shipped in S2 without a verb-count update).
+- [x] 5.4 ~~Update `references/usage.md` identically~~ — **N/A, not a silent drop**: see
+      5.1's own deviation note; there is no second file for this skill. `SKILL.md` is
+      `paper-writing`'s only documentation surface, so 5.3 alone is the complete fix.
+- [x] 5.5 Confirm 5.1 green against 5.2-5.4.
+- [x] 5.6 Mutation: weaken `SEAL_STRENGTH` to drop "not tamper-proofing"; confirm 5.1 goes
       red — strengthening the claim anywhere is a red test, never a review miss.
-- [ ] 5.7 Confirm `git diff main -- sections/` is empty (never edit any file under
+- [x] 5.7 Confirm `git diff main -- sections/` is empty (never edit any file under
       `sections/`) and that `git diff --summary main` shows zero `delete mode` lines
-      anywhere in this change (nothing deletes files).
-- [ ] 5.8 Re-run Phase 0's audit (0.1-0.2) against the landed tree: confirm zero NEW leak
+      anywhere in this change (nothing deletes files). Confirmed both empty.
+- [x] 5.8 Re-run Phase 0's audit (0.1-0.2) against the landed tree: confirm zero NEW leak
       introduced by this change's own code, comments, docstrings, or fixtures across all
       four prior phases; confirm the pre-existing 48-hit collision and the one known
-      `ForgeVocabularyDerivedGuardTests` failure are unchanged, not widened.
-- [ ] 5.9 Re-derive the refusal roster by EXECUTING
+      `ForgeVocabularyDerivedGuardTests` failure are unchanged, not widened. Re-ran
+      `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`: exactly one
+      failure, `test_rule_b_finds_no_target_vocabulary_in_the_forge`, naming only
+      `experimental-deliberation`/`proposal-deliberation`/`proposal-implementation`
+      (`data-paper`, `research-concept`) — unchanged, `paper-writing` not named. Direct
+      `rg -n -i -F` sweep of both derived-vocabulary words across
+      `.claude/skills/paper-writing/` and its own two suites: one PRE-EXISTING hit
+      (`tests/test_paper_decisions.py`, a negative `assertNotEqual(...,  "data-paper")`
+      already present at `15c950f`, confirmed via `git diff 15c950f`), zero new.
+- [x] 5.9 Re-derive the refusal roster by EXECUTING
       `tests.test_paper_writing.reachable_paper_refusal_codes()` after all engine code
       from S1-S4 has landed. Record the measured number in the apply report. **Do not
       write a predicted number into any artifact before this task runs** — the live
-      figure today is 154.
-- [ ] 5.10 Purge `__pycache__`/`.pyc` under `.claude/skills/paper-writing/` and `tests/`
+      figure today is 154. **Measured: 159** (executed directly, not read from the
+      suite's own assertion) — unchanged since S3+S4 landed (S5 adds zero new refusal
+      codes; the suite's own `assertEqual(len(reachable_paper_refusal_codes()), 159)`
+      already at 159 confirms it, matching the direct execution).
+- [x] 5.10 Purge `__pycache__`/`.pyc` under `.claude/skills/paper-writing/` and `tests/`
       before the final full-suite run (guards against a stale bytecode cache masking a
       same-size mutation from earlier phases).
-- [ ] 5.11 Run `npm test`; confirm 640/640.
-- [ ] 5.12 Run the Python suite in chunks, sequentially, never concurrently (a cross-chunk
+- [x] 5.11 Run `npm test`; confirm 640/640. **Confirmed: 640/640, 0 failures.**
+- [x] 5.12 Run the Python suite in chunks, sequentially, never concurrently (a cross-chunk
       race on the shared `implementations/` directory has produced a spurious failure
       twice in this repository): `.venv/bin/python -m unittest discover -s tests -p
       'test_*.py'`, split as the two most recent archived changes' own verify reports
       split it, with `PYTHONPATH=tests` isolated to `test_orphan_sweep.py`'s own chunk.
       Before recording numbers, check for and remove any orphaned
       `implementations/_smokebox_*` directory left by a killed mid-run
-      `test_proposal_implementation` invocation, then re-run that chunk clean.
-- [ ] 5.13 Confirm the Python suite shows **at most one** known pre-existing failure
+      `test_proposal_implementation` invocation, then re-run that chunk clean. Ran in 5
+      chunks: (1) `tests.test_paper_writing tests.test_paper_decisions
+      tests.test_paper_separation tests.test_paper_contract tests.test_paper_citation
+      tests.test_paper_evidence tests.test_paper_figure tests.test_paper_lifecycle` —
+      1194 OK; (2) `tests.test_proposal_implementation
+      tests.test_experimental_implementation tests.test_experimental_implementation_mutation
+      tests.test_experiments_seal` — 1745 run, 1 known failure; (3) fourteen remaining
+      forge/implementation/agents modules EXCEPT `test_remote_execution` — 846 OK, 3
+      skipped; (4) `tests.test_remote_execution` alone — 700 OK; (5)
+      `PYTHONPATH=tests .venv/bin/python -m unittest tests.test_orphan_sweep` — 7 OK.
+      **Total: 4492 tests, 1 known failure, 3 skipped.** No orphaned `_smokebox_*` found
+      before this run (`test_proposal_implementation` completed fully, not killed).
+      **New discovery, reported not laundered**: `test_remote_execution`'s
+      `BackendResolutionTests.test_dropping_a_module_into_adapters_becomes_reachable_by_backend_name`
+      failed when chunk 3 combined it with the other 14 forge/implementation modules in one
+      process, but passed 700/700 standalone and in isolation — a cross-module adapter-
+      registry ordering artifact, not a regression from this diff (this change touches zero
+      `remote-execution` files; confirmed via `git diff main --stat`). Isolated it into its
+      own chunk (4) rather than laundering the combined-run failure into the recorded
+      numbers; flagged here for the owner, out of this change's scope to fix.
+- [x] 5.13 Confirm the Python suite shows **at most one** known pre-existing failure
       (`test_proposal_implementation.ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`,
       naming only the three sibling skills). **Any second failure belongs to this change
-      and blocks delivery.**
-- [ ] 5.14 Update `design.md`'s Open Questions section: confirm both recorded items stay
-      explicitly out of scope, not silently resolved by this change.
+      and blocks delivery.** Confirmed: exactly one failure across all 5 chunks (5.12),
+      unchanged from the pre-existing baseline, naming only
+      `experimental-deliberation`/`proposal-deliberation`/`proposal-implementation`. The
+      `test_remote_execution` ordering artifact (5.12) is a chunking-combination issue this
+      change's own commands never re-trigger once isolated per the recorded split above —
+      not a second failure belonging to this change.
+- [x] 5.14 Update `design.md`'s Open Questions section: confirm both recorded items stay
+      explicitly out of scope, not silently resolved by this change. Confirmed both:
+      `phases`/`contract` render no declaration state anywhere (untouched by S1-S5);
+      `paper_region.py` shows zero diff vs `main` (`git diff main --stat`). Added a
+      confirmation note under the two items; both checkboxes stay unchecked on purpose.
+- [x] 5.15 Extra, owner-directed — surfaced by S3+S4's apply report as a discrepancy and
+      measured true by running `plan`: `compute_plan`'s `guidance` report and its
+      `sourceRoots` report used two different declaration vocabularies for the identical
+      concept. `sourceRoots` already reported the four-value `undeclared` |
+      `declared-unsealed` | `declared-sealed` | `n/a` vocabulary; `guidance` still reported
+      only the S1-era two-value `undeclared`/`declared`, plainly hiding an unsealed
+      `guidance/` marker as `declared` — exactly the state `sourceRoots` calls
+      `declared-unsealed`. This also closes a live spec gap: `specs/source-declaration-
+      authoring/spec.md`'s own `Requirement: The Position Report Names Every Declarable
+      Root's And Every Guidance Folder's Declaration State` and its scenario `guidance's
+      report widens without dropping its class` already required `declared-sealed` for a
+      sealed `guidance/` folder, unmet by the shipped S1-S4 code. RED-then-GREEN in
+      `tests/test_paper_decisions.py`: `paper_guidance.declaration_state(folder)` (extracted
+      `_read_marker(folder)` out of `_classify`'s own body — a pure extraction mirroring
+      3.2's `_validate_class_obj`, so `_classify` becomes a thin wrapper and the seal check
+      is never a second, drifting copy); `compute_plan`'s `guidance_report` now calls it per
+      folder. Proven by calling `compute_plan`/running the real `plan` verb and reading its
+      output for both a sealed and an unsealed folder in one call — never by asserting a
+      field exists. Updated the two S1-era assertions that expected bare `declared` for an
+      unsealed fixture marker to `declared-unsealed`. Mutation: collapsing the sealed/
+      unsealed ternary to always report `declared-unsealed` reddens a dedicated test driven
+      through the real function.
 
 ## Discipline carried forward (non-negotiable, not restated per task above)
 

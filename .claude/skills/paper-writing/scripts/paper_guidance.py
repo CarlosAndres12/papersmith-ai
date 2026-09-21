@@ -105,8 +105,15 @@ def _validate_class_obj(obj, marker_path) -> str:
     return value
 
 
-def _classify(folder: Path) -> str:
-    """One folder's class, or `unclassified` when it carries no marker.
+def _read_marker(folder: Path) -> dict | None:
+    """The marker-reading body `_classify` and `declaration_state` (tasks.md
+    5.15) BOTH need -- extracted so the shape check and the seal comparison
+    exist exactly once, never as two independently drifting copies. Returns
+    `None` when the marker file does not exist at all; otherwise
+    `{"class": str, "sealed": bool}` -- `sealed` is `True` only once the
+    recorded seal has ALREADY been checked to match (design.md Decision C):
+    by the time this returns, a sealed marker's seal is known good, never
+    merely present.
 
     Refuses `MALFORMED_GUIDANCE_MARKER` (work-state) when the marker file
     is not valid UTF-8, not valid JSON, not a JSON object, carries any key
@@ -123,12 +130,12 @@ def _classify(folder: Path) -> str:
     real strength — with no `--adopt` escape (design.md Decision E, guidance
     half). This check runs inside THIS function, reached by every gating
     verb already (`validate --source-md` via `classify_source_md` via
-    `read_registry`) — never only inside the read-only `plan` verb
-    (design.md Decision C, invariant 4).
+    `read_registry`, and now `declaration_state`) — never only inside the
+    read-only `plan` verb (design.md Decision C, invariant 4).
     """
     marker_path = folder / _MARKER_NAME
     if not marker_path.is_file():
-        return "unclassified"
+        return None
     try:
         raw_text = marker_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
@@ -145,7 +152,8 @@ def _classify(folder: Path) -> str:
     else:
         body = obj
     value = _validate_class_obj(body, marker_path)
-    if isinstance(obj, dict) and paper_marker.is_sealed(obj):
+    sealed = isinstance(obj, dict) and paper_marker.is_sealed(obj)
+    if sealed:
         recorded = obj[paper_marker.SEAL_KEY]
         computed = paper_marker.computed_seal(obj)
         if recorded != computed:
@@ -155,7 +163,38 @@ def _classify(folder: Path) -> str:
                 f"{computed!r}. {paper_marker.SEAL_STRENGTH} Re-run `mark class` to reseal; "
                 "there is no --adopt.",
             )
-    return value
+    return {"class": value, "sealed": sealed}
+
+
+def _classify(folder: Path) -> str:
+    """One folder's class, or `unclassified` when it carries no marker.
+
+    A thin wrapper over `_read_marker` (tasks.md 5.15's own extraction of
+    what used to be this function's entire body) — `unclassified` is
+    exactly `_read_marker` returning `None`; every refusal `_read_marker`
+    raises propagates through this function unchanged."""
+    result = _read_marker(folder)
+    return "unclassified" if result is None else result["class"]
+
+
+def declaration_state(folder: Path) -> str:
+    """One `guidance/` folder's declaration state -- the SAME
+    `'undeclared'` | `'declared-unsealed'` | `'declared-sealed'` vocabulary
+    `paper_declarations.declaration_state` reports for a `PROSE` source
+    root (`'n/a'` never applies here: every LISTED `guidance/` folder is
+    classifiable, unlike a `REPOSITORY`/`INGESTED` source root, which
+    carries no revisions rule at all). Reuses `_read_marker`, the SAME
+    shape-check-then-seal-compare `_classify` itself runs, so an absent
+    marker, a malformed one, or a hand-edited one propagate identically
+    through both callers — never a second, drifting notion of whether a
+    folder's own marker is good (design.md Decision C/I;
+    `specs/source-declaration-authoring/spec.md`, `Requirement: The
+    Position Report Names Every Declarable Root's And Every Guidance
+    Folder's Declaration State`; tasks.md 5.15)."""
+    result = _read_marker(folder)
+    if result is None:
+        return "undeclared"
+    return "declared-sealed" if result["sealed"] else "declared-unsealed"
 
 
 def declare_class(

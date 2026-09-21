@@ -383,6 +383,41 @@ class GuidanceRegistryTests(unittest.TestCase):
         self.assertIn(paper_marker.computed_seal(obj), ctx.exception.detail)
         self.assertIn(paper_marker.SEAL_STRENGTH, ctx.exception.detail)
 
+    def test_declaration_state_reports_undeclared_unsealed_sealed(self) -> None:
+        """tasks.md 5.15: `paper_guidance.declaration_state` reports the
+        SAME three reachable values `paper_declarations.declaration_state`
+        reports for a `PROSE` root -- `'n/a'` never applies here, since
+        every LISTED `guidance/` folder is classifiable."""
+        absent = self.guidance_dir / "absent-folder"
+        absent.mkdir(parents=True)
+        self.assertEqual(paper_guidance.declaration_state(absent), "undeclared")
+
+        self._write_marker("unsealed-folder", {"class": "evidence"})
+        self.assertEqual(
+            paper_guidance.declaration_state(self.guidance_dir / "unsealed-folder"),
+            "declared-unsealed",
+        )
+
+        obj = {"class": "style-reference"}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        self._write_marker("sealed-folder", obj)
+        self.assertEqual(
+            paper_guidance.declaration_state(self.guidance_dir / "sealed-folder"),
+            "declared-sealed",
+        )
+
+    def test_declaration_state_propagates_hand_edited_refusal(self) -> None:
+        """`declaration_state` reuses `_classify`'s own seal-verification
+        path (`_read_marker`), so a mismatched seal refuses identically
+        through either caller -- never a second, drifting notion of
+        whether a folder's own marker is good."""
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._write_marker("hand-edited-folder", obj)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declaration_state(self.guidance_dir / "hand-edited-folder")
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+
 
 class GuidanceRegistryMutationTests(unittest.TestCase):
     """Mutation 4 (design.md): defaulting an unclassified folder to
@@ -396,6 +431,20 @@ class GuidanceRegistryMutationTests(unittest.TestCase):
             'return "style-reference"',
             "tests.test_paper_decisions.GuidanceRegistryTests"
             ".test_fresh_clone_reports_every_folder_unclassified_refuses_nothing",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_declaration_state_sealed_branch_is_reachable(self) -> None:
+        """tasks.md 5.15: collapsing `declaration_state`'s sealed/unsealed
+        ternary to always report `declared-unsealed` must turn the sealed
+        assertion red -- proving the sealed branch is actually reached
+        through the real function, not merely present in source."""
+        proc = _run_against_mutant(
+            'return "declared-sealed" if result["sealed"] else "declared-unsealed"',
+            'return "declared-unsealed"',
+            "tests.test_paper_decisions.GuidanceRegistryTests"
+            ".test_declaration_state_reports_undeclared_unsealed_sealed",
             source_path=SKILL_SCRIPTS / "paper_guidance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
@@ -2906,7 +2955,7 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(
             report["guidance"],
             {
-                "classified-folder": {"class": "evidence", "declaration": "declared"},
+                "classified-folder": {"class": "evidence", "declaration": "declared-unsealed"},
                 "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
             },
         )
@@ -3005,9 +3054,9 @@ class PlanTests(unittest.TestCase):
         """`specs/source-declaration-authoring/spec.md`, `Requirement: The
         Position Report Names Every Declarable Root's And Every Guidance
         Folder's Declaration State`: `guidance`'s bare class string widens
-        to `{"class": ..., "declaration": ...}` -- a classified folder
-        reports `declared`, an unmarked one reports `undeclared`, never a
-        dropped `class` value."""
+        to `{"class": ..., "declaration": ...}` -- an unsealed classified
+        folder reports `declared-unsealed`, an unmarked one reports
+        `undeclared`, never a dropped `class` value."""
         classified = self.guidance_dir / "classified-folder"
         classified.mkdir(parents=True)
         (classified / ".paper-writing.json").write_text(
@@ -3020,9 +3069,47 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(
             report["guidance"],
             {
-                "classified-folder": {"class": "evidence", "declaration": "declared"},
+                "classified-folder": {"class": "evidence", "declaration": "declared-unsealed"},
                 "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
             },
+        )
+
+    def test_guidance_declaration_widens_to_declared_sealed_one_vocabulary_with_sourceroots(
+        self,
+    ) -> None:
+        """tasks.md 5.15 (surfaced by the S3+S4 apply report, measured true
+        by running `plan`): `guidance` and `sourceRoots` MUST report the
+        SAME four-value declaration vocabulary for the identical concept --
+        design.md Decision I's own worked `plan` example shows a
+        `guidance` folder reporting `declared-sealed`, and
+        `specs/source-declaration-authoring/spec.md`'s own scenario
+        `guidance's report widens without dropping its class` requires
+        exactly that. Proven by calling `compute_plan` (the same function
+        the `plan` verb runs) and reading its actual output for BOTH a
+        sealed and an unsealed folder in one call -- never by asserting a
+        field merely exists."""
+        sealed_folder = self.guidance_dir / "sealed-folder"
+        sealed_folder.mkdir(parents=True)
+        sealed_obj = {"class": "style-reference"}
+        sealed_obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(sealed_obj)
+        (sealed_folder / ".paper-writing.json").write_text(
+            json.dumps(sealed_obj), encoding="utf-8",
+        )
+        unsealed_folder = self.guidance_dir / "unsealed-folder"
+        unsealed_folder.mkdir(parents=True)
+        (unsealed_folder / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(
+            report["guidance"]["sealed-folder"],
+            {"class": "style-reference", "declaration": "declared-sealed"},
+        )
+        self.assertEqual(
+            report["guidance"]["unsealed-folder"],
+            {"class": "evidence", "declaration": "declared-unsealed"},
         )
 
 

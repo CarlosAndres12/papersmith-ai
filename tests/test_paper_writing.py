@@ -1684,6 +1684,80 @@ class PaperMarkerSealTests(unittest.TestCase):
         self.assertIn(paper_marker.SEAL_STRENGTH, source)
 
 
+class SealStrengthFourSurfaceTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: A
+    Declaration Is Sealed Against An Unaware Edit, At Exactly Its Real
+    Strength` (design.md Decision G); tasks.md 5.1/5.5/5.6. One test derives
+    its expectation from `paper_marker.SEAL_STRENGTH` itself and asserts its
+    byte-identical presence in every surface the requirement names — so
+    weakening the claim in any one of them is a red test, never a review
+    miss caught only by a human reading four separate files.
+
+    `references/usage.md` is NOT a fifth surface here: `paper-writing` has
+    no such file and never has (confirmed via `git ls-files`/`fd -H -I`,
+    unlike four sibling skills the design's own precedent generalizes
+    from — `2026-09-20-the-whole-cut-is-argued-before-any-section-is-
+    claimed`'s own archive-report already ruled this for this exact skill).
+    `SKILL.md` is `paper-writing`'s only documentation surface, so it alone
+    stands in for design.md's "and `references/usage.md`" clause."""
+
+    def test_seal_strength_appears_byte_identically_in_all_four_surfaces(self) -> None:
+        strength = paper_marker.SEAL_STRENGTH
+
+        # (a) the shared module's own docstring.
+        marker_source = (SKILL_SCRIPTS / "paper_marker.py").read_text(encoding="utf-8")
+        self.assertIn(strength, marker_source, "paper_marker.py module docstring")
+
+        # (b) SOURCE_DECLARATION_HAND_EDITED's own refusal detail, reached
+        # through the real reader every gating verb goes through — never a
+        # separately hand-copied literal.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            obj = {
+                "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+                paper_marker.SEAL_KEY: "a" * 64,
+            }
+            (root / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+            with self.assertRaises(Refused) as ctx:
+                paper_declarations.read_revisions_marker(root)
+            self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_HAND_EDITED")
+            self.assertIn(strength, ctx.exception.detail, "SOURCE_DECLARATION_HAND_EDITED detail")
+
+        # (c) GUIDANCE_DECLARATION_HAND_EDITED's own refusal detail, reached
+        # through `_classify` — the same shared reader `read_registry`/
+        # `classify_source_md` already go through.
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "some-folder"
+            folder.mkdir()
+            obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+            (folder / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+            with self.assertRaises(Refused) as ctx:
+                paper_guidance.read_registry(folder.parent)
+            self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+            self.assertIn(
+                strength, ctx.exception.detail, "GUIDANCE_DECLARATION_HAND_EDITED detail",
+            )
+
+        # (d) `SKILL.md` -- this skill's only documentation surface.
+        skill_md = (SKILL_SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(strength, skill_md, "SKILL.md")
+
+    def test_mutation_weakening_seal_strength_reddens_the_four_surface_test(self) -> None:
+        """tasks.md 5.6: weakening `SEAL_STRENGTH` to drop "not
+        tamper-proofing" must turn the four-surface test red -- proving
+        strengthening (or otherwise drifting) the claim anywhere is a red
+        test, never a review miss a human has to notice by eye."""
+        proc = _run_against_mutant(
+            '"This seal detects an unaware edit. It is self-consistency, not "',
+            '"This seal detects an unaware edit. It is self-consistency, "',
+            "tests.test_paper_writing.SealStrengthFourSurfaceTests"
+            ".test_seal_strength_appears_byte_identically_in_all_four_surfaces",
+            source_path=SKILL_SCRIPTS / "paper_marker.py",
+        )
+        self.assertIn("MUTANT_IMPORTED_OK", proc.stdout + proc.stderr, proc.stdout + proc.stderr)
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
 class SourceRevisionsMarkerGrammarTests(unittest.TestCase):
     """`source-section-binding` spec, `Requirement: The Marker Grammar Is
     Validated, And Disjoint From guidance/'s`: `paper_declarations.
