@@ -326,39 +326,39 @@ Design.md Decision H. `paper_declarations._resolve_bind_document` (line ~1029) a
 `scripts/paper_graph.py:427-433`) — carry today's byte-identical text by coincidence of a
 copied string, not a shared builder.
 
-- [ ] 4.1 Extract `_unmarked_candidates(base_path) -> list` into
+- [x] 4.1 Extract `_unmarked_candidates(base_path) -> list` into
       `scripts/paper_declarations.py`: `sorted(p.name for p in base_path.glob("*.md"))` —
       the SAME derivation `describe_binding_candidates`'s own no-marker branch already
       computes. `describe_binding_candidates` calls it too (one lister, two callers).
       Confirm `describe_binding_candidates`'s existing tests stay green unchanged.
-- [ ] 4.2 RED: add a failing test asserting
+- [x] 4.2 RED: add a failing test asserting
       `source_revisions_undeclared_detail(status, root)` names the root, the marker
       filename, every `*.md` file currently under the root (via `_unmarked_candidates`),
       and the exact `mark revisions --root <name> --revision-prefix <prefix>
       --ordinal-digits <n>` invocation that answers it.
-- [ ] 4.3 Add `source_revisions_undeclared_detail` to `scripts/paper_declarations.py`.
+- [x] 4.3 Add `source_revisions_undeclared_detail` to `scripts/paper_declarations.py`.
       Confirm 4.2 green.
-- [ ] 4.4 Wire `_resolve_bind_document`'s existing `SOURCE_REVISIONS_UNDECLARED` raise to
+- [x] 4.4 Wire `_resolve_bind_document`'s existing `SOURCE_REVISIONS_UNDECLARED` raise to
       call `source_revisions_undeclared_detail` instead of its own inline string.
-- [ ] 4.5 Wire `paper_graph.resolve_section_index`'s existing `SOURCE_REVISIONS_UNDECLARED`
+- [x] 4.5 Wire `paper_graph.resolve_section_index`'s existing `SOURCE_REVISIONS_UNDECLARED`
       raise to call the same function (`paper_graph` already imports
       `paper_declarations`, per design's measured invariant — confirm the import
       direction with `rg` before wiring; it must not run the other way).
-- [ ] 4.6 RED-then-GREEN: add a test asserting both raise sites produce byte-identical
+- [x] 4.6 RED-then-GREEN: add a test asserting both raise sites produce byte-identical
       detail text for the same root and disk state — reached once through `bind`/
       `_resolve_bind_document`'s own path and once through `write`/`resolve_section_index`.
-- [ ] 4.7 Mutation: inline a literal message at ONE of the two raise sites (revert the
+- [x] 4.7 Mutation: inline a literal message at ONE of the two raise sites (revert the
       call to the shared builder at either site); confirm the byte-identity test (4.6)
       goes red.
-- [ ] 4.8 RED-then-GREEN: add a test asserting deleting an existing marker file and
+- [x] 4.8 RED-then-GREEN: add a test asserting deleting an existing marker file and
       re-resolving the same binding still refuses `SOURCE_REVISIONS_UNDECLARED` (never a
       silent `unmeasured` degrade — this is `source-section-binding`'s existing, unchanged
       guarantee, checked here because the enriched detail text is new code touching the
       same raise sites).
-- [ ] 4.9 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 4.9 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture root/lineage name this unit's own tests invent; zero matches outside the
       test module.
-- [ ] 4.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
+- [x] 4.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
       confirm green, no new failures.
 
 ## Phase 5 — S5: Docs, honest strength, roster re-measured, both suites

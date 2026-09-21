@@ -1953,6 +1953,64 @@ class DescribeBindingCandidatesTests(unittest.TestCase):
             {"q77213-004-11029-2": {"revision": "q77213-004-11029-2.md", "sections": ["Dataset"]}},
         )
 
+    def test_unmarked_candidates_lists_every_md_file_by_name_sorted(self) -> None:
+        """tasks.md 4.1: the SAME derivation `describe_binding_candidates`'s
+        own no-marker branch already computes, extracted into one lister
+        both callers share -- one lister, two callers, provably the same
+        list."""
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "b-thesis.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / "a-thesis.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / "notes.txt").write_text("not markdown", encoding="utf-8")
+
+        candidates = paper_declarations._unmarked_candidates(proposals)
+
+        self.assertEqual(candidates, ["a-thesis.md", "b-thesis.md"])
+
+
+class SourceRevisionsUndeclaredDetailTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses`; design.md Decision H:
+    `source_revisions_undeclared_detail` is the ONE detail text both
+    `SOURCE_REVISIONS_UNDECLARED` raise sites use."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def test_names_the_root_the_marker_file_the_candidates_and_the_invocation(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "other-thesis-r05.md").write_text("# Only heading\n", encoding="utf-8")
+        root = paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
+        status = paper_declarations.source_root_status(self.base, root)
+
+        detail = paper_declarations.source_revisions_undeclared_detail(status, root)
+
+        self.assertIn("proposals", detail)
+        self.assertIn(".paper-writing.json", detail)
+        self.assertIn("lumen-thesis-r21.md", detail)
+        self.assertIn("other-thesis-r05.md", detail)
+        self.assertIn("mark revisions", detail)
+        self.assertIn("--root proposals", detail)
+
+    def test_reads_candidates_at_call_time_never_cached(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        root = paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
+        status = paper_declarations.source_root_status(self.base, root)
+
+        first = paper_declarations.source_revisions_undeclared_detail(status, root)
+        self.assertNotIn("fresh-arrival-r01.md", first)
+
+        (proposals / "fresh-arrival-r01.md").write_text("# 1\n", encoding="utf-8")
+        second = paper_declarations.source_revisions_undeclared_detail(status, root)
+
+        self.assertIn("fresh-arrival-r01.md", second)
+
 
 class ProducedFactUndeclarableTests(unittest.TestCase):
     """`a-fact-is-declared-or-it-is-produced`, `paper-declarations` spec,

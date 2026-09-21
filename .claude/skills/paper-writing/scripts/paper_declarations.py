@@ -1035,7 +1035,7 @@ def _resolve_bind_document(status: dict, root: SourceRoot, lineage: str) -> Path
     if marker is None:
         raise Refused(
             "SOURCE_REVISIONS_UNDECLARED",
-            f"{root.name!r} is document-rooted but carries no '.paper-writing.json' marker",
+            source_revisions_undeclared_detail(status, root),
         )
     return resolve_lineage(status["path"], lineage, marker)
 
@@ -1104,6 +1104,38 @@ def _binding_separation_report(
     )
 
 
+def _unmarked_candidates(base_path: Path) -> list:
+    """Every `*.md` file directly under `base_path`, by name, sorted --
+    the SAME derivation `describe_binding_candidates`'s own no-marker
+    branch already computes (design.md Decision H). Both
+    `describe_binding_candidates` and `source_revisions_undeclared_detail`
+    call this ONE lister, so a candidate list is provably the same list,
+    never independently recomputed."""
+    return sorted(p.name for p in base_path.glob("*.md"))
+
+
+def source_revisions_undeclared_detail(status: dict, root: SourceRoot) -> str:
+    """The ONE detail text both `SOURCE_REVISIONS_UNDECLARED` raise sites
+    use (design.md Decision H) -- `_resolve_bind_document` above and
+    `paper_graph.resolve_section_index` both call this, so byte-identity
+    across the two sites is structural, never asserted (`source-section-
+    binding` spec, `Requirement: A Document-Rooted Source With No Marker
+    Refuses`). Names the root, the marker filename it is missing, every
+    `*.md` file currently under the root (`_unmarked_candidates`, read at
+    the moment of refusal -- never cached), and the exact `mark revisions`
+    invocation that answers it. `<prefix>`/`<n>` stay literal placeholders:
+    an undeclared root has no recorded prefix or digit width to echo back.
+    """
+    base_path = status["path"]
+    marker_path = base_path / _SOURCE_MARKER_NAME
+    candidates = _unmarked_candidates(base_path)
+    return (
+        f"{root.name!r} is document-rooted but carries no {str(marker_path)!r} marker; "
+        f"*.md files currently under it: {candidates!r}. Run `mark revisions --root "
+        f"{root.name} --revision-prefix <prefix> --ordinal-digits <n>` to declare it."
+    )
+
+
 def _heading_titles(path: Path) -> list:
     """Every heading title `paper_guidance.segment_markdown` reads from
     `path` right now — the same read `_verify_source_section_bindings`
@@ -1153,8 +1185,10 @@ def describe_binding_candidates(status: dict, root: SourceRoot) -> dict:
     marker = read_revisions_marker(base_path)
     if marker is None:
         return {
-            doc_path.stem: {"revision": doc_path.name, "sections": _heading_titles(doc_path)}
-            for doc_path in sorted(base_path.glob("*.md"))
+            Path(name).stem: {
+                "revision": name, "sections": _heading_titles(base_path / name),
+            }
+            for name in _unmarked_candidates(base_path)
         }
 
     marker_prefix = marker["revision_prefix"]

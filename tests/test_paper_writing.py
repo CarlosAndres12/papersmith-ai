@@ -9424,6 +9424,115 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
 
         self._assert_refuses_before_drafting("SOURCE_DECLARATION_HAND_EDITED")
 
+    def test_deleting_an_already_declared_marker_still_refuses_undeclared(self) -> None:
+        """`source-section-binding` spec, scenario `Deleting the marker
+        does not degrade to unmeasured`: a document-rooted root that WAS
+        declared and had that declaration deleted refuses
+        `SOURCE_REVISIONS_UNDECLARED` again, never a silent `unmeasured`
+        report -- reserved for a root that is not document-rooted at all."""
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        self._marker(proposals)
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+        self.assertEqual(corpus.source_roots["proposals"]["state"], "document-rooted")
+
+        (proposals / ".paper-writing.json").unlink()
+
+        self._assert_refuses_before_drafting("SOURCE_REVISIONS_UNDECLARED")
+
+
+class SourceRevisionsUndeclaredByteIdentityTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses`, scenario `Both raise sites produce
+    byte-identical detail`; design.md Decision H: `_resolve_bind_document`
+    (reached through `bind`) and `paper_graph.resolve_section_index`
+    (reached through `write`) call the SAME shared builder, so drift
+    between them is structural rather than asserted."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-undeclared-byte-identity-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only", "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/a.md", "quote": "The formulation, written here."},
+                "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        proposals = self.test_root / "proposals"
+        proposals.mkdir()
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+    def _write_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def _bind_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            block="a.only", fact="formulation", lineage="lumen-thesis",
+            section=["1. Intro"], reopen=False,
+        )
+
+    def test_bind_and_write_produce_byte_identical_detail(self) -> None:
+        with self.assertRaises(Refused) as write_ctx:
+            paper_cli.cmd_write(self._write_args())
+        self.assertEqual(write_ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+
+        with self.assertRaises(Refused) as bind_ctx:
+            paper_cli.cmd_bind(self._bind_args())
+        self.assertEqual(bind_ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+
+        self.assertEqual(write_ctx.exception.detail, bind_ctx.exception.detail)
+
+
+class SourceRevisionsUndeclaredMutationProofTests(unittest.TestCase):
+    def test_mutation_inlining_the_bind_side_literal_breaks_byte_identity(self) -> None:
+        """tasks.md 4.7: inlining a literal message at ONE of the two raise
+        sites (here, `_resolve_bind_document`) must fail the byte-identity
+        test above -- proving the two sites share a builder rather than
+        merely a copied string."""
+        proc = _run_against_mutant(
+            'raise Refused(\n'
+            '            "SOURCE_REVISIONS_UNDECLARED",\n'
+            '            source_revisions_undeclared_detail(status, root),\n'
+            '        )',
+            'raise Refused(\n'
+            '            "SOURCE_REVISIONS_UNDECLARED",\n'
+            '            f"{root.name!r} is document-rooted but carries no marker at all",\n'
+            '        )',
+            "tests.test_paper_writing.SourceRevisionsUndeclaredByteIdentityTests"
+            ".test_bind_and_write_produce_byte_identical_detail",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
 
 class BindCliEndToEndTests(unittest.TestCase):
     """`the-requirement-names-the-section-that-feeds-it`, U3e ruling: the
