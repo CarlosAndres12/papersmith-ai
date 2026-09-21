@@ -288,28 +288,78 @@ falso.
 
 ---
 
-## Lo que ya está construido y sirve de molde
+## El molde, que ya está construido y embarcado
 
-El cambio `the-skill-writes-the-declaration-it-demands` (archivado bajo
-`openspec/changes/archive/`) implementa las cuatro piezas para los marcadores
-de `paper-writing`:
+El cambio `the-skill-writes-the-declaration-it-demands` está archivado bajo
+`openspec/changes/archive/2026-09-20-…` y **ya corre**. Implementa las cuatro
+piezas para los dos marcadores de `paper-writing`. Lo que sigue está medido
+contra el código embarcado, no contra su diseño.
 
-- un verbo con dos modos, uno por tipo de marcador;
-- un módulo único que es dueño del sello, en vez de dos ideas de qué significa
-  sellar;
-- validación contra el disco **en el momento de escribir**;
-- el sello verificado **dentro de los lectores**, nunca en el reporte — si se
-  verificara al reportar, sería el décimo guard de este repo alcanzable solo
-  desde un verbo de solo-lectura;
-- una propiedad de migración que hay que preservar: **lo viejo se sigue
-  leyendo**. Un marcador escrito antes del sello reporta `declared-unsealed` y
-  no rompe nada. Un cambio que obligue a re-declarar todo frena el paper.
+### El verbo
 
-Cuando se aborden las tres hermanas, ese es el molde. Y el orden importa: el
-`profile.ts` deja de nombrar, hay dónde declararlo, **y hay un verbo que lo
-escribe** — las tres juntas. Si se mueven los valores sin construir el verbo,
-se repite la cerradura sin llave que ya se construyó una vez y hubo que
-corregir después.
+```
+paper_cli.py mark revisions --root <raiz> --revision-prefix <p> --ordinal-digits <n> [--unsealed]
+paper_cli.py mark class     --folder <carpeta> --class <clase>              [--unsealed]
+```
+
+Un verbo, dos modos, uno por tipo de marcador. Su propia raíz, no un modo
+colgado de otro verbo que escribe en otro archivo.
+
+### Las cuatro piezas, como quedaron
+
+**MUESTRA.** El reporte de posición trae el estado de cada espacio destinado,
+con **un solo vocabulario** en las dos mitades:
+
+```
+proposals        declared-unsealed
+experiments      undeclared          ← visible antes de chocarse
+implementation   n/a                 ← es repositorio, no lleva declaración
+data-paper       declared-unsealed
+area-benchmark   undeclared
+```
+
+`n/a` y `undeclared` no son lo mismo: uno no corresponde, el otro falta. Si se
+mezclan, alguien va a intentar declarar algo que no lleva declaración.
+
+**PREGUNTA.** La negativa nombra el comando exacto y lee el disco para decir
+qué ve. Los dos lugares que la lanzan comparten **un solo constructor**, así
+que la identidad del mensaje es estructural y no una coincidencia de un texto
+copiado.
+
+**VALIDA al escribir.** Declarar tres dígitos teniendo archivos de dos se
+rechaza en el momento, con la persona mirando. Antes entraba y aparecía mucho
+después, en otro comando, con un mensaje sin relación.
+
+**SELLA.** Un módulo único es dueño del sello — no dos ideas de qué significa
+sellar. Y se verifica **dentro de los lectores**, nunca en el reporte: si se
+verificara al reportar sería el décimo guard de este repo alcanzable solo desde
+un verbo de solo-lectura. Sus mutaciones corren por `write` y `validate`.
+
+### La propiedad de migración, que hay que preservar
+
+**Lo viejo se sigue leyendo.** Los cinco marcadores que existían antes del
+sello —`proposals/` y las cuatro carpetas de `guidance/`— reportan
+`declared-unsealed` y no rompen nada. Un cambio que obligue a re-declarar todo
+frena el paper.
+
+### El modo de reversión, que es menos obvio de lo que parece
+
+`--unsealed` escribe la gramática anterior al sello. Hace falta porque **los
+dos lectores rechazan una clave desconocida**: si alguien revierte el cambio
+sin más, los marcadores sellados quedan **ilegibles**, no meramente sin sellar.
+La reversión se hace corriendo el verbo mientras el código todavía existe,
+nunca con un editor.
+
+---
+
+## Cuando se aborden las tres hermanas
+
+Ese es el molde, y el orden importa: **el `profile.ts` deja de nombrar, hay
+dónde declararlo, y hay un verbo que lo escribe — las tres juntas.**
+
+Si se mueven los valores sin construir el verbo, se repite la cerradura sin
+llave que ya se construyó dos veces en este repositorio y hubo que corregir
+después en los dos casos.
 
 ---
 
