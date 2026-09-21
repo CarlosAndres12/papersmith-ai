@@ -267,13 +267,13 @@ still forbids opening a file to find a sixth" and "Both shipped requirements
 carry delta specs" (specs already written; this phase covers the remaining
 non-spec docs).
 
-- [ ] 6.1 Edit `.claude/agents/redactor.md:15-24`: rewrite the four-input
+- [x] 6.1 Edit `.claude/agents/redactor.md:15-24`: rewrite the four-input
       paragraph to five, adding the block's own bound source sections as the
       fifth declared input. Re-anchor "you never open a file yourself to
       find a fifth input" to "a sixth input" — the prohibition's WORDS
       change, its MEANING does not: the redactor still never reads a file
       itself.
-- [ ] 6.2 Edit `.claude/skills/paper-writing/SKILL.md`: update the `packet`
+- [x] 6.2 Edit `.claude/skills/paper-writing/SKILL.md`: update the `packet`
       surface description (fifth key `source_sections` +
       `source_sections_state`, the `--paper` flag, the four-state
       vocabulary) and the refusal roster: add the 17 codes newly reachable
@@ -283,7 +283,7 @@ non-spec docs).
       (category C), and a note on the widened-blast-radius codes
       (`MALFORMED_HEADER`/`MALFORMED_FIGURE_OBLIGATION`, category D) —
       reachable via an UNRELATED section file, not new codes.
-- [ ] 6.3 Confirm neither `redactor.md` nor `SKILL.md` still reads "four
+- [x] 6.3 Confirm neither `redactor.md` nor `SKILL.md` still reads "four
       inputs" or "two-part packet" anywhere (`rg -n "four input" .claude/`).
 
 ## Phase 7 — WU7: neutrality, roster, both suites
@@ -292,7 +292,7 @@ Satisfies constraints 1, 6, 7 from the tasks brief; proposal Success
 Criteria "Roster re-measured live..." and "No paper id... appears anywhere
 under `.claude/skills/`."
 
-- [ ] 7.1 **Zero new refusal codes, measured.** Run
+- [x] 7.1 **Zero new refusal codes, measured.** Run
       `reachable_paper_refusal_codes()` (`tests/test_paper_writing.py:7486`)
       after all engine code from Phases 0-4 has landed. Confirm the pinning
       assertion at `tests/test_paper_writing.py:7942`
@@ -301,13 +301,13 @@ under `.claude/skills/`."
       (`design.md`, "Refusal Codes — A. New refusal codes introduced by this
       change: Zero"). If the count moved, stop and reconcile before
       proceeding — do not edit the pin to match an unexplained delta.
-- [ ] 7.2 **17 inherited codes recorded as reachable, not silently
+- [x] 7.2 **17 inherited codes recorded as reachable, not silently
       widened.** Confirm 4.1 (or an equivalent) is present in the final test
       suite and passing — the roster count staying at 161 in 7.1 together
       with 4.1's passing test is the proof that these 17 codes were already
       counted in 161 (reachable from `write` before this change) and are
       merely NEWLY REACHABLE FROM `packet`, not new to the codebase.
-- [ ] 7.3 Generality sweep, whole-change: run
+- [x] 7.3 Generality sweep, whole-change: run
       `tests.test_proposal_implementation`'s rule B / `FORGE_LEXICON`-derived
       guard (`ForgeVocabularyDerivedGuardTests`) and confirm no NEW leak
       introduced by this change's own code, comments, docstrings, or
@@ -325,7 +325,7 @@ under `.claude/skills/`."
       (`ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_
       vocabulary_in_the_forge`, the generic-word-"mechanisms" baseline).
       **Any second failure belongs to this change and blocks delivery.**
-- [ ] 7.5 Confirm `git diff main -- sections/` is empty and no file was
+- [x] 7.5 Confirm `git diff main -- sections/` is empty and no file was
       deleted anywhere in the change (`git diff --summary main` shows only
       `create`/`modify`, zero `delete mode`).
 
