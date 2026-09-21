@@ -84,16 +84,16 @@ opens PR #1.
 
 ## Phase 0 — GATE: baseline vocabulary audit (before any code lands)
 
-- [ ] 0.1 Derive the product vocabulary from disk: top-level names under `proposals/`,
+- [x] 0.1 Derive the product vocabulary from disk: top-level names under `proposals/`,
       `experiments/`, `implementations/`, `guidance/` (all four gitignored — walk with
       `fd -H -I` / `rg -I -H`, never a bare `fd`/`rg`, or the walk silently sees nothing).
-- [ ] 0.2 Sweep that vocabulary across `.claude/skills/paper-writing/` and the forge's own
+- [x] 0.2 Sweep that vocabulary across `.claude/skills/paper-writing/` and the forge's own
       suite (`rg -n -i -F <term> ...`). Record the exact commands and their output in the
       apply report. Expect the disclosed **48-hit** cross-skill collision — confirm it
       lands in `experimental-deliberation`/`proposal-deliberation` (sibling skills), not
       inside `paper-writing`'s own surface; owner-acknowledged, out of scope, do not let
       it read as this change's leak.
-- [ ] 0.3 Confirm `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
+- [x] 0.3 Confirm `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
       currently shows only the one known pre-existing failure
       (`test_rule_b_finds_no_target_vocabulary_in_the_forge`, naming the three sibling
       skills) before any production edit — this is the baseline S5's task 5.8 re-checks.
@@ -104,40 +104,40 @@ Design.md Decisions I, J. Closes `openspec/changes/archive/2026-09-20-the-requir
 item 2.14 (read-only), ticked `[x]`, claiming `Corpus.source_roots` is "echoed by every
 corpus-reading verb" — measured false by running `plan`, `phases`, `contract`.
 
-- [ ] 1.1 RED: add failing tests in `tests/test_paper_decisions.py` for
+- [x] 1.1 RED: add failing tests in `tests/test_paper_decisions.py` for
       `declaration_state(status, root)`: `n/a` for a non-`PROSE` root (by kind, never by
       name — assert against a fixture root whose `kind` is `REPOSITORY`); `undeclared` for
       a `PROSE` root with no marker; `declared` for a `PROSE` root with a valid marker
       (three-value vocabulary only — the sealed/unsealed split is S2's, not this unit's).
-- [ ] 1.2 Add `declarable_source_roots()` and `declaration_state(status, root)` to
+- [x] 1.2 Add `declarable_source_roots()` and `declaration_state(status, root)` to
       `scripts/paper_declarations.py`, derived from `FACT_SOURCE_ROOT`'s own `kind` field
       — no root name appears as a literal in either. Confirm 1.1 green.
-- [ ] 1.3 Mutation: extend `FACT_SOURCE_ROOT` with a sixth `PROSE`-kind root in a test
+- [x] 1.3 Mutation: extend `FACT_SOURCE_ROOT` with a sixth `PROSE`-kind root in a test
       fixture; assert it is both declarable and reported, with zero engine edit — the
       derivation proof design's Decision J and the spec's "Which Roots And Folders Are
       Declarable Is Derived" scenario both require.
-- [ ] 1.4 RED: add a failing integration test in `tests/test_paper_writing.py` asserting
+- [x] 1.4 RED: add a failing integration test in `tests/test_paper_writing.py` asserting
       `compute_plan`'s output carries a `sourceRoots` key, one entry per root in
       `FACT_SOURCE_ROOT`, each naming `state`/`documents`/`reason` (existing) plus
       `declaration` (new) — **assert this by calling `compute_plan` and reading its
       return value**, never by asserting a field exists on an intermediate object (the
       exact failure mode of the false-ticked 2.14).
-- [ ] 1.5 Wire `sourceRoots` into `paper_cli.compute_plan`, looping `FACT_SOURCE_ROOT`
+- [x] 1.5 Wire `sourceRoots` into `paper_cli.compute_plan`, looping `FACT_SOURCE_ROOT`
       once, calling `paper_declarations.source_root_status`/`declaration_state` per root.
-- [ ] 1.6 RED: add a failing test in `tests/test_paper_decisions.py` (or wherever the two
+- [x] 1.6 RED: add a failing test in `tests/test_paper_decisions.py` (or wherever the two
       measured flat-string consumers live) asserting `plan`'s `guidance` entries widen
       from a bare class string to `{"class": ..., "declaration": ...}`.
-- [ ] 1.7 Widen `compute_plan`'s `guidance` construction to the object shape; update the
+- [x] 1.7 Widen `compute_plan`'s `guidance` construction to the object shape; update the
       **two measured consumer assertions** in `tests/test_paper_decisions.py` that
       currently expect the flat string (zero consumers in `scripts/`, per design's
       measurement — confirm that measurement still holds with `rg` before editing).
       Confirm 1.6 green.
-- [ ] 1.8 Confirm no new `n/a`-producing root is matched by literal name: `rg` under
+- [x] 1.8 Confirm no new `n/a`-producing root is matched by literal name: `rg` under
       `scripts/paper_declarations.py`/`paper_cli.py` for a `REPOSITORY`/`INGESTED` root
       name used as a string comparison rather than a `.kind` check.
-- [ ] 1.9 Generality sweep: `rg` the fixture root name from 1.3 across
+- [x] 1.9 Generality sweep: `rg` the fixture root name from 1.3 across
       `.claude/skills/paper-writing/scripts/`; zero matches outside the test module.
-- [ ] 1.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
+- [x] 1.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
       confirm green, no new failures beyond the known pre-existing baseline.
 
 ## Phase 2 — S2: `paper_marker.py` + `mark revisions` (the seal, ruled by Decision A)

@@ -11844,5 +11844,78 @@ class PythonFloorGuardMutationTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, output)
 
 
+class PlanSourceRootsTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: The
+    Position Report Names Every Declarable Root's And Every Guidance
+    Folder's Declaration State`: `compute_plan`'s own return value carries
+    a `sourceRoots` key -- asserted here by CALLING `compute_plan` and
+    reading what it returns, never by asserting a field exists on `Corpus`
+    alone (the exact failure mode of the archived predecessor's
+    false-ticked `tasks.md` item 2.14, which claimed `Corpus.source_roots`
+    was already "echoed by every corpus-reading verb" while, measured by
+    running `plan`, `phases`, and `contract`, none of the three rendered it
+    at all)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.forge_root = Path(self._tmp.name) / "repo"
+        self.forge_root.mkdir()
+        self.paper_dir = paper_scaffold.resolve_paper_dir(None, forge_root=self.forge_root)
+        paper_scaffold.scaffold(self.paper_dir)
+        self.guidance_dir = self.forge_root / "guidance"
+
+    def test_compute_plan_carries_a_sourceRoots_entry_per_root(self) -> None:
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertIn("sourceRoots", report)
+        expected_names = {root.name for root in paper_declarations.FACT_SOURCE_ROOT.values()}
+        self.assertEqual(set(report["sourceRoots"]), expected_names)
+        for entry in report["sourceRoots"].values():
+            self.assertEqual(set(entry), {"state", "documents", "reason", "declaration"})
+
+    def test_a_prose_root_with_no_marker_reports_undeclared(self) -> None:
+        proposals = self.forge_root / "proposals"
+        proposals.mkdir()
+        (proposals / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "undeclared")
+
+    def test_a_prose_root_with_a_valid_marker_reports_declared(self) -> None:
+        proposals = self.forge_root / "proposals"
+        proposals.mkdir()
+        (proposals / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "declared")
+
+    def test_a_non_prose_root_reports_n_a_by_kind(self) -> None:
+        implementation_kind = paper_declarations.FACT_SOURCE_ROOT["implementation"].kind
+        self.assertEqual(implementation_kind, paper_declarations.SourceRootKind.REPOSITORY)
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(report["sourceRoots"]["implementation"]["declaration"], "n/a")
+
+    def test_a_sixth_prose_root_widens_the_report_with_zero_engine_edit(self) -> None:
+        sixth = paper_declarations.SourceRoot(
+            "invented-sixth-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        with unittest.mock.patch.dict(
+            paper_declarations.FACT_SOURCE_ROOT, {"invented-sixth-fact": sixth},
+        ):
+            report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertIn(sixth.name, report["sourceRoots"])
+        self.assertEqual(report["sourceRoots"][sixth.name]["declaration"], "undeclared")
+
+
 if __name__ == "__main__":
     unittest.main()

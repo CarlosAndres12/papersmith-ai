@@ -1593,10 +1593,17 @@ def _compute_provenance_report(
 
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
     """The pure aggregation `plan` reports: every `guidance/` folder's
-    class or `unclassified`; the whole `declarations` region body (fill
-    and fixed state, per record); and every written block's provenance
-    state — `current`, `drifted`, or `unprovenanced` (design.md, `plan
-    Aggregates Registry, Declarations, and Provenance`).
+    `{"class": ..., "declaration": ...}` (widened from a bare class string
+    -- design.md Decision I); the whole `declarations` region body (fill
+    and fixed state, per record); every written block's provenance state —
+    `current`, `drifted`, or `unprovenanced`; and, since this unit,
+    `sourceRoots`: one entry per distinct `paper_declarations.
+    FACT_SOURCE_ROOT` root naming its `state`/`documents`/`reason`
+    (`paper_declarations.source_root_status`) plus its `declaration`
+    (`paper_declarations.declaration_state`) (design.md, `plan Aggregates
+    Registry, Declarations, and Provenance`; `specs/source-declaration-
+    authoring/spec.md`, `Requirement: The Position Report Names Every
+    Declarable Root's And Every Guidance Folder's Declaration State`).
 
     Never writes — `read_registry`, `read_region` and `status` are all
     read-only, and `drift` only compares digests. Takes `paper_dir` and
@@ -1625,7 +1632,13 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     against a value that no longer holds; `plan` never rewrites `main.tex`
     or either region under any of this, unchanged from before.
     """
-    guidance_report = paper_guidance.read_registry(guidance_dir)
+    guidance_report = {
+        folder: {
+            "class": klass,
+            "declaration": "undeclared" if klass == "unclassified" else "declared",
+        }
+        for folder, klass in paper_guidance.read_registry(guidance_dir).items()
+    }
 
     tex_path = paper_block.resolve_main_tex(paper_dir)
     main_tex_bytes = tex_path.read_bytes()
@@ -1640,10 +1653,32 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     corpus = paper_graph.assemble_corpus(sections_dir) if sections_dir is not None else None
     provenance_report = _compute_provenance_report(main_tex_bytes, status, declarations_body, corpus)
 
+    # `specs/source-declaration-authoring/spec.md`, `Requirement: The
+    # Position Report Names Every Declarable Root's And Every Guidance
+    # Folder's Declaration State` (design.md Decision I): one entry per
+    # DISTINCT root in `FACT_SOURCE_ROOT`, the same source base
+    # `_binding_separation_report` already uses (`paper_dir.parent`), never
+    # `sections_dir` -- `plan` should not need one for a fact about the
+    # corpus. This corrects the archived predecessor's false-ticked
+    # `tasks.md` item 2.14 ("echoed by every corpus-reading verb"),
+    # measured false by running `plan`/`phases`/`contract` and finding none
+    # of the three render `Corpus.source_roots` at all.
+    source_base = paper_dir.parent
+    source_roots_report = {}
+    for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name):
+        root_status = paper_declarations.source_root_status(source_base, root)
+        source_roots_report[root.name] = {
+            "state": root_status["state"],
+            "documents": root_status["documents"],
+            "reason": root_status["reason"],
+            "declaration": paper_declarations.declaration_state(root_status, root),
+        }
+
     result = {
         "guidance": guidance_report,
         "declarations": declarations_body,
         "provenance": provenance_report,
+        "sourceRoots": source_roots_report,
     }
     if corpus is not None:
         # item 1 (`no-citation-before-its-paper-is-ingested`): every

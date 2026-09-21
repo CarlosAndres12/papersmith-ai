@@ -2770,7 +2770,10 @@ class PlanTests(unittest.TestCase):
 
         self.assertEqual(
             report["guidance"],
-            {"classified-folder": "evidence", "unclassified-folder": "unclassified"},
+            {
+                "classified-folder": {"class": "evidence", "declaration": "declared"},
+                "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
+            },
         )
         recorded = next(
             r for r in report["declarations"]["records"] if r["id"] == "author-roles"
@@ -2858,7 +2861,34 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(set(report["sectionGuidance"]), {"introduction"})
         self.assertTrue(report["sectionGuidance"]["introduction"]["exists"])
         # `guidance`'s own function-named-folder registry is untouched.
-        self.assertEqual(report["guidance"]["reference-papers"], "unclassified")
+        self.assertEqual(
+            report["guidance"]["reference-papers"],
+            {"class": "unclassified", "declaration": "undeclared"},
+        )
+
+    def test_guidance_entries_widen_to_class_and_declaration_object(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement: The
+        Position Report Names Every Declarable Root's And Every Guidance
+        Folder's Declaration State`: `guidance`'s bare class string widens
+        to `{"class": ..., "declaration": ...}` -- a classified folder
+        reports `declared`, an unmarked one reports `undeclared`, never a
+        dropped `class` value."""
+        classified = self.guidance_dir / "classified-folder"
+        classified.mkdir(parents=True)
+        (classified / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+        (self.guidance_dir / "unclassified-folder").mkdir(parents=True)
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(
+            report["guidance"],
+            {
+                "classified-folder": {"class": "evidence", "declaration": "declared"},
+                "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
+            },
+        )
 
 
 class InsumosObserverThreatMatrixTests(unittest.TestCase):
@@ -3353,6 +3383,103 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
         resolution time, never named here."""
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "data-paper")
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "proposals")
+
+
+class DeclarationStateTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: Absence
+    Is A Reported State; A Broken Seal Refuses Where The Marker Is Read`
+    -- this unit's own slice of it (S1): the three-value vocabulary only
+    (`undeclared` | `declared` | `n/a`); the sealed/unsealed split of
+    `declared` is S2's, built once `paper_marker.py` exists."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def test_a_non_prose_root_reports_n_a_by_kind_never_by_name(self) -> None:
+        """Asserted against a fixture root whose `kind` is `REPOSITORY` --
+        an invented name, never a shipped root's own name -- so this can
+        never pass by coincidentally matching `FACT_SOURCE_ROOT`'s own
+        `implementation`/`results` entries."""
+        root = paper_declarations.SourceRoot(
+            "invented-non-prose-root", paper_declarations.SourceRootKind.REPOSITORY,
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "n/a")
+
+    def test_a_prose_root_with_no_marker_is_undeclared(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "undeclared")
+
+    def test_a_prose_root_with_a_valid_marker_is_declared(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "declared")
+
+    def test_a_prose_root_that_is_not_a_directory_at_all_is_undeclared(self) -> None:
+        """A `PROSE` root whose directory does not exist yet
+        (`status["path"]` is `None`) can carry no marker file at all --
+        reported `undeclared`, never a crash on a `None` path."""
+        root = paper_declarations.SourceRoot(
+            "invented-absent-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertIsNone(status["path"])
+        self.assertEqual(paper_declarations.declaration_state(status, root), "undeclared")
+
+
+class DeclarableSourceRootsTests(unittest.TestCase):
+    """design.md Decision J; `specs/source-declaration-authoring/spec.md`,
+    `Requirement: Which Roots And Folders Are Declarable Is Derived, Never
+    Listed`."""
+
+    def test_declarable_roots_are_exactly_the_prose_kind_roots(self) -> None:
+        declarable = paper_declarations.declarable_source_roots()
+
+        self.assertEqual(
+            set(declarable),
+            {
+                root.name
+                for root in paper_declarations.FACT_SOURCE_ROOT.values()
+                if root.kind is paper_declarations.SourceRootKind.PROSE
+            },
+        )
+        for root in declarable.values():
+            self.assertEqual(root.kind, paper_declarations.SourceRootKind.PROSE)
+
+    def test_a_sixth_prose_root_widens_declarability_with_zero_engine_edit(self) -> None:
+        """The spec's own mutation scenario: extending `FACT_SOURCE_ROOT`
+        with a sixth PROSE-kind fact/root pair (via `patch.dict`, never a
+        source edit) makes that root declarable, proving the test is
+        membership-by-kind in the mapping, never a hand-maintained list."""
+        sixth = paper_declarations.SourceRoot(
+            "invented-sixth-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        with unittest.mock.patch.dict(
+            paper_declarations.FACT_SOURCE_ROOT, {"invented-sixth-fact": sixth},
+        ):
+            declarable = paper_declarations.declarable_source_roots()
+
+            self.assertIn(sixth.name, declarable)
+            self.assertEqual(declarable[sixth.name], sixth)
 
 
 class ReconcileObservationReportTests(unittest.TestCase):

@@ -1393,6 +1393,21 @@ FACT_SOURCE_ROOT: dict = {
 }
 
 
+def declarable_source_roots() -> dict:
+    """`{name: SourceRoot}` for every DISTINCT `PROSE`-kind value of
+    `FACT_SOURCE_ROOT` -- membership-by-`.kind` is the sole and only test,
+    never a hand-maintained list of root names (`specs/source-declaration-
+    authoring/spec.md`, `Requirement: Which Roots And Folders Are
+    Declarable Is Derived, Never Listed`; design.md Decision J). Extending
+    `FACT_SOURCE_ROOT` with a new `PROSE`-kind fact/root pair widens this
+    set with zero edit to this function."""
+    return {
+        root.name: root
+        for root in set(FACT_SOURCE_ROOT.values())
+        if root.kind is SourceRootKind.PROSE
+    }
+
+
 #: Per-root revision marker (`source-section-binding` spec, `Requirement:
 #: The Marker Grammar Is Validated, And Disjoint From guidance/'s`; design.md
 #: Decision A). Same filename `paper_guidance.py`'s own `guidance/` marker
@@ -1474,6 +1489,31 @@ def read_revisions_marker(root: Path) -> dict | None:
             "MALFORMED_SOURCE_MARKER", f"{marker_path}: 'ordinal_digits' must be an integer"
         )
     return {"revision_prefix": revision_prefix, "ordinal_digits": ordinal_digits}
+
+
+def declaration_state(status: dict, root: SourceRoot) -> str:
+    """One root's declaration state, this unit's (S1) three-value
+    vocabulary: `'n/a'` | `'undeclared'` | `'declared'` (`specs/source-
+    declaration-authoring/spec.md`, `Requirement: Absence Is A Reported
+    State; A Broken Seal Refuses Where The Marker Is Read`; design.md
+    Decision I/J -- the sealed/unsealed split of `'declared'` is S2's,
+    built once `paper_marker.py` exists).
+
+    `root.kind is not PROSE` reports `'n/a'` BY KIND, never by name --
+    `REPOSITORY` and `INGESTED` roots carry no revisions rule at all. A
+    `PROSE` root whose directory does not exist yet (`status['path']` is
+    `None`) can carry no marker file, so it reports `'undeclared'` without
+    ever calling the reader. Otherwise this calls `read_revisions_marker`
+    on `status['path']`, so a malformed marker's `MALFORMED_SOURCE_MARKER`
+    propagates through this function exactly as it would through any other
+    caller -- never a fifth, silently-swallowed value."""
+    if root.kind is not SourceRootKind.PROSE:
+        return "n/a"
+    path = status.get("path")
+    if path is None:
+        return "undeclared"
+    marker = read_revisions_marker(path)
+    return "undeclared" if marker is None else "declared"
 
 
 def source_root_status(base: Path, root: SourceRoot) -> dict:
