@@ -7931,8 +7931,15 @@ class RefusalRosterTests(unittest.TestCase):
         S4 (`source_revisions_undeclared_detail`) adds no new code: both
         raise sites reuse `SOURCE_REVISIONS_UNDECLARED` verbatim through one
         shared builder. Measured directly against `reachable_paper_refusal_
-        codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 159)
+        codes()`, never forecast.
+
+        159 -> 161: `SECTION_UNKNOWN` and `BLOCK_UNDECLARED`. Both replace a
+        crash, never a behaviour that used to be allowed -- `packet`, `write`
+        and `place` composed the contract filename from the section id and
+        then did a bare `next()` over the header's blocks, so a typo'd
+        `--section`/`--block` and EVERY shipped contract alike died with a
+        traceback and exit 1 instead of this skill's refusal envelope."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 161)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -10343,10 +10350,10 @@ class PacketAssemblyTests(unittest.TestCase):
             "paper-two": "# Overview\n\nA different reference paper's own sentence.\n",
         })
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
 
         self.assertEqual(packet["block"], "a")
-        self.assertEqual(packet["section"], "01-intro")
+        self.assertEqual(packet["section"], "intro")
         self.assertIn("Our own contract prose.", packet["contract"])
         self.assertEqual({ref["folder"] for ref in packet["references"]}, {"paper-one", "paper-two"})
         for ref in packet["references"]:
@@ -10363,7 +10370,7 @@ class PacketAssemblyTests(unittest.TestCase):
             json.dumps({"class": "evidence"}), encoding="utf-8",
         )
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
 
         self.assertEqual(packet["references"], [])
 
@@ -10373,7 +10380,7 @@ class PacketAssemblyTests(unittest.TestCase):
             "# X\n\nBody.\n", encoding="utf-8",
         )
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
 
         self.assertEqual(packet["references"], [])
 
@@ -10382,7 +10389,7 @@ class PacketAssemblyTests(unittest.TestCase):
             "paper-one": "Just a paragraph, no heading anywhere.\n",
         })
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
 
         self.assertEqual(len(packet["references"]), 1)
         self.assertEqual(packet["references"][0]["headings"], [])
@@ -10394,7 +10401,7 @@ class PacketAssemblyTests(unittest.TestCase):
         bad_md.write_bytes(b"\xff\xfe# Not valid UTF-8\n")
 
         with self.assertRaises(Refused) as ctx:
-            paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+            paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
 
         self.assertEqual(ctx.exception.code, "GUIDANCE_MARKDOWN_UNREADABLE")
 
@@ -10420,7 +10427,7 @@ class PacketLeakGuardTests(unittest.TestCase):
         })
 
     def test_no_reference_byte_in_the_payload(self) -> None:
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
         payload = json.dumps(packet)
         self.assertNotIn("unpublished finding", payload)
         self.assertNotIn("A reference sentence", payload)
@@ -10475,7 +10482,7 @@ class PacketStyleResolutionIntegrationTests(unittest.TestCase):
             "paper-b": "# Intro\n\nSentence two from paper B, whole and unexcerpted.\n",
         })
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
         self.assertEqual({ref["root"] for ref in packet["references"]}, {"root-a", "root-b"})
 
         # The (simulated) style-sampler reads the outline above, resolves
@@ -10514,7 +10521,7 @@ class PacketStyleResolutionIntegrationTests(unittest.TestCase):
             "paper-b": "# Intro\n\nSentence from paper B.\n",
         })
 
-        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
         self.assertEqual({ref["root"] for ref in packet["references"]}, {"root-a", "root-b"})
 
         proposals = [
@@ -10537,7 +10544,7 @@ class PacketStyleResolutionIntegrationTests(unittest.TestCase):
         _write_guidance_style_reference(self.guidance_dir, "root-a", {
             "paper-a": "# Intro\n\nA reference sentence with its own distinct register and words.\n",
         })
-        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
         proposals = [{
             "reference": "root-a",
             "source_md": str(self.guidance_dir / "root-a" / "paper-a" / "paper-a.md"),
@@ -10601,7 +10608,7 @@ class PacketWriteGateTests(unittest.TestCase):
 
         self.args = argparse.Namespace(
             paper=str(self.paper_dir), sections=str(self.sections_dir),
-            section="01-a", block="a",
+            section="phase-a", block="a",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
             evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
@@ -10684,7 +10691,7 @@ class CitationReadinessGateTests(unittest.TestCase):
 
         self.args = argparse.Namespace(
             paper=str(self.paper_dir), sections=str(self.sections_dir),
-            section="01-a", block="cited",
+            section="cited-section", block="cited",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
             evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
@@ -10818,9 +10825,9 @@ class PacketReadOnlyTests(unittest.TestCase):
     def test_packet_writes_nothing_including_when_it_refuses(self) -> None:
         before = self._manifest()
 
-        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "01-intro", "a")
+        paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
         with self.assertRaises(Refused):
-            paper_cli.assemble_packet(self.sections_dir, self.broken_guidance_dir, "01-intro", "a")
+            paper_cli.assemble_packet(self.sections_dir, self.broken_guidance_dir, "intro", "a")
 
         after = self._manifest()
         self.assertEqual(before, after)
@@ -10861,7 +10868,7 @@ class PacketPathContainmentTests(unittest.TestCase):
     def test_sections_outside_repository_refuses_and_writes_nothing(self) -> None:
         outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-sections-{os.getpid()}"
         args = argparse.Namespace(
-            section="01-intro", block="a", sections=str(outside), guidance=str(self.guidance_dir),
+            section="intro", block="a", sections=str(outside), guidance=str(self.guidance_dir),
         )
 
         with self.assertRaises(Refused) as ctx:
@@ -10873,7 +10880,7 @@ class PacketPathContainmentTests(unittest.TestCase):
     def test_guidance_outside_repository_refuses_and_writes_nothing(self) -> None:
         outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-guidance-{os.getpid()}"
         args = argparse.Namespace(
-            section="01-intro", block="a", sections=str(self.sections_dir), guidance=str(outside),
+            section="intro", block="a", sections=str(self.sections_dir), guidance=str(outside),
         )
 
         with self.assertRaises(Refused) as ctx:
@@ -10881,6 +10888,68 @@ class PacketPathContainmentTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "GUIDANCE_OUTSIDE_REPOSITORY")
         self.assertFalse(outside.exists())
+
+
+class PacketShippedCorpusTests(unittest.TestCase):
+    """`packet` against the contracts this repository actually ships.
+
+    Every packet fixture in this file writes `sections/01-intro.md` with a
+    header declaring `section: "intro"`, and then asked for `"01-intro"` --
+    the FILE STEM. That is the only shape under which composing
+    `sections_dir / f"{section}.md"` works, and it is a shape the shipped
+    corpus never has: all ten contracts are `NN-<section>.md`. So `packet`
+    could not open a single real contract, died with a `FileNotFoundError`
+    traceback and exit 1 rather than this skill's refusal envelope, and the
+    whole packet suite stayed green because it only ever exercised the
+    implementation's own shortcut.
+
+    This case is derived from the corpus on disk rather than listing
+    anything, so a future rename cannot re-break it in silence: it walks
+    every section every contract declares and every block inside it.
+    """
+
+    def test_packet_resolves_every_block_of_every_shipped_section(self) -> None:
+        sections_dir = FORGE_ROOT / "sections"
+        guidance_dir = FORGE_ROOT / "guidance"
+        pairs = []
+        for path in sorted(sections_dir.glob("*.md")):
+            header, _ = paper_contract.parse(path.read_bytes())
+            for block in header.blocks:
+                pairs.append((header.section, block["id"]))
+
+        self.assertGreaterEqual(
+            len(pairs), 10,
+            "no section/block pair parsed out of the shipped corpus -- every "
+            "assertion below would be passing over an empty set")
+
+        for section, block_id in pairs:
+            with self.subTest(section=section, block=block_id):
+                packet = paper_cli.assemble_packet(
+                    sections_dir, guidance_dir, section, block_id)
+                self.assertEqual(packet["section"], section)
+                self.assertEqual(packet["block"], block_id)
+                self.assertTrue(
+                    packet["contract"],
+                    "the packet's whole purpose is carrying contract prose")
+
+    def test_an_undeclared_section_refuses_and_names_what_is_declared(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.assemble_packet(
+                FORGE_ROOT / "sections", FORGE_ROOT / "guidance",
+                "experimental-setup.md", "es-dataset")
+        self.assertEqual(ctx.exception.code, "SECTION_UNKNOWN")
+        self.assertIn("experimental-setup", ctx.exception.detail)
+
+    def test_an_undeclared_block_refuses_and_names_what_is_declared(self) -> None:
+        """A bare `next()` raised `StopIteration` here -- a crash, and one a
+        static roster scan cannot see, since it only ever reads a literal
+        refusal code."""
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.assemble_packet(
+                FORGE_ROOT / "sections", FORGE_ROOT / "guidance",
+                "experimental-setup", "no-such-block")
+        self.assertEqual(ctx.exception.code, "BLOCK_UNDECLARED")
+        self.assertIn("es-dataset", ctx.exception.detail)
 
 
 class SeparationProposalShapeTests(unittest.TestCase):
