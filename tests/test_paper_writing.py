@@ -51,6 +51,7 @@ import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
 import paper_source_span  # noqa: E402
 import paper_marker  # noqa: E402
+import paper_grounding  # noqa: E402 -- the-block-asserts-only-what-its-section-carries: per-sentence support reconciliation against the bound section's own bytes
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -13220,6 +13221,220 @@ class PlanSourceRootsTests(unittest.TestCase):
 
         self.assertIn(sixth.name, report["sourceRoots"])
         self.assertEqual(report["sourceRoots"][sixth.name]["declaration"], "undeclared")
+
+
+class WriteBlockConsumesEvidenceAuditBindingsTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 0, tasks
+    0.2/0.3 (design.md D4 `[re-measured]`): `_stage_evidence_audit` already
+    returns `list[Binding]` (`paper_write.py:121`, `return bindings` at
+    `:129`) and has exactly one caller, where the value used to be dropped
+    on the floor as a bare statement. This asserts the CALL SITE actually
+    assigns the return value rather than merely running the call for its
+    side effects -- the shape that lets a later stage (this phase's own
+    subject derivation) use the bindings `_stage_evidence_audit` already
+    produces instead of segmenting the draft a second time (D4's own
+    rejected alternative)."""
+
+    def test_the_call_site_assigns_the_return_value_not_a_bare_statement(self) -> None:
+        source = (SKILL_SCRIPTS / "paper_write.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        write_block = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "write_block"
+        )
+
+        def calls_stage_evidence_audit(node) -> bool:
+            return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_stage_evidence_audit")
+
+        bare_statement_calls = [
+            stmt for stmt in write_block.body
+            if isinstance(stmt, ast.Expr) and calls_stage_evidence_audit(stmt.value)
+        ]
+        assigned_calls = [
+            stmt for stmt in write_block.body
+            if isinstance(stmt, ast.Assign) and calls_stage_evidence_audit(stmt.value)
+        ]
+        self.assertEqual(
+            bare_statement_calls, [],
+            "_stage_evidence_audit's return value is dropped as a bare statement",
+        )
+        self.assertEqual(
+            len(assigned_calls), 1,
+            "write_block must call _stage_evidence_audit exactly once, assigning "
+            "its return value to a name a later stage can use",
+        )
+
+    def test_a_fixture_with_a_bound_sentence_still_writes_after_the_fix(self) -> None:
+        """Runtime companion, task 0.3's own fixture requirement: a real
+        `write_block` call, with a fixture carrying at least one `fact:`-
+        bound sentence, still reaches `"status": "written"` once the call
+        site keeps the bindings rather than dropping them -- the fix
+        changes no observable behaviour for a block this phase does not
+        yet gate on subjects (no `source_sections` bound)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            paper_dir = Path(tmp) / "paper"
+            _write_fixture(paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+            contract = _write_contract(
+                citations_regime="none", evidence_set=(),
+                requires_facts=("calibration-regime",),
+            )
+            draft = {
+                "latex": "The device holds calibration steady across trials.",
+                "bindings": [
+                    {
+                        "sentence": "The device holds calibration steady across trials.",
+                        "binding": "fact:calibration-regime",
+                    }
+                ],
+            }
+            result = paper_write.write_block(paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+
+class WriteBlockGroundingAccountKeywordTests(unittest.TestCase):
+    """Task 0.4: `grounding_account` is a keyword-only, defaulted parameter
+    -- the same `source_sections: tuple = ()` precedent `BlockContract`
+    already sets -- so every existing positional `write_block(paper_dir,
+    contract, draft, audit_account)` call site in this suite stays green,
+    unchanged."""
+
+    def test_grounding_account_is_keyword_only_and_defaults_to_none(self) -> None:
+        signature = inspect.signature(paper_write.write_block)
+        parameter = signature.parameters["grounding_account"]
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+
+    def test_every_existing_positional_call_site_stays_green(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paper_dir = Path(tmp) / "paper"
+            _write_fixture(paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+            contract = _write_contract(citations_regime="none", evidence_set=())
+            result = paper_write.write_block(paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+
+def _fact_binding(sentence: str, fact: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="fact", ref=fact, raw=f"fact:{fact}")
+
+
+def _evidence_binding(sentence: str, evidence_id: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="evidence", ref=evidence_id, raw=f"evidence:{evidence_id}")
+
+
+def _structural_binding(sentence: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="structural", ref=None, raw="structural")
+
+
+def _bound_section(
+    *, fact="invented-calibration-fact", lineage="invented-study-r1",
+    title="Invented Calibration Section", text="Invented section body text.",
+) -> dict:
+    return {
+        "fact": fact, "lineage": lineage, "title": title,
+        "path": "/invented/path.md", "byte_start": 0, "byte_end": len(text),
+        "text": text,
+    }
+
+
+class SubjectsForTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: The Subject Set Is An
+    Intersection Derived From Bytes, Never A List` (tasks.md 0.5/0.6;
+    design.md D3). Invented fixture names only -- never a real paper's
+    block id, section title, document filename, or lineage literal."""
+
+    def test_a_licensed_fact_with_a_bound_section_is_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _fact_binding("The device holds calibration steady.", "invented-calibration-fact")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [binding])
+
+    def test_an_evidence_bound_sentence_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _evidence_binding("This cites an external record.", "E1")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_a_structural_sentence_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _structural_binding("This paragraph closes the section.")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_a_fact_bound_sentence_whose_fact_has_no_bound_section_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _fact_binding("An unrelated fact claim.", "invented-unrelated-fact")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_an_empty_source_sections_tuple_yields_no_subjects(self) -> None:
+        binding = _fact_binding("The device holds calibration steady.", "invented-calibration-fact")
+        subjects = paper_grounding.subjects_for([binding], ())
+        self.assertEqual(subjects, [])
+
+
+class ArgumentModeBlockHasNoSubjectsTests(unittest.TestCase):
+    """`transposition-grounding` spec, Scenario "An argument-mode block has
+    no subjects" (tasks.md 0.7): an `argument`-mode block never reaches
+    subject derivation at all -- the grounding stage must not even import
+    `paper_grounding`, let alone call `subjects_for`, for a non-
+    transposition block."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_argument_mode_never_calls_subjects_for(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument",
+            requires_facts=("invented-calibration-fact",), source_sections=(section,),
+        )
+        draft = {
+            "latex": "The device holds calibration steady across trials.",
+            "bindings": [
+                {
+                    "sentence": "The device holds calibration steady across trials.",
+                    "binding": "fact:invented-calibration-fact",
+                }
+            ],
+        }
+        with unittest.mock.patch.object(paper_grounding, "subjects_for") as mocked:
+            result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        mocked.assert_not_called()
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
+class InterimSourceGroundingEnvelopeTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: A Block With No Decided
+    Subject Reports Unmeasured, Never A Silent Pass`, the `subjects == 0`
+    half (tasks.md 0.8/0.9): the `write` envelope gains a `sourceGrounding`
+    key beside `sourceFidelity`, reporting `{"status": "unmeasured",
+    "subjects": 0}` for a block with an empty subject set."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_no_source_sections_reports_unmeasured_zero_subjects(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+    def test_a_bound_section_with_no_fact_bound_sentence_reports_unmeasured_zero_subjects(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), source_sections=(section,),
+        )
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
 
 
 if __name__ == "__main__":

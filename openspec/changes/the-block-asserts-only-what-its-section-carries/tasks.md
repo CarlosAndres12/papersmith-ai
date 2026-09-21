@@ -64,7 +64,7 @@ Intersection Derived From Bytes, Never A List" (all 5 scenarios) and the
 `subjects == 0` half of "Requirement: A Block With No Decided Subject Reports
 Unmeasured, Never A Silent Pass".
 
-- [ ] 0.1 **Ordering gate — read this before touching any file.** Confirm
+- [x] 0.1 **Ordering gate — read this before touching any file.** Confirm
       `the-redactor-receives-the-section-it-must-transpose` has landed by
       reading two files directly: `paper_bindings.py` (`class RedactorInput`,
       `:40-44`) must declare a fifth field `source_sections: tuple = ()`
@@ -80,21 +80,21 @@ Unmeasured, Never A Silent Pass".
       `assemble_packet` takes no `corpus`/`paper_dir`, and
       `openspec/changes/the-redactor-receives-the-section-it-must-transpose/`
       has no `tasks.md`.
-- [ ] 0.2 RED: add a failing test asserting `write_block` (`paper_write.py`)
+- [x] 0.2 RED: add a failing test asserting `write_block` (`paper_write.py`)
       actually consumes `_stage_evidence_audit`'s return value — spy or count
       that the `list[Binding]` it produces reaches a later step, against a
       fixture with at least one bound sentence. Confirm it fails against the
       current bare-statement call at `:159`.
-- [ ] 0.3 Fix `paper_write.py:159`: `_stage_evidence_audit(contract, draft)`
+- [x] 0.3 Fix `paper_write.py:159`: `_stage_evidence_audit(contract, draft)`
       → `bindings = _stage_evidence_audit(contract, draft)`. No signature
       change — it already returns `list` (`:121`, `return bindings` at
       `:129`) and has exactly this one caller. Confirm 0.2 goes green.
-- [ ] 0.4 Add `grounding_account: dict | None = None` as a keyword-only
+- [x] 0.4 Add `grounding_account: dict | None = None` as a keyword-only
       defaulted parameter to `write_block`'s signature (`:139`), the same
       `source_sections: tuple = ()` precedent `BlockContract` already sets.
       Confirm every existing positional `write_block(paper_dir, contract,
       draft, audit_account)` call site in tests stays green, unchanged.
-- [ ] 0.5 RED: failing tests for `paper_grounding.subjects_for(bindings,
+- [x] 0.5 RED: failing tests for `paper_grounding.subjects_for(bindings,
       source_sections)` (design.md, Interfaces): a `fact:`-bound `Binding`
       whose `ref` names a `source_sections` entry's `"fact"` key is a
       subject; an `evidence:`-bound binding is never a subject regardless of
@@ -105,21 +105,21 @@ Unmeasured, Never A Silent Pass".
       evidence-bound sentence is never a subject", "A structural sentence is
       never a subject", "A fact-bound sentence whose fact carries no bound
       section is never a subject".)
-- [ ] 0.6 Create `.claude/skills/paper-writing/scripts/paper_grounding.py`.
+- [x] 0.6 Create `.claude/skills/paper-writing/scripts/paper_grounding.py`.
       Implement `subjects_for(bindings: list, source_sections: tuple) ->
       list`: `bound_facts = {section["fact"] for section in
       source_sections}`, then `[b for b in bindings if b.kind == "fact" and
       b.ref in bound_facts]` — the exact intersection (design.md, D3). No
       block id, section title, document filename, or lineage literal decides
       membership. Confirm 0.5 goes green.
-- [ ] 0.7 RED-then-GREEN: an `argument`-mode block (`contract.mode !=
+- [x] 0.7 RED-then-GREEN: an `argument`-mode block (`contract.mode !=
       MODE_TRANSPOSITION`) never reaches subject derivation — the grounding
       stage added next must not call `subjects_for` at all for a
       non-transposition block, mirroring `check_source_section_verbatim`'s
       own `contract.mode == MODE_TRANSPOSITION` guard at `paper_write.py:236`.
       (`transposition-grounding`, Scenario "An argument-mode block has no
       subjects".)
-- [ ] 0.8 Wire the subject-derivation half of the grounding stage into
+- [x] 0.8 Wire the subject-derivation half of the grounding stage into
       `write_block`: after the existing `source_fidelity_report` call
       (`:249`), before `substitute` (`:251`), guarded on `contract.mode ==
       paper_vocabulary.MODE_TRANSPOSITION`, lazily import `paper_grounding`
@@ -130,18 +130,18 @@ Unmeasured, Never A Silent Pass".
       yet**, that is Phase 1. For an `argument`-mode block, or empty
       `contract.source_sections`, report `{"status": "unmeasured",
       "subjects": 0}` without importing `paper_grounding` at all.
-- [ ] 0.9 RED-then-GREEN: the `write` envelope gains a `sourceGrounding` key
+- [x] 0.9 RED-then-GREEN: the `write` envelope gains a `sourceGrounding` key
       beside `sourceFidelity`, reporting `{"status": "unmeasured",
       "subjects": 0}` for a block with an empty subject set.
       (`transposition-grounding`, "Requirement: A Block With No Decided
       Subject Reports Unmeasured...", Scenario "No subjects reports
       unmeasured with a zero count".)
-- [ ] 0.10 Generality sweep: `rg` under
+- [x] 0.10 Generality sweep: `rg` under
       `.claude/skills/paper-writing/scripts/paper_grounding.py`, this
       phase's `paper_write.py` diff, and its new tests/fixtures for any
       block id, section title, document filename, paper id, or lineage
       literal belonging to a real paper. Confirm zero matches.
-- [ ] 0.11 Run `.venv/bin/python -m unittest tests.test_paper_writing`;
+- [x] 0.11 Run `.venv/bin/python -m unittest tests.test_paper_writing`;
       confirm green, no new failures beyond the known pre-existing baseline.
 
 ## Phase 1 — WU2: Reconciliation, the four refusals, the report shape
