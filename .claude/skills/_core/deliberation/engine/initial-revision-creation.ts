@@ -101,7 +101,7 @@ export class InitialRevisionCreationService {
 		// blocks outright rather than asking for an acknowledgement (`preservation.ts`). There
 		// is nothing to acknowledge at v1 anyway -- no predecessor exists, so no atom can be
 		// lost. A profile whose rule set recognizes nothing here returns `[]` and this is a
-		// no-op, which is why `proposal-deliberation` is unaffected.
+		// no-op, which is why the mathematical domain is unaffected.
 		const violations = canonicalFormViolations(composed.markdown);
 		if (violations.length) return { status: 'blocked', code: 'INITIAL_REVISION_CANONICAL_FORM_VIOLATION', violations };
 		const filename = initialRevisionFilename(composed.slug);

@@ -5134,7 +5134,7 @@ const documentOperationGuardSchema = Type.Object({
 export function createDocumentOperationGuard(_projectRoot:string):DocumentOperationGuard {
  let active:{id:string;mode:any;operation:any;budget:any;token?:string;terminal:'ACTIVE'|'BLOCKED'|'COMPLETED';mutationAction?:DocumentOperationGuardInput['mutationAction'];targetFilename?:string;userAuthorized?:boolean}|undefined;
  const terminalIds=new Set<string>();
- const receipt=(decision:'allowed'|'denied',code:string,message:string):DocumentOperationReceipt=>({receipt_version:'document-operation-guard/v2',receipt_id:randomUUID(),operation_id:active?.id??'missing',decision,reason:{code,message},terminal_state:active?.terminal??'BLOCKED',allowed_document_roles:['proposal-deliberation-router','proposal-deliberation-editor','proposal-deliberation-reviewer','proposal-deliberation-tutor'],state:{execution_scope:'DOCUMENT_OPERATION',maintenance_authorized:false,infrastructure_mutation_allowed:false,test_execution_allowed:false,mode:active?.mode??null,operation:active?.operation??null},budget:active?.budget??{max_document_delegations:0,attempts:0,model_candidates:0,patches:0},consumed:{document_delegations:0,attempts:0,model_candidates:0,patches:0},authorization:active?.token});
+ const receipt=(decision:'allowed'|'denied',code:string,message:string):DocumentOperationReceipt=>({receipt_version:'document-operation-guard/v2',receipt_id:randomUUID(),operation_id:active?.id??'missing',decision,reason:{code,message},terminal_state:active?.terminal??'BLOCKED',allowed_document_roles:['deliberation-router','deliberation-editor','deliberation-reviewer','deliberation-tutor'],state:{execution_scope:'DOCUMENT_OPERATION',maintenance_authorized:false,infrastructure_mutation_allowed:false,test_execution_allowed:false,mode:active?.mode??null,operation:active?.operation??null},budget:active?.budget??{max_document_delegations:0,attempts:0,model_candidates:0,patches:0},consumed:{document_delegations:0,attempts:0,model_candidates:0,patches:0},authorization:active?.token});
  return {
   async execute(input){
    if(input.action==='begin_document_operation'){
@@ -5210,7 +5210,7 @@ export function createProposalWorkspaceTool(
 					"Pass the active operation_id and one-time operationAuthorization unchanged. Never request append, derive, derive_revision, authorize_overwrite, a route mismatch, an undeclared patch, a second attempt, tests, maintenance, or infrastructure mutation.",
 				]
 			: [
-					"Use proposal_workspace exclusively for proposal-deliberation filesystem access; if it blocks or is unavailable, stop and report the failure.",
+					"Use proposal_workspace exclusively for this domain's filesystem access; if it blocks or is unavailable, stop and report the failure.",
 					`Use proposal_workspace read/managed_target with the exact generated filename to resume or migrate an existing marker-owned draft; never use it for bases or manual ${PROPOSAL_DIRECTORY}.`,
 					`When a latest managed proposal exists, use derive_successor with its exact terminal-${REVISION_PLACEHOLDER} filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root ${artifact.stem}-${FIRST_REVISION_LABEL}.md advances only with slug ${SECOND_REVISION_LABEL}; explicit lineages retain the greater same-lineage terminal-${REVISION_PLACEHOLDER} rule, and root/explicit transitions are forbidden.`,
 					`Use legacy derive only for initial fixed-base creation or backward-compatible flows: ${DOMAIN.deriveBase}, a new slug ending -${REVISION_PLACEHOLDER}, and bounded additive insertions anchored to exact unique base text or anchor={equationLabel} / anchor={numberedTag} with position=after.`,
@@ -5432,7 +5432,7 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
  * is the resolved regular file to read.
  *
  * TWO shapes, nested first and flat second. The nested shape is what the legacy single
- * guide was -- one directory per ingested paper -- and `proposal-deliberation` still
+ * guide was -- one directory per ingested paper -- and the mathematical domain still
  * depends on it. It is NOT what a managed revision is: a managed revision is a flat file
  * named `<stem>-<lineage>-<label>.md` sitting directly in its own directory. So a domain
  * that declares another skill's managed directory as a source (a downstream document

@@ -8322,14 +8322,18 @@ FORGE_FLOOR_SURFACE_ADMISSIONS: dict[str, dict[str, str]] = {
         "kaggle": "one comment saying what the ignored directory holds, in the "
                   "file that keeps those credentials out of the history",
     },
-    "proposal-deliberation/profile.ts": {
-        "creda": "the DECLARED domain profile, whose whole job is naming the "
-                 "domain the neutral engine beside it must never know. The "
-                 "forge's own vocabulary module already carves the same "
-                 "exemption for the Node fixtures derived from this file, on "
-                 "exactly this reasoning; the engine itself is scanned and "
-                 "stays clean",
-    },
+    # `proposal-deliberation/profile.ts` used to be admitted here for one of the
+    # floor's proper nouns, on the argument that a domain profile's whole job is
+    # naming the domain the neutral engine must never know. Its own sibling
+    # disproved that argument: `experimental-deliberation/profile.ts` declares
+    # `names: ["experimental-deliberation"]` and needs no admission at all,
+    # because a profile's job is to name its own SKILL, not a research project.
+    # The exemption is gone along with the five fields that needed it -- and the
+    # fifth, `exampleSlug`, carried the noun in lowercase, exactly the residue
+    # `domain-profile.ts`'s own `names` docstring warns a phrase sweep misses.
+    # This comment cannot spell the word it is about: the floor has no
+    # legitimate use anywhere in the forge, this module included, and writing it
+    # here to explain its removal reddens the same guard the removal satisfies.
     "remote-execution/SKILL.md": {
         "kaggle": "the doctrine that designates the single adapter allowed to "
                   "name a service has to name the service it designates, or "
@@ -14145,6 +14149,21 @@ FORGE_LEXICON: dict[str, str] = {
     "contamination": "the auditor's own word for a box that was not empty "
                      "before a drive wrote into it, in the one function that "
                      "proves the detector can see it",
+    "research-concept": "the forge's own generic name for what a proposal "
+                        "document IS -- a research concept -- used as the stem "
+                        "every managed revision is named from "
+                        "(`artifact-naming.ts`). Rule B derives it because "
+                        "this checkout's live revisions are spelled with it, "
+                        "and that derivation cannot tell a slot the forge "
+                        "ships from a word one paper owns. The owner ruled it "
+                        "structure, on the test the maintenance note states: a "
+                        "second person cloning this forge for an unrelated "
+                        "paper is served by this name, not obstructed by it. "
+                        "The floor's proper nouns fail that same test, which is "
+                        "why they stayed on the floor and one of them was cut "
+                        "out of the profile in the same change. Admitted here "
+                        "rather than left red so the ruling lives in the "
+                        "machine instead of in a conversation",
     "benchmark": "the central noun of this whole skill: the kit ships "
                  "benchmark.py and every target declares a benchmark package",
     "confidence": "ordinary English about how sure a reading is, used in the "

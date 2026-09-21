@@ -1,6 +1,6 @@
 // pi-free compatibility shim for `@earendil-works/pi-coding-agent`.
 //
-// Reproduces exactly the surface the proposal-deliberation engine consumes:
+// Reproduces exactly the surface the deliberation engine consumes:
 //   - types: ExtensionAPI, ExtensionContext, SessionShutdownEvent
 //   - runtime: withFileMutationQueue (per-path async mutation serialization)
 //

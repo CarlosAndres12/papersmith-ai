@@ -932,7 +932,7 @@ class CLIWiringTests(unittest.TestCase):
 
     def test_real_section_02_es_assessment_no_longer_inverts_the_components_check(self) -> None:
         """Reproduces the verifier's own CRITICAL finding the way it
-        measured it: drives `render --section 02-experimental-setup
+        measured it: drives `render --section experimental-setup
         --block es-assessment` (the REAL, on-disk contract, real
         `sections/` corpus) against BOTH a prose-compliant crossing
         manifest and the verifier's degenerate dataset-only one. Before
@@ -972,7 +972,7 @@ class CLIWiringTests(unittest.TestCase):
                 proc = self._run(
                     "render", "--paper", str(iter_paper_dir), "--figure-id", fig_id,
                     "--latexmk-path", str(self.bin_dir),
-                    "--section", "02-experimental-setup", "--block", "es-assessment",
+                    "--section", "experimental-setup", "--block", "es-assessment",
                     "--sections", str(SECTIONS_DIR),
                     env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
                 )
@@ -983,7 +983,7 @@ class CLIWiringTests(unittest.TestCase):
         """W2 (`a-diagram-that-compiles-or-says-why`'s corrective re-verify,
         WARNING): reproduces the verifier's own item-3 finding, driven
         exactly the way the verifier measured it -- `render --section
-        02-experimental-setup --block es-assessment` (the REAL, on-disk
+        experimental-setup --block es-assessment` (the REAL, on-disk
         `mandatory: true` contract) against a diagram whose manifest
         declares ZERO components. Before the fix, this compiled and passed
         every obligation check (`check_mandatory` only ever checked PDF
@@ -1001,7 +1001,7 @@ class CLIWiringTests(unittest.TestCase):
         proc = self._run(
             "render", "--paper", str(self.paper_dir), "--figure-id", "diagEmpty",
             "--latexmk-path", str(self.bin_dir),
-            "--section", "02-experimental-setup", "--block", "es-assessment",
+            "--section", "experimental-setup", "--block", "es-assessment",
             "--sections", str(SECTIONS_DIR),
             env={"STUB_MODE": "success", "STUB_RECORD_PATH": str(record_path)},
         )

@@ -225,6 +225,16 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     #: itself could not be read" — never a second code for the same
     #: condition.
     "SECTION_CONTRACTS_UNREADABLE": WORK_STATE,
+    #: The caller named a section or a block the corpus does not declare.
+    #: Both replace a CRASH rather than adding a new prohibition: `packet`,
+    #: `write` and `place` each composed `sections_dir / f"{section}.md"`
+    #: (a `FileNotFoundError` for every shipped contract, since all ten are
+    #: `NN-<section>.md`) and each then did a bare `next(...)` over the
+    #: header's blocks (a `StopIteration` for an unknown id). Neither
+    #: exception carries a literal code, so the roster could not see the
+    #: gap: it was not an unclassified refusal, it was no refusal at all.
+    "SECTION_UNKNOWN": INVOCATION_DEFECT,
+    "BLOCK_UNDECLARED": INVOCATION_DEFECT,
     # --- corpus assembly and order (paper_graph.py) -----------------------
     "ID_COLLISION": WORK_STATE,
     "ORDER_CYCLE": WORK_STATE,
@@ -2011,6 +2021,34 @@ def _resolve_repo_path(raw: str) -> Path:
     return target
 
 
+def _declared_block(header, section: str, block_id: str) -> dict:
+    """One block of a parsed header, by id -- or `BLOCK_UNDECLARED`.
+
+    All three verbs that resolve a single `(section, block)` pair --
+    `packet`, `write` and `place` -- reached for it with a bare
+    `next(b for b in header.blocks if b["id"] == args.block)`, which raises
+    `StopIteration` for an id the header does not declare. That is a crash,
+    not this skill's refusal envelope, and it is invisible to the refusal
+    roster besides: the roster is a static scan for literal codes, and a
+    `StopIteration` carries none.
+
+    One helper rather than three copies, for the reason the three copies
+    themselves demonstrate: the identical defect sat in all of them, and
+    repairing one would have left the class open.
+
+    Names the ids the section DOES declare, so a typo is answerable from
+    the refusal without opening the contract.
+    """
+    for block in header.blocks:
+        if block["id"] == block_id:
+            return block
+    raise Refused(
+        "BLOCK_UNDECLARED",
+        f"section {section!r} declares no block {block_id!r}; "
+        f"declared blocks are {[b['id'] for b in header.blocks]}",
+    )
+
+
 def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:
     """The redactor packet (`redactor-packet` spec; design.md Decision D5):
     one block's own section contract prose, verbatim, plus -- per `style-
@@ -2043,9 +2081,14 @@ def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_
     later degrade; this is the same "contributes nothing, never refuses"
     shape one step earlier, over roots rather than resolved spans).
     """
-    section_path = sections_dir / f"{section}.md"
+    # The header's own `section` field is what names a section, never the
+    # filename (`paper_contract.resolve_section_path`). Composing
+    # `sections_dir / f"{section}.md"` here opened none of the shipped
+    # contracts -- all ten are `NN-<section>.md` -- so this verb died with a
+    # traceback and exit 1 on every real block instead of refusing.
+    section_path = paper_contract.resolve_section_path(sections_dir, section)
     header, body = paper_contract.parse(section_path.read_bytes())
-    next(b for b in header.blocks if b["id"] == block_id)
+    _declared_block(header, section, block_id)
 
     registry = paper_guidance.read_registry(guidance_dir)
     style_roots = sorted(name for name, cls in registry.items() if cls == "style-reference")
@@ -2176,9 +2219,9 @@ def cmd_write(args: argparse.Namespace) -> dict:
 
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
 
-    section_path = sections_dir / f"{args.section}.md"
+    section_path = paper_contract.resolve_section_path(sections_dir, args.section)
     header, body = paper_contract.parse(section_path.read_bytes())
-    block = next(b for b in header.blocks if b["id"] == args.block)
+    block = _declared_block(header, args.section, args.block)
 
     _guard_section_citations_ready(guidance_dir, header.section, block["citations"])
 
@@ -2356,9 +2399,9 @@ def _check_obligations(paper_dir: Path, args: argparse.Namespace) -> dict:
     on disk.
     """
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
-    section_path = sections_dir / f"{args.section}.md"
+    section_path = paper_contract.resolve_section_path(sections_dir, args.section)
     header, _body = paper_contract.parse(section_path.read_bytes())
-    block = next(b for b in header.blocks if b["id"] == args.block)
+    block = _declared_block(header, args.section, args.block)
     figure = block["figure"]
     if figure is None:
         return {"checked": False, "reason": f"{args.block!r} declares no figure: obligation"}

@@ -13,7 +13,7 @@ export const PROSE_REFERENCE=proseReference('g');
  * Reference integrity (change 5): what a document DECLARES as a numbered/named thing, and
  * what CITES one, are `profile.references.{declares, cites}` lookups now — never a hardwired
  * `\label`/`\tag`/`\eqref`/`(Ec. N)` assumption. The mathematical vocabulary ships as
- * `proposal-deliberation/reference-math.ts`, wired through `profile.ts`, exactly as the
+ * `the host-chosen profile's own reference module`, wired through `profile.ts`, exactly as the
  * preservation gate's `preservation-math.ts` (change 4).
  */
 

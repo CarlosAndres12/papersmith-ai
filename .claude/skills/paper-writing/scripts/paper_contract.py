@@ -763,3 +763,41 @@ def resolve_sections_dir(sections_arg: str | None, *, forge_root: Path = paper_s
             f"{target} does not exist as a directory; the section corpus cannot be read",
         )
     return target
+
+
+def resolve_section_path(sections_dir: Path, section: str) -> Path:
+    """The contract file declaring `section`, found by reading each header's
+    own `section` field -- NEVER by composing a filename from `section`.
+
+    The filename is not authoritative anywhere else in this skill and must
+    not become authoritative here: `order` derives the writing order from
+    the block graph and states it takes "`position`, declared block order,
+    and every transcribed `after` edge; never the filename", and
+    `paper_graph.assemble_corpus` keys every section off `header.section`
+    after globbing `*.md`. This applies the identical rule for the one
+    lookup that needs a single file rather than the whole corpus.
+
+    Composing `sections_dir / f"{section}.md"` instead is what `assemble_
+    packet` did, and it could not open a single one of the shipped
+    contracts -- every one of them is named `NN-<section>.md`, so `packet`
+    died with a `FileNotFoundError` traceback and exit 1 for every real
+    block, rather than returning this skill's own refusal envelope.
+
+    Refuses `SECTION_UNKNOWN` (invocation-defect), naming the sections the
+    corpus does declare, so a typo is answerable from the refusal itself.
+    Two files declaring the same section is a corpus defect rather than an
+    invocation one and belongs to the corpus reader
+    (`paper_graph.assemble_corpus`'s own `ID_COLLISION` surface); this
+    returns the first in sorted order and never silently prefers one.
+    """
+    declared = []
+    for path in sorted(sections_dir.glob("*.md")):
+        header, _ = parse(path.read_bytes())
+        if header.section == section:
+            return path
+        declared.append(header.section)
+    raise Refused(
+        "SECTION_UNKNOWN",
+        f"no contract under {sections_dir} declares section {section!r}; "
+        f"declared sections are {sorted(declared)}",
+    )

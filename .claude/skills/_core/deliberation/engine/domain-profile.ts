@@ -27,7 +27,7 @@ export type DeliberationDomainProfile = {
 	/**
 	 * Every word that belongs to this domain and to no other.
 	 *
-	 * The lock in `tests/proposal-deliberation-domain-profile-lock.test.mjs`
+	 * The lock in `the core-scan lock (`no file in the shared core names any domain`)`
 	 * refuses any engine file outside this one that contains any of them, matched
 	 * case-insensitively. Checking only the composed values above is not enough:
 	 * `exampleSlug` carries the same proper noun in lowercase, and that residue
@@ -119,7 +119,7 @@ export type DeliberationDomainProfile = {
 		 * `COMPOSITE_UNTOUCHED_INVARIANT` (`successor-composite-engine.ts`) walks only the gaps
 		 * BETWEEN edit spans plus the tail; a header that IS its own span sits inside the union,
 		 * so the invariant is satisfied, not bypassed. Undeclared (the default, and
-		 * `proposal-deliberation`'s own choice): `CREATE_SUCCESSOR` requires nothing extra,
+		 * the mathematical domain's own choice): `CREATE_SUCCESSOR` requires nothing extra,
 		 * `renderFromIdea` emits nothing extra, bytes are byte-identical to pre-change behavior.
 		 */
 		readonly changeHeader?: {
@@ -148,7 +148,7 @@ export type DeliberationDomainProfile = {
 	/**
 	 * Change 9: names which loaded sources this domain treats as a hard bound on claims, and
 	 * how to detect a candidate's evidence contradicting one. Off by default -- a profile
-	 * declaring none (`proposal-deliberation`'s own choice) never raises
+	 * declaring none (the mathematical domain's own choice) never raises
 	 * `SOURCE_AUTHORITY_CONFLICT`, regardless of candidate content. `severity` defaults to
 	 * `'advisory'` (preview-time, cleared by `acknowledgedSourceConflicts` on accept, mirroring
 	 * the preservation gate); `'refuse'` hard-blocks publish outright instead.
@@ -165,7 +165,7 @@ export type DeliberationDomainProfile = {
 	 * The preservation gate's atom extractor and rule set (change 4): `preservation.ts`
 	 * (formerly `math-integrity.ts`) is domain-neutral and sources both from here instead of
 	 * hardcoding one domain's own subject. The mathematical implementation ships as
-	 * `proposal-deliberation/preservation-math.ts`, wired through this field.
+	 * `the host-chosen profile's own preservation module`, wired through this field.
 	 */
 	readonly preservation: {
 		/** Every atom `source` declares, keyed by a stable id. Empty when nothing in this domain's vocabulary is present -- the caller (`preservation.ts`) reports that as "not applicable", never as a vacuous pass. */
@@ -177,7 +177,7 @@ export type DeliberationDomainProfile = {
 	 * Reference integrity (change 5): what this domain's documents DECLARE as a numbered/named
 	 * thing, and what CITES one, sourced here instead of hardwiring `\label`/`\tag`/`\eqref`/
 	 * `(Ec. N)` into `candidate-validator.ts`, `reference-index.ts` and `document-index.ts`.
-	 * The mathematical vocabulary ships as `proposal-deliberation/reference-math.ts`, wired
+	 * The mathematical vocabulary ships as `the host-chosen profile's own reference module`, wired
 	 * through this field, exactly as `preservation` ships `preservation-math.ts` above.
 	 */
 	readonly references: {
@@ -192,7 +192,7 @@ export type DeliberationDomainProfile = {
 	 * `proposal-workspace.ts`: each `path` is a project-root-relative directory inventoried the
 	 * same way the legacy single guide was, and a `required: true` source that is absent blocks
 	 * `CREATE_INITIAL_REVISION` with `REQUIRED_SOURCE_MISSING` instead of silently loading
-	 * nothing. `proposal-deliberation` declares its guide `required: false`, preserving today's
+	 * nothing. the mathematical domain declares its guide `required: false`, preserving today's
 	 * silence exactly.
 	 */
 	readonly sources: readonly { readonly path: string; readonly required: boolean }[];
