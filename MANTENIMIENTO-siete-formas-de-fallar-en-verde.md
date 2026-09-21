@@ -84,6 +84,23 @@ su firma declaraba `None`. Una tarea tildada decía que un dato salía por tres
 verbos y no salía por ninguno. Una propuesta afirmaba un insumo que el diseño
 nunca ruteó. Un conteo de verbos nació viejo el día que se lo "arregló".
 
+**Y el caso que más engaña: la prosa que dice la verdad HOY.** Una decisión que
+no se puede medir todavía —porque le falta un dato que aún no existe— se
+escribe como fallo declarado, con lo que la falsificaría. Eso está bien hecho.
+Pero queda en un documento, y un documento no se entera el día que ese dato
+aparece. La nota sigue siendo cierta, nadie la contradice, y nadie la vuelve a
+mirar tampoco.
+
+El arreglo es convertir la espera en un **testigo**: un test que lee la
+precondición y pasa **solo mientras siga sin cumplirse**. El día que se cumple
+se pone rojo y dice qué se debe. Cuesta diez líneas.
+
+> Un pendiente que depende de que algo aparezca no se guarda en prosa. Se
+> guarda en algo que corra y que mire si ya apareció.
+
+Y como cualquier guard: probá que puede dispararse. Un testigo que pasa porque
+la precondición nunca se cumplió se lee igual que uno que no puede fallar.
+
 **Las dos reglas:**
 
 > No heredes ninguna afirmación de un artefacto anterior sin volver a medirla.

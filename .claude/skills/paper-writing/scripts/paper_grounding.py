@@ -31,6 +31,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implemen
 from impl_refusals import Refused  # noqa: E402
 
 
+def _body_of(section: dict) -> str:
+    """One bound section's text WITHOUT its own heading line.
+
+    `paper_source_span.resolve_bound_sections` slices from the heading's own
+    first byte -- `paper_guidance.segment_markdown` sets `byte_start` at the
+    `#` rather than beneath it -- so `section["text"]` opens with the heading
+    itself. For the verbatim check that is correct and must not change: pasting
+    a source's heading into a draft IS copying it, and `SOURCE_SECTION_
+    VERBATIM` should see it.
+
+    For grounding it is wrong, and the difference is the whole point of this
+    guard. A `supported` verdict citing only the section's TITLE -- no body
+    text at all -- was byte-present in the full slice and therefore survived,
+    licensing a sentence the section's body never supports. A title says what a
+    section is about; it does not assert anything, so it cannot ground a claim.
+
+    Fixed HERE rather than in `paper_source_span`, deliberately. That slicer is
+    shared with the already-shipped verbatim check, which wants the heading
+    included. Two checks wanting different things from the same bytes is not a
+    reason to change the bytes -- it is a reason for each to derive what it
+    needs. The same "sibling, never extension" rule this module already follows
+    toward `check_source_section_verbatim`.
+
+    A section whose text carries no newline at all is treated as heading-only
+    and yields an empty body: nothing in it can ground anything, which is the
+    safe direction.
+    """
+    text = section.get("text", "")
+    if not text.startswith("#"):
+        return text
+    newline = text.find("\n")
+    return "" if newline == -1 else text[newline + 1:]
+
+
 def subjects_for(bindings: list, source_sections: tuple) -> list:
     """The subject set: the intersection of two independently produced sets
     -- the draft's own segmented bindings and the block's resolved bound
@@ -125,7 +159,7 @@ def reconcile_support(subjects: list, account: dict | None, source_sections: tup
                 f"{subject.sentence!r}",
             )
         if verdict == "supported":
-            byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)
+            byte_present_own = bool(span) and any(span in _body_of(section) for section in own_sections)
             if not byte_present_own:
                 verdict = "undecidable"
                 span = ""

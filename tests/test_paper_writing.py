@@ -11411,6 +11411,55 @@ class PacketShippedCorpusTests(unittest.TestCase):
         self.assertIn("es-dataset", ctx.exception.detail)
 
 
+class SectionPathCorruptSiblingTests(unittest.TestCase):
+    """A sibling this lookup was not asked about cannot decide it.
+
+    `resolve_section_path` reads EVERY `sections/*.md` to find one, so a
+    corrupted contract sorting alphabetically first used to refuse every
+    lookup behind it -- including a section whose own file is perfectly well
+    formed. Reproduced with a minimal fixture by the verify phase of
+    `the-redactor-receives-the-section-it-must-transpose`, whose own
+    corpus-contamination test had to order its fixture filenames around it.
+
+    The defect is deferred, never swallowed: a corrupt sibling that did not
+    hold the answer is irrelevant, and `contract`/`plan` still refuse on it
+    through the corpus reader, whose job that is.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+        # Sorts FIRST, and its header is not JSON.
+        (self.sections_dir / "00-corrupt.md").write_text(
+            "---\n{ not json at all\n---\n\nProse.\n", encoding="utf-8")
+        _write_packet_section(
+            self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+
+    def test_a_corrupt_sibling_sorting_first_does_not_block_a_well_formed_section(self) -> None:
+        resolved = paper_contract.resolve_section_path(self.sections_dir, "intro")
+        self.assertEqual(resolved.name, "01-intro.md")
+
+    def test_a_genuinely_absent_section_names_the_unreadable_files_too(self) -> None:
+        """'It is not there' and 'one file could not be read' must never
+        look the same from the refusal -- otherwise the deferral above
+        becomes a way to hide a corpus defect."""
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.resolve_section_path(self.sections_dir, "no-such-section")
+        self.assertEqual(ctx.exception.code, "SECTION_UNKNOWN")
+        self.assertIn("intro", ctx.exception.detail)
+        self.assertIn("00-corrupt.md", ctx.exception.detail)
+        self.assertIn("MALFORMED_HEADER", ctx.exception.detail)
+
+    def test_the_corpus_reader_still_refuses_on_the_same_corrupt_file(self) -> None:
+        """The deferral is scoped to this one lookup. The verb whose job is
+        reading the whole corpus must still say the file is broken."""
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+
+
 # =====================================================================
 # the-redactor-receives-the-section-it-must-transpose -- WU0/WU1
 # =====================================================================
@@ -13826,6 +13875,157 @@ class WriteBlockGroundingWiringTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
 
 
+class GroundingThresholdObligationTests(unittest.TestCase):
+    """The D2 obligation, carried by the machine instead of by prose.
+
+    `the-block-asserts-only-what-its-section-carries` deliberately shipped no
+    ratio threshold over `downgraded`/`decided`, and said so as a ruling with
+    a written falsifier rather than inventing a number. The reason is a
+    precondition, not an opinion: no real `document`-rooted binding exists
+    anywhere on disk, so there is nothing to calibrate against, and any number
+    would be chosen and then read six months later as measured.
+
+    That obligation lived only in `SKILL.md` and an archive report. A document
+    does not execute, so it cannot notice the day its precondition changes --
+    the failure this repository records as "prose that outlives its mechanism".
+
+    This test is the tripwire that closes that gap. While no binding is
+    recorded it passes, and it is passing for a stated reason rather than
+    vacuously. The moment somebody runs `bind` for real, it goes RED and names
+    what is now owed: run the falsifier, and either discharge the ruling with
+    measured counts or replace it with the blocking rule it asks for.
+
+    The falsifier itself, verbatim from `SKILL.md`: over ten or more recorded
+    real `write` runs against genuine document-rooted bindings, if any block
+    reaches `written` with `downgraded > 0`, or with `subjects > 0` and
+    `decided == 0`, the no-ratio-threshold ruling is wrong and a blocking rule
+    over these counts must be added.
+    """
+
+    def test_the_no_threshold_ruling_still_has_nothing_to_calibrate_against(self) -> None:
+        recorded = paper_declarations.read_bindings(FORGE_ROOT / "paper")
+        decided = {
+            block: facts for block, facts in recorded.items() if facts
+        }
+        self.assertEqual(
+            decided, {},
+            "A real document-rooted binding now exists, so the D2 obligation's own "
+            "precondition is met and the ruling is no longer unfalsifiable. It shipped "
+            "WITHOUT a ratio threshold only because there was nothing to measure. "
+            "Owed now: accumulate ten or more real `write` runs and check whether any "
+            "block reaches `written` with `downgraded > 0`, or with `subjects > 0` and "
+            "`decided == 0`. If either happens the ruling is wrong and a blocking rule "
+            "over those counts must be added; if neither does, discharge the obligation "
+            "with the measured counts and delete this test. Do NOT simply re-pin it.",
+        )
+
+    def test_the_falsifier_is_still_shipped_where_a_reader_will_find_it(self) -> None:
+        """The tripwire above is worthless if the obligation it points at has
+        been quietly edited out of the shipped doctrine."""
+        skill_md = (SKILL_SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Falsifier:", skill_md)
+        self.assertIn("downgraded > 0", skill_md)
+        self.assertIn("decided == 0", skill_md)
+
+
+class GroundingHeadingIsNotSupportTests(unittest.TestCase):
+    """A section's own HEADING cannot ground a claim about its body.
+
+    `resolve_bound_sections` slices from the heading's first byte, so
+    `section["text"]` opens with the heading itself. That is correct for
+    `SOURCE_SECTION_VERBATIM` -- pasting a source's heading into a draft is
+    copying it -- and wrong here: a `supported` verdict quoting only the
+    TITLE was byte-present in the full slice and survived reconciliation,
+    licensing a sentence the body never supports.
+
+    The verify phase of `the-block-asserts-only-what-its-section-carries`
+    reproduced this by direct execution and recorded it as a WARNING; none
+    of that change's own 39 grounding tests exercised it. These do.
+    """
+
+    HEADED = "# 3. Calibration Protocol\n\nThe constant is re-derived per trial.\n"
+
+    def test_a_span_quoting_only_the_heading_is_downgraded_never_supported(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact", text=self.HEADED)
+        subject = _fact_binding("Calibration runs once per study.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "3. Calibration Protocol",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertEqual(reconciled[0]["span"], "")
+        self.assertTrue(
+            reconciled[0]["downgraded"],
+            "a heading names what a section is about; it asserts nothing, so it "
+            "cannot ground a claim -- and the downgrade must be counted as one",
+        )
+
+    def test_a_span_quoting_the_body_still_survives(self) -> None:
+        """The other half, without which the check above could be a blanket
+        that downgrades everything and nothing would say so."""
+        section = _bound_section(fact="invented-calibration-fact", text=self.HEADED)
+        subject = _fact_binding("The constant is re-derived for every trial.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "The constant is re-derived per trial.",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+        self.assertFalse(reconciled[0]["downgraded"])
+
+    def test_a_section_that_is_only_a_heading_grounds_nothing(self) -> None:
+        """The degenerate case, failing in the safe direction: a section
+        carrying no body at all has nothing that can support anything."""
+        section = _bound_section(fact="invented-calibration-fact", text="# 3. Calibration Protocol")
+        subject = _fact_binding("Calibration runs once per study.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "3. Calibration Protocol",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertTrue(reconciled[0]["downgraded"])
+
+    def test_an_unheaded_section_is_read_whole(self) -> None:
+        """Not every bound section starts with a heading; one that does not
+        must keep every byte it has available as support."""
+        section = _bound_section(
+            fact="invented-calibration-fact", text="The constant is re-derived per trial.",
+        )
+        subject = _fact_binding("The constant is re-derived for every trial.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "The constant is re-derived per trial.",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+
+
 class GroundingScopeBoundaryTests(unittest.TestCase):
     """`transposition-grounding` spec, `Requirement: A Sibling Check, Never
     An Extension Of The Verbatim Or Leak Checks` (tasks.md 1.13, its own
@@ -14102,7 +14302,7 @@ class GroundingMutationProofTests(unittest.TestCase):
         without ever being checked against the section's own bytes, and an
         ungrounded `supported` verdict wrongly survives."""
         proc = _run_against_mutant(
-            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+            'byte_present_own = bool(span) and any(span in _body_of(section) for section in own_sections)',
             "byte_present_own = True",
             "tests.test_paper_writing.ReconcileSupportBurdenOfProofTests"
             ".test_a_supported_verdict_with_an_empty_span_never_passes_as_supported",
@@ -14134,7 +14334,7 @@ class GroundingMutationProofTests(unittest.TestCase):
             'if entry["sentence"] not in subject_sentences:',
             "if entry is None:",
             'if verdict == "unsupported":',
-            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+            'byte_present_own = bool(span) and any(span in _body_of(section) for section in own_sections)',
         ]
         anchor_lines = set()
         for anchor in anchors:

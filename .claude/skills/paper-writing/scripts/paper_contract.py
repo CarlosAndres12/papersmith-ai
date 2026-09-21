@@ -791,13 +791,37 @@ def resolve_section_path(sections_dir: Path, section: str) -> Path:
     returns the first in sorted order and never silently prefers one.
     """
     declared = []
+    unreadable_files: list = []
     for path in sorted(sections_dir.glob("*.md")):
-        header, _ = parse(path.read_bytes())
+        try:
+            header, _ = parse(path.read_bytes())
+        except Refused as unreadable:
+            # A sibling this lookup was not asked about cannot decide it. This
+            # scan reads every file to find one, so without this an unrelated
+            # corrupted contract that sorts alphabetically FIRST refused every
+            # lookup behind it -- including a section whose own file is
+            # perfectly well formed. Reproduced with a minimal fixture by the
+            # verify phase of `the-redactor-receives-the-section-it-must-
+            # transpose`, whose own corpus-contamination test had to order its
+            # fixture filenames around this to stay meaningful.
+            #
+            # The defect is not swallowed, only deferred: if the requested
+            # section IS found, the corrupt sibling genuinely did not matter
+            # and `contract`/`plan` still refuse on it through the corpus
+            # reader, which is the verb whose job that is. If it is NOT found,
+            # the refusal below names the unreadable files beside the declared
+            # sections, so "it is not there" and "one file could not be read"
+            # never look the same.
+            unreadable_files.append((path.name, unreadable.code))
+            continue
         if header.section == section:
             return path
         declared.append(header.section)
-    raise Refused(
-        "SECTION_UNKNOWN",
+    detail = (
         f"no contract under {sections_dir} declares section {section!r}; "
-        f"declared sections are {sorted(declared)}",
+        f"declared sections are {sorted(declared)}"
     )
+    if unreadable_files:
+        listed = ", ".join(f"{name} ({code})" for name, code in sorted(unreadable_files))
+        detail += f"; unreadable contracts, any of which could hold it: {listed}"
+    raise Refused("SECTION_UNKNOWN", detail)
