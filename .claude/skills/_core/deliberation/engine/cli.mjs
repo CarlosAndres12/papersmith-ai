@@ -80,7 +80,7 @@ const jiti = createJiti(import.meta.url);
 const host = await jiti.import(path.join(engineDir, 'proposal-workspace.ts'));
 
 const projectRoot = process.env.PROPOSAL_DELIBERATION_PROJECT_ROOT ?? process.cwd();
-const sessionId = process.env.PROPOSAL_DELIBERATION_SESSION_ID ?? 'proposal-deliberation-cli-session';
+const sessionId = process.env.PROPOSAL_DELIBERATION_SESSION_ID ?? 'deliberation-cli-session';
 
 /** Runtime context: the exact ExtensionContext surface the engine reads. No model
  * identity or model-auth registry is wired -- the keyless CREATE_SUCCESSOR +

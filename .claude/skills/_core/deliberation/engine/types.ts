@@ -4,7 +4,12 @@ import { createHash } from 'node:crypto';
 // table from `paragraph` to `table` changes its entryId (`${type}:${sha256(...)}`), so this
 // is a genuine re-parse, not a same-output rename -- it must NOT be added to
 // `SUPERSEDED_PARSER_VERSIONS` below (see that constant's own doc comment).
-export const PARSER_VERSION = 'proposal-deliberation/2';
+// The generation stays `2`: this engine's parsing did not change. Only the
+// namespace did, from the skill it was extracted from to what it actually is --
+// a domain-neutral deliberation engine that reads which domain it serves off a
+// host-chosen profile. That rename is precisely the case `SUPERSEDED_PARSER_
+// VERSIONS` below exists for, and the old spelling is listed there.
+export const PARSER_VERSION = 'deliberation/2';
 /**
  * Identifiers this parser answered to before, which derived state committed under them may still carry.
  *
@@ -14,9 +19,20 @@ export const PARSER_VERSION = 'proposal-deliberation/2';
  * with zero line changes, and edited exactly this constant. State written under the old name was
  * produced by byte-identical parsing code, so rejecting it invalidated correct history.
  *
+ * The second entry qualifies on the identical grounds: the engine's parsing is byte-for-byte unchanged
+ * by the rename that produced `deliberation/2` — that change edited this constant, comments, and
+ * infrastructure identifiers, and not one line of any index module. State written under the old name
+ * was produced by the same parsing code, so rejecting it would invalidate correct history over a
+ * spelling.
+ *
+ * This comment does not spell that entry, and the omission is deliberate: the core-scan lock
+ * (`no file in the shared core names any domain`) exempts the list itself, because a superseded-
+ * identifier list cannot do its job without naming what it supersedes — and exempts nothing else in
+ * this file, so the same name written one line up is still a leak. Read the entry from the array.
+ *
  * Reads accept these; writes always record PARSER_VERSION.
  */
-export const SUPERSEDED_PARSER_VERSIONS = Object.freeze(['paper-proposal/1']);
+export const SUPERSEDED_PARSER_VERSIONS = Object.freeze(['paper-proposal/1', 'proposal-deliberation/2']);
 export function isAcceptedParserVersion(stored: unknown, current: string = PARSER_VERSION): boolean {
 	return stored === current || (typeof stored === 'string' && SUPERSEDED_PARSER_VERSIONS.includes(stored));
 }

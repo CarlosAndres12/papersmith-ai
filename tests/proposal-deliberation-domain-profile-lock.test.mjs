@@ -141,11 +141,32 @@ function withoutProvenanceCitations(source) {
 	return source.replace(/sdd\/[A-Za-z0-9._-]+/g, 'sdd/<cited-change>');
 }
 
+/** The declared list of identifiers this engine ANSWERED TO BEFORE.
+ *
+ * `SUPERSEDED_PARSER_VERSIONS` exists to keep reading state written under an
+ * older spelling of the parser version, and it cannot do that job without
+ * spelling it. This is the same kind of thing as a provenance citation: a
+ * reference to the past, not the engine knowing which domain it serves today.
+ * Refusing it would force a choice between a green lock and a readable history,
+ * and the history would lose.
+ *
+ * Deliberately anchored to that one constant rather than to any frozen array:
+ * the carve-out has to be small enough that nobody can park a live identifier
+ * inside it. Writes always record `PARSER_VERSION`, which is scanned normally,
+ * so a domain name reaching stored state still reddens this lock.
+ */
+function withoutSupersededIdentifiers(source) {
+	return source.replace(
+		/(SUPERSEDED_PARSER_VERSIONS\s*=\s*Object\.freeze\()\[[^\]]*\]/,
+		'$1[/* superseded spellings */]',
+	);
+}
+
 test('no file in the shared core names any domain', () => {
 	assert.ok(coreSources.length > 40, `expected the whole engine, scanned ${coreSources.length}`);
 	const leaks = [];
 	for (const [rel, rawSource] of coreSources) {
-		const source = withoutProvenanceCitations(rawSource);
+		const source = withoutSupersededIdentifiers(withoutProvenanceCitations(rawSource));
 		const lower = source.toLowerCase();
 		for (const profile of profiles) {
 			for (const value of profile.declared) if (source.includes(value)) leaks.push(`${rel} spells ${JSON.stringify(value)} (${profile.skillName})`);
@@ -173,6 +194,25 @@ test('the provenance exemption removes citations and nothing else', () => {
 		'a domain named outside a citation must survive the exemption and still be caught');
 	assert.ok(coreSources.some(([, source]) => /sdd\/[A-Za-z0-9._-]+/.test(source)),
 		'no citation found in the engine at all -- this exemption would be guarding nothing');
+});
+
+test('the superseded-identifier exemption covers that one list and nothing else', () => {
+	// Same two halves, same reason: an exemption that cannot be shown to still
+	// let the lock fire is indistinguishable from switching the lock off.
+	const line = "export const SUPERSEDED_PARSER_VERSIONS = Object.freeze(['proposal-deliberation/2']);\nconst live = 'proposal-deliberation/3';";
+	const cleaned = withoutSupersededIdentifiers(line);
+	assert.ok(!cleaned.includes("'proposal-deliberation/2'"),
+		'the superseded spelling must leave the scanned text');
+	assert.ok(cleaned.includes("'proposal-deliberation/3'"),
+		'an identifier outside that list must survive the exemption and still be caught');
+
+	const types = coreSources.find(([rel]) => rel === 'types.ts');
+	assert.ok(types, 'types.ts not scanned -- this exemption would be guarding nothing');
+	assert.match(types[1], /SUPERSEDED_PARSER_VERSIONS\s*=\s*Object\.freeze\(\[/,
+		'the constant this exemption is anchored to no longer has that shape');
+	assert.ok(types[1].includes("'proposal-deliberation/2'"),
+		'the superseded spelling is gone from the list -- state written under it can no longer be read, '
+		+ 'and this exemption is now guarding nothing');
 });
 
 test('every profile declares its artifact namespace values (directory, stem, sidecarRoot)', () => {
@@ -329,7 +369,7 @@ const EQUATION_RESIDUE = { substringCount: 124, files: ['cleanup-planner.ts', 'd
 // truer, and does not age when a third skill arrives. The remaining residue is the
 // engine's own subject noun -- a proposal IS what it deliberates over -- plus six
 // live identifiers migrating separately.
-const PROPOSAL_RESIDUE = { wordBoundaryCount: 177, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'chat-draft-registry.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
+const PROPOSAL_RESIDUE = { wordBoundaryCount: 169, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
 
 test('C-3 vacuity guard: the denylist is non-empty, or this check would be vacuous', () => {
 	const denylist = buildDenylist(profiles);

@@ -268,7 +268,7 @@ export class DraftMaterializationService {
 	private readonly policy: ResolvedPolicy;
 	private readonly pendingRoutes = new Map<string, string>();
 
-	constructor(private readonly projectRoot: string, private readonly guard: DraftOperationGuard, policy: DraftMaterializationPolicy = {}, private readonly operationIdFactory: () => string = () => `proposal-deliberation-draft-${randomUUID()}`) {
+	constructor(private readonly projectRoot: string, private readonly guard: DraftOperationGuard, policy: DraftMaterializationPolicy = {}, private readonly operationIdFactory: () => string = () => `deliberation-draft-`) {
 		this.policy = resolvePolicy(policy);
 	}
 

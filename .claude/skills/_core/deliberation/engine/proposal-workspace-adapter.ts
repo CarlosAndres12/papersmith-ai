@@ -24,7 +24,7 @@ function verifyApproval(candidate: ExactApprovedCandidate, approval: DocumentRev
 }
 
 export class ProposalWorkspaceAdapter {
- constructor(private readonly projectRoot: string, private readonly guard: DocumentOperationGuard, private readonly workspace: Workspace, private readonly operationIdFactory: () => string = () => `proposal-deliberation-${randomUUID()}`) {}
+ constructor(private readonly projectRoot: string, private readonly guard: DocumentOperationGuard, private readonly workspace: Workspace, private readonly operationIdFactory: () => string = () => `deliberation-`) {}
 
  /** Publishes only an exact Document Reviewer-approved first-revision candidate through INITIAL_CREATE. */
  async publishInitial(input: PublishInitialInput): Promise<PublishedInitial> {
