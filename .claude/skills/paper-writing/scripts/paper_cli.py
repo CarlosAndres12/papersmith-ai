@@ -1907,7 +1907,78 @@ def _resolve_write_gate(paper_dir: Path, sections_dir: Path, qualified_id: str) 
     return corpus
 
 
-def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = None) -> dict:
+def _write_gate_state(corpus, guidance_dir: Path, qualified_id: str) -> dict:
+    """What `write` would refuse for ONE block, computed WITHOUT refusing --
+    the read-time half `the-requirement-names-the-section-that-feeds-it`'s
+    design.md (section H) chose and only half-delivered.
+
+    That decision table's chosen option reads: "Report an undecided binding
+    at read-time (`Corpus.undecided_bindings`, mirroring `source_roots`'s
+    own `unmeasured` report), refuse only when `write` assembles its own
+    corpus". The refusing half shipped (`enforce_bindings=True`, the single
+    `_resolve_write_gate` call site). The REPORTING half was built as a
+    `Corpus` field and wired to no output at all: `source_roots`, the twin
+    that sentence names, reaches the operator through `plan`'s own
+    `sourceRoots`; `undecided_bindings` reached nothing. This is the wire.
+
+    Both halves REUSE the gates `write` itself runs -- never a second
+    implementation that could drift from them. The binding half reads the
+    same `corpus.undecided_bindings` `_verify_source_section_bindings`
+    raises from; the citation half reads the same
+    `paper_guidance.section_citation_status` `_guard_section_citations_
+    ready` raises from, and applies the same `regime == "none"` exemption.
+
+    Reports, never raises: a block whose gates are all clear is
+    `{"state": "clear", "blockers": []}`; otherwise `{"state": "blocked",
+    "blockers": [{"code": ..., "detail": ...}, ...]}` naming EVERY blocker
+    found, not merely the first. `write` itself still raises one refusal
+    per call, in its own fixed order -- this report is what lets an
+    operator see all of them before spending a redactor and a
+    contract-auditor run on a block `write` will refuse.
+    """
+    blockers: list = []
+
+    facts = corpus.undecided_bindings.get(qualified_id) or {}
+    for fact_id in sorted(facts):
+        info = facts[fact_id]
+        blockers.append({
+            "code": "SECTION_BINDING_ABSENT",
+            "detail": f"{fact_id!r} is bindable and its source root "
+                      f"{info['root']!r} is measured, but carries no binding",
+        })
+
+    record = corpus.blocks.get(qualified_id)
+    # The SAME literal `_guard_section_citations_ready` tests (`regime ==
+    # "none"`); `paper_vocabulary` exposes the regime TUPLE, never a
+    # per-regime constant, so matching the sibling gate verbatim is what
+    # keeps the two from drifting.
+    if record is not None and record.citations != "none":
+        status = paper_guidance.section_citation_status(guidance_dir, record.section)
+        if not status["exists"]:
+            blockers.append({
+                "code": "CITATION_FOLDER_ABSENT",
+                "detail": f"guidance/{record.section}/ does not exist yet",
+            })
+        elif status["pending_pdfs"]:
+            blockers.append({
+                "code": "CITATION_NOT_INGESTED",
+                "detail": f"guidance/{record.section}/ still holds un-ingested "
+                          f"PDF(s) {status['pending_pdfs']}",
+            })
+        elif status["classification"] == "unclassified":
+            blockers.append({
+                "code": "CITATION_FOLDER_UNCLASSIFIED",
+                "detail": f"guidance/{record.section}/ carries no "
+                          ".paper-writing.json marker",
+            })
+
+    return {"state": "blocked" if blockers else "clear", "blockers": blockers}
+
+
+def compute_phases(
+    paper_dir: Path, sections_dir: Path, *, phase: int | None = None,
+    guidance_dir: Path | None = None,
+) -> dict:
     """`phases`: the read-only "what can I write now" report `readiness`
     alone never answered -- `compute_readiness` had exactly one caller
     (`cmd_readiness`) before this unit (design.md D3). Takes `paper_dir`/
@@ -1946,9 +2017,11 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
     The Phase Plan Before Writing Starts`; unit 9 wires this report into
     `SKILL.md`'s own approval prose).
     """
-    corpus = paper_graph.assemble_corpus(sections_dir)
+    corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir)
     edge_set = paper_graph.collect_edges(corpus)
     waves = paper_graph.derive_waves(corpus, edge_set)
+    if guidance_dir is None:
+        guidance_dir = paper_guidance.resolve_guidance_dir(None)
 
     tex_path = paper_block.resolve_main_tex(paper_dir)
     main_tex_bytes = tex_path.read_bytes()
@@ -2009,6 +2082,7 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
                     "optional": readiness_by_block[qualified_id]["optional"],
                     "opened": qualified_id in opened_blocks,
                     "provenance": provenance_by_block.get(qualified_id),
+                    "write_gates": _write_gate_state(corpus, guidance_dir, qualified_id),
                 }
                 for qualified_id in wave
             ],
@@ -2027,7 +2101,10 @@ def compute_phases(paper_dir: Path, sections_dir: Path, *, phase: int | None = N
 def cmd_phases(args: argparse.Namespace) -> dict:
     paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
-    return compute_phases(paper_dir, sections_dir, phase=args.phase)
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    return compute_phases(
+        paper_dir, sections_dir, phase=args.phase, guidance_dir=guidance_dir,
+    )
 
 
 def _resolve_repo_path(raw: str) -> Path:
@@ -2819,6 +2896,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_phases.add_argument(
         "--sections", default=None,
         help="override sections/ location; must resolve inside the repository root",
+    )
+    p_phases.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
     )
     p_phases.add_argument(
         "--phase", type=int, default=None,
