@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Native Claude Code host for the proposal-deliberation engine.
+// Native Claude Code host for the deliberation engine.
 //
 // Ambient-model paradigm (design `sdd/proposal-deliberation-ambient-model`): this host
 // is keyless. It builds the extension, registers `proposal_deliberation_execute`, and

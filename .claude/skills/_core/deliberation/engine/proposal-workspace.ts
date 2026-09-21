@@ -5210,7 +5210,7 @@ export function createProposalWorkspaceTool(
 					"Pass the active operation_id and one-time operationAuthorization unchanged. Never request append, derive, derive_revision, authorize_overwrite, a route mismatch, an undeclared patch, a second attempt, tests, maintenance, or infrastructure mutation.",
 				]
 			: [
-					"Use proposal_workspace exclusively for proposal-deliberation filesystem access; if it blocks or is unavailable, stop and report the failure.",
+					"Use proposal_workspace exclusively for this domain's filesystem access; if it blocks or is unavailable, stop and report the failure.",
 					`Use proposal_workspace read/managed_target with the exact generated filename to resume or migrate an existing marker-owned draft; never use it for bases or manual ${PROPOSAL_DIRECTORY}.`,
 					`When a latest managed proposal exists, use derive_successor with its exact terminal-${REVISION_PLACEHOLDER} filename, complete-file SHA-256, and only disjoint researcher-authorized exact replace or narrowly anchored insert patches. Root ${artifact.stem}-${FIRST_REVISION_LABEL}.md advances only with slug ${SECOND_REVISION_LABEL}; explicit lineages retain the greater same-lineage terminal-${REVISION_PLACEHOLDER} rule, and root/explicit transitions are forbidden.`,
 					`Use legacy derive only for initial fixed-base creation or backward-compatible flows: ${DOMAIN.deriveBase}, a new slug ending -${REVISION_PLACEHOLDER}, and bounded additive insertions anchored to exact unique base text or anchor={equationLabel} / anchor={numberedTag} with position=after.`,
@@ -5432,7 +5432,7 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
  * is the resolved regular file to read.
  *
  * TWO shapes, nested first and flat second. The nested shape is what the legacy single
- * guide was -- one directory per ingested paper -- and `proposal-deliberation` still
+ * guide was -- one directory per ingested paper -- and the mathematical domain still
  * depends on it. It is NOT what a managed revision is: a managed revision is a flat file
  * named `<stem>-<lineage>-<label>.md` sitting directly in its own directory. So a domain
  * that declares another skill's managed directory as a source (a downstream document

@@ -117,10 +117,35 @@ test('every declared name really is that domain speaking', () => {
 	}
 });
 
+/** A provenance citation -- `sdd/<change-name>` -- naming the change a piece of
+ * the engine came out of.
+ *
+ * These are NOT the engine knowing which domain it serves, which is the one
+ * thing the lock below exists to catch. They are references to real recorded
+ * changes, and a change's name is fixed the day it is recorded: rewording the
+ * citation does not rename the change, it only makes the citation point at
+ * nothing. Sixteen of them are in the engine today, all three distinct names
+ * belonging to changes that shaped it while it still lived inside one skill.
+ *
+ * Structural rather than a list of the three, so a citation written tomorrow is
+ * exempt for the same reason and nobody has to remember to widen anything.
+ *
+ * What this does NOT defend against: someone spelling a domain name and dressing
+ * it as `sdd/...` to get past the lock. That is a deliberate evasion, and this
+ * repository already states that standard for its own seal -- a check like this
+ * defends against an unaware edit, never a determined one. The exemption is
+ * narrow on purpose: it removes the citation's own text from the scan and
+ * nothing else on the line.
+ */
+function withoutProvenanceCitations(source) {
+	return source.replace(/sdd\/[A-Za-z0-9._-]+/g, 'sdd/<cited-change>');
+}
+
 test('no file in the shared core names any domain', () => {
 	assert.ok(coreSources.length > 40, `expected the whole engine, scanned ${coreSources.length}`);
 	const leaks = [];
-	for (const [rel, source] of coreSources) {
+	for (const [rel, rawSource] of coreSources) {
+		const source = withoutProvenanceCitations(rawSource);
 		const lower = source.toLowerCase();
 		for (const profile of profiles) {
 			for (const value of profile.declared) if (source.includes(value)) leaks.push(`${rel} spells ${JSON.stringify(value)} (${profile.skillName})`);
@@ -133,6 +158,21 @@ test('no file in the shared core names any domain', () => {
 		}
 	}
 	assert.deepEqual([...new Set(leaks)], [], 'the core must read these off the host-chosen profile, never spell them');
+});
+
+test('the provenance exemption removes citations and nothing else', () => {
+	// Red-first: without both halves asserted, the exemption could be a blanket
+	// that silences the whole lock and nothing would say so. The first half proves
+	// it exempts; the second proves it still fires on the same name spelled
+	// outside a citation, on the SAME line as one.
+	const line = 'const x = 1; // (design `sdd/proposal-deliberation-ambient-model`) for proposal-deliberation';
+	const cleaned = withoutProvenanceCitations(line);
+	assert.ok(!cleaned.includes('sdd/proposal-deliberation-ambient-model'),
+		'the citation itself must leave the scanned text');
+	assert.ok(cleaned.includes('for proposal-deliberation'),
+		'a domain named outside a citation must survive the exemption and still be caught');
+	assert.ok(coreSources.some(([, source]) => /sdd\/[A-Za-z0-9._-]+/.test(source)),
+		'no citation found in the engine at all -- this exemption would be guarding nothing');
 });
 
 test('every profile declares its artifact namespace values (directory, stem, sidecarRoot)', () => {
@@ -279,7 +319,17 @@ const EQUATION_RESIDUE = { substringCount: 124, files: ['cleanup-planner.ts', 'd
 // literal carried one `proposal` (its own marker bytes), so the count shrank by one.
 // Recorded rather than absorbed, in either direction: an unexplained move looks
 // exactly like a rename campaign from outside.
-const PROPOSAL_RESIDUE = { wordBoundaryCount: 191, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'chat-draft-registry.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'preservation.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
+// 191 -> 177: fourteen comments in the engine named a domain outright -- the engine
+// calling itself "the <domain> engine", and its own contract documented by pointing
+// at one sibling's module by directory. Both are the coupling the core-scan lock
+// exists to catch, and the second was bad documentation besides: naming ONE consumer
+// in a neutral engine's docstring implies that consumer is special, when there are
+// two today and could be five. Reworded to what they actually mean ("the deliberation
+// engine", "the host-chosen profile's own preservation module"), which is shorter,
+// truer, and does not age when a third skill arrives. The remaining residue is the
+// engine's own subject noun -- a proposal IS what it deliberates over -- plus six
+// live identifiers migrating separately.
+const PROPOSAL_RESIDUE = { wordBoundaryCount: 177, files: ['_pi-compat/pi-coding-agent.ts', 'ambient-supplied-planner.ts', 'artifact-naming.ts', 'chat-deliberation.ts', 'chat-draft-registry.ts', 'cli.mjs', 'conceptual-planner.ts', 'consistency-audit.ts', 'domain-profile.ts', 'draft-materialization.ts', 'edit-planner.ts', 'exports.ts', 'initial-revision-creation.ts', 'orchestrator.ts', 'patch-compiler.ts', 'proposal-workspace-adapter.ts', 'proposal-workspace.ts', 'reference-index.ts', 'revision-lifecycle-store.ts', 'runtime-metrics.ts', 'smoke-runner.ts', 'successor-acceptance-registry.ts', 'types.ts'] };
 
 test('C-3 vacuity guard: the denylist is non-empty, or this check would be vacuous', () => {
 	const denylist = buildDenylist(profiles);

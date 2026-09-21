@@ -7,7 +7,7 @@ import type { PreservationAtom, PreservationDelta, PreservationViolation } from 
  * domain-neutral now, sourcing its atom extractor and rule set from
  * `profile.preservation.{extractAtoms, violations}` instead of hardcoding one
  * domain's own subject. The mathematical implementation ships as
- * `proposal-deliberation/preservation-math.ts`, wired through that profile.
+ * `the host-chosen profile's own preservation module`, wired through that profile.
  *
  * The engine's other validators check *internal consistency* -- that labels are
  * unique, that references target existing entries, that symbols do not conflict.

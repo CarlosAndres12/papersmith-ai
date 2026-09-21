@@ -8,7 +8,7 @@ import { DOMAIN } from './domain-profile.js';
  * (the profile the host chose) exactly once here, and every other core file
  * imports the builders and matchers below instead of writing its own regex or
  * template literal. `DOMAIN.artifact.stem`/`sidecarRoot` themselves are never
- * re-spelled: `tests/proposal-deliberation-domain-profile-lock.test.mjs`'s
+ * re-spelled: `the core-scan lock (`no file in the shared core names any domain`)`'s
  * core-only scan reads this file too and holds it to the same rule.
  *
  * Five distinct matcher semantics survive here under five distinct names
