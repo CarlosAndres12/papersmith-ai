@@ -1261,6 +1261,16 @@ if any block reaches `written` with `downgraded > 0`, or with `subjects > 0`
 and `decided == 0`, this no-ratio-threshold ruling is wrong and a blocking
 rule over these counts must be added.
 
+That falsifier cannot be run today — no real `document`-rooted binding exists
+on disk anywhere, which is precisely why no number was picked — so the
+obligation is carried by a tripwire rather than by this paragraph.
+`GroundingThresholdObligationTests` (`tests/test_paper_writing.py`) reads the
+recorded bindings and passes only while there are none. The day `bind` records
+one for real it goes red and names what is then owed: accumulate the runs, and
+either discharge the ruling with measured counts or replace it with the
+blocking rule it asks for. A document cannot notice its own precondition
+changing; a test can.
+
 An `evidence:`-bound sentence and a `structural` sentence are never subjects
 — held by their own separately shipped mechanisms — and neither is any
 sentence in an `argument`-mode block, the same `contract.mode` derivation
