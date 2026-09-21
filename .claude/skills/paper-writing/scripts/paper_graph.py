@@ -230,7 +230,7 @@ def _reconcile_source_bindings(
 
 def assemble_corpus(
     sections_dir: Path, *, source_base: Path | None = None, paper_dir: Path | None = None,
-    enforce_bindings: bool = False,
+    enforce_bindings: bool = False, enforce_for_block: str | None = None,
 ) -> Corpus:
     """Parse every `*.md` under `sections_dir`, sorted by filename for
     reproducibility only. Refuses `ID_COLLISION` (work-state) when a raw
@@ -268,11 +268,30 @@ def assemble_corpus(
     `False` (default) — a bindable, measured, unbound entry is reported
     in `Corpus.undecided_bindings`, never raised; every read-only verb
     keeps working on a corpus that still carries an undecided binding.
-    `True` — the SAME condition raises `SECTION_BINDING_ABSENT`. Only
-    `paper_cli._resolve_write_gate` (`write`'s own first statement) ever
-    passes `True`: drafting a block without knowing which section feeds
-    it is the one moment an undecided binding would otherwise force an
-    invented answer, so only that moment refuses.
+    `True` — the SAME condition can raise `SECTION_BINDING_ABSENT`, scoped
+    by `enforce_for_block` below. Only `paper_cli._resolve_write_gate`
+    (`write`'s own first statement) ever passes `True`: drafting a block
+    without knowing which section feeds it is the one moment an undecided
+    binding would otherwise force an invented answer, so only that moment
+    refuses.
+
+    `enforce_for_block` (U4 correctness repair, design.md: "the block this
+    `write` call names, nothing else"): the qualified id `write` is
+    actually about to draft. `None` (default) — every existing direct
+    caller of `enforce_bindings=True` — raises on the FIRST entry
+    `Corpus.undecided_bindings` names, corpus-wide, unchanged from before
+    this parameter existed. A qualified id — `_resolve_write_gate`'s own
+    call — raises ONLY if THAT block's own entry survives in
+    `Corpus.undecided_bindings`; a sibling block's undecided binding stays
+    a report, never a refusal for a block that never named it. This is
+    the same argument `source-section-binding`'s own rationale already
+    makes per block ("drafting a block without knowing which section
+    feeds it is the one moment an undecided binding would otherwise force
+    an invented answer"): that argument reaches the block being drafted,
+    never its siblings — a block requiring no bindable fact at all cannot
+    invent an answer for one, so it must not be gated on a sibling's
+    unresolved binding. This does NOT consult `BlockRecord.optional`: an
+    optional block that IS the one being written is still gated in full.
 
     `paper_dir` (U3e ruling, `the-requirement-names-the-section-that-
     feeds-it`, design.md Decision J): where `paper_declarations.
@@ -348,7 +367,9 @@ def assemble_corpus(
     _verify_requirement_transcription(corpus, bodies)
     _verify_internal_chain(corpus, bodies)
     _verify_block_subunits(corpus, section_bodies)
-    _verify_source_section_bindings(corpus, enforce_bindings=enforce_bindings)
+    _verify_source_section_bindings(
+        corpus, enforce_bindings=enforce_bindings, enforce_for_block=enforce_for_block,
+    )
     declarations = _produces_facts_declarations(corpus)
     _verify_route_exclusivity(declarations)
     _verify_producer_duplication(declarations)
@@ -439,7 +460,9 @@ def resolve_section_index(source_roots: dict, root, lineage: str) -> tuple:
     return revision_path, counts, outline
 
 
-def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = False) -> None:
+def _verify_source_section_bindings(
+    corpus: Corpus, *, enforce_bindings: bool = False, enforce_for_block: str | None = None,
+) -> None:
     """`source-section-binding` spec — every check a `document`-bound
     `requires_facts` entry (`BlockRecord.source_bindings`) is held to,
     against real disk. Inert for every entry with no `document` half (U1),
@@ -481,21 +504,41 @@ def _verify_source_section_bindings(corpus: Corpus, *, enforce_bindings: bool = 
        this function, before `Corpus` even exists). `enforce_bindings=False`
        (every read-only verb's own default) leaves that report as a
        report: this step raises NOTHING for it. `enforce_bindings=True`
-       (`write`'s own gate, and ONLY `write`'s) turns the first entry
-       `Corpus.undecided_bindings` names, in the SAME block order the old
-       unconditional obligation loop used, into `SECTION_BINDING_ABSENT`
-       naming the owning block and the fact id — the obligation is still
-       UNCONDITIONAL at `write` and still never consults
-       `BlockRecord.optional`, it is merely no longer unconditional at
-       every OTHER verb too.
+       (`write`'s own gate, and ONLY `write`'s) can turn a surviving entry
+       into `SECTION_BINDING_ABSENT`, naming the owning block and the fact
+       id — SCOPED by `enforce_for_block` (U4 correctness repair): `None`
+       raises on the first entry `Corpus.undecided_bindings` names, in the
+       SAME block order the old unconditional obligation loop used,
+       corpus-wide — the shape every existing direct `enforce_bindings=True`
+       caller still gets. A qualified id (`_resolve_write_gate`'s own
+       call) raises ONLY when THAT block's own entry survives; a sibling
+       block's undecided binding is left standing in the report, never
+       raised for a block that does not name it — the per-block rationale
+       above ("drafting a block without knowing which section feeds it is
+       the one moment an undecided binding would otherwise force an
+       invented answer") only ever reached the block being drafted, never
+       its 46 siblings, and a block with no bindable fact at all cannot
+       invent an answer for one. Either way the obligation stays
+       UNCONDITIONAL for the block actually being enforced against, and
+       still never consults `BlockRecord.optional`: an optional block that
+       IS the one being written is still gated in full.
     """
     if enforce_bindings:
-        for qualified_id, facts in corpus.undecided_bindings.items():
-            fact_id, info = next(iter(facts.items()))
-            raise Refused(
-                "SECTION_BINDING_ABSENT",
-                _describe_binding_absent(corpus, qualified_id, fact_id, info),
-            )
+        if enforce_for_block is not None:
+            facts = corpus.undecided_bindings.get(enforce_for_block)
+            if facts:
+                fact_id, info = next(iter(facts.items()))
+                raise Refused(
+                    "SECTION_BINDING_ABSENT",
+                    _describe_binding_absent(corpus, enforce_for_block, fact_id, info),
+                )
+        else:
+            for qualified_id, facts in corpus.undecided_bindings.items():
+                fact_id, info = next(iter(facts.items()))
+                raise Refused(
+                    "SECTION_BINDING_ABSENT",
+                    _describe_binding_absent(corpus, qualified_id, fact_id, info),
+                )
 
     memo: dict = {}
     for qualified_id, record in corpus.blocks.items():

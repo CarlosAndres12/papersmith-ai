@@ -2685,7 +2685,9 @@ class SourceSectionBindingCorpusTests(unittest.TestCase):
         self,
     ) -> None:
         proc = _run_against_mutant(
-            "    _verify_source_section_bindings(corpus, enforce_bindings=enforce_bindings)\n",
+            "    _verify_source_section_bindings(\n"
+            "        corpus, enforce_bindings=enforce_bindings, enforce_for_block=enforce_for_block,\n"
+            "    )\n",
             "",
             "tests.test_paper_writing.SourceSectionBindingCorpusTests"
             ".test_an_absent_title_refuses_section_not_in_source",
@@ -4928,6 +4930,58 @@ class SkillMdModeCountAccuracyTests(unittest.TestCase):
             f"the corpus it describes.",
         )
 
+    def test_no_documented_section_value_is_a_contract_filename_stem(self) -> None:
+        """`--section` names the section id a contract DECLARES in its own
+        header, never the `sections/*.md` filename stem. Both are plausible
+        to a reader and only one resolves: `paper_contract.resolve_section_
+        file` matches `header.section`, so a stem refuses `SECTION_UNKNOWN`.
+
+        This guard exists because the drift already shipped and survived: the
+        resolver was fixed while SIX user-facing sites kept documenting the
+        stem -- two worked examples in `SKILL.md` and three `--help` strings
+        -- so an operator hitting `SECTION_UNKNOWN` and consulting `--help`
+        was handed the wrong answer again. A grep found those six; a grep is
+        a list, and a list ages the day someone writes the seventh
+        (`MANTENIMIENTO-siete-formas-de-fallar-en-verde.md`, 6: the fix is
+        not touching the N sites, it is having something DERIVED find them).
+
+        Both sides are derived, nothing hand-listed: the forbidden spellings
+        are the real filename stems read off `sections/`, and the haystack is
+        the live `SKILL.md` plus the live `--help` strings pulled out of the
+        built parser. Renaming a contract file moves this guard with it.
+        """
+        stems = {path.stem for path in sorted(SECTIONS_DIR.glob("*.md"))}
+        self.assertTrue(stems, "no shipped contracts found to derive stems from")
+
+        surfaces = {"SKILL.md": self.SKILL_MD.read_text(encoding="utf-8")}
+        parser = paper_cli.build_parser()
+        for action in parser._actions:
+            if not isinstance(action, argparse._SubParsersAction):
+                continue
+            for verb, subparser in action.choices.items():
+                for option in subparser._actions:
+                    if "--section" in option.option_strings and option.help:
+                        surfaces[f"{verb} --section help"] = option.help
+
+        for where, text in sorted(surfaces.items()):
+            for stem in sorted(stems):
+                self.assertNotIn(
+                    f"--section {stem}", text,
+                    f"{where} documents `--section {stem}`, a contract "
+                    f"FILENAME stem; `--section` takes the declared section "
+                    f"id and a stem refuses SECTION_UNKNOWN",
+                )
+            self.assertNotIn(
+                "--section <stem>", text,
+                f"{where} calls `--section` a stem; it is the declared "
+                f"section id",
+            )
+            self.assertNotIn(
+                "sections/<id>.md stem", text,
+                f"{where} describes `--section` as a filename stem; it is "
+                f"the section id the contract's own header declares",
+            )
+
 
 _SAMPLE_DISQUALIFIER = "A symbol used without being declared."
 
@@ -5033,6 +5087,71 @@ class ContractAuditTests(unittest.TestCase):
         with self.assertRaises(Refused) as ctx:
             paper_audit.reconcile_verdicts([_SAMPLE_DISQUALIFIER], [], "draft")
         self.assertEqual(ctx.exception.code, "VERDICT_MISSING")
+
+    def test_a_wrapped_bullet_is_joined_with_one_space(self) -> None:
+        body = (
+            "# Demo Contract\n\n## Disqualifiers\n"
+            "- An equation displayed and numbered that no sentence ever references, defines no\n"
+            "  contribution, and is not the general combination.\n"
+        )
+        bullets = paper_audit.extract_disqualifiers(body)
+        self.assertEqual(
+            bullets,
+            [
+                "An equation displayed and numbered that no sentence ever references, defines no "
+                "contribution, and is not the general combination."
+            ],
+        )
+
+    def test_a_nested_bullet_stays_its_own_bullet(self) -> None:
+        body = (
+            "# Demo Contract\n\n## Disqualifiers\n"
+            "- A top-level bullet.\n"
+            "  - A nested bullet indented under it.\n"
+        )
+        bullets = paper_audit.extract_disqualifiers(body)
+        self.assertEqual(
+            bullets, ["A top-level bullet.", "A nested bullet indented under it."]
+        )
+
+    def test_all_shipped_disqualifier_bullets_are_extracted_whole(self) -> None:
+        """Two properties, both derived from each contract's own bytes --
+        never a frozen count. A count would go red the day someone adds or
+        removes a disqualifier, which breaks nothing in production and is
+        exactly the "test that ratifies a decision instead of verifying a
+        property" pattern `MANTENIMIENTO-siete-formas-de-fallar-en-verde.md`
+        (7) names. These two stay true at 178 bullets, at 179, or at 200,
+        and still redden if the reader ever truncates, merges or splits one.
+
+        1. Every bullet arrives WHOLE. A wrapped bullet cut at its line
+           break loses its ending, and each shipped bullet is a sentence, so
+           a bullet not ending in `.` is a bullet the reader truncated.
+        2. Per contract, the number of bullets extracted equals the number
+           of `- ` lines under that contract's own `## Disqualifiers`
+           heading -- derived by counting them here, so a reader that
+           swallowed one into another (or split one in two) fails even
+           though every surviving bullet still ends in `.`.
+        """
+        for path in sorted(SECTIONS_DIR.glob("*.md")):
+            _header, body = paper_contract.parse(path.read_bytes())
+            text = body.decode("utf-8")
+            bullets = paper_audit.extract_disqualifiers(text, source_name=path.name)
+            for bullet in bullets:
+                self.assertTrue(bullet.endswith("."), f"{path.name}: {bullet!r}")
+
+            lines = text.splitlines()
+            start = next(
+                index for index, line in enumerate(lines)
+                if line.strip() == "## Disqualifiers"
+            )
+            markers = 0
+            for line in lines[start + 1:]:
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    break
+                if stripped.startswith("- ") or stripped.startswith("* "):
+                    markers += 1
+            self.assertEqual(len(bullets), markers, path.name)
 
 
 def _write_contract(
@@ -9560,6 +9679,132 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
         self._assert_refuses_before_drafting("SOURCE_REVISIONS_UNDECLARED")
 
 
+class SourceSectionBindingWriteGateScopeTests(unittest.TestCase):
+    """U4 correctness repair (gate-fix-design.md, measured 2026-09-21
+    against `introduction.block-6`): `SECTION_BINDING_ABSENT` is scoped to
+    the block `write` actually names, never the whole corpus. The old
+    corpus-wide raise (`_verify_source_section_bindings`, U3) refused
+    writing ANY block whenever ANY other block anywhere in the corpus
+    carried an undecided binding -- including a block that will never be
+    written at all. A block requiring no bindable fact (`skeleton`, a
+    `paper_declarations.STRUCTURAL_FACTS` entry -- never a key of
+    `FACT_SOURCE_ROOT`) can never invent an answer for one, so it must
+    never be gated on an unrelated SIBLING's own undecided binding; a
+    block whose OWN bindable fact is unbound must still refuse in full --
+    the scope narrows WHICH block can raise, never removes the obligation
+    for the block actually being written.
+    """
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-binding-scope-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+
+        # `a.structural` requires ONLY `skeleton` -- STRUCTURAL, never a
+        # key of `FACT_SOURCE_ROOT`, so it can never carry a binding at
+        # all and can never appear in `Corpus.undecided_bindings`.
+        self._write_section(
+            "01-a.md", "a", "structural",
+            {
+                "value": "skeleton",
+                "source": {"file": "sections/01-a.md", "quote": "The skeleton, written here."},
+            },
+        )
+        # `b.bound`, a SIBLING in a DIFFERENT section: its own `formulation`
+        # fact is bindable and its root (`proposals`) is measured below,
+        # but it carries no `document` half -- exactly the entry the OLD
+        # corpus-wide gate would raise `SECTION_BINDING_ABSENT` for on
+        # behalf of ANY block written, `a.structural` included.
+        self._write_section(
+            "02-b.md", "b", "bound",
+            {
+                "value": "formulation",
+                "source": {"file": "sections/02-b.md", "quote": "The formulation, written here."},
+            },
+        )
+
+        proposals = self.test_root / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+    def _write_section(self, filename: str, section: str, block_id: str, fact_entry: dict) -> None:
+        blocks = [{
+            "id": block_id, "requires_facts": [fact_entry],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / filename).write_text(
+            "---\n" + json.dumps({"section": section, "position": 1, "blocks": blocks})
+            + "\n---\n\n" + fact_entry["source"]["quote"] + "\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+
+    def _args(self, section: str, block: str) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section=section, block=block,
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
+        )
+
+    def test_a_block_with_no_bindable_fact_is_not_gated_on_a_siblings_undecided_binding(
+        self,
+    ) -> None:
+        """The regression under repair, reproducing the measured
+        `introduction.block-6` defect: `a.structural` requires only
+        `skeleton`, which can never carry a binding, so it must proceed
+        past the binding gate even though `b.bound`'s own `formulation`
+        fact sits measured and unbound in the SAME corpus. `--draft`/
+        `--audit` name files that are never created, so the next failure
+        past the gate is that bare, downstream open (`FileNotFoundError`)
+        or an unrelated `Refused` -- never `SECTION_BINDING_ABSENT`."""
+        with self.assertRaises((Refused, FileNotFoundError)) as ctx:
+            paper_cli.cmd_write(self._args("a", "structural"))
+        if isinstance(ctx.exception, Refused):
+            self.assertNotEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+
+    def test_a_block_with_its_own_unbound_fact_still_refuses_section_binding_absent(
+        self,
+    ) -> None:
+        """The scope narrows WHICH block can raise, never removes the
+        obligation for the block actually being written: `b.bound` names
+        its OWN unbound `formulation` fact and must still refuse in full,
+        with the detail naming `b.bound` itself."""
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args("b", "bound"))
+        self.assertEqual(ctx.exception.code, "SECTION_BINDING_ABSENT")
+        self.assertIn("b.bound", ctx.exception.detail)
+        self.assertIn("formulation", ctx.exception.detail)
+
+    def test_undecided_bindings_still_reports_the_sibling_even_when_the_gate_did_not_raise(
+        self,
+    ) -> None:
+        """`Corpus.undecided_bindings` is a corpus-wide REPORT
+        (`_compute_undecided_bindings`, untouched by this repair); scoping
+        the RAISE to the block actually being written must never shrink
+        it -- `b.bound`'s entry survives even when `enforce_for_block`
+        names the unrelated `a.structural` and the gate raises nothing."""
+        corpus = paper_graph.assemble_corpus(
+            self.sections_dir, paper_dir=self.paper_dir,
+            enforce_bindings=True, enforce_for_block="a.structural",
+        )  # raises nothing -- "a.structural" carries no undecided entry
+        self.assertEqual(
+            corpus.undecided_bindings["b.bound"]["formulation"]["state"], "undecided",
+        )
+        self.assertEqual(corpus.undecided_bindings["b.bound"]["formulation"]["root"], "proposals")
+
+
 class SourceRevisionsUndeclaredByteIdentityTests(unittest.TestCase):
     """`source-section-binding` spec, `Requirement: A Document-Rooted
     Source With No Marker Refuses`, scenario `Both raise sites produce
@@ -9862,11 +10107,12 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
         candidates`, proving that test load-bearing on the improved
         message, not merely on the refusal code."""
         proc = _run_against_mutant(
-            '                _describe_binding_absent(corpus, qualified_id, fact_id, info),\n'
-            '            )',
-            "                f\"{qualified_id}: {fact_id!r} is bindable and its source root \"\n"
-            "                f\"{info['root']!r} is measured, but carries no 'document' binding\",\n"
-            "            )",
+            '                    _describe_binding_absent(corpus, enforce_for_block, fact_id, info),\n'
+            '                )',
+            "                    f\"{enforce_for_block}: {fact_id!r} is bindable and its source \"\n"
+            "                    f\"root {info['root']!r} is measured, but carries no 'document' \"\n"
+            "                    \"binding\",\n"
+            "                )",
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_section_binding_absent_names_the_block_fact_root_and_candidates",
             source_path=SKILL_SCRIPTS / "paper_graph.py",
