@@ -11,11 +11,19 @@ import { declares, cites } from "./reference-math.js";
  * nothing to do with.
  */
 export const profile: DeliberationDomainProfile = {
-	deriveBase: "matematica_propuesta_CREDA.md",
-	baseLabel: "fixed CREDA base",
-	baseLabelLong: "fixed CREDA proposal base",
-	exampleSlug: "subject-bag-creda-integrated-r06",
-	names: ["CREDA"],
+	deriveBase: "mathematical_proposal_base.md",
+	baseLabel: "fixed proposal base",
+	baseLabelLong: "fixed mathematical proposal base",
+	// An invented example, never a real revision of a real project -- the same
+	// shape `experimental-deliberation`'s own `exampleSlug` already has.
+	exampleSlug: "kernel-aggregation-revisited-r06",
+	// This domain owns no proper noun -- it is a general layer, and naming one
+	// research project here is the exact coupling the profile mechanism removes.
+	// The one word it names ITSELF by is its own namespace, which no file under
+	// `_core/` spells, so the core-scan lock stays meaningful rather than vacuous.
+	// Verbatim the reasoning its sibling already carries; the two are now
+	// symmetric, and neither knows which paper it is serving.
+	names: ["proposal-deliberation"],
 	// These documents number with `\tag{N}` and cite as `(Ec. N)`; they do not
 	// use `\label`/`\eqref`, so this is the only citation form that resolves.
 	proseReferencePattern: "\\((?:Ec|Eq)\\.\\s*([0-9]+[a-z]?)\\)",
