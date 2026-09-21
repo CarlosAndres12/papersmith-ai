@@ -552,6 +552,19 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # (`paper_leak.check_source_section_verbatim`, wired into `write_block`
     # after the style tripwire and before `substitute`) ------------------
     "SOURCE_SECTION_VERBATIM": WORK_STATE,
+    # --- the-block-asserts-only-what-its-section-carries: a fourth sibling
+    # in `write_block`'s judge chain, `paper_grounding.reconcile_support`
+    # (wired after the verbatim check above and before `substitute`) --
+    # per-sentence support reconciliation against a bound section's own
+    # bytes. Every subject sentence must have a grounded `supported`
+    # verdict to reach `substitute`; the permissive verdict carries the
+    # burden of proof (design.md D1), which is why an absent account and a
+    # missing verdict are both WORK_STATE, never merely an invocation flag
+    # ----------------------------------------------------------------------
+    "GROUNDING_ACCOUNT_ABSENT": WORK_STATE,
+    "GROUNDING_SENTENCE_UNKNOWN": WORK_STATE,
+    "GROUNDING_VERDICT_MISSING": WORK_STATE,
+    "SECTION_UNSUPPORTED_CLAIM": WORK_STATE,
 }
 
 
@@ -2369,6 +2382,16 @@ def cmd_write(args: argparse.Namespace) -> dict:
     draft = json.loads(draft_path.read_text(encoding="utf-8"))
     audit_account = json.loads(audit_path.read_text(encoding="utf-8"))
 
+    # `the-block-asserts-only-what-its-section-carries`, design.md D7:
+    # `--grounding` stays `default=None` -- requiring it would break every
+    # `argument`-mode and non-transposition invocation. `grounding_account`
+    # stays `None` when omitted; `GROUNDING_ACCOUNT_ABSENT` is `paper_
+    # grounding`'s own to raise, never a flag check here.
+    grounding_account = None
+    if args.grounding:
+        grounding_path = _resolve_repo_path(args.grounding)
+        grounding_account = json.loads(grounding_path.read_text(encoding="utf-8"))
+
     mode_obj = paper_contract.resolve_mode(header, block)
     mode = mode_obj["value"] if mode_obj is not None else None
 
@@ -2393,7 +2416,9 @@ def cmd_write(args: argparse.Namespace) -> dict:
         style_set=style_set,
         source_sections=paper_source_span.resolve_bound_sections(corpus, qualified_id),
     )
-    return paper_write.write_block(paper_dir, contract, draft, audit_account)
+    return paper_write.write_block(
+        paper_dir, contract, draft, audit_account, grounding_account=grounding_account,
+    )
 
 
 def cmd_render(args: argparse.Namespace) -> dict:
@@ -3148,6 +3173,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_write.add_argument(
         "--transcript", default=None,
         help="path to a recorded agent transcript; containment-checked, never parsed for judgment",
+    )
+    p_write.add_argument(
+        "--grounding", default=None,
+        help="path to the section-grounding-auditor's JSON envelope: "
+             "{support: [{sentence, fact, verdict, span}, ...]}; must resolve inside the "
+             "repository root",
     )
 
     p_render = sub.add_parser(

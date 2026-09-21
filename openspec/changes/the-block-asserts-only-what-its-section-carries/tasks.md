@@ -256,7 +256,7 @@ The Verbatim Check And Before Substitution", and the `decided == 0` half of
 Satisfies design.md D9 (`tests/test_agents.py`'s shipped gates), D7 (the
 absent-account/CLI boundary), and §1's roster-registration table.
 
-- [ ] 2.1 Create `.claude/agents/section-grounding-auditor.md`, shaped on
+- [x] 2.1 Create `.claude/agents/section-grounding-auditor.md`, shaped on
       `.claude/agents/contract-auditor.md`'s own `stretch: write` precedent.
       Must carry verbatim: `name: section-grounding-auditor` matching its
       filename stem (`tests/test_agents.py:316`); non-empty `tools:`
@@ -271,47 +271,47 @@ absent-account/CLI boundary), and §1's roster-registration table.
       `contract-auditor.md`'s equivalent prose to per-sentence support
       judgment (`supported`/`unsupported`/`undecidable`, quoted `span` on
       `supported`) rather than per-bullet disqualifiers.
-- [ ] 2.2 Add the literal phrase `` delegates to the
+- [x] 2.2 Add the literal phrase `` delegates to the
       `section-grounding-auditor` agent `` to
       `.claude/skills/paper-writing/SKILL.md`
       (`tests/test_agents.py:345-351,360-370` — an agent missing this is an
       orphan and the suite reddens). Confirm the existing `Measure this
       before delegating` line (`SKILL.md:1046`) covers `:415-432`'s
       obligation, or add the equivalent for this delegation.
-- [ ] 2.3 Add `--grounding` to `p_write` in `paper_cli.py` (near `:3006-3009`'s
+- [x] 2.3 Add `--grounding` to `p_write` in `paper_cli.py` (near `:3006-3009`'s
       `--style`, same `default=None` shape — D7: required would break every
       `argument`-mode and non-transposition fixture): help text names the
       account envelope `{support: [{sentence, fact, verdict, span}, ...]}`
       and that it must resolve inside the repository root.
-- [ ] 2.4 Wire `cmd_write` (`:2230-2262`): resolve `--grounding` through
+- [x] 2.4 Wire `cmd_write` (`:2230-2262`): resolve `--grounding` through
       `_resolve_repo_path` when supplied (reusing `PAPER_OUTSIDE_REPOSITORY`,
       never a second code — D7), load its JSON, pass it to
       `paper_write.write_block(..., grounding_account=grounding_account)`.
       `grounding_account` stays `None` when omitted — `GROUNDING_ACCOUNT_ABSENT`
       is `paper_grounding`'s to raise, never a flag check in the CLI.
-- [ ] 2.5 Add the module-level import row to `paper_cli.py`'s registry
+- [x] 2.5 Add the module-level import row to `paper_cli.py`'s registry
       (`:75-107`, after `paper_source_span` at `:95`): `import
       paper_grounding  # noqa: E402 -- the-block-asserts-only-what-its-
       section-carries: per-sentence support reconciliation against the
       bound section's own bytes; for the roster derivation`.
-- [ ] 2.6 Add four `REFUSAL_CLASSIFICATION` entries (`:182-554`), all
+- [x] 2.6 Add four `REFUSAL_CLASSIFICATION` entries (`:182-554`), all
       `WORK_STATE`: `GROUNDING_ACCOUNT_ABSENT`, `GROUNDING_SENTENCE_UNKNOWN`,
       `GROUNDING_VERDICT_MISSING`, `SECTION_UNSUPPORTED_CLAIM`.
-- [ ] 2.7 Update `.claude/skills/paper-writing/SKILL.md` and `references/`:
+- [x] 2.7 Update `.claude/skills/paper-writing/SKILL.md` and `references/`:
       roster rows for the four codes (each naming its answer, per
       design.md §1's table), a note on the stage's position (after the
       verbatim check, before `substitute`), and D2's falsifier sentence
       verbatim — this ships in SKILL.md and the capability spec so the
       ruling stays arguable, not folklore.
-- [ ] 2.8 RED-then-GREEN: `cmd_write` reads `--grounding`, resolves it
+- [x] 2.8 RED-then-GREEN: `cmd_write` reads `--grounding`, resolves it
       through `_resolve_repo_path`, threads it to `write_block`; a path
       outside the repository root refuses `PAPER_OUTSIDE_REPOSITORY`.
-- [ ] 2.9 Confirm every `Refused(...)` first argument added in Phases 0-2 is
+- [x] 2.9 Confirm every `Refused(...)` first argument added in Phases 0-2 is
       a string literal — grep `paper_grounding.py` and the `paper_write.py`/
       `paper_cli.py` diffs for `raise Refused(exc.code`; there must be none
       (design.md §1: `_refusal_code_argument` reads only `ast.Constant`; a
       non-literal is invisible to the roster walk).
-- [ ] 2.10 Run `.venv/bin/python -m unittest tests.test_paper_writing
+- [x] 2.10 Run `.venv/bin/python -m unittest tests.test_paper_writing
       tests.test_agents`; confirm green.
 
 ## Phase 3 — WU4: Mutation proofs, neutrality sweep, roster re-measure, both suites

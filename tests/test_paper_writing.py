@@ -3228,7 +3228,7 @@ class SecondProseRootWriteGateTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_write_refuses_section_binding_absent_on_a_second_root(self) -> None:
@@ -9249,7 +9249,7 @@ class WriteGateTests(unittest.TestCase):
             section="phase-b", block="b",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten(self) -> None:
@@ -9354,7 +9354,7 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _assert_refuses_before_drafting(self, code: str) -> None:
@@ -9588,7 +9588,7 @@ class SourceRevisionsUndeclaredByteIdentityTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _bind_args(self) -> argparse.Namespace:
@@ -9690,7 +9690,7 @@ class BindCliEndToEndTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _bind_args(self, **overrides) -> argparse.Namespace:
@@ -10679,7 +10679,7 @@ class PacketWriteGateTests(unittest.TestCase):
             section="phase-a", block="a",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened(self) -> None:
@@ -10832,7 +10832,7 @@ class PacketCorpusReuseTests(unittest.TestCase):
                 section="a", block="only",
                 draft=str(self.tmp_path / "draft.json"),
                 audit=str(self.tmp_path / "audit.json"),
-                evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+                evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
             )
             with self.assertRaises(Refused) as ctx:
                 paper_cli.cmd_write(args)
@@ -10990,7 +10990,7 @@ class SourceSectionVerbatimFalsifierTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.tmp_path / "draft.json"),
             audit=str(self.tmp_path / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_the_fixture_packet_resolves_the_bound_section(self) -> None:
@@ -11090,7 +11090,7 @@ class CitationReadinessGateTests(unittest.TestCase):
             section="cited-section", block="cited",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_no_guidance_folder_at_all_refuses_citation_folder_absent(self) -> None:
@@ -12588,7 +12588,7 @@ class SeparateNeverRecordsABindingEndToEndTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _proposal_path(self, obj) -> Path:
@@ -12822,7 +12822,7 @@ class CmdWriteSourceSectionsWiringTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_cmd_write_fills_source_sections_from_the_resolved_corpus(self) -> None:
@@ -12991,7 +12991,7 @@ class MarkRevisionsCliWholeLoopTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _run(self, *args: str) -> subprocess.CompletedProcess:
@@ -13924,6 +13924,110 @@ class GroundingScopeBoundaryTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "written")
         self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
+class CmdWriteGroundingWiringTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 2, task
+    2.8: `cmd_write` reads `--grounding`, resolves it through
+    `_resolve_repo_path` when supplied, loads its JSON, and threads it to
+    `write_block(..., grounding_account=...)`. Mocks `paper_write.
+    write_block` (never `paper_source_span.resolve_bound_sections`), the
+    same shape `CmdWriteSourceSectionsWiringTests` already establishes."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-cmd-write-grounding-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nSome contract prose.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.test_root / "draft.json").write_text(
+            json.dumps({"latex": "Draft body.", "bindings": []}), encoding="utf-8",
+        )
+        (self.test_root / "audit.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+        self.grounding_payload = {
+            "support": [{"sentence": "Draft body.", "fact": "invented-fact", "verdict": "supported"}]
+        }
+        (self.test_root / "grounding.json").write_text(
+            json.dumps(self.grounding_payload), encoding="utf-8",
+        )
+
+    def _args(self, *, grounding=None) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None, grounding=grounding,
+        )
+
+    def test_cmd_write_threads_grounding_account_to_write_block(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args(grounding=str(self.test_root / "grounding.json")))
+
+        self.assertEqual(mocked_write_block.call_args.kwargs["grounding_account"], self.grounding_payload)
+
+    def test_cmd_write_omitting_grounding_passes_none(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args(grounding=None))
+
+        self.assertIsNone(mocked_write_block.call_args.kwargs["grounding_account"])
+
+    def test_a_grounding_path_outside_the_repository_refuses(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-grounding-outside-{os.getpid()}.json"
+        outside.write_text(json.dumps({"support": []}), encoding="utf-8")
+        self.addCleanup(outside.unlink, missing_ok=True)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args(grounding=str(outside)))
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+
+class RefusalConstructorLiteralArgumentTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, task 2.9
+    (design.md Sec 1): every `Refused(...)` first argument this change adds
+    is a string literal, in `paper_grounding.py` and this phase's
+    `paper_write.py`/`paper_cli.py` diffs -- a non-literal makes the site
+    `code is None` to `reachable_paper_refusal_codes`'s own static walk
+    (`_refusal_code_argument` reads only `ast.Constant`), silently widening
+    the module's whole constant set into the roster."""
+
+    def test_no_new_raise_site_re_raises_a_caught_refusals_own_code(self) -> None:
+        for path in (
+            SKILL_SCRIPTS / "paper_grounding.py",
+            SKILL_SCRIPTS / "paper_write.py",
+            CLI,
+        ):
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "raise Refused(exc.code", source,
+                f"{path.name} re-raises a caught refusal's own runtime code, which is "
+                "invisible to the roster derivation's static walk",
+            )
+
+    def test_every_refused_call_in_paper_grounding_takes_a_string_literal_code(self) -> None:
+        tree = ast.parse((SKILL_SCRIPTS / "paper_grounding.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Refused"):
+                first = node.args[0]
+                self.assertIsInstance(first, ast.Constant, ast.dump(node))
+                self.assertIsInstance(first.value, str, ast.dump(node))
 
 
 if __name__ == "__main__":
