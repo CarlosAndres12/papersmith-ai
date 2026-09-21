@@ -319,44 +319,44 @@ absent-account/CLI boundary), and §1's roster-registration table.
 Satisfies design.md's Testing Strategy "Mutation" row and the operator's
 non-negotiable discipline: a mutation is the only proof a guard holds.
 
-- [ ] 3.1 Mutation 1/4 — `GROUNDING_ACCOUNT_ABSENT`: anchor the check with a
+- [x] 3.1 Mutation 1/4 — `GROUNDING_ACCOUNT_ABSENT`: anchor the check with a
       source string occurring EXACTLY ONCE in `paper_grounding.py`
       (`tests/paper_mutation.py:64-68` raises otherwise); mutate it to treat
       `None` as empty; confirm the absent-account test (1.7) goes red via
       `_run_against_mutant(..., source_path=SKILL_SCRIPTS /
       "paper_grounding.py")`. Restore. (`transposition-grounding`, Scenario
       "Mutation — the absent-account refusal is reachable".)
-- [ ] 3.2 Mutation 2/4 — `GROUNDING_SENTENCE_UNKNOWN` and
+- [x] 3.2 Mutation 2/4 — `GROUNDING_SENTENCE_UNKNOWN` and
       `GROUNDING_VERDICT_MISSING`, EACH its own mutant, one direction
       disabled at a time; confirm each mutant reddens ONLY its own scenario
       (1.6), never the other. Anchors must not share a line with each other
       or with 3.1's. Restore both. (Scenario "Mutation — each direction is
       independently reachable".)
-- [ ] 3.3 Mutation 3/4 — the span-presence check on `supported`: remove the
+- [x] 3.3 Mutation 3/4 — the span-presence check on `supported`: remove the
       byte-presence re-read so any span is accepted without re-reading the
       section's bytes; confirm the absent-span downgrade test (1.1/1.3)
       goes red. Restore. (Scenario "Mutation — the downgrade is caught only
       by span reconciliation".)
-- [ ] 3.4 Mutation 4/4 — `SECTION_UNSUPPORTED_CLAIM`: mutate the
+- [x] 3.4 Mutation 4/4 — `SECTION_UNSUPPORTED_CLAIM`: mutate the
       `unsupported` branch to treat that verdict as `undecidable` instead
       of refusing; confirm the unsupported-claim test (1.5) goes red.
       Restore. (Scenario "Mutation — the unsupported refusal is
       reachable".) Confirm all four anchors from 3.1-3.4 sit on four
       DISTINCT lines in `paper_grounding.py` — a design constraint on the
       module, not an apply-time accident (design.md, "Mutation anchors").
-- [ ] 3.5 Do NOT "fix" `tests/paper_mutation.py`'s stale-bytecode handling —
+- [x] 3.5 Do NOT "fix" `tests/paper_mutation.py`'s stale-bytecode handling —
       it already purges `__pycache__` via a fresh `tempfile.mkdtemp` per
       call, a `uuid4`-named mutant module, and `PYTHONDONTWRITEBYTECODE=1`
       (`:74-75,139`). Pass `source_path=SKILL_SCRIPTS / "paper_grounding.py"`
       explicitly at every call site above (the default is `paper_block.py`).
-- [ ] 3.6 Generality sweep, whole change: `rg` under `.claude/skills/` for
+- [x] 3.6 Generality sweep, whole change: `rg` under `.claude/skills/` for
       any lineage name, method name, researcher's folder name, block id,
       section title, document filename, or paper id introduced by Phases
       0-2 together, not only the last phase. Run
       `ForgeVocabularyDerivedGuardTests` (rule B, `FORGE_LEXICON`); confirm
       no NEW leak beyond the one disclosed pre-existing failure this
       repository already carries.
-- [ ] 3.7 Re-derive the roster by EXECUTING
+- [x] 3.7 Re-derive the roster by EXECUTING
       `reachable_paper_refusal_codes()` after all engine code from Phases
       0-2 has landed. Update the pinned literal at
       `tests/test_paper_writing.py:7942` (today **161**) to the MEASURED
@@ -365,11 +365,11 @@ non-negotiable discipline: a mutation is the only proof a guard holds.
       further movement is codes becoming reachable through the widened
       import graph, the same mechanic this repository's own roster section
       already documents.
-- [ ] 3.8 Confirm `git diff --stat` shows zero deletions anywhere in the
+- [x] 3.8 Confirm `git diff --stat` shows zero deletions anywhere in the
       change, and `paper_leak.py` is byte-identical to its pre-change state
       (design.md, D5: "`paper_leak.py` is touched by this change not at
       all").
-- [ ] 3.9 Run the FULL suite, both runners — never a narrower module list
+- [x] 3.9 Run the FULL suite, both runners — never a narrower module list
       for either: `npm test` (confirm N/N, exit 0); then
       `.venv/bin/python -m unittest discover -s tests -p "test_*.py"`
       (chunk into sequential foreground runs if the ~650s discover time
@@ -381,7 +381,7 @@ non-negotiable discipline: a mutation is the only proof a guard holds.
       pre-existing failure
       (`ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`);
       any second failure belongs to this change and blocks delivery.
-- [ ] 3.10 Record D2's falsifier as a live, unexecuted obligation
+- [x] 3.10 Record D2's falsifier as a live, unexecuted obligation
       (design.md, D2 — over ten or more recorded real `write` runs, if any
       block reaches `written` with `downgraded > 0`, or with `subjects > 0`
       and `decided == 0`, the ruling is wrong) in this change's tracking,
@@ -406,3 +406,31 @@ non-negotiable discipline: a mutation is the only proof a guard holds.
   lands; no number is written into any artifact before that.
 - `paper_leak.py` stays untouched (D5) — checked explicitly at 3.8.
 - Both suites, in full — 3.9 names why a partial module list is not enough.
+
+## Live, unexecuted obligation (task 3.10) — D2's falsifier
+
+D2's no-ratio-threshold ruling over `undecidable`/`downgraded` is a
+JUDGEMENT CALL, not a measurement, and it ships with its own falsifier
+rather than as unexamined folklore (design.md D2; this obligation is also
+recorded verbatim in `SKILL.md`'s own "transposition-grounding guard"
+section, so the ruling stays arguable in both places a reader might land):
+
+> Over ten or more recorded real `write` runs against genuine
+> `document`-rooted bindings, if any block reaches `written` with
+> `downgraded > 0`, or with `subjects > 0` and `decided == 0`, this ruling
+> is wrong and a blocking rule over these counts must be added.
+
+**This obligation is UNEXECUTABLE as of this change landing (2026-09-21):**
+no real `document`-rooted binding exists anywhere on disk in this repository
+(`transposition-fidelity/spec.md:28-34`) — every scenario this change proves
+is a `bind`-recorded fixture carrying invented names. There is no corpus of
+ten real `write` runs to check the falsifier against yet, and there will not
+be until a real paper's own sections are bound and drafted through this
+pipeline.
+
+This is stated here explicitly so the obligation is never silently waived:
+it is NOT closed, NOT satisfied, and NOT forgotten — it is open, dated, and
+waiting on a precondition (real document-rooted bindings) this change does
+not itself create. A future session that accumulates ten or more real
+`write` runs against document-rooted bindings owes this falsifier an actual
+check against `sourceGrounding`'s own reported counts.

@@ -7957,8 +7957,22 @@ class RefusalRosterTests(unittest.TestCase):
         and `place` composed the contract filename from the section id and
         then did a bare `next()` over the header's blocks, so a typo'd
         `--section`/`--block` and EVERY shipped contract alike died with a
-        traceback and exit 1 instead of this skill's refusal envelope."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 161)
+        traceback and exit 1 instead of this skill's refusal envelope.
+
+        161 -> 165 in `the-block-asserts-only-what-its-section-carries`:
+        `paper_grounding.py` (newly imported, `# for the roster derivation`)
+        gains four raise sites -- `reconcile_support`'s own
+        `GROUNDING_ACCOUNT_ABSENT`, `GROUNDING_SENTENCE_UNKNOWN`,
+        `GROUNDING_VERDICT_MISSING` and `SECTION_UNSUPPORTED_CLAIM`, the
+        fourth sibling in `write_block`'s judge chain that reconciles a
+        per-sentence support account against a transposition block's own
+        bound source section bytes. Reachable through the whole-module scan
+        the moment the new import lands; `cmd_write`'s own `--grounding`
+        wiring reaches the same module through `write_block`, contributing
+        no code of its own. Measured directly against `reachable_paper_
+        refusal_codes()`, EXECUTED after all of this change's engine code
+        landed, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 165)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -14028,6 +14042,106 @@ class RefusalConstructorLiteralArgumentTests(unittest.TestCase):
                 first = node.args[0]
                 self.assertIsInstance(first, ast.Constant, ast.dump(node))
                 self.assertIsInstance(first.value, str, ast.dump(node))
+
+
+class GroundingMutationProofTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 3, tasks
+    3.1-3.4: one mutant per refusal code, proving reachability the way
+    this repository requires it proven -- by breaking the guard and
+    watching the mapped scenario go red, never by reading the source and
+    asserting it looks right. Every anchor below sits on its own line in
+    `paper_grounding.py`, none shared with another (tasks.md 3.4)."""
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_1_treating_an_absent_account_as_empty_fails_the_account_absent_guard(self) -> None:
+        """Scenario "Mutation -- the absent-account refusal is reachable"
+        (tasks.md 3.1)."""
+        proc = _run_against_mutant(
+            "    if account is None:",
+            "    if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_no_account_with_subjects_refuses_account_absent_never_verdict_missing",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_2a_disabling_the_unknown_sentence_check_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- each direction is independently reachable"
+        (tasks.md 3.2), the `GROUNDING_SENTENCE_UNKNOWN` direction."""
+        proc = _run_against_mutant(
+            '        if entry["sentence"] not in subject_sentences:',
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_an_account_entry_naming_an_unsegmented_sentence_refuses",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_2b_disabling_the_missing_verdict_check_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- each direction is independently reachable"
+        (tasks.md 3.2), the `GROUNDING_VERDICT_MISSING` direction -- a
+        DIFFERENT anchor line from 2a's, so each mutant reddens only its
+        own scenario, never the other."""
+        proc = _run_against_mutant(
+            "        if entry is None:",
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_a_subject_with_no_account_entry_refuses_verdict_missing",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_3_removing_the_byte_presence_re_read_fails_the_downgrade_guard(self) -> None:
+        """Scenario "Mutation -- the downgrade is caught only by span
+        reconciliation" (tasks.md 3.3) -- THE load-bearing property (design.md
+        D1): with the byte-presence re-read removed, any span is accepted
+        without ever being checked against the section's own bytes, and an
+        ungrounded `supported` verdict wrongly survives."""
+        proc = _run_against_mutant(
+            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+            "byte_present_own = True",
+            "tests.test_paper_writing.ReconcileSupportBurdenOfProofTests"
+            ".test_a_supported_verdict_with_an_empty_span_never_passes_as_supported",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_4_disabling_the_unsupported_branch_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- the unsupported refusal is reachable"
+        (tasks.md 3.4)."""
+        proc = _run_against_mutant(
+            '        if verdict == "unsupported":',
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_unsupported_refuses_naming_all_five_fields",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_the_four_anchors_sit_on_four_distinct_lines(self) -> None:
+        """tasks.md 3.4's own design constraint on the module: no two of
+        the four refusals' guard conditions may share a source line, or
+        `_run_against_mutant`'s exactly-once anchor requirement could never
+        be satisfied for both at once."""
+        source = (SKILL_SCRIPTS / "paper_grounding.py").read_text(encoding="utf-8")
+        lines = source.splitlines()
+        anchors = [
+            "if account is None:",
+            'if entry["sentence"] not in subject_sentences:',
+            "if entry is None:",
+            'if verdict == "unsupported":',
+            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+        ]
+        anchor_lines = set()
+        for anchor in anchors:
+            matches = [index for index, line in enumerate(lines) if anchor in line]
+            self.assertEqual(len(matches), 1, f"{anchor!r} must occur exactly once")
+            anchor_lines.add(matches[0])
+        self.assertEqual(len(anchor_lines), len(anchors), "two anchors share the same source line")
 
 
 if __name__ == "__main__":
