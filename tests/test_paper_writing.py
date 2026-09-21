@@ -4930,6 +4930,58 @@ class SkillMdModeCountAccuracyTests(unittest.TestCase):
             f"the corpus it describes.",
         )
 
+    def test_no_documented_section_value_is_a_contract_filename_stem(self) -> None:
+        """`--section` names the section id a contract DECLARES in its own
+        header, never the `sections/*.md` filename stem. Both are plausible
+        to a reader and only one resolves: `paper_contract.resolve_section_
+        file` matches `header.section`, so a stem refuses `SECTION_UNKNOWN`.
+
+        This guard exists because the drift already shipped and survived: the
+        resolver was fixed while SIX user-facing sites kept documenting the
+        stem -- two worked examples in `SKILL.md` and three `--help` strings
+        -- so an operator hitting `SECTION_UNKNOWN` and consulting `--help`
+        was handed the wrong answer again. A grep found those six; a grep is
+        a list, and a list ages the day someone writes the seventh
+        (`MANTENIMIENTO-siete-formas-de-fallar-en-verde.md`, 6: the fix is
+        not touching the N sites, it is having something DERIVED find them).
+
+        Both sides are derived, nothing hand-listed: the forbidden spellings
+        are the real filename stems read off `sections/`, and the haystack is
+        the live `SKILL.md` plus the live `--help` strings pulled out of the
+        built parser. Renaming a contract file moves this guard with it.
+        """
+        stems = {path.stem for path in sorted(SECTIONS_DIR.glob("*.md"))}
+        self.assertTrue(stems, "no shipped contracts found to derive stems from")
+
+        surfaces = {"SKILL.md": self.SKILL_MD.read_text(encoding="utf-8")}
+        parser = paper_cli.build_parser()
+        for action in parser._actions:
+            if not isinstance(action, argparse._SubParsersAction):
+                continue
+            for verb, subparser in action.choices.items():
+                for option in subparser._actions:
+                    if "--section" in option.option_strings and option.help:
+                        surfaces[f"{verb} --section help"] = option.help
+
+        for where, text in sorted(surfaces.items()):
+            for stem in sorted(stems):
+                self.assertNotIn(
+                    f"--section {stem}", text,
+                    f"{where} documents `--section {stem}`, a contract "
+                    f"FILENAME stem; `--section` takes the declared section "
+                    f"id and a stem refuses SECTION_UNKNOWN",
+                )
+            self.assertNotIn(
+                "--section <stem>", text,
+                f"{where} calls `--section` a stem; it is the declared "
+                f"section id",
+            )
+            self.assertNotIn(
+                "sections/<id>.md stem", text,
+                f"{where} describes `--section` as a filename stem; it is "
+                f"the section id the contract's own header declares",
+            )
+
 
 _SAMPLE_DISQUALIFIER = "A symbol used without being declared."
 
@@ -5063,14 +5115,43 @@ class ContractAuditTests(unittest.TestCase):
         )
 
     def test_all_shipped_disqualifier_bullets_are_extracted_whole(self) -> None:
-        all_bullets: list = []
+        """Two properties, both derived from each contract's own bytes --
+        never a frozen count. A count would go red the day someone adds or
+        removes a disqualifier, which breaks nothing in production and is
+        exactly the "test that ratifies a decision instead of verifying a
+        property" pattern `MANTENIMIENTO-siete-formas-de-fallar-en-verde.md`
+        (7) names. These two stay true at 178 bullets, at 179, or at 200,
+        and still redden if the reader ever truncates, merges or splits one.
+
+        1. Every bullet arrives WHOLE. A wrapped bullet cut at its line
+           break loses its ending, and each shipped bullet is a sentence, so
+           a bullet not ending in `.` is a bullet the reader truncated.
+        2. Per contract, the number of bullets extracted equals the number
+           of `- ` lines under that contract's own `## Disqualifiers`
+           heading -- derived by counting them here, so a reader that
+           swallowed one into another (or split one in two) fails even
+           though every surviving bullet still ends in `.`.
+        """
         for path in sorted(SECTIONS_DIR.glob("*.md")):
             _header, body = paper_contract.parse(path.read_bytes())
-            bullets = paper_audit.extract_disqualifiers(body.decode("utf-8"), source_name=path.name)
-            all_bullets.extend(bullets)
-        self.assertEqual(len(all_bullets), 179)
-        for bullet in all_bullets:
-            self.assertTrue(bullet.endswith("."), bullet)
+            text = body.decode("utf-8")
+            bullets = paper_audit.extract_disqualifiers(text, source_name=path.name)
+            for bullet in bullets:
+                self.assertTrue(bullet.endswith("."), f"{path.name}: {bullet!r}")
+
+            lines = text.splitlines()
+            start = next(
+                index for index, line in enumerate(lines)
+                if line.strip() == "## Disqualifiers"
+            )
+            markers = 0
+            for line in lines[start + 1:]:
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    break
+                if stripped.startswith("- ") or stripped.startswith("* "):
+                    markers += 1
+            self.assertEqual(len(bullets), markers, path.name)
 
 
 def _write_contract(
