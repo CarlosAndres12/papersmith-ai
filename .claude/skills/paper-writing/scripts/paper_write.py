@@ -136,7 +136,10 @@ def _stage_contract_audit(contract: BlockContract, draft: dict, audit_account: d
     )
 
 
-def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_account: dict) -> dict:
+def write_block(
+    paper_dir: Path, contract: BlockContract, draft: dict, audit_account: dict,
+    *, grounding_account: dict | None = None,
+) -> dict:
     """One `write` invocation for one block (`writing-orchestration` spec,
     `Requirement: Pipeline Stage Order`). Stages run in order: readiness,
     gate (both `_stage_readiness` above), draft (`draft`/`audit_account`
@@ -156,7 +159,7 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
     pre-`write` state.
     """
     _stage_readiness(contract)
-    _stage_evidence_audit(contract, draft)
+    bindings = _stage_evidence_audit(contract, draft)
 
     key = _attempt_key(contract)
     ledger = _read_ledger(paper_dir, contract.block_id)
@@ -248,6 +251,30 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
     # shipped shape rather than inventing a second reporting convention.
     source_fidelity = source_fidelity_report(contract.source_sections, source_sections_report)
 
+    # `transposition-grounding` spec, `Requirement: The Subject Set Is An
+    # Intersection...` + `Requirement: The Account Is Reconciled...` +
+    # `Requirement: The Guard Fires After The Verbatim Check And Before
+    # Substitution` (design.md D1/D3/D6/D8). Same `contract.mode ==
+    # MODE_TRANSPOSITION` derivation `MODE_ABSENT` and the verbatim check
+    # above both already rest on -- no block id, no list. Lazily imported,
+    # exactly as `paper_leak` above, so `paper_write.py` stays importable
+    # without `paper_grounding.py` present. Runs AFTER
+    # `check_source_section_verbatim` clears and BEFORE `substitute`, so a
+    # draft failing both checks always names `SOURCE_SECTION_VERBATIM`
+    # first -- copying is decided before meaning (D6). An `argument`-mode
+    # block, or a block with no `source_sections` at all, reports the
+    # interim `unmeasured`/0 envelope WITHOUT ever importing
+    # `paper_grounding` (`Scenario: An argument-mode block has no
+    # subjects").
+    source_grounding = {"status": "unmeasured", "subjects": 0}
+    if contract.source_sections and contract.mode == paper_vocabulary.MODE_TRANSPOSITION:
+        import paper_grounding  # noqa: PLC0415
+        subjects = paper_grounding.subjects_for(bindings, contract.source_sections)
+        reconciled = paper_grounding.reconcile_support(
+            subjects, grounding_account, contract.source_sections, block_id=contract.block_id,
+        )
+        source_grounding = paper_grounding.source_grounding_report(subjects, reconciled)
+
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {
         "status": "written",
@@ -255,6 +282,7 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
         "verdicts": audit_result["verdicts"],
         "styleChannel": style_report,
         "sourceFidelity": source_fidelity,
+        "sourceGrounding": source_grounding,
         **result,
     }
 

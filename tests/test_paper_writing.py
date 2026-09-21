@@ -51,6 +51,7 @@ import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
 import paper_source_span  # noqa: E402
 import paper_marker  # noqa: E402
+import paper_grounding  # noqa: E402 -- the-block-asserts-only-what-its-section-carries: per-sentence support reconciliation against the bound section's own bytes
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -3227,7 +3228,7 @@ class SecondProseRootWriteGateTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_write_refuses_section_binding_absent_on_a_second_root(self) -> None:
@@ -7956,8 +7957,22 @@ class RefusalRosterTests(unittest.TestCase):
         and `place` composed the contract filename from the section id and
         then did a bare `next()` over the header's blocks, so a typo'd
         `--section`/`--block` and EVERY shipped contract alike died with a
-        traceback and exit 1 instead of this skill's refusal envelope."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 161)
+        traceback and exit 1 instead of this skill's refusal envelope.
+
+        161 -> 165 in `the-block-asserts-only-what-its-section-carries`:
+        `paper_grounding.py` (newly imported, `# for the roster derivation`)
+        gains four raise sites -- `reconcile_support`'s own
+        `GROUNDING_ACCOUNT_ABSENT`, `GROUNDING_SENTENCE_UNKNOWN`,
+        `GROUNDING_VERDICT_MISSING` and `SECTION_UNSUPPORTED_CLAIM`, the
+        fourth sibling in `write_block`'s judge chain that reconciles a
+        per-sentence support account against a transposition block's own
+        bound source section bytes. Reachable through the whole-module scan
+        the moment the new import lands; `cmd_write`'s own `--grounding`
+        wiring reaches the same module through `write_block`, contributing
+        no code of its own. Measured directly against `reachable_paper_
+        refusal_codes()`, EXECUTED after all of this change's engine code
+        landed, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 165)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -9248,7 +9263,7 @@ class WriteGateTests(unittest.TestCase):
             section="phase-b", block="b",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_write_on_a_wave_2_block_refuses_phase_not_ready_while_wave_1_is_unwritten(self) -> None:
@@ -9353,7 +9368,7 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _assert_refuses_before_drafting(self, code: str) -> None:
@@ -9587,7 +9602,7 @@ class SourceRevisionsUndeclaredByteIdentityTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _bind_args(self) -> argparse.Namespace:
@@ -9689,7 +9704,7 @@ class BindCliEndToEndTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _bind_args(self, **overrides) -> argparse.Namespace:
@@ -10678,7 +10693,7 @@ class PacketWriteGateTests(unittest.TestCase):
             section="phase-a", block="a",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened(self) -> None:
@@ -10831,7 +10846,7 @@ class PacketCorpusReuseTests(unittest.TestCase):
                 section="a", block="only",
                 draft=str(self.tmp_path / "draft.json"),
                 audit=str(self.tmp_path / "audit.json"),
-                evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+                evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
             )
             with self.assertRaises(Refused) as ctx:
                 paper_cli.cmd_write(args)
@@ -10989,7 +11004,7 @@ class SourceSectionVerbatimFalsifierTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.tmp_path / "draft.json"),
             audit=str(self.tmp_path / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_the_fixture_packet_resolves_the_bound_section(self) -> None:
@@ -11089,7 +11104,7 @@ class CitationReadinessGateTests(unittest.TestCase):
             section="cited-section", block="cited",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None, grounding=None,
         )
 
     def test_no_guidance_folder_at_all_refuses_citation_folder_absent(self) -> None:
@@ -12587,7 +12602,7 @@ class SeparateNeverRecordsABindingEndToEndTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _proposal_path(self, obj) -> Path:
@@ -12821,7 +12836,7 @@ class CmdWriteSourceSectionsWiringTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def test_cmd_write_fills_source_sections_from_the_resolved_corpus(self) -> None:
@@ -12990,7 +13005,7 @@ class MarkRevisionsCliWholeLoopTests(unittest.TestCase):
             section="a", block="only",
             draft=str(self.test_root / "draft.json"),
             audit=str(self.test_root / "audit.json"),
-            evidence=None, style=None, guidance=None, transcript=None,
+            evidence=None, style=None, guidance=None, transcript=None, grounding=None,
         )
 
     def _run(self, *args: str) -> subprocess.CompletedProcess:
@@ -13220,6 +13235,913 @@ class PlanSourceRootsTests(unittest.TestCase):
 
         self.assertIn(sixth.name, report["sourceRoots"])
         self.assertEqual(report["sourceRoots"][sixth.name]["declaration"], "undeclared")
+
+
+class WriteBlockConsumesEvidenceAuditBindingsTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 0, tasks
+    0.2/0.3 (design.md D4 `[re-measured]`): `_stage_evidence_audit` already
+    returns `list[Binding]` (`paper_write.py:121`, `return bindings` at
+    `:129`) and has exactly one caller, where the value used to be dropped
+    on the floor as a bare statement. This asserts the CALL SITE actually
+    assigns the return value rather than merely running the call for its
+    side effects -- the shape that lets a later stage (this phase's own
+    subject derivation) use the bindings `_stage_evidence_audit` already
+    produces instead of segmenting the draft a second time (D4's own
+    rejected alternative)."""
+
+    def test_the_call_site_assigns_the_return_value_not_a_bare_statement(self) -> None:
+        source = (SKILL_SCRIPTS / "paper_write.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        write_block = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "write_block"
+        )
+
+        def calls_stage_evidence_audit(node) -> bool:
+            return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "_stage_evidence_audit")
+
+        bare_statement_calls = [
+            stmt for stmt in write_block.body
+            if isinstance(stmt, ast.Expr) and calls_stage_evidence_audit(stmt.value)
+        ]
+        assigned_calls = [
+            stmt for stmt in write_block.body
+            if isinstance(stmt, ast.Assign) and calls_stage_evidence_audit(stmt.value)
+        ]
+        self.assertEqual(
+            bare_statement_calls, [],
+            "_stage_evidence_audit's return value is dropped as a bare statement",
+        )
+        self.assertEqual(
+            len(assigned_calls), 1,
+            "write_block must call _stage_evidence_audit exactly once, assigning "
+            "its return value to a name a later stage can use",
+        )
+
+    def test_a_fixture_with_a_bound_sentence_still_writes_after_the_fix(self) -> None:
+        """Runtime companion, task 0.3's own fixture requirement: a real
+        `write_block` call, with a fixture carrying at least one `fact:`-
+        bound sentence, still reaches `"status": "written"` once the call
+        site keeps the bindings rather than dropping them -- the fix
+        changes no observable behaviour for a block this phase does not
+        yet gate on subjects (no `source_sections` bound)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            paper_dir = Path(tmp) / "paper"
+            _write_fixture(paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+            contract = _write_contract(
+                citations_regime="none", evidence_set=(),
+                requires_facts=("calibration-regime",),
+            )
+            draft = {
+                "latex": "The device holds calibration steady across trials.",
+                "bindings": [
+                    {
+                        "sentence": "The device holds calibration steady across trials.",
+                        "binding": "fact:calibration-regime",
+                    }
+                ],
+            }
+            result = paper_write.write_block(paper_dir, contract, draft, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+
+class WriteBlockGroundingAccountKeywordTests(unittest.TestCase):
+    """Task 0.4: `grounding_account` is a keyword-only, defaulted parameter
+    -- the same `source_sections: tuple = ()` precedent `BlockContract`
+    already sets -- so every existing positional `write_block(paper_dir,
+    contract, draft, audit_account)` call site in this suite stays green,
+    unchanged."""
+
+    def test_grounding_account_is_keyword_only_and_defaults_to_none(self) -> None:
+        signature = inspect.signature(paper_write.write_block)
+        parameter = signature.parameters["grounding_account"]
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIsNone(parameter.default)
+
+    def test_every_existing_positional_call_site_stays_green(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paper_dir = Path(tmp) / "paper"
+            _write_fixture(paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+            contract = _write_contract(citations_regime="none", evidence_set=())
+            result = paper_write.write_block(paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+
+
+def _fact_binding(sentence: str, fact: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="fact", ref=fact, raw=f"fact:{fact}")
+
+
+def _evidence_binding(sentence: str, evidence_id: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="evidence", ref=evidence_id, raw=f"evidence:{evidence_id}")
+
+
+def _structural_binding(sentence: str) -> "paper_bindings.Binding":
+    return paper_bindings.Binding(sentence=sentence, kind="structural", ref=None, raw="structural")
+
+
+def _bound_section(
+    *, fact="invented-calibration-fact", lineage="invented-study-r1",
+    title="Invented Calibration Section", text="Invented section body text.",
+) -> dict:
+    return {
+        "fact": fact, "lineage": lineage, "title": title,
+        "path": "/invented/path.md", "byte_start": 0, "byte_end": len(text),
+        "text": text,
+    }
+
+
+class SubjectsForTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: The Subject Set Is An
+    Intersection Derived From Bytes, Never A List` (tasks.md 0.5/0.6;
+    design.md D3). Invented fixture names only -- never a real paper's
+    block id, section title, document filename, or lineage literal."""
+
+    def test_a_licensed_fact_with_a_bound_section_is_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _fact_binding("The device holds calibration steady.", "invented-calibration-fact")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [binding])
+
+    def test_an_evidence_bound_sentence_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _evidence_binding("This cites an external record.", "E1")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_a_structural_sentence_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _structural_binding("This paragraph closes the section.")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_a_fact_bound_sentence_whose_fact_has_no_bound_section_is_never_a_subject(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        binding = _fact_binding("An unrelated fact claim.", "invented-unrelated-fact")
+        subjects = paper_grounding.subjects_for([binding], (section,))
+        self.assertEqual(subjects, [])
+
+    def test_an_empty_source_sections_tuple_yields_no_subjects(self) -> None:
+        binding = _fact_binding("The device holds calibration steady.", "invented-calibration-fact")
+        subjects = paper_grounding.subjects_for([binding], ())
+        self.assertEqual(subjects, [])
+
+
+class ArgumentModeBlockHasNoSubjectsTests(unittest.TestCase):
+    """`transposition-grounding` spec, Scenario "An argument-mode block has
+    no subjects" (tasks.md 0.7): an `argument`-mode block never reaches
+    subject derivation at all -- the grounding stage must not even import
+    `paper_grounding`, let alone call `subjects_for`, for a non-
+    transposition block."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_argument_mode_never_calls_subjects_for(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument",
+            requires_facts=("invented-calibration-fact",), source_sections=(section,),
+        )
+        draft = {
+            "latex": "The device holds calibration steady across trials.",
+            "bindings": [
+                {
+                    "sentence": "The device holds calibration steady across trials.",
+                    "binding": "fact:invented-calibration-fact",
+                }
+            ],
+        }
+        with unittest.mock.patch.object(paper_grounding, "subjects_for") as mocked:
+            result = paper_write.write_block(self.paper_dir, contract, draft, _CLEAN_AUDIT)
+        mocked.assert_not_called()
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
+class InterimSourceGroundingEnvelopeTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: A Block With No Decided
+    Subject Reports Unmeasured, Never A Silent Pass`, the `subjects == 0`
+    half (tasks.md 0.8/0.9): the `write` envelope gains a `sourceGrounding`
+    key beside `sourceFidelity`, reporting `{"status": "unmeasured",
+    "subjects": 0}` for a block with an empty subject set."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_no_source_sections_reports_unmeasured_zero_subjects(self) -> None:
+        contract = _write_contract(citations_regime="none", evidence_set=(), source_sections=())
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+    def test_a_bound_section_with_no_fact_bound_sentence_reports_unmeasured_zero_subjects(self) -> None:
+        section = _bound_section(fact="invented-calibration-fact")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), source_sections=(section,),
+        )
+        result = paper_write.write_block(self.paper_dir, contract, _CLEAN_DRAFT, _CLEAN_AUDIT)
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
+def _grounding_account(entries: list) -> dict:
+    return {"support": entries}
+
+
+class ReconcileSupportBurdenOfProofTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 1, task 1.1
+    -- THE LOAD-BEARING PROPERTY of the whole change, its own task, written
+    RED first (design.md D1): an ungrounded `supported` verdict for a
+    subject sentence must NOT let that sentence pass as `supported`. Copy
+    `contract-audit`'s asymmetry naively and an ungrounded `supported`
+    waves everything past -- the guard becomes ceremonial. (`transposition-
+    grounding` spec, `Requirement: The Permissive Verdict Carries The
+    Burden Of Proof`, Scenario "A supported verdict with an absent span
+    downgrades".)"""
+
+    def test_a_supported_verdict_with_an_empty_span_never_passes_as_supported(self) -> None:
+        section = _bound_section(
+            fact="invented-calibration-fact", text="The calibration constant stays fixed across trials.",
+        )
+        subject = _fact_binding("Calibration is held constant across every trial.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(len(reconciled), 1)
+        self.assertNotEqual(reconciled[0]["verdict"], "supported")
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertEqual(reconciled[0]["span"], "")
+        self.assertTrue(reconciled[0]["downgraded"])
+
+
+class ReconcileSupportTests(unittest.TestCase):
+    """`transposition-grounding` spec: `reconcile_support`'s full both-
+    direction reconciliation (design.md D1/D3/D7; tasks.md 1.2-1.11)."""
+
+    def test_a_different_facts_section_also_downgrades(self) -> None:
+        """Scenario "A supported verdict grounded in a different fact's
+        section downgrades" (tasks.md 1.3)."""
+        own_section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="Own Section", text="The own section carries nothing about the midpoint.",
+        )
+        other_section = _bound_section(
+            fact="other-fact", lineage="widget-study-r4",
+            title="Other Section", text="The midpoint constant is fixed across every trial.",
+        )
+        subject = _fact_binding("The constant sits at the midpoint across trials.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "midpoint constant is fixed across every trial",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (own_section, other_section), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertEqual(reconciled[0]["span"], "")
+        self.assertTrue(reconciled[0]["downgraded"])
+
+    def test_a_byte_present_span_in_its_own_section_passes(self) -> None:
+        """Scenario "A supported verdict with a byte-present span passes"
+        (tasks.md 1.4)."""
+        section = _bound_section(
+            fact="calibration-regime", text="The constant is fixed at the interval's midpoint.",
+        )
+        subject = _fact_binding("Calibration fixes that constant at the midpoint.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "fixed at the interval's midpoint",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+        self.assertEqual(reconciled[0]["span"], "fixed at the interval's midpoint")
+        self.assertFalse(reconciled[0]["downgraded"])
+
+    def test_unsupported_refuses_naming_all_five_fields(self) -> None:
+        """Scenario "An unsupported claim is refused with full
+        identification" (tasks.md 1.5)."""
+        section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="2. Widget Calibration", text="The constant never changes across trials.",
+        )
+        subject = _fact_binding("Calibration was repeated after every third trial.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "unsupported",
+            }
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], account, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "SECTION_UNSUPPORTED_CLAIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("calibration-regime", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+        self.assertIn(subject.sentence, ctx.exception.detail)
+
+    def test_an_account_entry_naming_an_unsegmented_sentence_refuses(self) -> None:
+        """Scenario "An account entry naming an unsegmented sentence
+        refuses" (tasks.md 1.6, first direction)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("The real subject sentence.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "Invented section body text.",
+            },
+            {
+                "sentence": "A sentence write never segmented as this fact's subject.",
+                "fact": "calibration-regime", "verdict": "clear",
+            },
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], account, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_SENTENCE_UNKNOWN")
+        self.assertIn("A sentence write never segmented as this fact's subject.", ctx.exception.detail)
+
+    def test_a_subject_with_no_account_entry_refuses_verdict_missing(self) -> None:
+        """Scenario "A subject sentence absent from the account refuses"
+        (tasks.md 1.6, second direction)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("This subject sentence has no verdict at all.", "calibration-regime")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support(
+                [subject], _grounding_account([]), (section,), block_id="mm-proposal",
+            )
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_VERDICT_MISSING")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn(subject.sentence, ctx.exception.detail)
+
+    def test_no_account_with_subjects_refuses_account_absent_never_verdict_missing(self) -> None:
+        """Scenario "No account, subjects exist" (tasks.md 1.7): the
+        absence must never fall through to `GROUNDING_VERDICT_MISSING` on
+        the first subject (design.md D7's own rejected alternative)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("A subject sentence.", "calibration-regime")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], None, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_ACCOUNT_ABSENT")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("1", ctx.exception.detail)
+        self.assertNotEqual(ctx.exception.code, "GROUNDING_VERDICT_MISSING")
+
+    def test_no_account_and_no_subjects_raises_nothing(self) -> None:
+        """Scenario "No account, no subjects" (tasks.md 1.7)."""
+        reconciled = paper_grounding.reconcile_support([], None, (), block_id="mm-proposal")
+        self.assertEqual(reconciled, [])
+
+
+class SourceGroundingReportTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: Undecidable Never
+    Blocks Alone...` + `Requirement: A Block With No Decided Subject
+    Reports Unmeasured...` (design.md D8; tasks.md 1.8-1.11)."""
+
+    def test_downgraded_and_agent_returned_undecidable_never_merge(self) -> None:
+        """Task 1.9, its own task per design.md D2: one subject returned
+        `undecidable` directly, a second `supported` with an absent span;
+        the report counts the first as `undecidable` and exactly the
+        second as `downgraded` -- the two counts never merge. (Scenario "A
+        downgrade is never counted as an agent-returned undecidable".)"""
+        section = _bound_section(fact="calibration-regime")
+        honest = _fact_binding("An honestly abstained subject sentence.", "calibration-regime")
+        minted = _fact_binding("A subject sentence with a minted, absent span.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": honest.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+            {
+                "sentence": minted.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [honest, minted], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([honest, minted], reconciled)
+
+        self.assertEqual(report["undecidable"], 1)
+        self.assertEqual(report["downgraded"], 1)
+        self.assertEqual(report["subjects"], 2)
+
+    def test_an_all_undecidable_or_downgraded_account_does_not_block(self) -> None:
+        """Scenario "An all-undecidable-or-downgraded account does not
+        block" (tasks.md 1.10)."""
+        section = _bound_section(fact="calibration-regime")
+        returned = _fact_binding("Returned undecidable directly.", "calibration-regime")
+        downgraded_subject = _fact_binding("Downgraded by an absent span.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": returned.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+            {
+                "sentence": downgraded_subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "not present anywhere",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [returned, downgraded_subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([returned, downgraded_subject], reconciled)
+
+        self.assertGreater(report["undecidable"], 0)
+        self.assertGreater(report["downgraded"], 0)
+        self.assertNotEqual(report["status"], "refused")
+
+    def test_subjects_exist_but_none_decided_reports_unmeasured_nonzero(self) -> None:
+        """Scenario "Subjects exist but none decided reports unmeasured
+        with a nonzero count" (tasks.md 1.11)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("A subject sentence returned undecidable.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": subject.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([subject], reconciled)
+
+        self.assertEqual(report["status"], "unmeasured")
+        self.assertEqual(report["subjects"], 1)
+        self.assertGreater(report["subjects"], 0)
+
+    def test_a_decided_subject_reports_measured(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        subject = _fact_binding("The constant holds steady across trials.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "constant holds across trials",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([subject], reconciled)
+
+        self.assertEqual(report["status"], "measured")
+        self.assertEqual(report["decided"], 1)
+
+
+class WriteBlockGroundingWiringTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: The Guard Fires After
+    The Verbatim Check And Before Substitution` (tasks.md 1.12/1.14); full
+    guard wired into `write_block`, replacing Phase 0's interim
+    unconditional-`unmeasured` report."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_an_unsupported_claim_refuses_through_a_real_write_call(self) -> None:
+        """Scenario "An unsupported claim is refused by an actual write
+        invocation" -- never a read-only verb; `main.tex` stays unchanged."""
+        section = _bound_section(
+            fact="calibration-regime", text="The constant never changes across trials.",
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft = {
+            "latex": "Calibration was repeated after every third trial.",
+            "bindings": [
+                {
+                    "sentence": "Calibration was repeated after every third trial.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "Calibration was repeated after every third trial.",
+                "fact": "calibration-regime", "verdict": "unsupported",
+            }
+        ])
+        pre = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(
+                self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+            )
+
+        self.assertEqual(ctx.exception.code, "SECTION_UNSUPPORTED_CLAIM")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_supported_claim_writes_with_the_span_reported(self) -> None:
+        section = _bound_section(
+            fact="calibration-regime", text="The constant is fixed at the interval's midpoint.",
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft = {
+            "latex": "Calibration fixes that constant at the midpoint.",
+            "bindings": [
+                {
+                    "sentence": "Calibration fixes that constant at the midpoint.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "Calibration fixes that constant at the midpoint.",
+                "fact": "calibration-regime", "verdict": "supported",
+                "span": "fixed at the interval's midpoint",
+            }
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"]["status"], "measured")
+        self.assertEqual(result["sourceGrounding"]["decided"], 1)
+
+    def test_a_draft_failing_both_checks_names_the_verbatim_refusal(self) -> None:
+        """Scenario "A draft failing both checks names the verbatim
+        refusal" (tasks.md 1.14): copying is decided before meaning."""
+        run = _n_token_run(17)
+        section_text = f"Some opening sentence. {run} A closing sentence about something else."
+        section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="2. Widget Calibration", text=section_text,
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft_latex = f"Opening sentence of the draft. {run} Closing sentence of the draft."
+        draft = {
+            "latex": draft_latex,
+            "bindings": [{"sentence": draft_latex, "binding": "fact:calibration-regime"}],
+        }
+        grounding_account = _grounding_account([
+            {"sentence": draft_latex, "fact": "calibration-regime", "verdict": "unsupported"},
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(
+                self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+            )
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+
+
+class GroundingScopeBoundaryTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: A Sibling Check, Never
+    An Extension Of The Verbatim Or Leak Checks` (tasks.md 1.13, its own
+    task). An `evidence:`-bound sentence and an `argument`-mode block NEVER
+    reach reconciliation, even when a grounding account names them --
+    proven by a LOCK, not by the absence of a failure."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_an_account_entry_naming_a_non_subject_sentence_is_ignored(self) -> None:
+        """A grounding account naming an `evidence:`-bound sentence (never
+        a subject) must not raise `GROUNDING_SENTENCE_UNKNOWN` -- the entry
+        is simply irrelevant to reconciliation, which is scoped to
+        subjects' own facts alone."""
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        subject = _fact_binding("The constant holds steady across trials.", "calibration-regime")
+        non_subject_entry = {
+            "sentence": "This cites an external record, never a subject.",
+            "fact": "an-unrelated-non-subject-fact", "verdict": "unsupported",
+        }
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "constant holds across trials",
+            },
+            non_subject_entry,
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+
+    def test_an_evidence_bound_sentence_never_reaches_reconciliation_through_write(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        contract = _write_contract(
+            citations_regime="resolution", evidence_set=({"id": "E1", "regime": "resolution"},),
+            requires_facts=("calibration-regime",), source_sections=(section,),
+        )
+        draft = {
+            "latex": (
+                "The constant holds steady across trials. "
+                "This closes on the recorded evidence."
+            ),
+            "bindings": [
+                {
+                    "sentence": "The constant holds steady across trials.",
+                    "binding": "fact:calibration-regime",
+                },
+                {
+                    "sentence": "This closes on the recorded evidence.",
+                    "binding": "evidence:E1",
+                },
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "The constant holds steady across trials.",
+                "fact": "calibration-regime", "verdict": "supported",
+                "span": "constant holds across trials",
+            },
+            {
+                # An over-eager account also judging the evidence-bound
+                # sentence, which is never a subject and must be ignored.
+                "sentence": "This closes on the recorded evidence.",
+                "fact": "E1", "verdict": "unsupported",
+            },
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+
+    def test_an_argument_mode_block_never_reaches_reconciliation_through_write(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument",
+            requires_facts=("calibration-regime",), source_sections=(section,),
+        )
+        draft = {
+            "latex": "The constant holds steady across trials.",
+            "bindings": [
+                {
+                    "sentence": "The constant holds steady across trials.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        # An account claiming `unsupported` would refuse `SECTION_
+        # UNSUPPORTED_CLAIM` were this block ever reconciled -- it is not,
+        # even though a caller (mistakenly) supplied one.
+        grounding_account = _grounding_account([
+            {
+                "sentence": "The constant holds steady across trials.",
+                "fact": "calibration-regime", "verdict": "unsupported",
+            }
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
+class CmdWriteGroundingWiringTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 2, task
+    2.8: `cmd_write` reads `--grounding`, resolves it through
+    `_resolve_repo_path` when supplied, loads its JSON, and threads it to
+    `write_block(..., grounding_account=...)`. Mocks `paper_write.
+    write_block` (never `paper_source_span.resolve_bound_sections`), the
+    same shape `CmdWriteSourceSectionsWiringTests` already establishes."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-cmd-write-grounding-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only", "requires_facts": [], "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nSome contract prose.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        (self.test_root / "draft.json").write_text(
+            json.dumps({"latex": "Draft body.", "bindings": []}), encoding="utf-8",
+        )
+        (self.test_root / "audit.json").write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+        self.grounding_payload = {
+            "support": [{"sentence": "Draft body.", "fact": "invented-fact", "verdict": "supported"}]
+        }
+        (self.test_root / "grounding.json").write_text(
+            json.dumps(self.grounding_payload), encoding="utf-8",
+        )
+
+    def _args(self, *, grounding=None) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None, grounding=grounding,
+        )
+
+    def test_cmd_write_threads_grounding_account_to_write_block(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args(grounding=str(self.test_root / "grounding.json")))
+
+        self.assertEqual(mocked_write_block.call_args.kwargs["grounding_account"], self.grounding_payload)
+
+    def test_cmd_write_omitting_grounding_passes_none(self) -> None:
+        with unittest.mock.patch("paper_write.write_block") as mocked_write_block:
+            mocked_write_block.return_value = {"status": "written"}
+            paper_cli.cmd_write(self._args(grounding=None))
+
+        self.assertIsNone(mocked_write_block.call_args.kwargs["grounding_account"])
+
+    def test_a_grounding_path_outside_the_repository_refuses(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-grounding-outside-{os.getpid()}.json"
+        outside.write_text(json.dumps({"support": []}), encoding="utf-8")
+        self.addCleanup(outside.unlink, missing_ok=True)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._args(grounding=str(outside)))
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+
+class RefusalConstructorLiteralArgumentTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, task 2.9
+    (design.md Sec 1): every `Refused(...)` first argument this change adds
+    is a string literal, in `paper_grounding.py` and this phase's
+    `paper_write.py`/`paper_cli.py` diffs -- a non-literal makes the site
+    `code is None` to `reachable_paper_refusal_codes`'s own static walk
+    (`_refusal_code_argument` reads only `ast.Constant`), silently widening
+    the module's whole constant set into the roster."""
+
+    def test_no_new_raise_site_re_raises_a_caught_refusals_own_code(self) -> None:
+        for path in (
+            SKILL_SCRIPTS / "paper_grounding.py",
+            SKILL_SCRIPTS / "paper_write.py",
+            CLI,
+        ):
+            source = path.read_text(encoding="utf-8")
+            self.assertNotIn(
+                "raise Refused(exc.code", source,
+                f"{path.name} re-raises a caught refusal's own runtime code, which is "
+                "invisible to the roster derivation's static walk",
+            )
+
+    def test_every_refused_call_in_paper_grounding_takes_a_string_literal_code(self) -> None:
+        tree = ast.parse((SKILL_SCRIPTS / "paper_grounding.py").read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "Refused"):
+                first = node.args[0]
+                self.assertIsInstance(first, ast.Constant, ast.dump(node))
+                self.assertIsInstance(first.value, str, ast.dump(node))
+
+
+class GroundingMutationProofTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 3, tasks
+    3.1-3.4: one mutant per refusal code, proving reachability the way
+    this repository requires it proven -- by breaking the guard and
+    watching the mapped scenario go red, never by reading the source and
+    asserting it looks right. Every anchor below sits on its own line in
+    `paper_grounding.py`, none shared with another (tasks.md 3.4)."""
+
+    def _assert_guard_failed_under_mutation(self, proc: subprocess.CompletedProcess) -> None:
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_1_treating_an_absent_account_as_empty_fails_the_account_absent_guard(self) -> None:
+        """Scenario "Mutation -- the absent-account refusal is reachable"
+        (tasks.md 3.1)."""
+        proc = _run_against_mutant(
+            "    if account is None:",
+            "    if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_no_account_with_subjects_refuses_account_absent_never_verdict_missing",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_2a_disabling_the_unknown_sentence_check_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- each direction is independently reachable"
+        (tasks.md 3.2), the `GROUNDING_SENTENCE_UNKNOWN` direction."""
+        proc = _run_against_mutant(
+            '        if entry["sentence"] not in subject_sentences:',
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_an_account_entry_naming_an_unsegmented_sentence_refuses",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_2b_disabling_the_missing_verdict_check_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- each direction is independently reachable"
+        (tasks.md 3.2), the `GROUNDING_VERDICT_MISSING` direction -- a
+        DIFFERENT anchor line from 2a's, so each mutant reddens only its
+        own scenario, never the other."""
+        proc = _run_against_mutant(
+            "        if entry is None:",
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_a_subject_with_no_account_entry_refuses_verdict_missing",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_3_removing_the_byte_presence_re_read_fails_the_downgrade_guard(self) -> None:
+        """Scenario "Mutation -- the downgrade is caught only by span
+        reconciliation" (tasks.md 3.3) -- THE load-bearing property (design.md
+        D1): with the byte-presence re-read removed, any span is accepted
+        without ever being checked against the section's own bytes, and an
+        ungrounded `supported` verdict wrongly survives."""
+        proc = _run_against_mutant(
+            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+            "byte_present_own = True",
+            "tests.test_paper_writing.ReconcileSupportBurdenOfProofTests"
+            ".test_a_supported_verdict_with_an_empty_span_never_passes_as_supported",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_mutation_4_disabling_the_unsupported_branch_fails_its_own_scenario(self) -> None:
+        """Scenario "Mutation -- the unsupported refusal is reachable"
+        (tasks.md 3.4)."""
+        proc = _run_against_mutant(
+            '        if verdict == "unsupported":',
+            "        if False:",
+            "tests.test_paper_writing.ReconcileSupportTests"
+            ".test_unsupported_refuses_naming_all_five_fields",
+            source_path=SKILL_SCRIPTS / "paper_grounding.py",
+        )
+        self._assert_guard_failed_under_mutation(proc)
+
+    def test_the_four_anchors_sit_on_four_distinct_lines(self) -> None:
+        """tasks.md 3.4's own design constraint on the module: no two of
+        the four refusals' guard conditions may share a source line, or
+        `_run_against_mutant`'s exactly-once anchor requirement could never
+        be satisfied for both at once."""
+        source = (SKILL_SCRIPTS / "paper_grounding.py").read_text(encoding="utf-8")
+        lines = source.splitlines()
+        anchors = [
+            "if account is None:",
+            'if entry["sentence"] not in subject_sentences:',
+            "if entry is None:",
+            'if verdict == "unsupported":',
+            'byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)',
+        ]
+        anchor_lines = set()
+        for anchor in anchors:
+            matches = [index for index, line in enumerate(lines) if anchor in line]
+            self.assertEqual(len(matches), 1, f"{anchor!r} must occur exactly once")
+            anchor_lines.add(matches[0])
+        self.assertEqual(len(anchor_lines), len(anchors), "two anchors share the same source line")
 
 
 if __name__ == "__main__":

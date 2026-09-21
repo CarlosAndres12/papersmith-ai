@@ -1046,7 +1046,7 @@ anything itself.**
 
 | Verb | What it does | Refuses |
 | --- | --- | --- |
-| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then refuses if this block's own section citation folder is not fully ready, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute`. For a `transposition`-mode block with at least one resolved bound section, `check_source_section_verbatim` then runs against the same draft, after the style tripwire and before `substitute` | `PHASE_NOT_READY`, `CITATION_FOLDER_ABSENT`, `CITATION_NOT_INGESTED`, `CITATION_FOLDER_UNCLASSIFIED`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP`, `SOURCE_SECTION_VERBATIM` |
+| `write --section <id> --block <id> --draft <path> --audit <path> [--evidence <path>] [--style <path>] [--guidance <dir>] [--transcript <path>] [--grounding <path>]` | Before any draft/audit byte is read: refuses if this block's own phase wave is not yet writable, then refuses if this block's own section citation folder is not fully ready, then runs packet assembly for this block. Then reconciles the already-drafted, already-audited block against its real contract, evidence set and mode; substitutes on success, reports fired bullets on a first failure, refuses on exhaustion. `--style` records the sampler's account as `R` and runs the eight-token tripwire against the styled draft before `substitute`. For a `transposition`-mode block with at least one resolved bound section, `check_source_section_verbatim` then runs against the same draft, after the style tripwire and before `substitute`. `--grounding` records the section-grounding-auditor's account and reconciles it against every subject sentence, after the verbatim check and before `substitute` | `PHASE_NOT_READY`, `CITATION_FOLDER_ABSENT`, `CITATION_NOT_INGESTED`, `CITATION_FOLDER_UNCLASSIFIED`, `GUIDANCE_MARKDOWN_UNREADABLE`, `MODE_ABSENT`, `EVIDENCE_SET_REQUIRED`, `UNBOUND_SENTENCE`, `BINDING_ORPHANED`, `EVIDENCE_ID_UNKNOWN`, `FACT_NOT_LICENSED`, `STRUCTURAL_CARRIES_CLAIM`, `MODE_VIOLATION`, `DISQUALIFIERS_ABSENT`, `VERDICT_MISSING`, `VERDICT_BULLET_UNKNOWN`, `AUDIT_EXHAUSTED`, `SPAN_NOT_IN_SOURCE`, `STYLE_OVERLAP`, `SOURCE_SECTION_VERBATIM`, `GROUNDING_ACCOUNT_ABSENT`, `GROUNDING_SENTENCE_UNKNOWN`, `GROUNDING_VERDICT_MISSING`, `SECTION_UNSUPPORTED_CLAIM` |
 
 **The phase gate stops the write path, it does not merely report it.**
 Unit 6 wired `PHASE_NOT_READY` onto the read-only `phases` verb alone;
@@ -1213,6 +1213,64 @@ first. Guarded on `contract.mode == paper_vocabulary.MODE_TRANSPOSITION` —
 derived from the contract on disk, never a block id or a hand-maintained
 list; an `argument`-mode block is out of scope this change and is never
 checked, regardless of overlap.
+
+### The transposition-grounding guard: containment, not copying
+
+A `transposition`-mode block must assert only what its bound source section
+carries. The verbatim check above judges **copying**; it stays silent about
+a draft that paraphrases freely while asserting something the section never
+states. `paper_grounding.reconcile_support` is a fourth sibling in `write`'s
+judge chain, judging **containment** instead: a subject sentence — a
+`fact:`-bound sentence whose fact also names a section the block resolves as
+bound — must be supported by that section's own bytes. The orchestrating
+agent also delegates to the `section-grounding-auditor` agent, which returns
+one `supported`/`unsupported`/`undecidable` verdict per subject sentence,
+quoting a span from the bound section for every `supported`. Write that JSON
+to a file and run `write --grounding <path>`.
+
+**Measure this before delegating (section-grounding-auditor):** confirm the
+block's own bound source sections have already resolved (`packet`'s own
+`source_sections`/`source_sections_state`, above); an agent asked to judge
+support against a section that never resolved cannot distinguish "nothing to
+ground" from "cannot be checked."
+
+**The permissive verdict carries the burden of proof — the opposite of
+`contract-audit`'s own asymmetry.** There, the *blocking* verdict (`fires`)
+must quote a span. Here `supported` is what lets a sentence reach
+`substitute`, so `supported` is the one `write` requires to be grounded: its
+cited span must be byte-present in the re-derived text of the section
+belonging to that sentence's own fact — never the account's own copy of
+either. A `supported` verdict with an empty or absent span, or one grounded
+only in a *different* fact's section, downgrades to `undecidable` rather
+than being trusted. `unsupported` needs no span to refuse
+`SECTION_UNSUPPORTED_CLAIM`, naming the block, the fact, the lineage, the
+section title and the sentence — demanding a span for a claim the section
+never makes would demand proof of a negative.
+
+`undecidable` — returned directly or produced by a downgrade — never blocks
+on its own; a mechanism that blocks on its own uncertainty trains the agent
+to guess. But the two are counted and reported SEPARATELY in
+`sourceGrounding` (`subjects`, `decided`, `undecidable`, `downgraded`), so an
+honest abstention and a downgraded, unfounded `supported` stay
+distinguishable from the envelope alone. `status` is `"measured"` only when
+`decided > 0`, else `"unmeasured"` — reported for a block with no subjects
+at all, and separately for one whose subjects are all undecidable, the two
+cases distinguished by the reported `subjects` count. **Falsifier:** over ten
+or more recorded real `write` runs against genuine document-rooted bindings,
+if any block reaches `written` with `downgraded > 0`, or with `subjects > 0`
+and `decided == 0`, this no-ratio-threshold ruling is wrong and a blocking
+rule over these counts must be added.
+
+An `evidence:`-bound sentence and a `structural` sentence are never subjects
+— held by their own separately shipped mechanisms — and neither is any
+sentence in an `argument`-mode block, the same `contract.mode` derivation
+`MODE_ABSENT` and the verbatim check above both already rest on. This is a
+sibling check, never an extension of the verbatim check or the style
+tripwire: it takes an agent account as input and refuses on semantics,
+something neither of those two functions' contracts admit. Runs inside
+`write_block`, after the verbatim check above and before `substitute`, so a
+draft failing both checks always names `SOURCE_SECTION_VERBATIM` first —
+copying is decided before meaning.
 
 ## A diagram that compiles, or says why: `render` and `place`
 
