@@ -2049,15 +2049,115 @@ def _declared_block(header, section: str, block_id: str) -> dict:
     )
 
 
-def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:
+def _resolve_packet_source_sections(
+    sections_dir: Path, header, block: dict, qualified_id: str, *, corpus, paper_dir,
+) -> tuple:
+    """`the-redactor-receives-the-section-it-must-transpose`, design.md
+    D1/D2/D5: the block's own bound source sections, plus the sibling
+    `source_sections_state` naming which of the closed four-value
+    vocabulary applies (`resolved`, `unbound`, `unmeasured`, `not-
+    applicable`). Mode is resolved from the header `assemble_packet`
+    already parsed -- no extra disk read. Never assembles a corpus it was
+    handed (`corpus is not None` skips assembly entirely); never derives a
+    paper root it was not given (`paper_dir is None` skips assembly
+    entirely too, rather than letting `paper_graph.assemble_corpus`
+    silently derive `sections_dir.parent / "paper"` on this function's
+    behalf).
+    """
+    mode_obj = paper_contract.resolve_mode(header, block)
+    mode = mode_obj["value"] if mode_obj is not None else None
+    header_triples = paper_contract.requirement_documents(block["requires_facts"])
+
+    if mode is None:
+        return (), {
+            "state": "unmeasured",
+            "reason": (
+                f"{qualified_id}: no mode resolves at section or block level; declare one "
+                "before its bound sections can be resolved"
+            ),
+            "unresolved": [
+                {"fact": fact, "lineage": lineage, "title": title}
+                for fact, lineage, title in header_triples
+            ],
+        }
+    if mode != paper_vocabulary.MODE_TRANSPOSITION:
+        return (), {
+            "state": "not-applicable",
+            "reason": (
+                f"{qualified_id}: mode is {mode!r}, not {paper_vocabulary.MODE_TRANSPOSITION!r}; "
+                "source sections are only resolved for a transposition-mode block"
+            ),
+            "unresolved": [],
+        }
+
+    if corpus is None:
+        # Corpus-wide refusal contamination on `packet` is accepted, see
+        # `design.md` D2 and `redactor-packet` spec scenario "An unrelated
+        # section's defect blocks a transposition block's packet" -- the
+        # tests, not this comment, are the enforcement.
+        if paper_dir is None:
+            if not header_triples:
+                return (), {
+                    "state": "unbound",
+                    "reason": f"{qualified_id}: names no (fact, lineage, title) binding at all; nothing to resolve",
+                    "unresolved": [],
+                }
+            return (), {
+                "state": "unmeasured",
+                "reason": (
+                    f"{qualified_id}: no paper root supplied; pass --paper <dir> (or "
+                    "ensure paper/main.tex is reachable) so its bound sections can be "
+                    "resolved"
+                ),
+                "unresolved": [
+                    {"fact": fact, "lineage": lineage, "title": title}
+                    for fact, lineage, title in header_triples
+                ],
+            }
+        corpus = paper_graph.assemble_corpus(sections_dir, paper_dir=paper_dir)
+
+    record = corpus.blocks[qualified_id]
+    declared_triples = record.source_bindings
+    if not declared_triples:
+        return (), {
+            "state": "unbound",
+            "reason": f"{qualified_id}: names no (fact, lineage, title) binding at all; nothing to resolve",
+            "unresolved": [],
+        }
+
+    resolved_sections = paper_source_span.resolve_bound_sections(corpus, qualified_id)
+    resolved_keys = {(entry["fact"], entry["lineage"], entry["title"]) for entry in resolved_sections}
+    unresolved = [
+        {"fact": fact, "lineage": lineage, "title": title}
+        for fact, lineage, title in declared_triples
+        if (fact, lineage, title) not in resolved_keys
+    ]
+    if unresolved:
+        return resolved_sections, {
+            "state": "unmeasured",
+            "reason": (
+                f"{qualified_id}: {len(unresolved)} bound-section triple(s) did not resolve -- "
+                "run 'bind', populate the source root, or check the title -- see 'unresolved'"
+            ),
+            "unresolved": unresolved,
+        }
+    return resolved_sections, {"state": "resolved", "reason": None, "unresolved": []}
+
+
+def assemble_packet(
+    sections_dir: Path, guidance_dir: Path, section: str, block_id: str,
+    *, corpus=None, paper_dir: Path | None = None,
+) -> dict:
     """The redactor packet (`redactor-packet` spec; design.md Decision D5):
     one block's own section contract prose, verbatim, plus -- per `style-
     reference`-classed `guidance/` root -- every ingested paper's heading
     OUTLINE (`paper_guidance.read_markdown_outline`: `{title, level,
-    byte_start, byte_end}`, never the span text itself). Read-only: never
-    opens a reference `.md` for anything beyond computing its own outline,
-    and never writes anything under any input, including every refusal
-    path (tasks.md 8.14).
+    byte_start, byte_end}`, never the span text itself); plus, for a
+    `transposition`-mode block only, the block's own bound source
+    sections (`the-redactor-receives-the-section-it-must-transpose`,
+    design.md D1/D2/D4/D5). Read-only: never opens a reference `.md` for
+    anything beyond computing its own outline, and never writes anything
+    under any input, including every refusal path (tasks.md 8.14).
 
     This is the structural half of the leak guard the operator raised
     twice: the packet is physically incapable of carrying reference
@@ -2080,6 +2180,18 @@ def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_
     with no equivalent block contributes nothing` is the sampler's own
     later degrade; this is the same "contributes nothing, never refuses"
     shape one step earlier, over roots rather than resolved spans).
+
+    Returns, additionally (`the-redactor-receives-the-section-it-must-
+    transpose`, design.md Interfaces):
+        "source_sections": [ {fact, lineage, title, path,
+                              byte_start, byte_end, text}, ... ]
+        "source_sections_state": {
+            "state": "resolved" | "unbound" | "unmeasured" | "not-applicable",
+            "reason": str | None,
+            "unresolved": [ {fact, lineage, title}, ... ],
+        }
+    Never assembles a corpus it was handed; never derives a paper root it
+    was not given.
     """
     # The header's own `section` field is what names a section, never the
     # filename (`paper_contract.resolve_section_path`). Composing
@@ -2088,7 +2200,8 @@ def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_
     # traceback and exit 1 on every real block instead of refusing.
     section_path = paper_contract.resolve_section_path(sections_dir, section)
     header, body = paper_contract.parse(section_path.read_bytes())
-    _declared_block(header, section, block_id)
+    block = _declared_block(header, section, block_id)
+    qualified_id = f"{section}.{block_id}"
 
     registry = paper_guidance.read_registry(guidance_dir)
     style_roots = sorted(name for name, cls in registry.items() if cls == "style-reference")
@@ -2105,11 +2218,17 @@ def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_
                 **outline,
             })
 
+    source_sections, source_sections_state = _resolve_packet_source_sections(
+        sections_dir, header, block, qualified_id, corpus=corpus, paper_dir=paper_dir,
+    )
+
     return {
         "block": block_id,
         "section": section,
         "contract": body.decode("utf-8"),
         "references": references,
+        "source_sections": source_sections,
+        "source_sections_state": source_sections_state,
     }
 
 
@@ -2120,10 +2239,17 @@ def cmd_packet(args: argparse.Namespace) -> dict:
     to the redactor and style-sampler agents by hand without risking
     dropping one of the channels ("Why this verb exists at all": no
     script in this skill may import `subprocess`, so the skill can never
-    invoke either agent itself)."""
+    invoke either agent itself). `--paper` (`the-redactor-receives-the-
+    section-it-must-transpose`, design.md D1 category C) resolves through
+    the SAME `paper_scaffold.resolve_paper_dir` boundary `write`/`place`
+    already enforce, so a transposition-mode block's own bound sections
+    can be resolved against a real paper root -- the one refusal `packet`
+    newly reaches on every invocation, `PAPER_OUTSIDE_REPOSITORY`, is an
+    invocation defect, never a state of the world (D1)."""
     sections_dir = paper_contract.resolve_sections_dir(args.sections)
     guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
-    return assemble_packet(sections_dir, guidance_dir, args.section, args.block)
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return assemble_packet(sections_dir, guidance_dir, args.section, args.block, paper_dir=paper_dir)
 
 
 def _guard_section_citations_ready(guidance_dir: Path, section_id: str, regime: str) -> None:
@@ -2225,7 +2351,14 @@ def cmd_write(args: argparse.Namespace) -> dict:
 
     _guard_section_citations_ready(guidance_dir, header.section, block["citations"])
 
-    assemble_packet(sections_dir, guidance_dir, args.section, args.block)
+    # `the-redactor-receives-the-section-it-must-transpose`, design.md D2:
+    # this corpus is already assembled above (`_resolve_write_gate`, with
+    # `paper_dir` already resolved too) -- passed straight through so
+    # `assemble_packet` never assembles a SECOND corpus against a
+    # possibly-different derived root.
+    assemble_packet(
+        sections_dir, guidance_dir, args.section, args.block, corpus=corpus, paper_dir=paper_dir,
+    )
 
     draft_path = _resolve_repo_path(args.draft)
     audit_path = _resolve_repo_path(args.audit)
@@ -3089,7 +3222,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_packet = sub.add_parser(
         "packet",
         help="read-only: this block's own contract prose plus every style-reference "
-             "paper's heading outline (offsets only, never reference prose)",
+             "paper's heading outline (offsets only, never reference prose), plus -- for a "
+             "transposition-mode block -- its own bound source sections",
     )
     p_packet.add_argument("--section", required=True, help="the sections/<id>.md stem this block belongs to")
     p_packet.add_argument("--block", required=True, help="block id to assemble the packet for")
@@ -3100,6 +3234,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_packet.add_argument(
         "--guidance", default=None,
         help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_packet.add_argument(
+        "--paper", default=None,
+        help="override paper/ location; must resolve inside the repository root",
     )
 
     p_reuse = sub.add_parser(

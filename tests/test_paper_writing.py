@@ -4619,6 +4619,24 @@ class RedactorInputContractTests(unittest.TestCase):
         self.assertEqual(redactor_input.style_set, ())
         self.assertEqual(redactor_input.contract_prose, "Some contract prose.")
 
+    def test_the_shape_carries_exactly_five_fields(self) -> None:
+        """`design.md` D3: the field count is the shape's only enforcement
+        -- `RedactorInput` has no production constructor, so a fifth field
+        appended without this assertion could silently drift unnoticed."""
+        self.assertEqual(len(dataclasses.fields(paper_bindings.RedactorInput)), 5)
+
+    def test_source_sections_round_trips_as_a_keyword(self) -> None:
+        section = {
+            "fact": "formulation", "lineage": "widget-cascade", "title": "3. Something",
+            "path": "proposals/widget-cascade-r21.md", "byte_start": 0, "byte_end": 10,
+            "text": "Some text.",
+        }
+        redactor_input = paper_bindings.RedactorInput(
+            contract_prose="Some contract prose.", evidence_set=(), mode="transposition",
+            style_set=(), source_sections=(section,),
+        )
+        self.assertEqual(redactor_input.source_sections, (section,))
+
 
 class BindingMapTests(unittest.TestCase):
     """`evidence-bound-drafting` spec, `Requirement: Binding Map
@@ -10249,9 +10267,11 @@ def _write_guidance_style_reference(guidance_dir: Path, root: str, papers: dict)
 
 def _write_packet_section(sections_dir: Path, stem: str, section: str, block_id: str, prose: str) -> None:
     """Test fixture (unit 8): the smallest `sections/<stem>.md` contract
-    `paper_contract.parse` accepts, carrying one block -- `assemble_
-    packet` never calls `paper_graph.assemble_corpus`, so no `### External
-    inputs`/`### Internal chain` sections are required here."""
+    `paper_contract.parse` accepts, carrying one block -- a mode-less
+    block never enters `assemble_packet`'s own transposition-mode branch
+    (`the-redactor-receives-the-section-it-must-transpose`, design.md D5),
+    so `paper_graph.assemble_corpus` is never called for it and no
+    `### External inputs`/`### Internal chain` sections are required here."""
     header = json.dumps({
         "section": section, "position": 1,
         "blocks": [
@@ -10259,6 +10279,53 @@ def _write_packet_section(sections_dir: Path, stem: str, section: str, block_id:
         ],
     })
     (sections_dir / f"{stem}.md").write_text(f"---\n{header}\n---\n\n{prose}\n", encoding="utf-8")
+
+
+#: Reused across every fixture in this section that needs `paper_contract.
+#: parse`'s own `mode.source.quote` transcription check to hold verbatim
+#: (`the-redactor-receives-the-section-it-must-transpose`, design.md).
+_TRANSPOSITION_QUOTE = (
+    "This synthetic fixture block restates its own formulation for testing purposes only."
+)
+
+
+def _write_transposition_section(
+    sections_dir: Path, stem: str, section: str, block_id: str,
+    *, mode: str | None = "transposition", document: dict | None = None, with_fact: bool = True,
+) -> None:
+    """Test fixture (`the-redactor-receives-the-section-it-must-transpose`,
+    design.md D1/D2/D5): a `sections/<stem>.md` contract carrying one
+    block whose own `requires_facts` entry names the synthetic
+    `formulation` fact, optionally bound to a `document` triple --
+    `mode=None` omits the header's own `mode` key entirely (`paper_
+    contract.resolve_mode` then reports `None`). Carries the full
+    `## Disqualifiers` / `### External inputs` / `### Internal chain`
+    partition every real `assemble_corpus`/`write_block` call needs, so
+    the SAME fixture serves a bare `assemble_packet` call (Phase 0/1/4)
+    and a full `cmd_write` pipeline run (Phase 3/5) alike."""
+    header: dict = {
+        "section": section, "position": 1,
+        "blocks": [{
+            "id": block_id, "requires_facts": [], "requires_declarations": [], "citations": "none",
+        }],
+    }
+    if with_fact:
+        fact_entry = {
+            "value": "formulation", "source": {"file": f"sections/{stem}.md", "quote": _TRANSPOSITION_QUOTE},
+        }
+        if document is not None:
+            fact_entry["document"] = document
+        header["blocks"][0]["requires_facts"] = [fact_entry]
+    if mode is not None:
+        header["mode"] = {"value": mode, "source": {"file": f"sections/{stem}.md", "quote": _TRANSPOSITION_QUOTE}}
+    body = (
+        f"{_TRANSPOSITION_QUOTE}\n\n"
+        "## Disqualifiers\n\n- A symbol used without being declared.\n\n"
+        "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+    )
+    (sections_dir / f"{stem}.md").write_text(
+        "---\n" + json.dumps(header) + "\n---\n\n" + body, encoding="utf-8",
+    )
 
 
 class SegmentMarkdownTests(unittest.TestCase):
@@ -10644,7 +10711,9 @@ class PacketWriteGateMutationProofTests(unittest.TestCase):
 
     def test_mutation_removing_the_packet_assembly_call_fails_the_gate(self) -> None:
         proc = _run_against_mutant(
-            "    assemble_packet(sections_dir, guidance_dir, args.section, args.block)\n",
+            "    assemble_packet(\n"
+            "        sections_dir, guidance_dir, args.section, args.block, corpus=corpus, paper_dir=paper_dir,\n"
+            "    )\n",
             "",
             "tests.test_paper_writing.PacketWriteGateTests"
             ".test_an_unreadable_style_reference_paper_refuses_before_draft_is_opened",
@@ -10653,6 +10722,332 @@ class PacketWriteGateMutationProofTests(unittest.TestCase):
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
         self.assertNotEqual(proc.returncode, 0, output)
+
+
+# =====================================================================
+# the-redactor-receives-the-section-it-must-transpose -- WU3/WU4/WU5
+# =====================================================================
+
+
+class PacketCorpusReuseTests(unittest.TestCase):
+    """`design.md` D2, Phase 3 (WU3, tasks 3.4/3.6): `assemble_packet`
+    never assembles a corpus it was handed, and never derives a paper
+    root it was not given -- proven against a REAL `bind`-recorded
+    binding, so only the SUPPLIED root (never the derived default) can
+    possibly resolve it."""
+
+    def setUp(self) -> None:
+        # `cmd_bind`/`cmd_write` both resolve `--paper`/`--sections` through
+        # the real, non-injectable `FORGE_ROOT` default (the same
+        # containment `BindCliEndToEndTests` requires), so this fixture
+        # lives under the already-gitignored `implementations/` tree.
+        self.tmp_path = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-packet-corpus-reuse-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.tmp_path, ignore_errors=True)
+        self.tmp_path.mkdir(parents=True)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        # `document=None`: the header itself declares NO binding, so the
+        # fixture's binding exists ONLY where `bind` records it below --
+        # a header-declared binding would resolve identically no matter
+        # which `paper_dir` is supplied, which would prove nothing.
+        _write_transposition_section(self.sections_dir, "01-a", "a", "only", document=None)
+        proposals = self.tmp_path / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}), encoding="utf-8",
+        )
+        (proposals / "widget-cascade-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n\nResolved section body text for this fixture only.\n",
+            encoding="utf-8",
+        )
+        # A DIFFERENT root from `sections_dir.parent / "paper"` (`paper_
+        # graph.assemble_corpus`'s own default) -- the SUPPLIED root this
+        # whole class proves `assemble_packet` actually uses.
+        self.custom_paper_dir = self.tmp_path / "custom-paper"
+        paper_scaffold.scaffold(self.custom_paper_dir)
+        # The DERIVED default -- scaffolded too, but never bound, so a
+        # silent fallback to it would show `unbound`, never `resolved`.
+        self.default_paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(self.default_paper_dir)
+
+        _settle_separation_round(
+            self.custom_paper_dir, self.tmp_path, "formulation", "widget-cascade", "a.only",
+            ["3. Something"],
+        )
+        paper_cli.cmd_bind(argparse.Namespace(
+            paper=str(self.custom_paper_dir), sections=str(self.sections_dir),
+            block="a.only", fact="formulation", lineage="widget-cascade",
+            section=["3. Something"], reopen=False,
+        ))
+
+    def test_a_corpus_assembled_under_the_supplied_paper_dir_is_reused_verbatim(self) -> None:
+        corpus = paper_cli._resolve_write_gate(self.custom_paper_dir, self.sections_dir, "a.only")
+
+        with unittest.mock.patch.object(
+            paper_graph, "assemble_corpus", wraps=paper_graph.assemble_corpus,
+        ) as spy:
+            packet = paper_cli.assemble_packet(
+                self.sections_dir, self.guidance_dir, "a", "only",
+                corpus=corpus, paper_dir=self.custom_paper_dir,
+            )
+
+        spy.assert_not_called()
+        self.assertEqual(packet["source_sections_state"]["state"], "resolved")
+        self.assertEqual(len(packet["source_sections"]), 1)
+
+    def test_no_corpus_resolves_against_the_supplied_root_never_the_derived_default(self) -> None:
+        under_custom = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "a", "only", paper_dir=self.custom_paper_dir,
+        )
+        under_default = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "a", "only", paper_dir=self.default_paper_dir,
+        )
+
+        self.assertEqual(under_custom["source_sections_state"]["state"], "resolved")
+        self.assertEqual(under_default["source_sections_state"]["state"], "unbound")
+
+    def test_cmd_write_resolves_source_sections_consistently_with_assemble_packet(self) -> None:
+        """Task 3.6: `cmd_write`'s own `assemble_packet` call (now given
+        `corpus=corpus, paper_dir=paper_dir`) and `BlockContract.source_
+        sections` (`paper_cli.py:2260`) must resolve against the SAME
+        corpus -- never a second, independently-assembled one."""
+        draft = {
+            "latex": "This closes the block.",
+            "bindings": [{"sentence": "This closes the block.", "binding": "structural"}],
+        }
+        audit = {"verdicts": [{"bullet": "A symbol used without being declared.", "verdict": "clear"}]}
+        (self.tmp_path / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+        (self.tmp_path / "audit.json").write_text(json.dumps(audit), encoding="utf-8")
+
+        with unittest.mock.patch.object(
+            paper_source_span, "resolve_bound_sections", wraps=paper_source_span.resolve_bound_sections,
+        ) as spy:
+            args = argparse.Namespace(
+                paper=str(self.custom_paper_dir), sections=str(self.sections_dir),
+                section="a", block="only",
+                draft=str(self.tmp_path / "draft.json"),
+                audit=str(self.tmp_path / "audit.json"),
+                evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+            )
+            with self.assertRaises(Refused) as ctx:
+                paper_cli.cmd_write(args)
+
+        # No open block marker exists for "only" in this fixture's `main.tex`
+        # -- `substitute` refuses `BLOCK_ABSENT` at the very end of the
+        # pipeline, proving every earlier stage (including BOTH `resolve_
+        # bound_sections` calls) already cleared.
+        self.assertEqual(ctx.exception.code, "BLOCK_ABSENT")
+        self.assertEqual(spy.call_count, 2)
+        corpora = {id(call.args[0]) for call in spy.call_args_list}
+        self.assertEqual(len(corpora), 1)
+        qualified_ids = {call.args[1] for call in spy.call_args_list}
+        self.assertEqual(qualified_ids, {"a.only"})
+
+
+class PacketCorpusContaminationTests(unittest.TestCase):
+    """`design.md` D2 category B/D, Phase 4 (WU4, tasks 4.1-4.3):
+    seventeen shipped codes are newly reachable from `packet` for a
+    `transposition` block -- proved by a test, not merely documented as
+    reachable."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        self.paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only",
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+        proposals = self.tmp_path / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}), encoding="utf-8",
+        )
+        (proposals / "widget-cascade-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n\nResolved section body text for this fixture only.\n",
+            encoding="utf-8",
+        )
+
+    def test_a_hand_edited_declarations_region_blocks_the_packet(self) -> None:
+        """Task 4.1: at least one of the 17 category-B codes -- here
+        `DECLARATIONS_HAND_EDITED` -- is reachable from `packet`, not
+        merely documented as reachable."""
+        paper_declarations.set_declaration(self.paper_dir, "author-roles", "Alice: writing")
+        tex_path = paper_block.resolve_main_tex(self.paper_dir)
+        pre = tex_path.read_bytes()
+        record = paper_region.read_region(pre, "declarations")
+        corrupted = (
+            pre[: record["begin_start"]]
+            + pre[record["begin_start"]:record["end_end"]].replace(b"Alice", b"Alicf", 1)
+            + pre[record["end_end"]:]
+        )
+        tex_path.write_bytes(corrupted)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.assemble_packet(
+                self.sections_dir, self.guidance_dir, "a", "only", paper_dir=self.paper_dir,
+            )
+        self.assertEqual(ctx.exception.code, "DECLARATIONS_HAND_EDITED")
+
+    def test_an_unrelated_malformed_section_blocks_a_transposition_packet(self) -> None:
+        (self.sections_dir / "02-b.md").write_bytes(b"---\nnot valid json\n---\n\nBroken.\n")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.assemble_packet(
+                self.sections_dir, self.guidance_dir, "a", "only", paper_dir=self.paper_dir,
+            )
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+
+    def test_the_same_corrupted_sibling_does_not_block_an_argument_mode_packet(self) -> None:
+        # Named "00-c" (sorts BEFORE the corrupted "02-b" below) so `paper_
+        # contract.resolve_section_path`'s own pre-existing, mode-blind
+        # scan-every-file lookup for THIS section resolves before ever
+        # reaching the corrupted sibling -- this test is about `assemble_
+        # packet`'s NEW mode gate (skipping `assemble_corpus` entirely for
+        # an `argument`-mode block), never about that unrelated, already-
+        # shipped lookup order.
+        _write_transposition_section(
+            self.sections_dir, "00-c", "c", "only", mode="argument",
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+        (self.sections_dir / "02-b.md").write_bytes(b"---\nnot valid json\n---\n\nBroken.\n")
+
+        packet = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "c", "only", paper_dir=self.paper_dir,
+        )
+        self.assertEqual(packet["source_sections_state"]["state"], "not-applicable")
+
+
+class SourceSectionVerbatimFalsifierTests(unittest.TestCase):
+    """`design.md` D6, Phase 5 (WU5, tasks 5.1-5.4): `SOURCE_RUN_BACKSTOP`
+    holds unchanged, and THIS is the falsifier that makes it a MEASURED
+    claim -- driven through the REAL `cmd_packet` -> `cmd_write` path end
+    to end, never a hand-built `BlockContract`."""
+
+    def setUp(self) -> None:
+        # `cmd_packet`/`cmd_write` both resolve `--paper`/`--sections`
+        # through the real, non-injectable `FORGE_ROOT` default, the same
+        # containment `BindCliEndToEndTests` requires.
+        self.tmp_path = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-verbatim-falsifier-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.tmp_path, ignore_errors=True)
+        self.tmp_path.mkdir(parents=True)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+        self.paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        (self.paper_dir / "main.tex").write_bytes(_marker_pair("only", b"Old body.\n"))
+        self._section_text = (
+            "This synthetic fixture section restates a long distinctive and entirely invented "
+            "sentence describing a formulation transposed from its own bound source document "
+            "for testing purposes only."
+        )
+        # A single-word heading title -- `resolve_bound_sections`' own span
+        # includes the heading LINE itself (`paper_guidance.segment_
+        # markdown`'s `byte_start` starts at the `#` marker, not the body
+        # beneath it), and its only capitalized token then sits at index 0
+        # of the pasted sentence, where `paper_bindings.type_structural`'s
+        # named-external-object check never looks (`index == 0: continue`).
+        # A multi-word title would otherwise flag its OWN second word as a
+        # named external object, a `paper_bindings` concern unrelated to
+        # the D6 falsifier this fixture exists to prove.
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only",
+            document={"lineage": "widget-cascade", "section": "Formulation"},
+        )
+        proposals = self.tmp_path / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}), encoding="utf-8",
+        )
+        (proposals / "widget-cascade-r21.md").write_text(
+            f"# Intro\n\n# Formulation\n\n{self._section_text}\n", encoding="utf-8",
+        )
+
+    def _packet(self) -> dict:
+        args = argparse.Namespace(
+            section="a", block="only", sections=str(self.sections_dir),
+            guidance=str(self.guidance_dir), paper=str(self.paper_dir),
+        )
+        return paper_cli.cmd_packet(args)
+
+    def _write_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.tmp_path / "draft.json"),
+            audit=str(self.tmp_path / "audit.json"),
+            evidence=None, style=None, guidance=str(self.guidance_dir), transcript=None,
+        )
+
+    def test_the_fixture_packet_resolves_the_bound_section(self) -> None:
+        """Task 5.2: the packet resolves through the real `cmd_packet`
+        path, not a hand-built corpus."""
+        packet = self._packet()
+        self.assertEqual(packet["source_sections_state"]["state"], "resolved")
+        self.assertEqual(len(packet["source_sections"]), 1)
+        self.assertIn(self._section_text, packet["source_sections"][0]["text"])
+
+    def test_a_verbatim_paste_of_the_fixture_bound_section_refuses(self) -> None:
+        """Task 5.3: D6's own required falsifier."""
+        packet = self._packet()
+        bound_text = packet["source_sections"][0]["text"]
+        # Segmented the SAME way `write`'s own `paper_bindings.reconcile`
+        # will segment it -- robust to whatever the resolved span's own
+        # sentence boundaries turn out to be, never assumed to be one.
+        sentences = paper_bindings.segment_sentences(bound_text)
+        self.assertTrue(sentences, "the resolved span segmented into zero sentences")
+
+        draft = {
+            "latex": bound_text,
+            "bindings": [{"sentence": sentence, "binding": "structural"} for sentence in sentences],
+        }
+        audit = {"verdicts": [{"bullet": "A symbol used without being declared.", "verdict": "clear"}]}
+        (self.tmp_path / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+        (self.tmp_path / "audit.json").write_text(json.dumps(audit), encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._write_args())
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+        # `main.tex` never changes on a refused write.
+        self.assertEqual(
+            (self.paper_dir / "main.tex").read_bytes(), _marker_pair("only", b"Old body.\n"),
+        )
+
+    def test_a_genuinely_restated_draft_under_threshold_still_writes(self) -> None:
+        """Task 5.4: the companion case -- a genuinely restated draft,
+        run length under threshold, passes and `write` succeeds; the
+        guard is not simply always-refuse."""
+        packet = self._packet()
+        self.assertEqual(len(packet["source_sections"]), 1)  # sanity: the section did resolve
+
+        draft = {
+            "latex": "This closes the block with its own distinct restatement.",
+            "bindings": [{
+                "sentence": "This closes the block with its own distinct restatement.",
+                "binding": "structural",
+            }],
+        }
+        audit = {"verdicts": [{"bullet": "A symbol used without being declared.", "verdict": "clear"}]}
+        (self.tmp_path / "draft.json").write_text(json.dumps(draft), encoding="utf-8")
+        (self.tmp_path / "audit.json").write_text(json.dumps(audit), encoding="utf-8")
+
+        result = paper_cli.cmd_write(self._write_args())
+
+        self.assertEqual(result["status"], "written")
 
 
 class CitationReadinessGateTests(unittest.TestCase):
@@ -10834,10 +11229,16 @@ class PacketReadOnlyTests(unittest.TestCase):
 
     def test_mutation_a_write_inside_assemble_packet_fails_the_manifest_guard(self) -> None:
         proc = _run_against_mutant(
-            "def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:",
-            "def assemble_packet(sections_dir: Path, guidance_dir: Path, section: str, block_id: str) -> dict:\n"
+            "def assemble_packet(\n"
+            "    sections_dir: Path, guidance_dir: Path, section: str, block_id: str,\n"
+            "    *, corpus=None, paper_dir: Path | None = None,\n"
+            ") -> dict:\n",
+            "def assemble_packet(\n"
+            "    sections_dir: Path, guidance_dir: Path, section: str, block_id: str,\n"
+            "    *, corpus=None, paper_dir: Path | None = None,\n"
+            ") -> dict:\n"
             "    marker = sections_dir / '01-intro.md'\n"
-            "    marker.write_bytes(marker.read_bytes() + b'x')",
+            "    marker.write_bytes(marker.read_bytes() + b'x')\n",
             "tests.test_paper_writing.PacketReadOnlyTests"
             ".test_packet_writes_nothing_including_when_it_refuses",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
@@ -10868,7 +11269,7 @@ class PacketPathContainmentTests(unittest.TestCase):
     def test_sections_outside_repository_refuses_and_writes_nothing(self) -> None:
         outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-sections-{os.getpid()}"
         args = argparse.Namespace(
-            section="intro", block="a", sections=str(outside), guidance=str(self.guidance_dir),
+            section="intro", block="a", sections=str(outside), guidance=str(self.guidance_dir), paper=None,
         )
 
         with self.assertRaises(Refused) as ctx:
@@ -10880,7 +11281,7 @@ class PacketPathContainmentTests(unittest.TestCase):
     def test_guidance_outside_repository_refuses_and_writes_nothing(self) -> None:
         outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-guidance-{os.getpid()}"
         args = argparse.Namespace(
-            section="intro", block="a", sections=str(self.sections_dir), guidance=str(outside),
+            section="intro", block="a", sections=str(self.sections_dir), guidance=str(outside), paper=None,
         )
 
         with self.assertRaises(Refused) as ctx:
@@ -10888,6 +11289,49 @@ class PacketPathContainmentTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.code, "GUIDANCE_OUTSIDE_REPOSITORY")
         self.assertFalse(outside.exists())
+
+
+class PacketPaperFlagTests(unittest.TestCase):
+    """`the-redactor-receives-the-section-it-must-transpose`, design.md D1
+    category C, Phase 3 (WU3, tasks 3.1-3.3): `cmd_packet` now resolves
+    `--paper` through `paper_scaffold.resolve_paper_dir`, the SAME
+    containment boundary `write`/`place` already enforce."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-packet-paper-flag-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Prose.")
+        self.guidance_dir = self.test_root / "guidance"
+
+    def test_paper_outside_repository_refuses(self) -> None:
+        outside = Path(tempfile.gettempdir()) / f"paper-writing-packet-outside-paper-{os.getpid()}"
+        args = argparse.Namespace(
+            section="intro", block="a", sections=str(self.sections_dir),
+            guidance=str(self.guidance_dir), paper=str(outside),
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_packet(args)
+
+        self.assertEqual(ctx.exception.code, "PAPER_OUTSIDE_REPOSITORY")
+
+    def test_a_real_paper_root_reaches_assemble_packet(self) -> None:
+        paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(paper_dir)
+        args = argparse.Namespace(
+            section="intro", block="a", sections=str(self.sections_dir),
+            guidance=str(self.guidance_dir), paper=str(paper_dir),
+        )
+
+        packet = paper_cli.cmd_packet(args)
+
+        self.assertEqual(packet["block"], "a")
+        self.assertIn("source_sections_state", packet)
 
 
 class PacketShippedCorpusTests(unittest.TestCase):
@@ -10950,6 +11394,205 @@ class PacketShippedCorpusTests(unittest.TestCase):
                 "experimental-setup", "no-such-block")
         self.assertEqual(ctx.exception.code, "BLOCK_UNDECLARED")
         self.assertIn("es-dataset", ctx.exception.detail)
+
+
+# =====================================================================
+# the-redactor-receives-the-section-it-must-transpose -- WU0/WU1
+# =====================================================================
+
+
+class AssemblePacketCorpusParamsTests(unittest.TestCase):
+    """`design.md` D2/D3(interface), Phase 0 (WU0): `assemble_packet`
+    gains keyword-only `corpus`/`paper_dir`, defaulted, and never
+    re-assembles a corpus it was handed."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+
+    def test_no_corpus_or_paper_dir_leaves_the_four_original_keys_unchanged(self) -> None:
+        """Task 0.1: called with no `corpus`/`paper_dir`, the widened
+        signature changes nothing an existing caller reads."""
+        _write_packet_section(self.sections_dir, "01-intro", "intro", "a", "Our own contract prose.")
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "intro", "a")
+
+        self.assertEqual(packet["block"], "a")
+        self.assertEqual(packet["section"], "intro")
+        self.assertIn("Our own contract prose.", packet["contract"])
+        self.assertEqual(packet["references"], [])
+
+    def test_a_supplied_corpus_is_never_re_assembled(self) -> None:
+        """Task 0.2: a `transposition`-mode block, handed a pre-built
+        corpus, must never call `paper_graph.assemble_corpus` a second
+        time -- spied, not merely inferred from the returned envelope."""
+        _write_transposition_section(self.sections_dir, "02-b", "b", "only", with_fact=False)
+        corpus = paper_graph.assemble_corpus(self.sections_dir)
+
+        with unittest.mock.patch.object(
+            paper_graph, "assemble_corpus", wraps=paper_graph.assemble_corpus,
+        ) as spy:
+            paper_cli.assemble_packet(
+                self.sections_dir, self.guidance_dir, "b", "only", corpus=corpus,
+            )
+
+        spy.assert_not_called()
+
+
+class PacketSourceSectionsStateTests(unittest.TestCase):
+    """`design.md` D1/D2/D4/D5, Phase 1 (WU1): the closed `source_sections_
+    state` vocabulary, and the mode gate that decides whether a corpus is
+    even assembled. `redactor-packet` spec, scenarios "A transposition
+    block with a resolved binding...", "...reports unbound...", "No paper
+    root reachable reports unmeasured...", "An argument-mode block
+    reports not-applicable..."."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp_path = Path(self._tmp.name)
+        self.sections_dir = self.tmp_path / "sections"
+        self.sections_dir.mkdir()
+        self.guidance_dir = self.tmp_path / "guidance"
+
+    def _scaffold_source(self) -> None:
+        proposals = self.tmp_path / "proposals"
+        proposals.mkdir()
+        (proposals / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}), encoding="utf-8",
+        )
+        (proposals / "widget-cascade-r21.md").write_text(
+            "# 1. Intro\n\n# 3. Something\n\nResolved section body text for this synthetic fixture only.\n",
+            encoding="utf-8",
+        )
+
+    def test_a_resolvable_binding_reports_resolved(self) -> None:
+        self._scaffold_source()
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only",
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+        paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(paper_dir)
+
+        packet = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "a", "only", paper_dir=paper_dir,
+        )
+
+        self.assertEqual(len(packet["source_sections"]), 1)
+        section = packet["source_sections"][0]
+        self.assertEqual(section["fact"], "formulation")
+        self.assertEqual(section["lineage"], "widget-cascade")
+        self.assertEqual(section["title"], "3. Something")
+        self.assertIn("Resolved section body text", section["text"])
+        self.assertEqual(
+            packet["source_sections_state"],
+            {"state": "resolved", "reason": None, "unresolved": []},
+        )
+
+    def test_no_triple_declared_at_all_reports_unbound_never_a_refusal(self) -> None:
+        _write_transposition_section(self.sections_dir, "01-a", "a", "only", with_fact=False)
+        paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(paper_dir)
+
+        packet = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "a", "only", paper_dir=paper_dir,
+        )
+
+        self.assertEqual(packet["source_sections"], ())
+        state = packet["source_sections_state"]
+        self.assertEqual(state["state"], "unbound")
+        self.assertIsNotNone(state["reason"])
+        self.assertEqual(state["unresolved"], [])
+
+    def test_a_declared_triple_with_no_paper_root_reports_unmeasured(self) -> None:
+        """Constraint 4: distinct from the `unbound` envelope above even
+        though both report an empty `source_sections`."""
+        self._scaffold_source()
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only",
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "a", "only")
+
+        self.assertEqual(packet["source_sections"], ())
+        state = packet["source_sections_state"]
+        self.assertEqual(state["state"], "unmeasured")
+        self.assertIsNotNone(state["reason"])
+        self.assertEqual(
+            state["unresolved"],
+            [{"fact": "formulation", "lineage": "widget-cascade", "title": "3. Something"}],
+        )
+        self.assertNotEqual(state["state"], "unbound")
+        self.assertNotEqual(
+            state, {"state": "unbound", "reason": state["reason"], "unresolved": []},
+        )
+
+    def test_an_argument_mode_block_reports_not_applicable_and_stays_byte_identical(self) -> None:
+        self._scaffold_source()
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only", mode="argument",
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+        paper_dir = self.tmp_path / "paper"
+        paper_scaffold.scaffold(paper_dir)
+
+        with_root = paper_cli.assemble_packet(
+            self.sections_dir, self.guidance_dir, "a", "only", paper_dir=paper_dir,
+        )
+        baseline = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "a", "only")
+
+        state = with_root["source_sections_state"]
+        self.assertEqual(state["state"], "not-applicable")
+        self.assertIsNotNone(state["reason"])
+        self.assertEqual(with_root["source_sections"], ())
+        for key in ("block", "section", "contract", "references"):
+            self.assertEqual(with_root[key], baseline[key])
+
+    def test_no_mode_declared_reports_unmeasured_naming_the_absent_mode(self) -> None:
+        _write_transposition_section(
+            self.sections_dir, "01-a", "a", "only", mode=None,
+            document={"lineage": "widget-cascade", "section": "3. Something"},
+        )
+
+        packet = paper_cli.assemble_packet(self.sections_dir, self.guidance_dir, "a", "only")
+
+        state = packet["source_sections_state"]
+        self.assertEqual(state["state"], "unmeasured")
+        self.assertIsNotNone(state["reason"])
+        self.assertIn("mode", state["reason"].lower())
+        self.assertEqual(packet["source_sections"], ())
+
+    def test_mutation_the_no_paper_root_branch_is_reachable_not_decorative(self) -> None:
+        """Task 1.7: break the `unmeasured`-because-no-paper-root branch's
+        own `state`/`reason` assignment and confirm the pinning test above
+        goes RED -- proving that branch is reachable, not decorative."""
+        proc = _run_against_mutant(
+            '            return (), {\n'
+            '                "state": "unmeasured",\n'
+            '                "reason": (\n'
+            '                    f"{qualified_id}: no paper root supplied; pass --paper <dir> (or "\n'
+            '                    "ensure paper/main.tex is reachable) so its bound sections can be "\n'
+            '                    "resolved"\n'
+            '                ),\n'
+            '                "unresolved": [\n'
+            '                    {"fact": fact, "lineage": lineage, "title": title}\n'
+            '                    for fact, lineage, title in header_triples\n'
+            '                ],\n'
+            '            }\n',
+            '            return (), {"state": "resolved", "reason": None, "unresolved": []}\n',
+            "tests.test_paper_writing.PacketSourceSectionsStateTests"
+            ".test_a_declared_triple_with_no_paper_root_reports_unmeasured",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
 
 
 class SeparationProposalShapeTests(unittest.TestCase):
