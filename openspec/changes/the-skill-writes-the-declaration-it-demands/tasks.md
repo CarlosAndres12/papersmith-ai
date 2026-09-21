@@ -264,58 +264,58 @@ here; the four-surface test lands in S5), K.
 Design.md Decision F (guidance half), owner ruling that `guidance/`'s class marker enters
 this change identically to the revisions marker.
 
-- [ ] 3.1 RED: add a failing test asserting `paper_guidance._MARKER_ALLOWED_KEYS` is
+- [x] 3.1 RED: add a failing test asserting `paper_guidance._MARKER_ALLOWED_KEYS` is
       derived as `("class", paper_marker.SEAL_KEY)` — never re-spelled as a second
       literal. Import `paper_marker` in `scripts/paper_guidance.py`.
-- [ ] 3.2 Extract `_validate_class_obj(obj, label)` out of `_classify`'s own shape-checking
+- [x] 3.2 Extract `_validate_class_obj(obj, label)` out of `_classify`'s own shape-checking
       body; `_classify` becomes a thin wrapper. Confirm every existing `_classify`/
       `read_registry` test stays green unchanged.
-- [ ] 3.3 RED: add failing tests for `declare_class(guidance_dir, folder, value, *,
+- [x] 3.3 RED: add failing tests for `declare_class(guidance_dir, folder, value, *,
       sealed=True)`: `--folder` naming a directory not directly under `guidance/` refuses
       `GUIDANCE_FOLDER_ABSENT`, naming every folder that is there; assert no directory is
       created.
-- [ ] 3.4 RED: add a failing test asserting `--class` outside `CLASSES` refuses
+- [x] 3.4 RED: add a failing test asserting `--class` outside `CLASSES` refuses
       `UNKNOWN_GUIDANCE_CLASS` (reused verbatim).
-- [ ] 3.5 RED: add a failing test asserting classing a second folder `evidence` while
+- [x] 3.5 RED: add a failing test asserting classing a second folder `evidence` while
       another already carries that class refuses `EVIDENCE_ROOT_AMBIGUOUS` (reused
       verbatim) **before the write** — assert the second folder's marker file was not
       created on disk (the "pre-write check must assert nothing was written" constraint;
       a message with a side effect is not a refusal).
-- [ ] 3.6 Add `declare_class`: enumerate folders under `guidance_dir` the same way
+- [x] 3.6 Add `declare_class`: enumerate folders under `guidance_dir` the same way
       `read_registry` does, check membership (3.3), check `CLASSES` membership (3.4),
       check evidence-ambiguity (3.5), round-trip through `_validate_class_obj`, call
       `paper_marker.write`. Deliberately does NOT refuse an `evidence` folder holding zero
       ingested papers (`_ingested_root_status` already rules that an earlier stage, not a
       fault — no new check may contradict it). Confirm 3.3-3.5 green.
-- [ ] 3.7 RED-then-GREEN: add a test asserting `mark class --unsealed` writes with no
+- [x] 3.7 RED-then-GREEN: add a test asserting `mark class --unsealed` writes with no
       `seal_sha256` key, shape-identical to the pre-change grammar — mirrors 2.12 for the
       class marker.
-- [ ] 3.8 RED: add a failing test asserting `_classify` refuses
+- [x] 3.8 RED: add a failing test asserting `_classify` refuses
       `GUIDANCE_DECLARATION_HAND_EDITED` when `seal_sha256` is present but mismatched —
       driven through a gating verb that classifies source material (`validate
       --source-md`), **never through `plan` alone**.
-- [ ] 3.9 Add the seal check inside `_classify` (six lines): `paper_marker.seal_shape_error`
+- [x] 3.9 Add the seal check inside `_classify` (six lines): `paper_marker.seal_shape_error`
       first (malformed shape raises `MALFORMED_GUIDANCE_MARKER`, `_classify`'s own code),
       then `computed_seal` comparison when shape-valid. Confirm 3.8 green.
-- [ ] 3.10 **Mutation — reachable through a gating verb, not only `plan`**: replace the
+- [x] 3.10 **Mutation — reachable through a gating verb, not only `plan`**: replace the
       seal-comparison line inside `_classify` with a constant `True`; the test proving
       `GUIDANCE_DECLARATION_HAND_EDITED` MUST be driven through `validate --source-md` (or
       an equivalent gating verb) and MUST go red.
-- [ ] 3.11 Mutation: replace the directory-membership test in `declare_class` with `True`;
+- [x] 3.11 Mutation: replace the directory-membership test in `declare_class` with `True`;
       naming an absent folder at `--folder` must go red (3.3), and confirm no directory is
       created under the mutation.
-- [ ] 3.12 Mutation: delete the pre-write `EVIDENCE_ROOT_AMBIGUOUS` uniqueness check;
+- [x] 3.12 Mutation: delete the pre-write `EVIDENCE_ROOT_AMBIGUOUS` uniqueness check;
       confirm the second-evidence-folder test (3.5) goes red **and** its own assertion
       that the second marker was never written also fails under the mutation (proving the
       test actually checks the write-order, not merely the refusal).
-- [ ] 3.13 Add `cmd_mark_class` and the `mark class` argparse subparser (`--folder`,
+- [x] 3.13 Add `cmd_mark_class` and the `mark class` argparse subparser (`--folder`,
       `--class`, `--guidance`, `--unsealed`) nested under the same `mark` root S2 created.
       Add `GUIDANCE_FOLDER_ABSENT` and `GUIDANCE_DECLARATION_HAND_EDITED` to
       `REFUSAL_CLASSIFICATION` (`work-state` tier).
-- [ ] 3.14 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 3.14 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture folder name this unit's own tests invent; zero matches outside the test
       module.
-- [ ] 3.15 Run `.venv/bin/python -m unittest tests.test_paper_decisions tests.paper_mutation`;
+- [x] 3.15 Run `.venv/bin/python -m unittest tests.test_paper_decisions tests.paper_mutation`;
       confirm green, no new failures.
 
 ## Phase 4 — S4: ASK — the enriched refusal, byte-identical at both raise sites

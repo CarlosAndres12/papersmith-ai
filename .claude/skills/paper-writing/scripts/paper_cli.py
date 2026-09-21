@@ -486,6 +486,13 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     "SOURCE_ROOT_UNDECLARABLE": WORK_STATE,
     "SOURCE_DECLARATION_UNMATCHED": WORK_STATE,
     "SOURCE_DECLARATION_HAND_EDITED": WORK_STATE,
+    # --- the-skill-writes-the-declaration-it-demands, S3: `mark class`
+    # (`paper_guidance.declare_class`) -- the verb that WRITES a guidance/
+    # folder's own class marker, validated against disk at the moment of
+    # writing, and the seal-mismatch code its own reader (`_classify`) now
+    # raises (design.md Decisions A/C/F, guidance half) -----------------
+    "GUIDANCE_FOLDER_ABSENT": WORK_STATE,
+    "GUIDANCE_DECLARATION_HAND_EDITED": WORK_STATE,
     # --- the-requirement-names-the-section-that-feeds-it, U3e ruling: the
     # verb that RECORDS a binding (`bind`, `paper_declarations.bind_
     # section`/`reopen_binding`) -- the answer to `SECTION_BINDING_ABSENT`
@@ -950,13 +957,30 @@ def cmd_mark_revisions(args: argparse.Namespace) -> dict:
     )
 
 
+def cmd_mark_class(args: argparse.Namespace) -> dict:
+    """`mark class`: the CLI front door for `paper_guidance.declare_class`
+    (design.md Decision D/F, guidance half; `specs/guidance-registry/
+    spec.md`) -- the answer to an unclassified `guidance/<folder>` a person
+    gives BY USING THE SKILL, never by hand-editing
+    `guidance/<folder>/.paper-writing.json` with a file-writing tool.
+
+    `--folder` is matched against `declare_class`'s own derived folder
+    enumeration; no operator string is ever joined onto a path (design.md
+    Decision D)."""
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    return paper_guidance.declare_class(
+        guidance_dir, args.folder, args.class_value, sealed=not args.unsealed,
+    )
+
+
 def cmd_mark(args: argparse.Namespace) -> dict:
-    """`mark`: one new root with (so far) one mode, `revisions` (design.md
+    """`mark`: one root with two modes, `revisions` and `class` (design.md
     Decision D: same subject, same root, the `bib build` two-level nesting
-    precedent). `mark_command` is `required=True` with `revisions` its only
-    registered choice in this unit, so this dispatch is exhaustive as
-    written; a sibling mode joins this dispatch, never a second root, the
-    day it lands."""
+    precedent). `mark_command` is `required=True` with `revisions` and
+    `class` its only registered choices, so this dispatch is exhaustive as
+    written."""
+    if args.mark_command == "class":
+        return cmd_mark_class(args)
     return cmd_mark_revisions(args)
 
 
@@ -2675,8 +2699,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_mark = sub.add_parser(
         "mark",
         help="record a per-directory .paper-writing.json marker, validated against disk at "
-             "write time -- the answer to SOURCE_REVISIONS_UNDECLARED (and, later, an "
-             "unclassified guidance/ folder), by using the skill, never a hand edit",
+             "write time -- the answer to SOURCE_REVISIONS_UNDECLARED and an unclassified "
+             "guidance/ folder, by using the skill, never a hand edit",
     )
     mark_sub = p_mark.add_subparsers(dest="mark_command", required=True)
     p_mark_revisions = mark_sub.add_parser(
@@ -2706,6 +2730,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--unsealed", action="store_true",
         help="write the pre-seal grammar (no seal_sha256 key) -- the documented rollback "
              "path (design.md Decision K), run once per declared root before reverting; "
+             "never a routine choice",
+    )
+    p_mark_class = mark_sub.add_parser(
+        "class",
+        help="record guidance/<folder>/.paper-writing.json's own class grammar, validated "
+             "against the folders actually there right now",
+    )
+    p_mark_class.add_argument(
+        "--folder", required=True,
+        help="a directory name directly under guidance/ to classify -- matched against a "
+             "derived enumeration, never a literal list",
+    )
+    p_mark_class.add_argument(
+        "--class", required=True, dest="class_value",
+        help="one of paper_guidance.CLASSES ('style-reference', 'evidence')",
+    )
+    p_mark_class.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_mark_class.add_argument(
+        "--unsealed", action="store_true",
+        help="write the pre-seal grammar (no seal_sha256 key) -- the documented rollback "
+             "path (design.md Decision K), run once per declared folder before reverting; "
              "never a routine choice",
     )
 

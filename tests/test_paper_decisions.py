@@ -342,6 +342,47 @@ class GuidanceRegistryTests(unittest.TestCase):
         for hardcoded in ("paper-guide", "reference-papers"):
             self.assertNotIn(hardcoded, source)
 
+    def test_marker_allowed_keys_is_derived_from_paper_marker_seal_key(self) -> None:
+        """tasks.md 3.1: `_MARKER_ALLOWED_KEYS` is `("class",
+        paper_marker.SEAL_KEY)` -- never a second, re-spelled literal."""
+        self.assertEqual(
+            paper_guidance._MARKER_ALLOWED_KEYS, ("class", paper_marker.SEAL_KEY),
+        )
+
+    def test_a_valid_sealed_marker_classifies_its_folder(self) -> None:
+        """`specs/guidance-registry/spec.md`, scenario `A valid sealed
+        marker classifies its folder`."""
+        obj = {"class": "evidence"}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        self._write_marker("prior-papers", obj)
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(registry["prior-papers"], "evidence")
+
+    def test_a_malformed_seal_shape_refuses_as_malformed_not_hand_edited(self) -> None:
+        self._write_marker(
+            "prior-papers", {"class": "evidence", paper_marker.SEAL_KEY: "not-a-hex-digest"},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
+        self.assertIn(paper_marker.SEAL_KEY, ctx.exception.detail)
+
+    def test_a_mismatched_seal_refuses_hand_edited_naming_both_digests(self) -> None:
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._write_marker("prior-papers", obj)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+        self.assertIn("a" * 64, ctx.exception.detail)
+        self.assertIn(paper_marker.computed_seal(obj), ctx.exception.detail)
+        self.assertIn(paper_marker.SEAL_STRENGTH, ctx.exception.detail)
+
 
 class GuidanceRegistryMutationTests(unittest.TestCase):
     """Mutation 4 (design.md): defaulting an unclassified folder to
@@ -522,6 +563,22 @@ class ValidateSourceMdGuardTests(unittest.TestCase):
         self.assertEqual(result["status"], "satisfied")
         self.assertEqual(result["unsupported"], [])
 
+    def test_a_quote_from_a_hand_edited_sealed_evidence_source_refuses(self) -> None:
+        """`specs/guidance-registry/spec.md`, scenario `A mismatched seal
+        refuses, with no adopt escape` -- reached through `validate
+        --source-md`, a gating verb, never only through `plan` (design.md
+        Decision C, invariant 4)."""
+        folder = self.guidance_dir / "source-manuscript"
+        folder.mkdir(parents=True)
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        (folder / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+        source_md = self._write_source(folder, "scientific data")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_validate(self._args(source_md=source_md, quote="scientific data"))
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+
 
 class ValidateSourceMdGuardMutationTests(unittest.TestCase):
     """Proves both new refusal branches are load-bearing, not dead code."""
@@ -562,6 +619,25 @@ class ValidateSourceMdGuardMutationTests(unittest.TestCase):
             "tests.test_paper_decisions.ValidateSourceMdGuardTests"
             ".test_a_quote_from_an_unclassified_source_refuses",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_class_marker_seal_comparison_is_reachable_through_validate_not_only_plan(
+        self,
+    ) -> None:
+        """tasks.md 3.10 (the non-negotiable constraint): replacing the
+        seal-comparison line inside `_classify` with a constant `True`
+        (i.e. never mismatched) MUST be caught by a test driven through
+        `validate --source-md`, a gating verb -- never only through the
+        read-only `plan`. This mutation runs against `paper_guidance.py`,
+        not `paper_cli.py`: `validate` still reaches `_classify`
+        unchanged, but the reader itself no longer detects the mismatch."""
+        proc = _run_against_mutant(
+            "        if recorded != computed:",
+            "        if False:",
+            "tests.test_paper_decisions.ValidateSourceMdGuardTests"
+            ".test_a_quote_from_a_hand_edited_sealed_evidence_source_refuses",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 
@@ -3680,6 +3756,174 @@ class DeclareRevisionsTests(unittest.TestCase):
             "tests.test_paper_decisions.DeclareRevisionsTests"
             ".test_a_non_declarable_root_refuses_by_name",
             source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class DeclareClassTests(unittest.TestCase):
+    """`specs/guidance-registry/spec.md`; design.md Decision F (guidance
+    half) -- `declare_class`'s own engine, the `guidance/` marker's
+    sibling to `DeclareRevisionsTests` above, independent of the CLI
+    wiring."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.guidance_dir = Path(self._tmp.name) / "guidance"
+        self.guidance_dir.mkdir()
+
+    def _marker_path(self, folder: str) -> Path:
+        return self.guidance_dir / folder / ".paper-writing.json"
+
+    def _mkfolder(self, name: str) -> None:
+        (self.guidance_dir / name).mkdir(parents=True, exist_ok=True)
+
+    def test_a_folder_is_classified_and_recorded(self) -> None:
+        self._mkfolder("prior-papers")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        self.assertEqual(result, {"folder": "prior-papers", "class": "evidence", "sealed": True})
+        self.assertTrue(self._marker_path("prior-papers").is_file())
+
+    def test_a_folder_absent_under_guidance_refuses_naming_every_folder_present(self) -> None:
+        self._mkfolder("first-folder")
+        self._mkfolder("second-folder")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "invented-nowhere-folder", "evidence")
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_FOLDER_ABSENT")
+        self.assertIn("first-folder", ctx.exception.detail)
+        self.assertIn("second-folder", ctx.exception.detail)
+        self.assertFalse((self.guidance_dir / "invented-nowhere-folder").exists())
+
+    def test_a_class_outside_the_vocabulary_refuses(self) -> None:
+        self._mkfolder("prior-papers")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "prior-papers", "reference-material")
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_GUIDANCE_CLASS")
+        self.assertIn("reference-material", ctx.exception.detail)
+        self.assertFalse(self._marker_path("prior-papers").exists())
+
+    def test_classing_a_second_evidence_folder_refuses_ambiguous_before_the_write(self) -> None:
+        self._mkfolder("first-evidence")
+        self._mkfolder("second-evidence")
+        paper_guidance.declare_class(self.guidance_dir, "first-evidence", "evidence")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "second-evidence", "evidence")
+
+        self.assertEqual(ctx.exception.code, "EVIDENCE_ROOT_AMBIGUOUS")
+        self.assertIn("first-evidence", ctx.exception.detail)
+        self.assertIn("second-evidence", ctx.exception.detail)
+        self.assertFalse(self._marker_path("second-evidence").exists())
+
+    def test_declare_class_never_produces_a_marker_its_own_reader_refuses(self) -> None:
+        self._mkfolder("prior-papers")
+
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "style-reference")
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+        self.assertEqual(registry["prior-papers"], "style-reference")
+
+    def test_unsealed_writes_no_seal_key_shape_identical_to_pre_seal_grammar(self) -> None:
+        """tasks.md 3.7: mirrors 2.12 for the class marker -- the
+        `--unsealed` marker's shape is IDENTICAL to what the pre-change
+        grammar admits."""
+        self._mkfolder("prior-papers")
+
+        result = paper_guidance.declare_class(
+            self.guidance_dir, "prior-papers", "evidence", sealed=False,
+        )
+
+        self.assertFalse(result["sealed"])
+        on_disk = json.loads(self._marker_path("prior-papers").read_text(encoding="utf-8"))
+        self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+        self.assertEqual(set(on_disk), {"class"})
+
+    def test_re_recording_always_succeeds_over_an_existing_sealed_marker(self) -> None:
+        self._mkfolder("prior-papers")
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "style-reference")
+
+        self.assertEqual(result["class"], "style-reference")
+
+    def test_re_recording_over_a_hand_edited_marker_clears_the_defect(self) -> None:
+        """No `--reopen`/`--adopt`: re-running the verb is the only exit
+        from a hand-edited sealed class marker (spec: "Re-Recording Always
+        Succeeds; There Is No Stuck State", mirrored from the revisions
+        marker's own requirement)."""
+        self._mkfolder("prior-papers")
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._marker_path("prior-papers").write_text(json.dumps(obj), encoding="utf-8")
+
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+        self.assertEqual(registry["prior-papers"], "evidence")
+
+    def test_an_evidence_folder_holding_zero_ingested_papers_is_not_refused(self) -> None:
+        """design.md Decision F: deliberately not validated -- a class is
+        a judgement about a folder, not a measurement of it."""
+        self._mkfolder("empty-evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "empty-evidence", "evidence")
+
+        self.assertEqual(result["class"], "evidence")
+
+    def test_re_marking_the_same_folder_evidence_again_is_never_self_ambiguous(self) -> None:
+        """Re-recording the SAME folder's own class must never trip the
+        ambiguity check against itself."""
+        self._mkfolder("prior-papers")
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        self.assertEqual(result["class"], "evidence")
+
+    def test_mutation_the_folder_membership_check_is_reachable(self) -> None:
+        proc = _run_against_mutant(
+            "    if folder not in present:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareClassTests"
+            ".test_a_folder_absent_under_guidance_refuses_naming_every_folder_present",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_evidence_ambiguity_check_is_reachable(self) -> None:
+        """tasks.md 3.12: deleting the pre-write uniqueness check must fail
+        BOTH this test's own refusal assertion AND its assertion that the
+        second folder's marker was never written -- proving the test
+        checks the write-order, not merely the refusal code."""
+        self._mkfolder("first-evidence")
+        self._mkfolder("second-evidence")
+        paper_guidance.declare_class(self.guidance_dir, "first-evidence", "evidence")
+        proc = _run_against_mutant(
+            '    if value == "evidence":\n'
+            "        other = None\n"
+            "        for entry in sorted(guidance_dir.iterdir()):\n"
+            "            if not entry.is_dir() or entry.name == folder:\n"
+            "                continue\n"
+            '            if _classify(entry) == "evidence":\n'
+            "                other = entry.name\n"
+            "                break\n"
+            "        if other is not None:\n"
+            "            raise Refused(\n"
+            '                "EVIDENCE_ROOT_AMBIGUOUS",\n'
+            "                f\"{folder!r} would be classed 'evidence', but {other!r} already "
+            'is; "\n'
+            "                f\"re-mark {other!r} first if {folder!r} should hold the evidence "
+            'role",\n'
+            "            )",
+            "",
+            "tests.test_paper_decisions.DeclareClassTests"
+            ".test_classing_a_second_evidence_folder_refuses_ambiguous_before_the_write",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 

@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paper_marker  # noqa: E402
 import paper_scaffold  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implementation"))
@@ -47,7 +48,10 @@ from impl_refusals import Refused  # noqa: E402
 CLASSES: tuple[str, ...] = ("style-reference", "evidence")
 
 _MARKER_NAME = ".paper-writing.json"
-_MARKER_ALLOWED_KEYS = ("class",)
+#: Derived from `paper_marker.SEAL_KEY`, never re-spelled as a second
+#: literal (design.md Decision B; tasks.md 3.1) -- the source-root marker's
+#: own `_SOURCE_MARKER_TOP_KEY` + `SEAL_KEY` pair is this module's sibling.
+_MARKER_ALLOWED_KEYS = ("class", paper_marker.SEAL_KEY)
 
 
 def resolve_guidance_dir(
@@ -72,27 +76,17 @@ def resolve_guidance_dir(
     return target
 
 
-def _classify(folder: Path) -> str:
-    """One folder's class, or `unclassified` when it carries no marker.
-
-    Refuses `MALFORMED_GUIDANCE_MARKER` (work-state) when the marker file
-    is not valid UTF-8, not valid JSON, not a JSON object, carries any key
-    other than `class`, or omits `class`. Refuses `UNKNOWN_GUIDANCE_CLASS`
-    (work-state) when `class` holds a value outside `CLASSES` — this never
-    silently degrades to `unclassified`; only a genuinely absent marker
-    file does that.
-    """
-    marker_path = folder / _MARKER_NAME
-    if not marker_path.is_file():
-        return "unclassified"
-    try:
-        raw_text = marker_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
-    try:
-        obj = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+def _validate_class_obj(obj, marker_path) -> str:
+    """The `class` shape-checking body `_classify` used to carry inline,
+    extracted unchanged (tasks.md 3.2: a PURE extraction, zero behavior
+    change here). The seal key is entirely this function's caller's own
+    concern -- stripped from `obj` before this ever runs, so this
+    function's own grammar is exactly what it was before sealing existed:
+    exactly one admitted key, `class`, nothing else. Returns the validated
+    class value. Refuses `MALFORMED_GUIDANCE_MARKER` naming the offending
+    file and the missing or unknown key, or `UNKNOWN_GUIDANCE_CLASS` naming
+    the offending value -- byte-identical to this reader's own prior inline
+    body."""
     if not isinstance(obj, dict):
         raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: must be a JSON object")
     unknown = [key for key in obj if key not in _MARKER_ALLOWED_KEYS]
@@ -109,6 +103,127 @@ def _classify(folder: Path) -> str:
             f"{marker_path}: {value!r} is not one of the declared classes {CLASSES}",
         )
     return value
+
+
+def _classify(folder: Path) -> str:
+    """One folder's class, or `unclassified` when it carries no marker.
+
+    Refuses `MALFORMED_GUIDANCE_MARKER` (work-state) when the marker file
+    is not valid UTF-8, not valid JSON, not a JSON object, carries any key
+    other than `class`/`seal_sha256`, omits `class`, or carries a
+    `seal_sha256` that is not a 64-character lowercase hex string. Refuses
+    `UNKNOWN_GUIDANCE_CLASS` (work-state) when `class` holds a value outside
+    `CLASSES` — this never silently degrades to `unclassified`; only a
+    genuinely absent marker file does that.
+
+    When `seal_sha256` IS present and shape-valid, it is compared against
+    `paper_marker.computed_seal` of the marker's own remaining bytes; a
+    mismatch refuses `GUIDANCE_DECLARATION_HAND_EDITED` (work-state), naming
+    the file, the recorded digest, the computed digest, and the seal's own
+    real strength — with no `--adopt` escape (design.md Decision E, guidance
+    half). This check runs inside THIS function, reached by every gating
+    verb already (`validate --source-md` via `classify_source_md` via
+    `read_registry`) — never only inside the read-only `plan` verb
+    (design.md Decision C, invariant 4).
+    """
+    marker_path = folder / _MARKER_NAME
+    if not marker_path.is_file():
+        return "unclassified"
+    try:
+        raw_text = marker_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
+    try:
+        obj = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+    if isinstance(obj, dict):
+        seal_error = paper_marker.seal_shape_error(obj)
+        if seal_error is not None:
+            raise Refused("MALFORMED_GUIDANCE_MARKER", f"{marker_path}: {seal_error}")
+        body = {key: value for key, value in obj.items() if key != paper_marker.SEAL_KEY}
+    else:
+        body = obj
+    value = _validate_class_obj(body, marker_path)
+    if isinstance(obj, dict) and paper_marker.is_sealed(obj):
+        recorded = obj[paper_marker.SEAL_KEY]
+        computed = paper_marker.computed_seal(obj)
+        if recorded != computed:
+            raise Refused(
+                "GUIDANCE_DECLARATION_HAND_EDITED",
+                f"{marker_path}: recorded seal {recorded!r} does not match computed seal "
+                f"{computed!r}. {paper_marker.SEAL_STRENGTH} Re-run `mark class` to reseal; "
+                "there is no --adopt.",
+            )
+    return value
+
+
+def declare_class(
+    guidance_dir: Path, folder: str, value: str, *, sealed: bool = True,
+) -> dict:
+    """`mark class`'s own engine (design.md Decision F, guidance half;
+    `specs/guidance-registry/spec.md`). Mirrors `paper_declarations.
+    declare_revisions` (S2) for the OTHER marker kind.
+
+    In order: `folder` must directly name a directory under `guidance_dir`,
+    enumerated the SAME way `read_registry` enumerates. Otherwise refuses
+    `GUIDANCE_FOLDER_ABSENT`, naming every folder that is there. **Nothing
+    creates the folder.** `value` must be in `CLASSES`, otherwise refuses
+    `UNKNOWN_GUIDANCE_CLASS` (reused verbatim). Classing a folder `evidence`
+    while some OTHER folder already carries it refuses
+    `EVIDENCE_ROOT_AMBIGUOUS` (reused verbatim from `_ingested_root_status`)
+    BEFORE the write, naming both folders and the exit -- re-mark the other
+    folder first. That ambiguity scan never classifies `folder` itself
+    (Decision E: re-recording must always succeed, even over a folder whose
+    OWN current marker is malformed or hand-edited). The candidate is
+    round-tripped through `_validate_class_obj` before `paper_marker.write`
+    ever runs, so this verb can never produce a marker its own reader would
+    refuse.
+
+    Deliberately does NOT refuse an `evidence` folder holding zero ingested
+    papers -- `_ingested_root_status` already rules that state an earlier
+    stage, never a fault (design.md Decision F).
+
+    Always writes, regardless of whether a marker already exists at that
+    path or whether its current seal matches (design.md Decision E) -- no
+    `--reopen`/`--adopt`, and this function never reads `folder`'s own
+    previous marker at all.
+
+    Returns `{"folder", "class", "sealed"}` (design.md, Interfaces)."""
+    present = (
+        sorted(entry.name for entry in guidance_dir.iterdir() if entry.is_dir())
+        if guidance_dir.is_dir() else []
+    )
+    if folder not in present:
+        raise Refused(
+            "GUIDANCE_FOLDER_ABSENT",
+            f"--folder must name a directory directly under {guidance_dir}; "
+            f"{folder!r} is not one of {present}",
+        )
+    if value not in CLASSES:
+        raise Refused(
+            "UNKNOWN_GUIDANCE_CLASS",
+            f"{value!r} is not one of the declared classes {CLASSES}",
+        )
+    marker_path = guidance_dir / folder / _MARKER_NAME
+    if value == "evidence":
+        other = None
+        for entry in sorted(guidance_dir.iterdir()):
+            if not entry.is_dir() or entry.name == folder:
+                continue
+            if _classify(entry) == "evidence":
+                other = entry.name
+                break
+        if other is not None:
+            raise Refused(
+                "EVIDENCE_ROOT_AMBIGUOUS",
+                f"{folder!r} would be classed 'evidence', but {other!r} already is; "
+                f"re-mark {other!r} first if {folder!r} should hold the evidence role",
+            )
+    candidate = {"class": value}
+    _validate_class_obj(candidate, marker_path)
+    paper_marker.write(marker_path, candidate, sealed=sealed)
+    return {"folder": folder, "class": value, "sealed": sealed}
 
 
 def ingested_papers(guidance_dir: Path) -> dict:

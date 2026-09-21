@@ -7843,8 +7843,22 @@ class RefusalRosterTests(unittest.TestCase):
         `paper_marker.py` is imported too (`ModuleCompletenessTests`) but
         contributes nothing of its own -- it raises no `Refused`
         (design.md Decision B). Measured directly against `reachable_
-        paper_refusal_codes()`, never forecast; S3/S4 move this again."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 157)
+        paper_refusal_codes()`, never forecast; S3/S4 move this again.
+
+        Moved from 157 to 159 in S3 of `the-skill-writes-the-declaration-
+        it-demands`: `paper_guidance.py` (already imported) gains two new
+        raise sites -- `declare_class`'s own `GUIDANCE_FOLDER_ABSENT` (a
+        `--folder` naming no directory directly under `guidance/`) and
+        `_classify`'s own `GUIDANCE_DECLARATION_HAND_EDITED` (a sealed class
+        marker's recorded seal not matching the computed one). `mark class`
+        joins `cmd_mark`'s own dispatch (`cmd_mark` -> `cmd_mark_class`),
+        never a new top-level root, so the top-level verb-roster count this
+        skill's own `test_skill_audit.py` probe measures is unmoved by S3.
+        S4 (`source_revisions_undeclared_detail`) adds no new code: both
+        raise sites reuse `SOURCE_REVISIONS_UNDECLARED` verbatim through one
+        shared builder. Measured directly against `reachable_paper_refusal_
+        codes()`, never forecast."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 159)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
