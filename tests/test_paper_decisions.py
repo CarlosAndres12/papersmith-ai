@@ -34,6 +34,7 @@ import paper_scaffold  # noqa: E402
 import paper_vocabulary  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_marker  # noqa: E402
 import paper_provenance  # noqa: E402
 import paper_couplings  # noqa: E402
 import paper_coupling_evidence  # noqa: E402
@@ -341,6 +342,82 @@ class GuidanceRegistryTests(unittest.TestCase):
         for hardcoded in ("paper-guide", "reference-papers"):
             self.assertNotIn(hardcoded, source)
 
+    def test_marker_allowed_keys_is_derived_from_paper_marker_seal_key(self) -> None:
+        """tasks.md 3.1: `_MARKER_ALLOWED_KEYS` is `("class",
+        paper_marker.SEAL_KEY)` -- never a second, re-spelled literal."""
+        self.assertEqual(
+            paper_guidance._MARKER_ALLOWED_KEYS, ("class", paper_marker.SEAL_KEY),
+        )
+
+    def test_a_valid_sealed_marker_classifies_its_folder(self) -> None:
+        """`specs/guidance-registry/spec.md`, scenario `A valid sealed
+        marker classifies its folder`."""
+        obj = {"class": "evidence"}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        self._write_marker("prior-papers", obj)
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(registry["prior-papers"], "evidence")
+
+    def test_a_malformed_seal_shape_refuses_as_malformed_not_hand_edited(self) -> None:
+        self._write_marker(
+            "prior-papers", {"class": "evidence", paper_marker.SEAL_KEY: "not-a-hex-digest"},
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_GUIDANCE_MARKER")
+        self.assertIn(paper_marker.SEAL_KEY, ctx.exception.detail)
+
+    def test_a_mismatched_seal_refuses_hand_edited_naming_both_digests(self) -> None:
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._write_marker("prior-papers", obj)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.read_registry(self.guidance_dir)
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+        self.assertIn("a" * 64, ctx.exception.detail)
+        self.assertIn(paper_marker.computed_seal(obj), ctx.exception.detail)
+        self.assertIn(paper_marker.SEAL_STRENGTH, ctx.exception.detail)
+
+    def test_declaration_state_reports_undeclared_unsealed_sealed(self) -> None:
+        """tasks.md 5.15: `paper_guidance.declaration_state` reports the
+        SAME three reachable values `paper_declarations.declaration_state`
+        reports for a `PROSE` root -- `'n/a'` never applies here, since
+        every LISTED `guidance/` folder is classifiable."""
+        absent = self.guidance_dir / "absent-folder"
+        absent.mkdir(parents=True)
+        self.assertEqual(paper_guidance.declaration_state(absent), "undeclared")
+
+        self._write_marker("unsealed-folder", {"class": "evidence"})
+        self.assertEqual(
+            paper_guidance.declaration_state(self.guidance_dir / "unsealed-folder"),
+            "declared-unsealed",
+        )
+
+        obj = {"class": "style-reference"}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        self._write_marker("sealed-folder", obj)
+        self.assertEqual(
+            paper_guidance.declaration_state(self.guidance_dir / "sealed-folder"),
+            "declared-sealed",
+        )
+
+    def test_declaration_state_propagates_hand_edited_refusal(self) -> None:
+        """`declaration_state` reuses `_classify`'s own seal-verification
+        path (`_read_marker`), so a mismatched seal refuses identically
+        through either caller -- never a second, drifting notion of
+        whether a folder's own marker is good."""
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._write_marker("hand-edited-folder", obj)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declaration_state(self.guidance_dir / "hand-edited-folder")
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+
 
 class GuidanceRegistryMutationTests(unittest.TestCase):
     """Mutation 4 (design.md): defaulting an unclassified folder to
@@ -354,6 +431,20 @@ class GuidanceRegistryMutationTests(unittest.TestCase):
             'return "style-reference"',
             "tests.test_paper_decisions.GuidanceRegistryTests"
             ".test_fresh_clone_reports_every_folder_unclassified_refuses_nothing",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_declaration_state_sealed_branch_is_reachable(self) -> None:
+        """tasks.md 5.15: collapsing `declaration_state`'s sealed/unsealed
+        ternary to always report `declared-unsealed` must turn the sealed
+        assertion red -- proving the sealed branch is actually reached
+        through the real function, not merely present in source."""
+        proc = _run_against_mutant(
+            'return "declared-sealed" if result["sealed"] else "declared-unsealed"',
+            'return "declared-unsealed"',
+            "tests.test_paper_decisions.GuidanceRegistryTests"
+            ".test_declaration_state_reports_undeclared_unsealed_sealed",
             source_path=SKILL_SCRIPTS / "paper_guidance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
@@ -521,6 +612,22 @@ class ValidateSourceMdGuardTests(unittest.TestCase):
         self.assertEqual(result["status"], "satisfied")
         self.assertEqual(result["unsupported"], [])
 
+    def test_a_quote_from_a_hand_edited_sealed_evidence_source_refuses(self) -> None:
+        """`specs/guidance-registry/spec.md`, scenario `A mismatched seal
+        refuses, with no adopt escape` -- reached through `validate
+        --source-md`, a gating verb, never only through `plan` (design.md
+        Decision C, invariant 4)."""
+        folder = self.guidance_dir / "source-manuscript"
+        folder.mkdir(parents=True)
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        (folder / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+        source_md = self._write_source(folder, "scientific data")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_validate(self._args(source_md=source_md, quote="scientific data"))
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_DECLARATION_HAND_EDITED")
+
 
 class ValidateSourceMdGuardMutationTests(unittest.TestCase):
     """Proves both new refusal branches are load-bearing, not dead code."""
@@ -561,6 +668,25 @@ class ValidateSourceMdGuardMutationTests(unittest.TestCase):
             "tests.test_paper_decisions.ValidateSourceMdGuardTests"
             ".test_a_quote_from_an_unclassified_source_refuses",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_class_marker_seal_comparison_is_reachable_through_validate_not_only_plan(
+        self,
+    ) -> None:
+        """tasks.md 3.10 (the non-negotiable constraint): replacing the
+        seal-comparison line inside `_classify` with a constant `True`
+        (i.e. never mismatched) MUST be caught by a test driven through
+        `validate --source-md`, a gating verb -- never only through the
+        read-only `plan`. This mutation runs against `paper_guidance.py`,
+        not `paper_cli.py`: `validate` still reaches `_classify`
+        unchanged, but the reader itself no longer detects the mismatch."""
+        proc = _run_against_mutant(
+            "        if recorded != computed:",
+            "        if False:",
+            "tests.test_paper_decisions.ValidateSourceMdGuardTests"
+            ".test_a_quote_from_a_hand_edited_sealed_evidence_source_refuses",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
         )
         _assert_guard_failed_under_mutation(self, proc)
 
@@ -1876,6 +2002,64 @@ class DescribeBindingCandidatesTests(unittest.TestCase):
             {"q77213-004-11029-2": {"revision": "q77213-004-11029-2.md", "sections": ["Dataset"]}},
         )
 
+    def test_unmarked_candidates_lists_every_md_file_by_name_sorted(self) -> None:
+        """tasks.md 4.1: the SAME derivation `describe_binding_candidates`'s
+        own no-marker branch already computes, extracted into one lister
+        both callers share -- one lister, two callers, provably the same
+        list."""
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "b-thesis.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / "a-thesis.md").write_text("# 1\n", encoding="utf-8")
+        (proposals / "notes.txt").write_text("not markdown", encoding="utf-8")
+
+        candidates = paper_declarations._unmarked_candidates(proposals)
+
+        self.assertEqual(candidates, ["a-thesis.md", "b-thesis.md"])
+
+
+class SourceRevisionsUndeclaredDetailTests(unittest.TestCase):
+    """`source-section-binding` spec, `Requirement: A Document-Rooted
+    Source With No Marker Refuses`; design.md Decision H:
+    `source_revisions_undeclared_detail` is the ONE detail text both
+    `SOURCE_REVISIONS_UNDECLARED` raise sites use."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def test_names_the_root_the_marker_file_the_candidates_and_the_invocation(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        (proposals / "other-thesis-r05.md").write_text("# Only heading\n", encoding="utf-8")
+        root = paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
+        status = paper_declarations.source_root_status(self.base, root)
+
+        detail = paper_declarations.source_revisions_undeclared_detail(status, root)
+
+        self.assertIn("proposals", detail)
+        self.assertIn(".paper-writing.json", detail)
+        self.assertIn("lumen-thesis-r21.md", detail)
+        self.assertIn("other-thesis-r05.md", detail)
+        self.assertIn("mark revisions", detail)
+        self.assertIn("--root proposals", detail)
+
+    def test_reads_candidates_at_call_time_never_cached(self) -> None:
+        proposals = self.base / "proposals"
+        proposals.mkdir()
+        root = paper_declarations.SourceRoot("proposals", paper_declarations.SourceRootKind.PROSE)
+        status = paper_declarations.source_root_status(self.base, root)
+
+        first = paper_declarations.source_revisions_undeclared_detail(status, root)
+        self.assertNotIn("fresh-arrival-r01.md", first)
+
+        (proposals / "fresh-arrival-r01.md").write_text("# 1\n", encoding="utf-8")
+        second = paper_declarations.source_revisions_undeclared_detail(status, root)
+
+        self.assertIn("fresh-arrival-r01.md", second)
+
 
 class ProducedFactUndeclarableTests(unittest.TestCase):
     """`a-fact-is-declared-or-it-is-produced`, `paper-declarations` spec,
@@ -2770,7 +2954,10 @@ class PlanTests(unittest.TestCase):
 
         self.assertEqual(
             report["guidance"],
-            {"classified-folder": "evidence", "unclassified-folder": "unclassified"},
+            {
+                "classified-folder": {"class": "evidence", "declaration": "declared-unsealed"},
+                "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
+            },
         )
         recorded = next(
             r for r in report["declarations"]["records"] if r["id"] == "author-roles"
@@ -2858,7 +3045,72 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(set(report["sectionGuidance"]), {"introduction"})
         self.assertTrue(report["sectionGuidance"]["introduction"]["exists"])
         # `guidance`'s own function-named-folder registry is untouched.
-        self.assertEqual(report["guidance"]["reference-papers"], "unclassified")
+        self.assertEqual(
+            report["guidance"]["reference-papers"],
+            {"class": "unclassified", "declaration": "undeclared"},
+        )
+
+    def test_guidance_entries_widen_to_class_and_declaration_object(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement: The
+        Position Report Names Every Declarable Root's And Every Guidance
+        Folder's Declaration State`: `guidance`'s bare class string widens
+        to `{"class": ..., "declaration": ...}` -- an unsealed classified
+        folder reports `declared-unsealed`, an unmarked one reports
+        `undeclared`, never a dropped `class` value."""
+        classified = self.guidance_dir / "classified-folder"
+        classified.mkdir(parents=True)
+        (classified / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+        (self.guidance_dir / "unclassified-folder").mkdir(parents=True)
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(
+            report["guidance"],
+            {
+                "classified-folder": {"class": "evidence", "declaration": "declared-unsealed"},
+                "unclassified-folder": {"class": "unclassified", "declaration": "undeclared"},
+            },
+        )
+
+    def test_guidance_declaration_widens_to_declared_sealed_one_vocabulary_with_sourceroots(
+        self,
+    ) -> None:
+        """tasks.md 5.15 (surfaced by the S3+S4 apply report, measured true
+        by running `plan`): `guidance` and `sourceRoots` MUST report the
+        SAME four-value declaration vocabulary for the identical concept --
+        design.md Decision I's own worked `plan` example shows a
+        `guidance` folder reporting `declared-sealed`, and
+        `specs/source-declaration-authoring/spec.md`'s own scenario
+        `guidance's report widens without dropping its class` requires
+        exactly that. Proven by calling `compute_plan` (the same function
+        the `plan` verb runs) and reading its actual output for BOTH a
+        sealed and an unsealed folder in one call -- never by asserting a
+        field merely exists."""
+        sealed_folder = self.guidance_dir / "sealed-folder"
+        sealed_folder.mkdir(parents=True)
+        sealed_obj = {"class": "style-reference"}
+        sealed_obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(sealed_obj)
+        (sealed_folder / ".paper-writing.json").write_text(
+            json.dumps(sealed_obj), encoding="utf-8",
+        )
+        unsealed_folder = self.guidance_dir / "unsealed-folder"
+        unsealed_folder.mkdir(parents=True)
+        (unsealed_folder / ".paper-writing.json").write_text(
+            json.dumps({"class": "evidence"}), encoding="utf-8",
+        )
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(
+            report["guidance"]["sealed-folder"],
+            {"class": "style-reference", "declaration": "declared-sealed"},
+        )
+        self.assertEqual(
+            report["guidance"]["unsealed-folder"],
+            {"class": "evidence", "declaration": "declared-unsealed"},
+        )
 
 
 class InsumosObserverThreatMatrixTests(unittest.TestCase):
@@ -3353,6 +3605,472 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
         resolution time, never named here."""
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "data-paper")
         self.assertNotEqual(paper_declarations.FACT_SOURCE_ROOT["dataset"].name, "proposals")
+
+
+class DeclarationStateTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: Absence
+    Is A Reported State; A Broken Seal Refuses Where The Marker Is Read`
+    -- S2's four-value vocabulary (`undeclared` | `declared-unsealed` |
+    `declared-sealed` | `n/a`), now that `paper_marker.py` exists."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+
+    def test_a_non_prose_root_reports_n_a_by_kind_never_by_name(self) -> None:
+        """Asserted against a fixture root whose `kind` is `REPOSITORY` --
+        an invented name, never a shipped root's own name -- so this can
+        never pass by coincidentally matching `FACT_SOURCE_ROOT`'s own
+        `implementation`/`results` entries."""
+        root = paper_declarations.SourceRoot(
+            "invented-non-prose-root", paper_declarations.SourceRootKind.REPOSITORY,
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "n/a")
+
+    def test_a_prose_root_with_no_marker_is_undeclared(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "undeclared")
+
+    def test_a_prose_root_with_a_valid_unsealed_marker_is_declared_unsealed(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps({"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}),
+            encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "declared-unsealed")
+
+    def test_a_prose_root_with_a_valid_sealed_marker_is_declared_sealed(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps(obj), encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "declared-sealed")
+
+    def test_a_prose_root_with_a_hand_edited_sealed_marker_propagates_the_refusal(self) -> None:
+        """`Requirement: Absence Is A Reported State; A Broken Seal Refuses
+        Where The Marker Is Read` -- never a fifth, silently-swallowed
+        declaration_state value."""
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {
+            "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+            paper_marker.SEAL_KEY: "a" * 64,
+        }
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps(obj), encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declaration_state(status, root)
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_HAND_EDITED")
+
+    def test_a_prose_root_that_is_not_a_directory_at_all_is_undeclared(self) -> None:
+        """A `PROSE` root whose directory does not exist yet
+        (`status["path"]` is `None`) can carry no marker file at all --
+        reported `undeclared`, never a crash on a `None` path."""
+        root = paper_declarations.SourceRoot(
+            "invented-absent-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertIsNone(status["path"])
+        self.assertEqual(paper_declarations.declaration_state(status, root), "undeclared")
+
+
+class DeclarableSourceRootsTests(unittest.TestCase):
+    """design.md Decision J; `specs/source-declaration-authoring/spec.md`,
+    `Requirement: Which Roots And Folders Are Declarable Is Derived, Never
+    Listed`."""
+
+    def test_declarable_roots_are_exactly_the_prose_kind_roots(self) -> None:
+        declarable = paper_declarations.declarable_source_roots()
+
+        self.assertEqual(
+            set(declarable),
+            {
+                root.name
+                for root in paper_declarations.FACT_SOURCE_ROOT.values()
+                if root.kind is paper_declarations.SourceRootKind.PROSE
+            },
+        )
+        for root in declarable.values():
+            self.assertEqual(root.kind, paper_declarations.SourceRootKind.PROSE)
+
+    def test_a_sixth_prose_root_widens_declarability_with_zero_engine_edit(self) -> None:
+        """The spec's own mutation scenario: extending `FACT_SOURCE_ROOT`
+        with a sixth PROSE-kind fact/root pair (via `patch.dict`, never a
+        source edit) makes that root declarable, proving the test is
+        membership-by-kind in the mapping, never a hand-maintained list."""
+        sixth = paper_declarations.SourceRoot(
+            "invented-sixth-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        with unittest.mock.patch.dict(
+            paper_declarations.FACT_SOURCE_ROOT, {"invented-sixth-fact": sixth},
+        ):
+            declarable = paper_declarations.declarable_source_roots()
+
+            self.assertIn(sixth.name, declarable)
+            self.assertEqual(declarable[sixth.name], sixth)
+
+
+class DeclareRevisionsTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: A Source
+    Root's Revision Rule Is Recorded And Validated Against Disk By Using
+    The Skill`; design.md Decision F -- `declare_revisions`'s own engine,
+    independent of the CLI wiring (`MarkRevisionsCliWholeLoopTests` in
+    `test_paper_writing.py` proves that end of it)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.experiments = self.base / "experiments"
+        self.experiments.mkdir()
+
+    def _marker_path(self) -> Path:
+        return self.experiments / ".paper-writing.json"
+
+    def test_a_matching_declaration_is_recorded(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(result["root"], "experiments")
+        self.assertEqual(
+            result["revisions"], {"revision_prefix": "r", "ordinal_digits": 2},
+        )
+        self.assertEqual(
+            sorted(result["matched"]), ["field-survey-r07.md", "field-survey-r08.md"],
+        )
+        self.assertEqual(result["unmatched"], [])
+        self.assertTrue(result["sealed"])
+        self.assertTrue(self._marker_path().is_file())
+
+    def test_a_declared_width_matching_nothing_refuses_at_write_time(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "v", 3)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_UNMATCHED")
+        self.assertIn("v", ctx.exception.detail)
+        self.assertIn("3", ctx.exception.detail)
+        self.assertIn("field-survey-r07.md", ctx.exception.detail)
+        self.assertIn("field-survey-r08.md", ctx.exception.detail)
+        self.assertFalse(self._marker_path().exists())
+
+    def test_a_non_declarable_root_refuses_by_name(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "implementation", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_ROOT_UNDECLARABLE")
+        self.assertIn("proposals", ctx.exception.detail)
+        self.assertIn("experiments", ctx.exception.detail)
+        self.assertIn("repository", ctx.exception.detail)
+
+    def test_a_name_matching_no_known_root_at_all_also_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "invented-nowhere-root", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_ROOT_UNDECLARABLE")
+
+    def test_ordinal_digits_below_one_refuses_malformed(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "r", 0)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("ordinal_digits", ctx.exception.detail)
+        self.assertFalse(self._marker_path().exists())
+
+    def test_a_root_that_is_not_a_directory_folds_into_unmatched(self) -> None:
+        """design.md Decision F.3: a root that is not a directory at all
+        folds into the SAME `SOURCE_DECLARATION_UNMATCHED` code. Nothing
+        creates the directory."""
+        shutil.rmtree(self.experiments)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_UNMATCHED")
+        self.assertFalse(self.experiments.exists())
+
+    def test_declare_revisions_never_produces_a_marker_its_own_reader_refuses(self) -> None:
+        """The round-trip guarantee (tasks.md 2.10): every accepted write
+        is immediately re-readable through `read_revisions_marker`."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        marker = paper_declarations.read_revisions_marker(self.experiments)
+        self.assertEqual(marker["revision_prefix"], "r")
+        self.assertEqual(marker["ordinal_digits"], 2)
+        self.assertTrue(marker["sealed"])
+
+    def test_unsealed_writes_no_seal_key_shape_identical_to_pre_seal_grammar(self) -> None:
+        """tasks.md 2.12: the `--unsealed` marker's shape is IDENTICAL to
+        what the pre-change grammar admits -- round-tripped here through a
+        hand-built pre-seal validator, never through the sealed-aware
+        reader alone."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(
+            self.base, "experiments", "r", 2, sealed=False,
+        )
+
+        self.assertFalse(result["sealed"])
+        on_disk = json.loads(self._marker_path().read_text(encoding="utf-8"))
+        self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+        # A hand-built pre-seal validator: exactly {"revisions": {...}},
+        # exactly the two required nested keys -- the grammar an
+        # unmodified older reader (one that has never heard of
+        # `seal_sha256`) still accepts.
+        self.assertEqual(set(on_disk), {"revisions"})
+        self.assertEqual(set(on_disk["revisions"]), {"revision_prefix", "ordinal_digits"})
+
+    def test_re_recording_always_succeeds_over_an_existing_sealed_marker(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(sorted(result["matched"]), ["field-survey-r07.md", "field-survey-r08.md"])
+
+    def test_re_recording_over_a_hand_edited_marker_clears_the_defect(self) -> None:
+        """No `--reopen`/`--adopt`: re-running the verb is the only exit
+        from a hand-edited sealed marker (spec: "Re-Recording Always
+        Succeeds; There Is No Stuck State")."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {
+            "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+            paper_marker.SEAL_KEY: "a" * 64,
+        }
+        self._marker_path().write_text(json.dumps(obj), encoding="utf-8")
+
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        marker = paper_declarations.read_revisions_marker(self.experiments)
+        self.assertTrue(marker["sealed"])
+
+    def test_mutation_the_zero_match_guard_is_reachable(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        proc = _run_against_mutant(
+            "    if not matched:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareRevisionsTests"
+            ".test_a_declared_width_matching_nothing_refuses_at_write_time",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_declarable_membership_check_is_reachable(self) -> None:
+        proc = _run_against_mutant(
+            "    if root_name not in declarable:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareRevisionsTests"
+            ".test_a_non_declarable_root_refuses_by_name",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+
+class DeclareClassTests(unittest.TestCase):
+    """`specs/guidance-registry/spec.md`; design.md Decision F (guidance
+    half) -- `declare_class`'s own engine, the `guidance/` marker's
+    sibling to `DeclareRevisionsTests` above, independent of the CLI
+    wiring."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.guidance_dir = Path(self._tmp.name) / "guidance"
+        self.guidance_dir.mkdir()
+
+    def _marker_path(self, folder: str) -> Path:
+        return self.guidance_dir / folder / ".paper-writing.json"
+
+    def _mkfolder(self, name: str) -> None:
+        (self.guidance_dir / name).mkdir(parents=True, exist_ok=True)
+
+    def test_a_folder_is_classified_and_recorded(self) -> None:
+        self._mkfolder("prior-papers")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        self.assertEqual(result, {"folder": "prior-papers", "class": "evidence", "sealed": True})
+        self.assertTrue(self._marker_path("prior-papers").is_file())
+
+    def test_a_folder_absent_under_guidance_refuses_naming_every_folder_present(self) -> None:
+        self._mkfolder("first-folder")
+        self._mkfolder("second-folder")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "invented-nowhere-folder", "evidence")
+
+        self.assertEqual(ctx.exception.code, "GUIDANCE_FOLDER_ABSENT")
+        self.assertIn("first-folder", ctx.exception.detail)
+        self.assertIn("second-folder", ctx.exception.detail)
+        self.assertFalse((self.guidance_dir / "invented-nowhere-folder").exists())
+
+    def test_a_class_outside_the_vocabulary_refuses(self) -> None:
+        self._mkfolder("prior-papers")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "prior-papers", "reference-material")
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_GUIDANCE_CLASS")
+        self.assertIn("reference-material", ctx.exception.detail)
+        self.assertFalse(self._marker_path("prior-papers").exists())
+
+    def test_classing_a_second_evidence_folder_refuses_ambiguous_before_the_write(self) -> None:
+        self._mkfolder("first-evidence")
+        self._mkfolder("second-evidence")
+        paper_guidance.declare_class(self.guidance_dir, "first-evidence", "evidence")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_guidance.declare_class(self.guidance_dir, "second-evidence", "evidence")
+
+        self.assertEqual(ctx.exception.code, "EVIDENCE_ROOT_AMBIGUOUS")
+        self.assertIn("first-evidence", ctx.exception.detail)
+        self.assertIn("second-evidence", ctx.exception.detail)
+        self.assertFalse(self._marker_path("second-evidence").exists())
+
+    def test_declare_class_never_produces_a_marker_its_own_reader_refuses(self) -> None:
+        self._mkfolder("prior-papers")
+
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "style-reference")
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+        self.assertEqual(registry["prior-papers"], "style-reference")
+
+    def test_unsealed_writes_no_seal_key_shape_identical_to_pre_seal_grammar(self) -> None:
+        """tasks.md 3.7: mirrors 2.12 for the class marker -- the
+        `--unsealed` marker's shape is IDENTICAL to what the pre-change
+        grammar admits."""
+        self._mkfolder("prior-papers")
+
+        result = paper_guidance.declare_class(
+            self.guidance_dir, "prior-papers", "evidence", sealed=False,
+        )
+
+        self.assertFalse(result["sealed"])
+        on_disk = json.loads(self._marker_path("prior-papers").read_text(encoding="utf-8"))
+        self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+        self.assertEqual(set(on_disk), {"class"})
+
+    def test_re_recording_always_succeeds_over_an_existing_sealed_marker(self) -> None:
+        self._mkfolder("prior-papers")
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "style-reference")
+
+        self.assertEqual(result["class"], "style-reference")
+
+    def test_re_recording_over_a_hand_edited_marker_clears_the_defect(self) -> None:
+        """No `--reopen`/`--adopt`: re-running the verb is the only exit
+        from a hand-edited sealed class marker (spec: "Re-Recording Always
+        Succeeds; There Is No Stuck State", mirrored from the revisions
+        marker's own requirement)."""
+        self._mkfolder("prior-papers")
+        obj = {"class": "evidence", paper_marker.SEAL_KEY: "a" * 64}
+        self._marker_path("prior-papers").write_text(json.dumps(obj), encoding="utf-8")
+
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        registry = paper_guidance.read_registry(self.guidance_dir)
+        self.assertEqual(registry["prior-papers"], "evidence")
+
+    def test_an_evidence_folder_holding_zero_ingested_papers_is_not_refused(self) -> None:
+        """design.md Decision F: deliberately not validated -- a class is
+        a judgement about a folder, not a measurement of it."""
+        self._mkfolder("empty-evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "empty-evidence", "evidence")
+
+        self.assertEqual(result["class"], "evidence")
+
+    def test_re_marking_the_same_folder_evidence_again_is_never_self_ambiguous(self) -> None:
+        """Re-recording the SAME folder's own class must never trip the
+        ambiguity check against itself."""
+        self._mkfolder("prior-papers")
+        paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        result = paper_guidance.declare_class(self.guidance_dir, "prior-papers", "evidence")
+
+        self.assertEqual(result["class"], "evidence")
+
+    def test_mutation_the_folder_membership_check_is_reachable(self) -> None:
+        proc = _run_against_mutant(
+            "    if folder not in present:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareClassTests"
+            ".test_a_folder_absent_under_guidance_refuses_naming_every_folder_present",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_evidence_ambiguity_check_is_reachable(self) -> None:
+        """tasks.md 3.12: deleting the pre-write uniqueness check must fail
+        BOTH this test's own refusal assertion AND its assertion that the
+        second folder's marker was never written -- proving the test
+        checks the write-order, not merely the refusal code."""
+        self._mkfolder("first-evidence")
+        self._mkfolder("second-evidence")
+        paper_guidance.declare_class(self.guidance_dir, "first-evidence", "evidence")
+        proc = _run_against_mutant(
+            '    if value == "evidence":\n'
+            "        other = None\n"
+            "        for entry in sorted(guidance_dir.iterdir()):\n"
+            "            if not entry.is_dir() or entry.name == folder:\n"
+            "                continue\n"
+            '            if _classify(entry) == "evidence":\n'
+            "                other = entry.name\n"
+            "                break\n"
+            "        if other is not None:\n"
+            "            raise Refused(\n"
+            '                "EVIDENCE_ROOT_AMBIGUOUS",\n'
+            "                f\"{folder!r} would be classed 'evidence', but {other!r} already "
+            'is; "\n'
+            "                f\"re-mark {other!r} first if {folder!r} should hold the evidence "
+            'role",\n'
+            "            )",
+            "",
+            "tests.test_paper_decisions.DeclareClassTests"
+            ".test_classing_a_second_evidence_folder_refuses_ambiguous_before_the_write",
+            source_path=SKILL_SCRIPTS / "paper_guidance.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
 
 
 class ReconcileObservationReportTests(unittest.TestCase):

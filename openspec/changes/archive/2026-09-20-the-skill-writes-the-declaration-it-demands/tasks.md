@@ -84,16 +84,16 @@ opens PR #1.
 
 ## Phase 0 — GATE: baseline vocabulary audit (before any code lands)
 
-- [ ] 0.1 Derive the product vocabulary from disk: top-level names under `proposals/`,
+- [x] 0.1 Derive the product vocabulary from disk: top-level names under `proposals/`,
       `experiments/`, `implementations/`, `guidance/` (all four gitignored — walk with
       `fd -H -I` / `rg -I -H`, never a bare `fd`/`rg`, or the walk silently sees nothing).
-- [ ] 0.2 Sweep that vocabulary across `.claude/skills/paper-writing/` and the forge's own
+- [x] 0.2 Sweep that vocabulary across `.claude/skills/paper-writing/` and the forge's own
       suite (`rg -n -i -F <term> ...`). Record the exact commands and their output in the
       apply report. Expect the disclosed **48-hit** cross-skill collision — confirm it
       lands in `experimental-deliberation`/`proposal-deliberation` (sibling skills), not
       inside `paper-writing`'s own surface; owner-acknowledged, out of scope, do not let
       it read as this change's leak.
-- [ ] 0.3 Confirm `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
+- [x] 0.3 Confirm `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`
       currently shows only the one known pre-existing failure
       (`test_rule_b_finds_no_target_vocabulary_in_the_forge`, naming the three sibling
       skills) before any production edit — this is the baseline S5's task 5.8 re-checks.
@@ -104,40 +104,40 @@ Design.md Decisions I, J. Closes `openspec/changes/archive/2026-09-20-the-requir
 item 2.14 (read-only), ticked `[x]`, claiming `Corpus.source_roots` is "echoed by every
 corpus-reading verb" — measured false by running `plan`, `phases`, `contract`.
 
-- [ ] 1.1 RED: add failing tests in `tests/test_paper_decisions.py` for
+- [x] 1.1 RED: add failing tests in `tests/test_paper_decisions.py` for
       `declaration_state(status, root)`: `n/a` for a non-`PROSE` root (by kind, never by
       name — assert against a fixture root whose `kind` is `REPOSITORY`); `undeclared` for
       a `PROSE` root with no marker; `declared` for a `PROSE` root with a valid marker
       (three-value vocabulary only — the sealed/unsealed split is S2's, not this unit's).
-- [ ] 1.2 Add `declarable_source_roots()` and `declaration_state(status, root)` to
+- [x] 1.2 Add `declarable_source_roots()` and `declaration_state(status, root)` to
       `scripts/paper_declarations.py`, derived from `FACT_SOURCE_ROOT`'s own `kind` field
       — no root name appears as a literal in either. Confirm 1.1 green.
-- [ ] 1.3 Mutation: extend `FACT_SOURCE_ROOT` with a sixth `PROSE`-kind root in a test
+- [x] 1.3 Mutation: extend `FACT_SOURCE_ROOT` with a sixth `PROSE`-kind root in a test
       fixture; assert it is both declarable and reported, with zero engine edit — the
       derivation proof design's Decision J and the spec's "Which Roots And Folders Are
       Declarable Is Derived" scenario both require.
-- [ ] 1.4 RED: add a failing integration test in `tests/test_paper_writing.py` asserting
+- [x] 1.4 RED: add a failing integration test in `tests/test_paper_writing.py` asserting
       `compute_plan`'s output carries a `sourceRoots` key, one entry per root in
       `FACT_SOURCE_ROOT`, each naming `state`/`documents`/`reason` (existing) plus
       `declaration` (new) — **assert this by calling `compute_plan` and reading its
       return value**, never by asserting a field exists on an intermediate object (the
       exact failure mode of the false-ticked 2.14).
-- [ ] 1.5 Wire `sourceRoots` into `paper_cli.compute_plan`, looping `FACT_SOURCE_ROOT`
+- [x] 1.5 Wire `sourceRoots` into `paper_cli.compute_plan`, looping `FACT_SOURCE_ROOT`
       once, calling `paper_declarations.source_root_status`/`declaration_state` per root.
-- [ ] 1.6 RED: add a failing test in `tests/test_paper_decisions.py` (or wherever the two
+- [x] 1.6 RED: add a failing test in `tests/test_paper_decisions.py` (or wherever the two
       measured flat-string consumers live) asserting `plan`'s `guidance` entries widen
       from a bare class string to `{"class": ..., "declaration": ...}`.
-- [ ] 1.7 Widen `compute_plan`'s `guidance` construction to the object shape; update the
+- [x] 1.7 Widen `compute_plan`'s `guidance` construction to the object shape; update the
       **two measured consumer assertions** in `tests/test_paper_decisions.py` that
       currently expect the flat string (zero consumers in `scripts/`, per design's
       measurement — confirm that measurement still holds with `rg` before editing).
       Confirm 1.6 green.
-- [ ] 1.8 Confirm no new `n/a`-producing root is matched by literal name: `rg` under
+- [x] 1.8 Confirm no new `n/a`-producing root is matched by literal name: `rg` under
       `scripts/paper_declarations.py`/`paper_cli.py` for a `REPOSITORY`/`INGESTED` root
       name used as a string comparison rather than a `.kind` check.
-- [ ] 1.9 Generality sweep: `rg` the fixture root name from 1.3 across
+- [x] 1.9 Generality sweep: `rg` the fixture root name from 1.3 across
       `.claude/skills/paper-writing/scripts/`; zero matches outside the test module.
-- [ ] 1.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
+- [x] 1.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
       confirm green, no new failures beyond the known pre-existing baseline.
 
 ## Phase 2 — S2: `paper_marker.py` + `mark revisions` (the seal, ruled by Decision A)
@@ -147,12 +147,12 @@ here; the four-surface test lands in S5), K.
 
 **The shared seal module**
 
-- [ ] 2.1 RED: add failing unit tests in `tests/test_paper_writing.py` (new module-level
+- [x] 2.1 RED: add failing unit tests in `tests/test_paper_writing.py` (new module-level
       test class) for `paper_marker.canonical_bytes`/`computed_seal`: identical input
       produces an identical digest across two separate calls (canonicalization stability
       — `sort_keys=True` is load-bearing, mirroring `paper_region.serialize_body`'s own
       documented reason); the digest excludes `seal_sha256` itself from its own input.
-- [ ] 2.2 Create `scripts/paper_marker.py`: `SEAL_KEY`, `SEAL_STRENGTH` (Decision G's exact
+- [x] 2.2 Create `scripts/paper_marker.py`: `SEAL_KEY`, `SEAL_STRENGTH` (Decision G's exact
       sentence — "detects an unaware edit... self-consistency, not tamper-proofing...
       anyone who reproduces it can... recompute a matching seal"), `canonical_bytes`,
       `computed_seal`, `is_sealed`, `seal_shape_error` (returns the shape-error detail
@@ -160,73 +160,73 @@ here; the four-surface test lands in S5), K.
       a consumer's refusal), and `write(path, obj, *, sealed=True)` with its own
       `_atomic_replace` (a fourth copy, docstring says so — mirrors `paper_block.py`'s
       exact same-directory temp-file-then-`os.replace` shape). Confirm 2.1 green.
-- [ ] 2.3 RED: add failing tests for `seal_shape_error`: `None` when `seal_sha256` is
+- [x] 2.3 RED: add failing tests for `seal_shape_error`: `None` when `seal_sha256` is
       absent; `None` when present and a 64-char lowercase hex string; a detail string when
       present but wrong length, wrong charset, or non-string.
-- [ ] 2.4 Confirm 2.3 green against 2.2's implementation.
+- [x] 2.4 Confirm 2.3 green against 2.2's implementation.
 
 **Write-time validation and the write verb**
 
-- [ ] 2.5 RED: add failing tests in `tests/test_paper_decisions.py` for
+- [x] 2.5 RED: add failing tests in `tests/test_paper_decisions.py` for
       `declare_revisions(base, root_name, prefix, digits, *, sealed=True)`: `--root`
       naming a non-`PROSE` root refuses `SOURCE_ROOT_UNDECLARABLE`, naming every
       declarable root and the rejected root's own kind.
-- [ ] 2.6 RED: add a failing test asserting `--ordinal-digits < 1` refuses
+- [x] 2.6 RED: add a failing test asserting `--ordinal-digits < 1` refuses
       `MALFORMED_SOURCE_MARKER` (reused verbatim — a value-shape error on the marker
       being written).
-- [ ] 2.7 RED: add failing tests: a prefix/digit pair matching zero `*.md` under the root
+- [x] 2.7 RED: add failing tests: a prefix/digit pair matching zero `*.md` under the root
       refuses `SOURCE_DECLARATION_UNMATCHED`, naming the prefix, the digit count, and
       every `*.md` file seen; a root that is not a directory at all folds into the same
       code (Decision F.3). Assert **nothing is written to disk** on this refusal.
-- [ ] 2.8 Extract `_revision_pattern(prefix, digits)` out of `resolve_lineage`'s own inline
+- [x] 2.8 Extract `_revision_pattern(prefix, digits)` out of `resolve_lineage`'s own inline
       regex composition (`scripts/paper_declarations.py`), so `resolve_lineage` and
       `declare_revisions` compose the identical pattern from one function — never two
       that can drift. Confirm `resolve_lineage`'s existing tests stay green untouched.
-- [ ] 2.9 Extract `_validate_revisions_obj(obj, label)` out of `read_revisions_marker`'s
+- [x] 2.9 Extract `_validate_revisions_obj(obj, label)` out of `read_revisions_marker`'s
       own shape-checking body; `read_revisions_marker` becomes a thin wrapper: read file,
       parse JSON, call `_validate_revisions_obj`. Confirm every existing
       `read_revisions_marker` test in `tests/test_paper_writing.py` stays green unchanged
       — this is a pure extraction, not a behavior change.
-- [ ] 2.10 Add `declare_revisions`: build the candidate `{"revisions": {...}}` object,
+- [x] 2.10 Add `declare_revisions`: build the candidate `{"revisions": {...}}` object,
       glob-match per 2.7, round-trip the candidate through `_validate_revisions_obj`
       before writing (so `mark` can never produce a marker its own reader would refuse),
       then call `paper_marker.write`. Returns `{"root", "revisions", "matched",
       "unmatched", "sealed"}`. Confirm 2.5-2.7 green.
-- [ ] 2.11 RED-then-GREEN: add a test asserting a matching declaration records the marker,
+- [x] 2.11 RED-then-GREEN: add a test asserting a matching declaration records the marker,
       reporting both matched and unmatched files correctly (the spec's "A matching
       declaration is recorded" scenario).
-- [ ] 2.12 Add `--unsealed` to `declare_revisions` (already threaded via `sealed: bool`);
+- [x] 2.12 Add `--unsealed` to `declare_revisions` (already threaded via `sealed: bool`);
       RED-then-GREEN: add a test asserting `mark revisions --unsealed` writes a marker
       with no `seal_sha256` key, and that this marker's shape is IDENTICAL to what the
       pre-change grammar admits (round-trip it through a hand-built pre-seal validator
       inline in the test — the "an older reader accepts it" proof).
-- [ ] 2.13 RED-then-GREEN: add a test asserting `mark revisions` always writes, with no
+- [x] 2.13 RED-then-GREEN: add a test asserting `mark revisions` always writes, with no
       `--reopen`/`--adopt`, regardless of whether a sealed marker already exists at that
       path or whether its existing seal matches — re-recording a hand-edited marker
       clears the defect (spec: "Re-Recording Always Succeeds; There Is No Stuck State").
-- [ ] 2.14 Document `mark revisions --unsealed`'s docstring per Decision K: its only
+- [x] 2.14 Document `mark revisions --unsealed`'s docstring per Decision K: its only
       purpose is the pre-revert downgrade, and it removes nothing a determined editor
       could not already remove by hand-editing the file (Decision G) — this is the
       rollback boundary named in the Suggested Work Units table above.
 
 **The seal reaches the reader — never the report alone**
 
-- [ ] 2.15 RED: add a failing test asserting `read_revisions_marker` accepts a marker with
+- [x] 2.15 RED: add a failing test asserting `read_revisions_marker` accepts a marker with
       no `seal_sha256` key exactly as before sealing existed (`declared-unsealed`, no
       refusal).
-- [ ] 2.16 RED: add a failing test asserting `read_revisions_marker` refuses
+- [x] 2.16 RED: add a failing test asserting `read_revisions_marker` refuses
       `SOURCE_DECLARATION_HAND_EDITED` when `seal_sha256` is present but does not match
       `paper_marker.computed_seal` of the marker's own remaining bytes — driven through
       `cmd_write` (a gating verb), **not through `plan`**.
-- [ ] 2.17 Add the seal check inside `read_revisions_marker` (six lines, per design's own
+- [x] 2.17 Add the seal check inside `read_revisions_marker` (six lines, per design's own
       count): shape-check via `paper_marker.seal_shape_error` (malformed shape still
       raises `MALFORMED_SOURCE_MARKER`, the reader's own code, never
       `paper_marker`'s), then compare via `computed_seal` when shape-valid. Confirm 2.15
       and 2.16 green.
-- [ ] 2.18 Widen `declaration_state` (S1) to a four-value vocabulary: `declared` splits
+- [x] 2.18 Widen `declaration_state` (S1) to a four-value vocabulary: `declared` splits
       into `declared-sealed`/`declared-unsealed` using `paper_marker.is_sealed` plus the
       seal-match result. RED-then-GREEN in `tests/test_paper_decisions.py`.
-- [ ] 2.19 **Mutation — reachable through `write`, not only through `plan` (the
+- [x] 2.19 **Mutation — reachable through `write`, not only through `plan` (the
       non-negotiable constraint)**: replace the seal-comparison line inside
       `read_revisions_marker` with a constant `True`. The test proving
       `SOURCE_DECLARATION_HAND_EDITED` MUST be driven through `cmd_write`
@@ -234,27 +234,27 @@ here; the four-surface test lands in S5), K.
       test that only drives the mutation through `plan` does not satisfy this task —
       write it through `cmd_write` explicitly, or a cheaper read-only test will pass this
       task's letter while missing invariant 4 entirely.
-- [ ] 2.20 Mutation: replace `declare_revisions`'s zero-match guard condition with
+- [x] 2.20 Mutation: replace `declare_revisions`'s zero-match guard condition with
       `False`; the wrong-prefix test (2.7) must go red.
-- [ ] 2.21 Mutation: replace the declarable-membership test (`root.kind is
+- [x] 2.21 Mutation: replace the declarable-membership test (`root.kind is
       SourceRootKind.PROSE`) with `True`; naming a `REPOSITORY`-kind root at `--root` must
       go red (2.5), and confirm no marker file appears on disk under that mutation.
-- [ ] 2.22 Add `cmd_mark_revisions` and the `mark revisions` argparse subparser (`--root`,
+- [x] 2.22 Add `cmd_mark_revisions` and the `mark revisions` argparse subparser (`--root`,
       `--revision-prefix`, `--ordinal-digits`, `--unsealed`) to `scripts/paper_cli.py`,
       nested under one new `mark` root (the `bib build` two-level nesting precedent — read
       `scripts/paper_cli.py`'s existing `bib`-root subparser wiring as the shape to mirror,
       read-only). Add `SOURCE_ROOT_UNDECLARABLE` and `SOURCE_DECLARATION_UNMATCHED` and
       `SOURCE_DECLARATION_HAND_EDITED` to `REFUSAL_CLASSIFICATION` (`work-state` tier).
-- [ ] 2.23 RED-then-GREEN integration test: `write` refuses `SOURCE_REVISIONS_UNDECLARED`
+- [x] 2.23 RED-then-GREEN integration test: `write` refuses `SOURCE_REVISIONS_UNDECLARED`
       → run `mark revisions` for that root → `write` proceeds, one session, real CLI
       invocation (not calling the Python functions directly) — the "whole loop" proof.
-- [ ] 2.24 Purge `__pycache__`/`.pyc` before running the mutation suite (a same-size
+- [x] 2.24 Purge `__pycache__`/`.pyc` before running the mutation suite (a same-size
       mutation can silently reuse a stale bytecode cache in this repository). Extend
       `tests/paper_mutation.py`'s mutant-sandbox copy list with `paper_marker.py`.
-- [ ] 2.25 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 2.25 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture root/folder name this unit's own tests invent; zero matches outside the test
       module.
-- [ ] 2.26 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.paper_mutation`;
+- [x] 2.26 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.paper_mutation`;
       re-run any mutation tests touched by 2.8/2.9's extraction to confirm no anchor moved
       (extraction shifts exact-match anchors elsewhere in the suite — this is the whole
       point of re-running the full mutation suite, not only the new tests); confirm green.
@@ -264,58 +264,58 @@ here; the four-surface test lands in S5), K.
 Design.md Decision F (guidance half), owner ruling that `guidance/`'s class marker enters
 this change identically to the revisions marker.
 
-- [ ] 3.1 RED: add a failing test asserting `paper_guidance._MARKER_ALLOWED_KEYS` is
+- [x] 3.1 RED: add a failing test asserting `paper_guidance._MARKER_ALLOWED_KEYS` is
       derived as `("class", paper_marker.SEAL_KEY)` — never re-spelled as a second
       literal. Import `paper_marker` in `scripts/paper_guidance.py`.
-- [ ] 3.2 Extract `_validate_class_obj(obj, label)` out of `_classify`'s own shape-checking
+- [x] 3.2 Extract `_validate_class_obj(obj, label)` out of `_classify`'s own shape-checking
       body; `_classify` becomes a thin wrapper. Confirm every existing `_classify`/
       `read_registry` test stays green unchanged.
-- [ ] 3.3 RED: add failing tests for `declare_class(guidance_dir, folder, value, *,
+- [x] 3.3 RED: add failing tests for `declare_class(guidance_dir, folder, value, *,
       sealed=True)`: `--folder` naming a directory not directly under `guidance/` refuses
       `GUIDANCE_FOLDER_ABSENT`, naming every folder that is there; assert no directory is
       created.
-- [ ] 3.4 RED: add a failing test asserting `--class` outside `CLASSES` refuses
+- [x] 3.4 RED: add a failing test asserting `--class` outside `CLASSES` refuses
       `UNKNOWN_GUIDANCE_CLASS` (reused verbatim).
-- [ ] 3.5 RED: add a failing test asserting classing a second folder `evidence` while
+- [x] 3.5 RED: add a failing test asserting classing a second folder `evidence` while
       another already carries that class refuses `EVIDENCE_ROOT_AMBIGUOUS` (reused
       verbatim) **before the write** — assert the second folder's marker file was not
       created on disk (the "pre-write check must assert nothing was written" constraint;
       a message with a side effect is not a refusal).
-- [ ] 3.6 Add `declare_class`: enumerate folders under `guidance_dir` the same way
+- [x] 3.6 Add `declare_class`: enumerate folders under `guidance_dir` the same way
       `read_registry` does, check membership (3.3), check `CLASSES` membership (3.4),
       check evidence-ambiguity (3.5), round-trip through `_validate_class_obj`, call
       `paper_marker.write`. Deliberately does NOT refuse an `evidence` folder holding zero
       ingested papers (`_ingested_root_status` already rules that an earlier stage, not a
       fault — no new check may contradict it). Confirm 3.3-3.5 green.
-- [ ] 3.7 RED-then-GREEN: add a test asserting `mark class --unsealed` writes with no
+- [x] 3.7 RED-then-GREEN: add a test asserting `mark class --unsealed` writes with no
       `seal_sha256` key, shape-identical to the pre-change grammar — mirrors 2.12 for the
       class marker.
-- [ ] 3.8 RED: add a failing test asserting `_classify` refuses
+- [x] 3.8 RED: add a failing test asserting `_classify` refuses
       `GUIDANCE_DECLARATION_HAND_EDITED` when `seal_sha256` is present but mismatched —
       driven through a gating verb that classifies source material (`validate
       --source-md`), **never through `plan` alone**.
-- [ ] 3.9 Add the seal check inside `_classify` (six lines): `paper_marker.seal_shape_error`
+- [x] 3.9 Add the seal check inside `_classify` (six lines): `paper_marker.seal_shape_error`
       first (malformed shape raises `MALFORMED_GUIDANCE_MARKER`, `_classify`'s own code),
       then `computed_seal` comparison when shape-valid. Confirm 3.8 green.
-- [ ] 3.10 **Mutation — reachable through a gating verb, not only `plan`**: replace the
+- [x] 3.10 **Mutation — reachable through a gating verb, not only `plan`**: replace the
       seal-comparison line inside `_classify` with a constant `True`; the test proving
       `GUIDANCE_DECLARATION_HAND_EDITED` MUST be driven through `validate --source-md` (or
       an equivalent gating verb) and MUST go red.
-- [ ] 3.11 Mutation: replace the directory-membership test in `declare_class` with `True`;
+- [x] 3.11 Mutation: replace the directory-membership test in `declare_class` with `True`;
       naming an absent folder at `--folder` must go red (3.3), and confirm no directory is
       created under the mutation.
-- [ ] 3.12 Mutation: delete the pre-write `EVIDENCE_ROOT_AMBIGUOUS` uniqueness check;
+- [x] 3.12 Mutation: delete the pre-write `EVIDENCE_ROOT_AMBIGUOUS` uniqueness check;
       confirm the second-evidence-folder test (3.5) goes red **and** its own assertion
       that the second marker was never written also fails under the mutation (proving the
       test actually checks the write-order, not merely the refusal).
-- [ ] 3.13 Add `cmd_mark_class` and the `mark class` argparse subparser (`--folder`,
+- [x] 3.13 Add `cmd_mark_class` and the `mark class` argparse subparser (`--folder`,
       `--class`, `--guidance`, `--unsealed`) nested under the same `mark` root S2 created.
       Add `GUIDANCE_FOLDER_ABSENT` and `GUIDANCE_DECLARATION_HAND_EDITED` to
       `REFUSAL_CLASSIFICATION` (`work-state` tier).
-- [ ] 3.14 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 3.14 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture folder name this unit's own tests invent; zero matches outside the test
       module.
-- [ ] 3.15 Run `.venv/bin/python -m unittest tests.test_paper_decisions tests.paper_mutation`;
+- [x] 3.15 Run `.venv/bin/python -m unittest tests.test_paper_decisions tests.paper_mutation`;
       confirm green, no new failures.
 
 ## Phase 4 — S4: ASK — the enriched refusal, byte-identical at both raise sites
@@ -326,94 +326,163 @@ Design.md Decision H. `paper_declarations._resolve_bind_document` (line ~1029) a
 `scripts/paper_graph.py:427-433`) — carry today's byte-identical text by coincidence of a
 copied string, not a shared builder.
 
-- [ ] 4.1 Extract `_unmarked_candidates(base_path) -> list` into
+- [x] 4.1 Extract `_unmarked_candidates(base_path) -> list` into
       `scripts/paper_declarations.py`: `sorted(p.name for p in base_path.glob("*.md"))` —
       the SAME derivation `describe_binding_candidates`'s own no-marker branch already
       computes. `describe_binding_candidates` calls it too (one lister, two callers).
       Confirm `describe_binding_candidates`'s existing tests stay green unchanged.
-- [ ] 4.2 RED: add a failing test asserting
+- [x] 4.2 RED: add a failing test asserting
       `source_revisions_undeclared_detail(status, root)` names the root, the marker
       filename, every `*.md` file currently under the root (via `_unmarked_candidates`),
       and the exact `mark revisions --root <name> --revision-prefix <prefix>
       --ordinal-digits <n>` invocation that answers it.
-- [ ] 4.3 Add `source_revisions_undeclared_detail` to `scripts/paper_declarations.py`.
+- [x] 4.3 Add `source_revisions_undeclared_detail` to `scripts/paper_declarations.py`.
       Confirm 4.2 green.
-- [ ] 4.4 Wire `_resolve_bind_document`'s existing `SOURCE_REVISIONS_UNDECLARED` raise to
+- [x] 4.4 Wire `_resolve_bind_document`'s existing `SOURCE_REVISIONS_UNDECLARED` raise to
       call `source_revisions_undeclared_detail` instead of its own inline string.
-- [ ] 4.5 Wire `paper_graph.resolve_section_index`'s existing `SOURCE_REVISIONS_UNDECLARED`
+- [x] 4.5 Wire `paper_graph.resolve_section_index`'s existing `SOURCE_REVISIONS_UNDECLARED`
       raise to call the same function (`paper_graph` already imports
       `paper_declarations`, per design's measured invariant — confirm the import
       direction with `rg` before wiring; it must not run the other way).
-- [ ] 4.6 RED-then-GREEN: add a test asserting both raise sites produce byte-identical
+- [x] 4.6 RED-then-GREEN: add a test asserting both raise sites produce byte-identical
       detail text for the same root and disk state — reached once through `bind`/
       `_resolve_bind_document`'s own path and once through `write`/`resolve_section_index`.
-- [ ] 4.7 Mutation: inline a literal message at ONE of the two raise sites (revert the
+- [x] 4.7 Mutation: inline a literal message at ONE of the two raise sites (revert the
       call to the shared builder at either site); confirm the byte-identity test (4.6)
       goes red.
-- [ ] 4.8 RED-then-GREEN: add a test asserting deleting an existing marker file and
+- [x] 4.8 RED-then-GREEN: add a test asserting deleting an existing marker file and
       re-resolving the same binding still refuses `SOURCE_REVISIONS_UNDECLARED` (never a
       silent `unmeasured` degrade — this is `source-section-binding`'s existing, unchanged
       guarantee, checked here because the enriched detail text is new code touching the
       same raise sites).
-- [ ] 4.9 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 4.9 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture root/lineage name this unit's own tests invent; zero matches outside the
       test module.
-- [ ] 4.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
+- [x] 4.10 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions`;
       confirm green, no new failures.
 
 ## Phase 5 — S5: Docs, honest strength, roster re-measured, both suites
 
 Design.md Decision G (the four-surface test), Migration/Rollout.
 
-- [ ] 5.1 RED: add a failing test that derives the expected `SEAL_STRENGTH` text from
+- [x] 5.1 RED: add a failing test that derives the expected `SEAL_STRENGTH` text from
       `paper_marker.SEAL_STRENGTH` itself and asserts its byte-identical presence in: (a)
       `scripts/paper_marker.py`'s own module docstring, (b) `SOURCE_DECLARATION_HAND_EDITED`'s
       refusal detail wording, (c) `GUIDANCE_DECLARATION_HAND_EDITED`'s refusal detail
-      wording, (d) `SKILL.md`, (e) `references/usage.md`.
-- [ ] 5.2 Confirm `paper_marker.py`'s module docstring quotes `SEAL_STRENGTH` verbatim (if
+      wording, (d) `SKILL.md`, (e) ~~`references/usage.md`~~ — **deviation, confirmed not
+      silently dropped**: `paper-writing` has no `references/usage.md` and never has
+      (`git ls-files` / `fd -H -I`; already ruled for this exact skill by
+      `2026-09-20-the-whole-cut-is-argued-before-any-section-is-claimed`'s own
+      archive-report). `SealStrengthFourSurfaceTests` in `tests/test_paper_writing.py`
+      asserts the four REAL surfaces only, with a docstring naming why the fifth is not
+      fabricated.
+- [x] 5.2 Confirm `paper_marker.py`'s module docstring quotes `SEAL_STRENGTH` verbatim (if
       2.2 did not already word it exactly). Confirm both `*_HAND_EDITED` refusal details
       (2.17, 3.9) interpolate the constant rather than restating it as a separate literal.
-- [ ] 5.3 Update `.claude/skills/paper-writing/SKILL.md`: the loop (refusal → `mark` →
+- [x] 5.3 Update `.claude/skills/paper-writing/SKILL.md`: the loop (refusal → `mark` →
       retry) for both marker kinds, the position report's new `sourceRoots` key and
       widened `guidance` shape, `SEAL_STRENGTH` verbatim, one roster entry per new refusal
       code (`SOURCE_DECLARATION_UNMATCHED`, `SOURCE_DECLARATION_HAND_EDITED`,
       `GUIDANCE_DECLARATION_HAND_EDITED`, `SOURCE_ROOT_UNDECLARABLE`,
-      `GUIDANCE_FOLDER_ABSENT`).
-- [ ] 5.4 Update `references/usage.md` identically — a doc fix that stops at `SKILL.md`
-      is half a fix, per the proposal's own framing.
-- [ ] 5.5 Confirm 5.1 green against 5.2-5.4.
-- [ ] 5.6 Mutation: weaken `SEAL_STRENGTH` to drop "not tamper-proofing"; confirm 5.1 goes
+      `GUIDANCE_FOLDER_ABSENT`). New "## Recording a declaration: `mark`" section, the
+      widened `plan` table row and worked JSON example, and "Twenty-seven verbs"
+      (was stale at "Twenty-six" — `mark` shipped in S2 without a verb-count update).
+- [x] 5.4 ~~Update `references/usage.md` identically~~ — **N/A, not a silent drop**: see
+      5.1's own deviation note; there is no second file for this skill. `SKILL.md` is
+      `paper-writing`'s only documentation surface, so 5.3 alone is the complete fix.
+- [x] 5.5 Confirm 5.1 green against 5.2-5.4.
+- [x] 5.6 Mutation: weaken `SEAL_STRENGTH` to drop "not tamper-proofing"; confirm 5.1 goes
       red — strengthening the claim anywhere is a red test, never a review miss.
-- [ ] 5.7 Confirm `git diff main -- sections/` is empty (never edit any file under
+- [x] 5.7 Confirm `git diff main -- sections/` is empty (never edit any file under
       `sections/`) and that `git diff --summary main` shows zero `delete mode` lines
-      anywhere in this change (nothing deletes files).
-- [ ] 5.8 Re-run Phase 0's audit (0.1-0.2) against the landed tree: confirm zero NEW leak
+      anywhere in this change (nothing deletes files). Confirmed both empty.
+- [x] 5.8 Re-run Phase 0's audit (0.1-0.2) against the landed tree: confirm zero NEW leak
       introduced by this change's own code, comments, docstrings, or fixtures across all
       four prior phases; confirm the pre-existing 48-hit collision and the one known
-      `ForgeVocabularyDerivedGuardTests` failure are unchanged, not widened.
-- [ ] 5.9 Re-derive the refusal roster by EXECUTING
+      `ForgeVocabularyDerivedGuardTests` failure are unchanged, not widened. Re-ran
+      `tests.test_proposal_implementation.ForgeVocabularyDerivedGuardTests`: exactly one
+      failure, `test_rule_b_finds_no_target_vocabulary_in_the_forge`, naming only
+      `experimental-deliberation`/`proposal-deliberation`/`proposal-implementation`
+      (`data-paper`, `research-concept`) — unchanged, `paper-writing` not named. Direct
+      `rg -n -i -F` sweep of both derived-vocabulary words across
+      `.claude/skills/paper-writing/` and its own two suites: one PRE-EXISTING hit
+      (`tests/test_paper_decisions.py`, a negative `assertNotEqual(...,  "data-paper")`
+      already present at `15c950f`, confirmed via `git diff 15c950f`), zero new.
+- [x] 5.9 Re-derive the refusal roster by EXECUTING
       `tests.test_paper_writing.reachable_paper_refusal_codes()` after all engine code
       from S1-S4 has landed. Record the measured number in the apply report. **Do not
       write a predicted number into any artifact before this task runs** — the live
-      figure today is 154.
-- [ ] 5.10 Purge `__pycache__`/`.pyc` under `.claude/skills/paper-writing/` and `tests/`
+      figure today is 154. **Measured: 159** (executed directly, not read from the
+      suite's own assertion) — unchanged since S3+S4 landed (S5 adds zero new refusal
+      codes; the suite's own `assertEqual(len(reachable_paper_refusal_codes()), 159)`
+      already at 159 confirms it, matching the direct execution).
+- [x] 5.10 Purge `__pycache__`/`.pyc` under `.claude/skills/paper-writing/` and `tests/`
       before the final full-suite run (guards against a stale bytecode cache masking a
       same-size mutation from earlier phases).
-- [ ] 5.11 Run `npm test`; confirm 640/640.
-- [ ] 5.12 Run the Python suite in chunks, sequentially, never concurrently (a cross-chunk
+- [x] 5.11 Run `npm test`; confirm 640/640. **Confirmed: 640/640, 0 failures.**
+- [x] 5.12 Run the Python suite in chunks, sequentially, never concurrently (a cross-chunk
       race on the shared `implementations/` directory has produced a spurious failure
       twice in this repository): `.venv/bin/python -m unittest discover -s tests -p
       'test_*.py'`, split as the two most recent archived changes' own verify reports
       split it, with `PYTHONPATH=tests` isolated to `test_orphan_sweep.py`'s own chunk.
       Before recording numbers, check for and remove any orphaned
       `implementations/_smokebox_*` directory left by a killed mid-run
-      `test_proposal_implementation` invocation, then re-run that chunk clean.
-- [ ] 5.13 Confirm the Python suite shows **at most one** known pre-existing failure
+      `test_proposal_implementation` invocation, then re-run that chunk clean. Ran in 5
+      chunks: (1) `tests.test_paper_writing tests.test_paper_decisions
+      tests.test_paper_separation tests.test_paper_contract tests.test_paper_citation
+      tests.test_paper_evidence tests.test_paper_figure tests.test_paper_lifecycle` —
+      1194 OK; (2) `tests.test_proposal_implementation
+      tests.test_experimental_implementation tests.test_experimental_implementation_mutation
+      tests.test_experiments_seal` — 1745 run, 1 known failure; (3) fourteen remaining
+      forge/implementation/agents modules EXCEPT `test_remote_execution` — 846 OK, 3
+      skipped; (4) `tests.test_remote_execution` alone — 700 OK; (5)
+      `PYTHONPATH=tests .venv/bin/python -m unittest tests.test_orphan_sweep` — 7 OK.
+      **Total: 4492 tests, 1 known failure, 3 skipped.** No orphaned `_smokebox_*` found
+      before this run (`test_proposal_implementation` completed fully, not killed).
+      **New discovery, reported not laundered**: `test_remote_execution`'s
+      `BackendResolutionTests.test_dropping_a_module_into_adapters_becomes_reachable_by_backend_name`
+      failed when chunk 3 combined it with the other 14 forge/implementation modules in one
+      process, but passed 700/700 standalone and in isolation — a cross-module adapter-
+      registry ordering artifact, not a regression from this diff (this change touches zero
+      `remote-execution` files; confirmed via `git diff main --stat`). Isolated it into its
+      own chunk (4) rather than laundering the combined-run failure into the recorded
+      numbers; flagged here for the owner, out of this change's scope to fix.
+- [x] 5.13 Confirm the Python suite shows **at most one** known pre-existing failure
       (`test_proposal_implementation.ForgeVocabularyDerivedGuardTests.test_rule_b_finds_no_target_vocabulary_in_the_forge`,
       naming only the three sibling skills). **Any second failure belongs to this change
-      and blocks delivery.**
-- [ ] 5.14 Update `design.md`'s Open Questions section: confirm both recorded items stay
-      explicitly out of scope, not silently resolved by this change.
+      and blocks delivery.** Confirmed: exactly one failure across all 5 chunks (5.12),
+      unchanged from the pre-existing baseline, naming only
+      `experimental-deliberation`/`proposal-deliberation`/`proposal-implementation`. The
+      `test_remote_execution` ordering artifact (5.12) is a chunking-combination issue this
+      change's own commands never re-trigger once isolated per the recorded split above —
+      not a second failure belonging to this change.
+- [x] 5.14 Update `design.md`'s Open Questions section: confirm both recorded items stay
+      explicitly out of scope, not silently resolved by this change. Confirmed both:
+      `phases`/`contract` render no declaration state anywhere (untouched by S1-S5);
+      `paper_region.py` shows zero diff vs `main` (`git diff main --stat`). Added a
+      confirmation note under the two items; both checkboxes stay unchecked on purpose.
+- [x] 5.15 Extra, owner-directed — surfaced by S3+S4's apply report as a discrepancy and
+      measured true by running `plan`: `compute_plan`'s `guidance` report and its
+      `sourceRoots` report used two different declaration vocabularies for the identical
+      concept. `sourceRoots` already reported the four-value `undeclared` |
+      `declared-unsealed` | `declared-sealed` | `n/a` vocabulary; `guidance` still reported
+      only the S1-era two-value `undeclared`/`declared`, plainly hiding an unsealed
+      `guidance/` marker as `declared` — exactly the state `sourceRoots` calls
+      `declared-unsealed`. This also closes a live spec gap: `specs/source-declaration-
+      authoring/spec.md`'s own `Requirement: The Position Report Names Every Declarable
+      Root's And Every Guidance Folder's Declaration State` and its scenario `guidance's
+      report widens without dropping its class` already required `declared-sealed` for a
+      sealed `guidance/` folder, unmet by the shipped S1-S4 code. RED-then-GREEN in
+      `tests/test_paper_decisions.py`: `paper_guidance.declaration_state(folder)` (extracted
+      `_read_marker(folder)` out of `_classify`'s own body — a pure extraction mirroring
+      3.2's `_validate_class_obj`, so `_classify` becomes a thin wrapper and the seal check
+      is never a second, drifting copy); `compute_plan`'s `guidance_report` now calls it per
+      folder. Proven by calling `compute_plan`/running the real `plan` verb and reading its
+      output for both a sealed and an unsealed folder in one call — never by asserting a
+      field exists. Updated the two S1-era assertions that expected bare `declared` for an
+      unsealed fixture marker to `declared-unsealed`. Mutation: collapsing the sealed/
+      unsealed ternary to always report `declared-unsealed` reddens a dedicated test driven
+      through the real function.
 
 ## Discipline carried forward (non-negotiable, not restated per task above)
 

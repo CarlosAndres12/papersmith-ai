@@ -469,3 +469,10 @@ None blocking. Two recorded, deliberately out of scope:
 - [ ] Whether `paper_region.py`'s region digest should adopt `paper_marker`'s strength sentence
       too. Its docstrings are accurate today but never state the limit outright; a wording-only
       change to a shipped module is not this change's subject.
+
+**S5 confirmation (tasks.md 5.14):** both items remain explicitly out of scope, not silently
+resolved. `phases`/`contract` still render no declaration state anywhere (confirmed: neither
+verb's implementation was touched by any phase of this change, S1 through S5); `paper_region.py`
+was read-only throughout, per its own row in `File Changes` above, and carries no
+`SEAL_STRENGTH`-derived wording. Both checkboxes stay unchecked on purpose — an open question
+resolved by silent omission is exactly what this note exists to rule out.

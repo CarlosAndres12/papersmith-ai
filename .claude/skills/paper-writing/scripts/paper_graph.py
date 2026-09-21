@@ -428,8 +428,7 @@ def resolve_section_index(source_roots: dict, root, lineage: str) -> tuple:
         if marker is None:
             raise Refused(
                 "SOURCE_REVISIONS_UNDECLARED",
-                f"{root.name!r} is document-rooted but carries no "
-                f"'.paper-writing.json' marker",
+                paper_declarations.source_revisions_undeclared_detail(status, root),
             )
         revision_path = paper_declarations.resolve_lineage(status["path"], lineage, marker)
     body = revision_path.read_text(encoding="utf-8")

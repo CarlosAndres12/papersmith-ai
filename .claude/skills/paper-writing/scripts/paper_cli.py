@@ -82,6 +82,7 @@ import paper_readiness  # noqa: E402
 import paper_region  # noqa: E402,F401 -- registered for the roster derivation
 import paper_guidance  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_marker  # noqa: E402,F401 -- the-skill-writes-the-declaration-it-demands, S2: the shared seal `paper_declarations.declare_revisions`/`read_revisions_marker` both call; raises no `Refused` of its own (design.md Decision B), imported here so `ModuleCompletenessTests` sees it and the roster derivation's whole-module scan covers it (contributing nothing, since it raises nothing)
 import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substitute's own --contract wiring calls paper_block, which calls this module in turn
 import paper_objective  # noqa: E402,F401 -- this skill's own declared north (tests/test_agents.py); raises no Refused of its own
 import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the claim<->source record
@@ -477,6 +478,21 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # cover -- that code names a lineage's own candidates under an already-
     # identified root, never which root to use in the first place -----------
     "EVIDENCE_ROOT_AMBIGUOUS": WORK_STATE,
+    # --- the-skill-writes-the-declaration-it-demands, S2: `mark revisions`
+    # (`paper_declarations.declare_revisions`) -- the verb that WRITES a
+    # source root's own revisions marker, validated against disk at the
+    # moment of writing, and the seal-mismatch code its own reader
+    # (`read_revisions_marker`) now raises (design.md Decisions A/C/F) -----
+    "SOURCE_ROOT_UNDECLARABLE": WORK_STATE,
+    "SOURCE_DECLARATION_UNMATCHED": WORK_STATE,
+    "SOURCE_DECLARATION_HAND_EDITED": WORK_STATE,
+    # --- the-skill-writes-the-declaration-it-demands, S3: `mark class`
+    # (`paper_guidance.declare_class`) -- the verb that WRITES a guidance/
+    # folder's own class marker, validated against disk at the moment of
+    # writing, and the seal-mismatch code its own reader (`_classify`) now
+    # raises (design.md Decisions A/C/F, guidance half) -----------------
+    "GUIDANCE_FOLDER_ABSENT": WORK_STATE,
+    "GUIDANCE_DECLARATION_HAND_EDITED": WORK_STATE,
     # --- the-requirement-names-the-section-that-feeds-it, U3e ruling: the
     # verb that RECORDS a binding (`bind`, `paper_declarations.bind_
     # section`/`reopen_binding`) -- the answer to `SECTION_BINDING_ABSENT`
@@ -917,6 +933,55 @@ def cmd_bind(args: argparse.Namespace) -> dict:
         paper_dir, args.block, args.fact, args.lineage, tuple(args.section or ()),
         source_base=sections_dir.parent,
     )
+
+
+def cmd_mark_revisions(args: argparse.Namespace) -> dict:
+    """`mark revisions`: the CLI front door for `paper_declarations.
+    declare_revisions` (design.md Decision D/F; `specs/source-declaration-
+    authoring/spec.md`, `Requirement: A Source Root's Revision Rule Is
+    Recorded And Validated Against Disk By Using The Skill`) -- the answer
+    to `SOURCE_REVISIONS_UNDECLARED` a person gives BY USING THE SKILL,
+    never by hand-editing `<root>/.paper-writing.json` with a file-writing
+    tool.
+
+    `--root` is matched against `declare_revisions`'s own derived
+    declarable-root map; no operator string is ever joined onto a path
+    (design.md Decision D). The source base is `paper_dir.parent`, the
+    IDENTICAL derivation `compute_plan`'s own `sourceRoots` and
+    `_binding_separation_report` already use -- never a second convention
+    for where a root resolves from."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_declarations.declare_revisions(
+        paper_dir.parent, args.root, args.revision_prefix, args.ordinal_digits,
+        sealed=not args.unsealed,
+    )
+
+
+def cmd_mark_class(args: argparse.Namespace) -> dict:
+    """`mark class`: the CLI front door for `paper_guidance.declare_class`
+    (design.md Decision D/F, guidance half; `specs/guidance-registry/
+    spec.md`) -- the answer to an unclassified `guidance/<folder>` a person
+    gives BY USING THE SKILL, never by hand-editing
+    `guidance/<folder>/.paper-writing.json` with a file-writing tool.
+
+    `--folder` is matched against `declare_class`'s own derived folder
+    enumeration; no operator string is ever joined onto a path (design.md
+    Decision D)."""
+    guidance_dir = paper_guidance.resolve_guidance_dir(args.guidance)
+    return paper_guidance.declare_class(
+        guidance_dir, args.folder, args.class_value, sealed=not args.unsealed,
+    )
+
+
+def cmd_mark(args: argparse.Namespace) -> dict:
+    """`mark`: one root with two modes, `revisions` and `class` (design.md
+    Decision D: same subject, same root, the `bib build` two-level nesting
+    precedent). `mark_command` is `required=True` with `revisions` and
+    `class` its only registered choices, so this dispatch is exhaustive as
+    written."""
+    if args.mark_command == "class":
+        return cmd_mark_class(args)
+    return cmd_mark_revisions(args)
 
 
 #: `_read_separation_proposal`'s own closed key-set grammar (design.md,
@@ -1593,10 +1658,21 @@ def _compute_provenance_report(
 
 def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | None = None) -> dict:
     """The pure aggregation `plan` reports: every `guidance/` folder's
-    class or `unclassified`; the whole `declarations` region body (fill
-    and fixed state, per record); and every written block's provenance
-    state — `current`, `drifted`, or `unprovenanced` (design.md, `plan
-    Aggregates Registry, Declarations, and Provenance`).
+    `{"class": ..., "declaration": ...}` (widened from a bare class string
+    -- design.md Decision I; `declaration` is `paper_guidance.
+    declaration_state`'s own `'undeclared'`|`'declared-unsealed'`|
+    `'declared-sealed'` vocabulary, tasks.md 5.15 -- the SAME vocabulary
+    `sourceRoots` uses below, never a second, 2-value spelling of the same
+    concept); the whole `declarations` region body (fill and fixed state,
+    per record); every written block's provenance state — `current`,
+    `drifted`, or `unprovenanced`; and, since this unit, `sourceRoots`: one
+    entry per distinct `paper_declarations.FACT_SOURCE_ROOT` root naming
+    its `state`/`documents`/`reason` (`paper_declarations.
+    source_root_status`) plus its `declaration` (`paper_declarations.
+    declaration_state`) (design.md, `plan Aggregates Registry, Declarations,
+    and Provenance`; `specs/source-declaration-authoring/spec.md`,
+    `Requirement: The Position Report Names Every Declarable Root's And
+    Every Guidance Folder's Declaration State`).
 
     Never writes — `read_registry`, `read_region` and `status` are all
     read-only, and `drift` only compares digests. Takes `paper_dir` and
@@ -1625,7 +1701,20 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     against a value that no longer holds; `plan` never rewrites `main.tex`
     or either region under any of this, unchanged from before.
     """
-    guidance_report = paper_guidance.read_registry(guidance_dir)
+    # `guidance`'s own declaration state uses the IDENTICAL four-value
+    # vocabulary `sourceRoots` uses below -- `paper_guidance.
+    # declaration_state` (tasks.md 5.15), never a second, 2-value
+    # "undeclared"/"declared" spelling of the same concept
+    # (`specs/source-declaration-authoring/spec.md`, `Requirement: The
+    # Position Report Names Every Declarable Root's And Every Guidance
+    # Folder's Declaration State`).
+    guidance_report = {
+        folder: {
+            "class": klass,
+            "declaration": paper_guidance.declaration_state(guidance_dir / folder),
+        }
+        for folder, klass in paper_guidance.read_registry(guidance_dir).items()
+    }
 
     tex_path = paper_block.resolve_main_tex(paper_dir)
     main_tex_bytes = tex_path.read_bytes()
@@ -1640,10 +1729,32 @@ def compute_plan(paper_dir: Path, *, guidance_dir: Path, sections_dir: Path | No
     corpus = paper_graph.assemble_corpus(sections_dir) if sections_dir is not None else None
     provenance_report = _compute_provenance_report(main_tex_bytes, status, declarations_body, corpus)
 
+    # `specs/source-declaration-authoring/spec.md`, `Requirement: The
+    # Position Report Names Every Declarable Root's And Every Guidance
+    # Folder's Declaration State` (design.md Decision I): one entry per
+    # DISTINCT root in `FACT_SOURCE_ROOT`, the same source base
+    # `_binding_separation_report` already uses (`paper_dir.parent`), never
+    # `sections_dir` -- `plan` should not need one for a fact about the
+    # corpus. This corrects the archived predecessor's false-ticked
+    # `tasks.md` item 2.14 ("echoed by every corpus-reading verb"),
+    # measured false by running `plan`/`phases`/`contract` and finding none
+    # of the three render `Corpus.source_roots` at all.
+    source_base = paper_dir.parent
+    source_roots_report = {}
+    for root in sorted(set(paper_declarations.FACT_SOURCE_ROOT.values()), key=lambda r: r.name):
+        root_status = paper_declarations.source_root_status(source_base, root)
+        source_roots_report[root.name] = {
+            "state": root_status["state"],
+            "documents": root_status["documents"],
+            "reason": root_status["reason"],
+            "declaration": paper_declarations.declaration_state(root_status, root),
+        }
+
     result = {
         "guidance": guidance_report,
         "declarations": declarations_body,
         "provenance": provenance_report,
+        "sourceRoots": source_roots_report,
     }
     if corpus is not None:
         # item 1 (`no-citation-before-its-paper-is-ingested`): every
@@ -2596,6 +2707,67 @@ def build_parser() -> argparse.ArgumentParser:
         help="clear this exact (--block, --fact) binding's fixed state instead of recording one",
     )
 
+    p_mark = sub.add_parser(
+        "mark",
+        help="record a per-directory .paper-writing.json marker, validated against disk at "
+             "write time -- the answer to SOURCE_REVISIONS_UNDECLARED and an unclassified "
+             "guidance/ folder, by using the skill, never a hand edit",
+    )
+    mark_sub = p_mark.add_subparsers(dest="mark_command", required=True)
+    p_mark_revisions = mark_sub.add_parser(
+        "revisions",
+        help="record <root>/.paper-writing.json's own revisions grammar, validated against "
+             "the *.md files actually there right now",
+    )
+    p_mark_revisions.add_argument(
+        "--paper", default=None,
+        help="override paper/ location (its PARENT is the source base --root resolves "
+             "under, the same derivation compute_plan's own sourceRoots uses); must resolve "
+             "inside the repository root",
+    )
+    p_mark_revisions.add_argument(
+        "--root", required=True,
+        help="a PROSE-kind key of FACT_SOURCE_ROOT to declare -- derived, never a literal list",
+    )
+    p_mark_revisions.add_argument(
+        "--revision-prefix", required=True, dest="revision_prefix",
+        help="the revision ordinal's own literal prefix, e.g. 'r'",
+    )
+    p_mark_revisions.add_argument(
+        "--ordinal-digits", required=True, type=int, dest="ordinal_digits",
+        help="the minimum ordinal digit width this root's revisions carry",
+    )
+    p_mark_revisions.add_argument(
+        "--unsealed", action="store_true",
+        help="write the pre-seal grammar (no seal_sha256 key) -- the documented rollback "
+             "path (design.md Decision K), run once per declared root before reverting; "
+             "never a routine choice",
+    )
+    p_mark_class = mark_sub.add_parser(
+        "class",
+        help="record guidance/<folder>/.paper-writing.json's own class grammar, validated "
+             "against the folders actually there right now",
+    )
+    p_mark_class.add_argument(
+        "--folder", required=True,
+        help="a directory name directly under guidance/ to classify -- matched against a "
+             "derived enumeration, never a literal list",
+    )
+    p_mark_class.add_argument(
+        "--class", required=True, dest="class_value",
+        help="one of paper_guidance.CLASSES ('style-reference', 'evidence')",
+    )
+    p_mark_class.add_argument(
+        "--guidance", default=None,
+        help="override guidance/ location; must resolve inside the repository root",
+    )
+    p_mark_class.add_argument(
+        "--unsealed", action="store_true",
+        help="write the pre-seal grammar (no seal_sha256 key) -- the documented rollback "
+             "path (design.md Decision K), run once per declared folder before reverting; "
+             "never a routine choice",
+    )
+
     p_separate = sub.add_parser(
         "separate",
         help="score a proposed whole-cut assignment of source sections to blocks against the "
@@ -2931,8 +3103,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "bind", "separate", "observe", "plan", "resolve", "full_text", "bib", "validate", "write",
-    "render", "place", "couplings", "verify", "packet", "reuse", "exhaustion",
+    "declare", "bind", "mark", "separate", "observe", "plan", "resolve", "full_text", "bib", "validate",
+    "write", "render", "place", "couplings", "verify", "packet", "reuse", "exhaustion",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2946,6 +3118,7 @@ _COMMANDS = {
     "order": cmd_order,
     "declare": cmd_declare,
     "bind": cmd_bind,
+    "mark": cmd_mark,
     "separate": cmd_separate,
     "observe": cmd_observe,
     "plan": cmd_plan,
