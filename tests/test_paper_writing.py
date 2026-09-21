@@ -50,6 +50,7 @@ import paper_declarations  # noqa: E402
 import paper_region  # noqa: E402
 import paper_guidance  # noqa: E402
 import paper_source_span  # noqa: E402
+import paper_marker  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / ".claude" / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -1596,13 +1597,102 @@ class SourceBindingsFieldTests(unittest.TestCase):
         self.assertEqual(corpus.blocks["a.only"].source_bindings, ())
 
 
+class PaperMarkerSealTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: A
+    Declaration Is Sealed Against An Unaware Edit, At Exactly Its Real
+    Strength` -- the shared seal convention itself (design.md Decision B),
+    independent of either marker's own grammar."""
+
+    def test_identical_input_produces_an_identical_digest_across_two_calls(self) -> None:
+        """Canonicalization stability: `sort_keys=True` is load-bearing, the
+        same reason `paper_region.serialize_body` documents its own."""
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+
+        first = paper_marker.computed_seal(obj)
+        second = paper_marker.computed_seal(dict(obj))
+
+        self.assertEqual(first, second)
+
+    def test_the_digest_excludes_the_seal_key_itself_from_its_own_input(self) -> None:
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        seal = paper_marker.computed_seal(obj)
+        with_seal = {**obj, paper_marker.SEAL_KEY: seal}
+
+        self.assertEqual(paper_marker.computed_seal(with_seal), seal)
+
+    def test_canonical_bytes_ignores_key_order(self) -> None:
+        first = {"b": 1, "a": 2}
+        second = {"a": 2, "b": 1}
+
+        self.assertEqual(paper_marker.canonical_bytes(first), paper_marker.canonical_bytes(second))
+
+    def test_is_sealed_true_iff_the_seal_key_is_present(self) -> None:
+        self.assertFalse(paper_marker.is_sealed({"revisions": {}}))
+        self.assertTrue(paper_marker.is_sealed({"revisions": {}, paper_marker.SEAL_KEY: "x"}))
+
+    def test_seal_shape_error_none_when_absent(self) -> None:
+        self.assertIsNone(paper_marker.seal_shape_error({"revisions": {}}))
+
+    def test_seal_shape_error_none_when_a_valid_64_hex_string(self) -> None:
+        obj = {"revisions": {}, paper_marker.SEAL_KEY: "a" * 64}
+
+        self.assertIsNone(paper_marker.seal_shape_error(obj))
+
+    def test_seal_shape_error_detail_when_wrong_length(self) -> None:
+        obj = {"revisions": {}, paper_marker.SEAL_KEY: "a" * 63}
+
+        detail = paper_marker.seal_shape_error(obj)
+
+        self.assertIsNotNone(detail)
+        self.assertIn(paper_marker.SEAL_KEY, detail)
+
+    def test_seal_shape_error_detail_when_wrong_charset(self) -> None:
+        obj = {"revisions": {}, paper_marker.SEAL_KEY: "g" * 64}
+
+        self.assertIsNotNone(paper_marker.seal_shape_error(obj))
+
+    def test_seal_shape_error_detail_when_not_a_string(self) -> None:
+        obj = {"revisions": {}, paper_marker.SEAL_KEY: 12345}
+
+        self.assertIsNotNone(paper_marker.seal_shape_error(obj))
+
+    def test_write_sealed_sets_a_seal_matching_computed_seal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".paper-writing.json"
+            obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+
+            written = paper_marker.write(path, obj, sealed=True)
+
+            self.assertEqual(written[paper_marker.SEAL_KEY], paper_marker.computed_seal(obj))
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(on_disk, written)
+
+    def test_write_unsealed_carries_no_seal_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".paper-writing.json"
+            obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+
+            written = paper_marker.write(path, obj, sealed=False)
+
+            self.assertNotIn(paper_marker.SEAL_KEY, written)
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+
+    def test_the_module_docstring_quotes_seal_strength_verbatim(self) -> None:
+        source = (SKILL_SCRIPTS / "paper_marker.py").read_text(encoding="utf-8")
+
+        self.assertIn(paper_marker.SEAL_STRENGTH, source)
+
+
 class SourceRevisionsMarkerGrammarTests(unittest.TestCase):
     """`source-section-binding` spec, `Requirement: The Marker Grammar Is
     Validated, And Disjoint From guidance/'s`: `paper_declarations.
     read_revisions_marker` -- UTF-8 JSON, exactly one top-level key
     (`revisions`), an object holding exactly `revision_prefix` (string) and
     `ordinal_digits` (integer), both required, no other key admitted at
-    either level."""
+    either level. `seal_sha256` MAY additionally be present at the top
+    level (design.md Decision A/C) -- checked by this class too, once
+    `paper_marker.py` exists to check it against."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -1625,7 +1715,57 @@ class SourceRevisionsMarkerGrammarTests(unittest.TestCase):
 
         marker = paper_declarations.read_revisions_marker(self.root)
 
-        self.assertEqual(marker, {"revision_prefix": "r", "ordinal_digits": 2})
+        self.assertEqual(
+            marker, {"revision_prefix": "r", "ordinal_digits": 2, "sealed": False},
+        )
+
+    def test_an_unsealed_marker_accepts_exactly_as_before_sealing_existed(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement:
+        Absence Is A Reported State...`, scenario `An unsealed marker on an
+        existing checkout reports, not refuses`."""
+        self._marker('{"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}')
+
+        marker = paper_declarations.read_revisions_marker(self.root)
+
+        self.assertFalse(marker["sealed"])
+
+    def test_a_valid_sealed_marker_parses(self) -> None:
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        self._marker(json.dumps(obj))
+
+        marker = paper_declarations.read_revisions_marker(self.root)
+
+        self.assertTrue(marker["sealed"])
+        self.assertEqual(marker["revision_prefix"], "r")
+        self.assertEqual(marker["ordinal_digits"], 2)
+
+    def test_a_malformed_seal_shape_refuses_as_malformed_not_hand_edited(self) -> None:
+        self._marker(
+            json.dumps({
+                "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+                paper_marker.SEAL_KEY: "not-a-hex-digest",
+            })
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn(paper_marker.SEAL_KEY, ctx.exception.detail)
+
+    def test_a_mismatched_seal_refuses_hand_edited_naming_both_digests(self) -> None:
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = "a" * 64  # never the real computed seal
+        self._marker(json.dumps(obj))
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.read_revisions_marker(self.root)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_HAND_EDITED")
+        self.assertIn("a" * 64, ctx.exception.detail)
+        self.assertIn(paper_marker.computed_seal(obj), ctx.exception.detail)
+        self.assertIn(paper_marker.SEAL_STRENGTH, ctx.exception.detail)
 
     def test_a_non_json_marker_refuses_malformed_source_marker(self) -> None:
         self._marker("{not valid json")
@@ -7689,8 +7829,22 @@ class RefusalRosterTests(unittest.TestCase):
         floor, refused by name ahead of every command rather than a bare
         traceback. Reachable only once `main` joins `cmd_*` as a root this
         walk follows (above); no new import needed. Measured directly
-        against `reachable_paper_refusal_codes()`, never forecast."""
-        self.assertEqual(len(reachable_paper_refusal_codes()), 154)
+        against `reachable_paper_refusal_codes()`, never forecast.
+
+        Moved from 154 to 157 in S2 of `the-skill-writes-the-declaration-
+        it-demands`: `paper_declarations.py` (already imported) gains three
+        new raise sites -- `declare_revisions`'s own `SOURCE_ROOT_
+        UNDECLARABLE` (a `--root` naming a non-`PROSE`-kind root) and
+        `SOURCE_DECLARATION_UNMATCHED` (a declared prefix/width matching
+        zero `*.md`, or the root not being a directory at all), and
+        `read_revisions_marker`'s own `SOURCE_DECLARATION_HAND_EDITED` (a
+        sealed marker's recorded seal not matching the computed one). `mark`
+        joins `cmd_*` as a new root (`cmd_mark` -> `cmd_mark_revisions`);
+        `paper_marker.py` is imported too (`ModuleCompletenessTests`) but
+        contributes nothing of its own -- it raises no `Refused`
+        (design.md Decision B). Measured directly against `reachable_
+        paper_refusal_codes()`, never forecast; S3/S4 move this again."""
+        self.assertEqual(len(reachable_paper_refusal_codes()), 157)
 
 
 class ObjectiveNorthTests(unittest.TestCase):
@@ -9235,6 +9389,27 @@ class SourceSectionBindingWriteGateTests(unittest.TestCase):
 
         self._assert_refuses_before_drafting("EVIDENCE_ROOT_AMBIGUOUS")
 
+    def test_write_refuses_source_declaration_hand_edited(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement:
+        Absence Is A Reported State; A Broken Seal Refuses Where The Marker
+        Is Read` -- the seal is verified inside `read_revisions_marker`,
+        reached here through `write`'s own corpus-assembly gate, never only
+        through the read-only `plan`/`phases` verbs (design.md Decision C,
+        invariant 4)."""
+        self._write_bound_section({
+            "value": "formulation",
+            "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+            "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
+        })
+        proposals = self.test_root / "proposals"
+        proposals.mkdir(parents=True)
+        (proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = "a" * 64  # never the real computed seal
+        (proposals / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+
+        self._assert_refuses_before_drafting("SOURCE_DECLARATION_HAND_EDITED")
+
 
 class BindCliEndToEndTests(unittest.TestCase):
     """`the-requirement-names-the-section-that-feeds-it`, U3e ruling: the
@@ -9405,6 +9580,25 @@ class SourceSectionBindingWriteGateMutationProofTests(unittest.TestCase):
             "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
             ".test_write_refuses_source_revisions_undeclared",
             source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+    def test_mutation_the_seal_comparison_is_reachable_through_write_not_only_plan(self) -> None:
+        """tasks.md 2.19 (the non-negotiable constraint): replacing the
+        seal-comparison line inside `read_revisions_marker` with a constant
+        `True` MUST be caught by a test driven through `write`, a gating
+        verb -- never only through the read-only `plan`. This mutation runs
+        against `paper_declarations.py`, not `paper_cli.py`: `write` still
+        reaches `read_revisions_marker` unchanged, but the reader itself no
+        longer detects the mismatch."""
+        proc = _run_against_mutant(
+            "        if recorded != computed:",
+            "        if False:",
+            "tests.test_paper_writing.SourceSectionBindingWriteGateTests"
+            ".test_write_refuses_source_declaration_hand_edited",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
         )
         output = proc.stdout + proc.stderr
         self.assertIn("MUTANT_IMPORTED_OK", output, output)
@@ -11844,6 +12038,157 @@ class PythonFloorGuardMutationTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, output)
 
 
+class MarkRevisionsCliWholeLoopTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, Acceptance Criteria:
+    "Both marker kinds gain a writer reachable only by using the skill" --
+    the whole loop `SOURCE_REVISIONS_UNDECLARED` exists to enable: `write`
+    refuses, `mark revisions` (a REAL CLI invocation, never a direct Python
+    call -- the CLI wiring itself is what this test proves) answers it,
+    `write` proceeds past that gate (tasks.md 2.23)."""
+
+    def setUp(self) -> None:
+        self.test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-mark-revisions-loop-test-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, self.test_root, ignore_errors=True)
+        self.paper_dir = self.test_root / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        self.sections_dir = self.test_root / "sections"
+        self.sections_dir.mkdir(parents=True)
+        blocks = [{
+            "id": "only",
+            "requires_facts": [{
+                "value": "formulation",
+                "source": {"file": "sections/01-a.md", "quote": "The formulation, written here."},
+                "document": {"lineage": "lumen-thesis", "section": "1. Intro"},
+            }],
+            "requires_declarations": [], "citations": "none",
+        }]
+        (self.sections_dir / "01-a.md").write_text(
+            "---\n" + json.dumps({"section": "a", "position": 1, "blocks": blocks})
+            + "\n---\n\nThe formulation, written here.\n\n"
+            "### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n",
+            encoding="utf-8",
+        )
+        self.proposals = self.test_root / "proposals"
+        self.proposals.mkdir()
+        (self.proposals / "lumen-thesis-r21.md").write_text("# 1. Intro\n", encoding="utf-8")
+
+    def _write_args(self) -> argparse.Namespace:
+        return argparse.Namespace(
+            paper=str(self.paper_dir), sections=str(self.sections_dir),
+            section="a", block="only",
+            draft=str(self.test_root / "draft.json"),
+            audit=str(self.test_root / "audit.json"),
+            evidence=None, style=None, guidance=None, transcript=None,
+        )
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess:
+        """The SAME confirmed CLI-shelling shape `_cli_shelling_run_helper_
+        names` recognizes elsewhere in this file (`test_paper_contract.
+        VerbFrontDoorCoverageTests`'s own AST scan) -- `mark revisions`'s
+        CLI wiring is a front door, proven through a REAL subprocess, never
+        a direct Python call to `paper_declarations.declare_revisions`."""
+        return subprocess.run(
+            [sys.executable, str(CLI), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_write_refuses_then_mark_revisions_then_write_proceeds(self) -> None:
+        # 1. `write` refuses -- `proposals/` is document-rooted, no marker.
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        self.assertEqual(ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+
+        # 2. `mark revisions` answers it -- a REAL subprocess CLI
+        #    invocation, never a direct call to `paper_declarations.
+        #    declare_revisions`, so the CLI wiring itself (the argparse
+        #    subparser, `cmd_mark`, `cmd_mark_revisions`) is what is proven.
+        proc = self._run(
+            "mark", "revisions", "--paper", str(self.paper_dir), "--root", "proposals",
+            "--revision-prefix", "r", "--ordinal-digits", "2",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["root"], "proposals")
+        self.assertEqual(payload["matched"], ["lumen-thesis-r21.md"])
+        self.assertEqual(payload["unmatched"], [])
+        self.assertTrue(payload["sealed"])
+        self.assertTrue((self.proposals / ".paper-writing.json").is_file())
+
+        # 3. `write` no longer refuses `SOURCE_REVISIONS_UNDECLARED` -- it
+        #    proceeds past the marker gate, all the way to trying to open
+        #    the never-created `--draft`.
+        with self.assertRaises((Refused, FileNotFoundError)) as ctx:
+            paper_cli.cmd_write(self._write_args())
+        if isinstance(ctx.exception, Refused):
+            self.assertNotEqual(ctx.exception.code, "SOURCE_REVISIONS_UNDECLARED")
+
+        # `sections/01-a.md` is never touched by any of this.
+        prose = (self.sections_dir / "01-a.md").read_text(encoding="utf-8")
+        self.assertNotIn("seal_sha256", prose)
+
+    def test_mark_revisions_refuses_a_declared_width_matching_nothing_on_disk(self) -> None:
+        proc = self._run(
+            "mark", "revisions", "--paper", str(self.paper_dir), "--root", "proposals",
+            "--revision-prefix", "v", "--ordinal-digits", "3",
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "SOURCE_DECLARATION_UNMATCHED")
+        self.assertIn("v", payload["detail"])
+        self.assertIn("3", payload["detail"])
+        self.assertIn("lumen-thesis-r21.md", payload["detail"])
+        self.assertFalse((self.proposals / ".paper-writing.json").exists())
+
+    def test_mark_revisions_refuses_a_non_declarable_root(self) -> None:
+        proc = self._run(
+            "mark", "revisions", "--paper", str(self.paper_dir), "--root", "implementation",
+            "--revision-prefix", "r", "--ordinal-digits", "2",
+        )
+        self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["code"], "SOURCE_ROOT_UNDECLARABLE")
+        self.assertIn("proposals", payload["detail"])
+        self.assertIn("experiments", payload["detail"])
+
+    def test_mark_revisions_unsealed_writes_no_seal_key(self) -> None:
+        proc = self._run(
+            "mark", "revisions", "--paper", str(self.paper_dir), "--root", "proposals",
+            "--revision-prefix", "r", "--ordinal-digits", "2", "--unsealed",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertFalse(payload["sealed"])
+        on_disk = json.loads((self.proposals / ".paper-writing.json").read_text(encoding="utf-8"))
+        self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+
+    def test_re_recording_a_hand_edited_marker_always_succeeds(self) -> None:
+        """`specs/source-declaration-authoring/spec.md`, `Requirement:
+        Re-Recording Always Succeeds; There Is No Stuck State` -- no
+        `--reopen`/`--adopt`, and a hand-edited sealed marker is cleared by
+        re-running the verb, never by hand-editing the file."""
+        marker_path = self.proposals / ".paper-writing.json"
+        marker_path.write_text(
+            json.dumps({
+                "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+                paper_marker.SEAL_KEY: "a" * 64,
+            }),
+            encoding="utf-8",
+        )
+
+        proc = self._run(
+            "mark", "revisions", "--paper", str(self.paper_dir), "--root", "proposals",
+            "--revision-prefix", "r", "--ordinal-digits", "2",
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        on_disk = json.loads(marker_path.read_text(encoding="utf-8"))
+        self.assertEqual(on_disk[paper_marker.SEAL_KEY], paper_marker.computed_seal(on_disk))
+
+
 class PlanSourceRootsTests(unittest.TestCase):
     """`specs/source-declaration-authoring/spec.md`, `Requirement: The
     Position Report Names Every Declarable Root's And Every Guidance
@@ -11883,7 +12228,14 @@ class PlanSourceRootsTests(unittest.TestCase):
 
         self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "undeclared")
 
-    def test_a_prose_root_with_a_valid_marker_reports_declared(self) -> None:
+    def test_a_prose_root_with_a_valid_unsealed_marker_reports_declared_unsealed(self) -> None:
+        """S2 widens the three-value vocabulary `declared` split into
+        `declared-sealed`/`declared-unsealed` (design.md Decision C/I;
+        `specs/source-declaration-authoring/spec.md`, `Requirement: Absence
+        Is A Reported State; A Broken Seal Refuses Where The Marker Is
+        Read`) -- a marker written before sealing existed carries no
+        `seal_sha256` key and reports `declared-unsealed`, never a
+        refusal."""
         proposals = self.forge_root / "proposals"
         proposals.mkdir()
         (proposals / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
@@ -11894,7 +12246,19 @@ class PlanSourceRootsTests(unittest.TestCase):
 
         report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
 
-        self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "declared")
+        self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "declared-unsealed")
+
+    def test_a_prose_root_with_a_valid_sealed_marker_reports_declared_sealed(self) -> None:
+        proposals = self.forge_root / "proposals"
+        proposals.mkdir()
+        (proposals / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        (proposals / ".paper-writing.json").write_text(json.dumps(obj), encoding="utf-8")
+
+        report = paper_cli.compute_plan(self.paper_dir, guidance_dir=self.guidance_dir)
+
+        self.assertEqual(report["sourceRoots"]["proposals"]["declaration"], "declared-sealed")
 
     def test_a_non_prose_root_reports_n_a_by_kind(self) -> None:
         implementation_kind = paper_declarations.FACT_SOURCE_ROOT["implementation"].kind

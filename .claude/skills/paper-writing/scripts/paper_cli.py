@@ -82,6 +82,7 @@ import paper_readiness  # noqa: E402
 import paper_region  # noqa: E402,F401 -- registered for the roster derivation
 import paper_guidance  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_marker  # noqa: E402,F401 -- the-skill-writes-the-declaration-it-demands, S2: the shared seal `paper_declarations.declare_revisions`/`read_revisions_marker` both call; raises no `Refused` of its own (design.md Decision B), imported here so `ModuleCompletenessTests` sees it and the roster derivation's whole-module scan covers it (contributing nothing, since it raises nothing)
 import paper_provenance  # noqa: E402,F401 -- for the roster derivation; substitute's own --contract wiring calls paper_block, which calls this module in turn
 import paper_objective  # noqa: E402,F401 -- this skill's own declared north (tests/test_agents.py); raises no Refused of its own
 import paper_evidence  # noqa: E402 -- no-claim-without-a-source-that-holds-it, WU1: the claim<->source record
@@ -477,6 +478,14 @@ REFUSAL_CLASSIFICATION: dict[str, str] = {
     # cover -- that code names a lineage's own candidates under an already-
     # identified root, never which root to use in the first place -----------
     "EVIDENCE_ROOT_AMBIGUOUS": WORK_STATE,
+    # --- the-skill-writes-the-declaration-it-demands, S2: `mark revisions`
+    # (`paper_declarations.declare_revisions`) -- the verb that WRITES a
+    # source root's own revisions marker, validated against disk at the
+    # moment of writing, and the seal-mismatch code its own reader
+    # (`read_revisions_marker`) now raises (design.md Decisions A/C/F) -----
+    "SOURCE_ROOT_UNDECLARABLE": WORK_STATE,
+    "SOURCE_DECLARATION_UNMATCHED": WORK_STATE,
+    "SOURCE_DECLARATION_HAND_EDITED": WORK_STATE,
     # --- the-requirement-names-the-section-that-feeds-it, U3e ruling: the
     # verb that RECORDS a binding (`bind`, `paper_declarations.bind_
     # section`/`reopen_binding`) -- the answer to `SECTION_BINDING_ABSENT`
@@ -917,6 +926,38 @@ def cmd_bind(args: argparse.Namespace) -> dict:
         paper_dir, args.block, args.fact, args.lineage, tuple(args.section or ()),
         source_base=sections_dir.parent,
     )
+
+
+def cmd_mark_revisions(args: argparse.Namespace) -> dict:
+    """`mark revisions`: the CLI front door for `paper_declarations.
+    declare_revisions` (design.md Decision D/F; `specs/source-declaration-
+    authoring/spec.md`, `Requirement: A Source Root's Revision Rule Is
+    Recorded And Validated Against Disk By Using The Skill`) -- the answer
+    to `SOURCE_REVISIONS_UNDECLARED` a person gives BY USING THE SKILL,
+    never by hand-editing `<root>/.paper-writing.json` with a file-writing
+    tool.
+
+    `--root` is matched against `declare_revisions`'s own derived
+    declarable-root map; no operator string is ever joined onto a path
+    (design.md Decision D). The source base is `paper_dir.parent`, the
+    IDENTICAL derivation `compute_plan`'s own `sourceRoots` and
+    `_binding_separation_report` already use -- never a second convention
+    for where a root resolves from."""
+    paper_dir = paper_scaffold.resolve_paper_dir(args.paper)
+    return paper_declarations.declare_revisions(
+        paper_dir.parent, args.root, args.revision_prefix, args.ordinal_digits,
+        sealed=not args.unsealed,
+    )
+
+
+def cmd_mark(args: argparse.Namespace) -> dict:
+    """`mark`: one new root with (so far) one mode, `revisions` (design.md
+    Decision D: same subject, same root, the `bib build` two-level nesting
+    precedent). `mark_command` is `required=True` with `revisions` its only
+    registered choice in this unit, so this dispatch is exhaustive as
+    written; a sibling mode joins this dispatch, never a second root, the
+    day it lands."""
+    return cmd_mark_revisions(args)
 
 
 #: `_read_separation_proposal`'s own closed key-set grammar (design.md,
@@ -2631,6 +2672,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="clear this exact (--block, --fact) binding's fixed state instead of recording one",
     )
 
+    p_mark = sub.add_parser(
+        "mark",
+        help="record a per-directory .paper-writing.json marker, validated against disk at "
+             "write time -- the answer to SOURCE_REVISIONS_UNDECLARED (and, later, an "
+             "unclassified guidance/ folder), by using the skill, never a hand edit",
+    )
+    mark_sub = p_mark.add_subparsers(dest="mark_command", required=True)
+    p_mark_revisions = mark_sub.add_parser(
+        "revisions",
+        help="record <root>/.paper-writing.json's own revisions grammar, validated against "
+             "the *.md files actually there right now",
+    )
+    p_mark_revisions.add_argument(
+        "--paper", default=None,
+        help="override paper/ location (its PARENT is the source base --root resolves "
+             "under, the same derivation compute_plan's own sourceRoots uses); must resolve "
+             "inside the repository root",
+    )
+    p_mark_revisions.add_argument(
+        "--root", required=True,
+        help="a PROSE-kind key of FACT_SOURCE_ROOT to declare -- derived, never a literal list",
+    )
+    p_mark_revisions.add_argument(
+        "--revision-prefix", required=True, dest="revision_prefix",
+        help="the revision ordinal's own literal prefix, e.g. 'r'",
+    )
+    p_mark_revisions.add_argument(
+        "--ordinal-digits", required=True, type=int, dest="ordinal_digits",
+        help="the minimum ordinal digit width this root's revisions carry",
+    )
+    p_mark_revisions.add_argument(
+        "--unsealed", action="store_true",
+        help="write the pre-seal grammar (no seal_sha256 key) -- the documented rollback "
+             "path (design.md Decision K), run once per declared root before reverting; "
+             "never a routine choice",
+    )
+
     p_separate = sub.add_parser(
         "separate",
         help="score a proposed whole-cut assignment of source sections to blocks against the "
@@ -2966,8 +3044,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS = (
     "scaffold", "status", "open", "substitute", "contract", "readiness", "phases", "skeleton", "order",
-    "declare", "bind", "separate", "observe", "plan", "resolve", "full_text", "bib", "validate", "write",
-    "render", "place", "couplings", "verify", "packet", "reuse", "exhaustion",
+    "declare", "bind", "mark", "separate", "observe", "plan", "resolve", "full_text", "bib", "validate",
+    "write", "render", "place", "couplings", "verify", "packet", "reuse", "exhaustion",
 )
 _COMMANDS = {
     "scaffold": cmd_scaffold,
@@ -2981,6 +3059,7 @@ _COMMANDS = {
     "order": cmd_order,
     "declare": cmd_declare,
     "bind": cmd_bind,
+    "mark": cmd_mark,
     "separate": cmd_separate,
     "observe": cmd_observe,
     "plan": cmd_plan,

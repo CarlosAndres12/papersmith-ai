@@ -71,6 +71,11 @@ Public surface:
         AND that root's kind -- PROSE (a document revision, section-bindable),
         REPOSITORY (a target code repository, measured by running it), or
         INGESTED (a published paper under guidance/, identity-resolved))
+    declarable_source_roots() -> dict[str, SourceRoot]  (PROSE-kind roots only, derived)
+    declaration_state(status, root) -> str  ('undeclared' | 'declared-unsealed' |
+        'declared-sealed' | 'n/a' -- design.md Decision C/I, S2's four-value widening)
+    declare_revisions(base, root_name, prefix, digits, *, sealed=True) -> dict
+        (`mark revisions`'s own engine; design.md Decision F)
     resolve_ingested_document(evidence_dir, lineage) -> Path  (pure disk read;
         the INGESTED-kind counterpart to resolve_lineage above)
     source_available(root) -> bool  (pure disk measurement; gitignore-blind, `Path.iterdir()`)
@@ -92,6 +97,7 @@ from typing import NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paper_block  # noqa: E402
 import paper_guidance  # noqa: E402
+import paper_marker  # noqa: E402
 import paper_region  # noqa: E402
 import paper_vocabulary  # noqa: E402
 
@@ -1419,35 +1425,28 @@ _SOURCE_MARKER_TOP_KEY = "revisions"
 _SOURCE_MARKER_REQUIRED = ("revision_prefix", "ordinal_digits")
 
 
-def read_revisions_marker(root: Path) -> dict | None:
-    """`root / '.paper-writing.json'`'s own `{"revisions": {"revision_
-    prefix": str, "ordinal_digits": int}}` declaration, or `None` when the
-    marker file does not exist at all — an ABSENT marker is a distinct,
-    legitimate state (`SOURCE_REVISIONS_UNDECLARED`, the caller's concern,
-    never this reader's).
+def _revision_pattern(prefix: str, digits: int, *, lineage: str | None = None) -> re.Pattern:
+    """The ONE regex both `resolve_lineage` (a specific `lineage`, anchored)
+    and `declare_revisions` (`lineage=None`, admitting ANY lineage segment
+    -- the write-time existence check) compose from a marker's declared
+    `revision_prefix`/`ordinal_digits` -- extracted so the two can never
+    drift into two independent compositions of the same grammar (design.md
+    Decision F.3, tasks.md 2.8)."""
+    lineage_group = re.escape(lineage) if lineage is not None else r".+"
+    return re.compile(rf"^{lineage_group}-{re.escape(prefix)}(\d{{{digits},}})\.md$")
 
-    Refuses `MALFORMED_SOURCE_MARKER` (work-state) naming the offending
-    file and the missing, unknown, or wrong-typed key when the marker
-    EXISTS but is not valid UTF-8, not valid JSON, not a JSON object, is
-    missing the top-level `revisions` key, carries any other top-level key,
-    is missing `revision_prefix`/`ordinal_digits`, carries an unknown
-    nested key, or gives either required key the wrong type. A
-    `guidance/`-shaped marker (`{"class": ...}`) refuses naming `revisions`
-    as missing, rather than silently accepting `class` — the disjoint-key
-    requirement, checked missing-before-unknown so the ABSENT key is always
-    named first, the same ordering `paper_contract._validate_document_
-    object` uses."""
-    marker_path = root / _SOURCE_MARKER_NAME
-    if not marker_path.is_file():
-        return None
-    try:
-        raw_text = marker_path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
-    try:
-        obj = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+
+def _validate_revisions_obj(obj, marker_path) -> dict:
+    """The `revisions` shape-checking body `read_revisions_marker` used to
+    carry inline, extracted unchanged (tasks.md 2.9: a PURE extraction, zero
+    behavior change here). The seal key is entirely this function's
+    caller's own concern -- stripped from `obj` before this ever runs, so
+    this function's own grammar is exactly what it was before sealing
+    existed: exactly the one top-level key `_SOURCE_MARKER_TOP_KEY`, nothing
+    else. Returns the validated `{'revision_prefix', 'ordinal_digits'}`
+    dict. Refuses `MALFORMED_SOURCE_MARKER` naming the offending file and
+    the missing, unknown, or wrong-typed key -- byte-identical to this
+    reader's own prior inline body."""
     if not isinstance(obj, dict):
         raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: must be a JSON object")
     if _SOURCE_MARKER_TOP_KEY not in obj:
@@ -1491,13 +1490,80 @@ def read_revisions_marker(root: Path) -> dict | None:
     return {"revision_prefix": revision_prefix, "ordinal_digits": ordinal_digits}
 
 
+def read_revisions_marker(root: Path) -> dict | None:
+    """`root / '.paper-writing.json'`'s own `{"revisions": {"revision_
+    prefix": str, "ordinal_digits": int}[, "seal_sha256": str]}`
+    declaration, or `None` when the marker file does not exist at all — an
+    ABSENT marker is a distinct, legitimate state (`SOURCE_REVISIONS_
+    UNDECLARED`, the caller's concern, never this reader's). Returns
+    `{"revision_prefix", "ordinal_digits", "sealed"}` — `sealed` is `True`
+    only once the recorded seal has ALREADY been checked to match (design.md
+    Decision C): by the time this returns, a sealed marker's seal is known
+    good, never merely present.
+
+    Refuses `MALFORMED_SOURCE_MARKER` (work-state) naming the offending
+    file and the missing, unknown, or wrong-typed key when the marker
+    EXISTS but is not valid UTF-8, not valid JSON, not a JSON object, is
+    missing the top-level `revisions` key, carries any other top-level key
+    (`seal_sha256` excepted), is missing `revision_prefix`/`ordinal_digits`,
+    carries an unknown nested key, gives either required key the wrong
+    type, or carries a `seal_sha256` that is not a 64-character lowercase
+    hex string (`paper_marker.seal_shape_error`, this reader's OWN code
+    per that shared module's own split). A `guidance/`-shaped marker
+    (`{"class": ...}`) refuses naming `revisions` as missing, rather than
+    silently accepting `class` — the disjoint-key requirement, checked
+    missing-before-unknown so the ABSENT key is always named first, the
+    same ordering `paper_contract._validate_document_object` uses.
+
+    When `seal_sha256` IS present and shape-valid, it is compared against
+    `paper_marker.computed_seal` of the marker's own remaining bytes; a
+    mismatch refuses `SOURCE_DECLARATION_HAND_EDITED` (work-state), naming
+    the file, the recorded digest, the computed digest, and the seal's own
+    real strength — with no `--adopt` escape, since there is none (design.md
+    Decision E). This check runs inside THIS reader, reached by every
+    gating verb already (`write` via `resolve_section_index`, `bind` via
+    `_resolve_bind_document`) — never only inside a read-only reporting verb
+    (design.md Decision C, invariant 4)."""
+    marker_path = root / _SOURCE_MARKER_NAME
+    if not marker_path.is_file():
+        return None
+    try:
+        raw_text = marker_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: not valid utf-8: {exc}")
+    try:
+        obj = json.loads(raw_text)
+    except json.JSONDecodeError as exc:
+        raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: invalid JSON: {exc.msg}")
+    if isinstance(obj, dict):
+        seal_error = paper_marker.seal_shape_error(obj)
+        if seal_error is not None:
+            raise Refused("MALFORMED_SOURCE_MARKER", f"{marker_path}: {seal_error}")
+        body = {key: value for key, value in obj.items() if key != paper_marker.SEAL_KEY}
+    else:
+        body = obj
+    revisions = _validate_revisions_obj(body, marker_path)
+    sealed = isinstance(obj, dict) and paper_marker.is_sealed(obj)
+    if sealed:
+        recorded = obj[paper_marker.SEAL_KEY]
+        computed = paper_marker.computed_seal(obj)
+        if recorded != computed:
+            raise Refused(
+                "SOURCE_DECLARATION_HAND_EDITED",
+                f"{marker_path}: recorded seal {recorded!r} does not match computed seal "
+                f"{computed!r}. {paper_marker.SEAL_STRENGTH} Re-run `mark revisions` to "
+                "reseal; there is no --adopt.",
+            )
+    return {**revisions, "sealed": sealed}
+
+
 def declaration_state(status: dict, root: SourceRoot) -> str:
-    """One root's declaration state, this unit's (S1) three-value
-    vocabulary: `'n/a'` | `'undeclared'` | `'declared'` (`specs/source-
-    declaration-authoring/spec.md`, `Requirement: Absence Is A Reported
-    State; A Broken Seal Refuses Where The Marker Is Read`; design.md
-    Decision I/J -- the sealed/unsealed split of `'declared'` is S2's,
-    built once `paper_marker.py` exists).
+    """One root's declaration state, S2's four-value vocabulary: `'n/a'` |
+    `'undeclared'` | `'declared-unsealed'` | `'declared-sealed'`
+    (`specs/source-declaration-authoring/spec.md`, `Requirement: Absence Is
+    A Reported State; A Broken Seal Refuses Where The Marker Is Read`;
+    design.md Decision C/I -- widened from S1's three-value vocabulary now
+    that `paper_marker.py` exists).
 
     `root.kind is not PROSE` reports `'n/a'` BY KIND, never by name --
     `REPOSITORY` and `INGESTED` roots carry no revisions rule at all. A
@@ -1505,15 +1571,97 @@ def declaration_state(status: dict, root: SourceRoot) -> str:
     `None`) can carry no marker file, so it reports `'undeclared'` without
     ever calling the reader. Otherwise this calls `read_revisions_marker`
     on `status['path']`, so a malformed marker's `MALFORMED_SOURCE_MARKER`
+    (or a hand-edited sealed marker's `SOURCE_DECLARATION_HAND_EDITED`)
     propagates through this function exactly as it would through any other
-    caller -- never a fifth, silently-swallowed value."""
+    caller -- never a fifth, silently-swallowed value. By the time a
+    non-`None` marker returns, its seal (if any) is ALREADY known to
+    match (`read_revisions_marker`'s own guarantee), so `marker['sealed']`
+    alone decides `'declared-sealed'` vs `'declared-unsealed'`."""
     if root.kind is not SourceRootKind.PROSE:
         return "n/a"
     path = status.get("path")
     if path is None:
         return "undeclared"
     marker = read_revisions_marker(path)
-    return "undeclared" if marker is None else "declared"
+    if marker is None:
+        return "undeclared"
+    return "declared-sealed" if marker["sealed"] else "declared-unsealed"
+
+
+def declare_revisions(
+    base: Path, root_name: str, prefix: str, digits: int, *, sealed: bool = True,
+) -> dict:
+    """`mark revisions`'s own engine (design.md Decision F; `specs/source-
+    declaration-authoring/spec.md`, `Requirement: A Source Root's Revision
+    Rule Is Recorded And Validated Against Disk By Using The Skill`).
+
+    In order: `root_name` must be a `PROSE`-kind key of `declarable_source_
+    roots()` -- membership is the SAME derived-not-listed test that
+    function itself performs, never a second hand-maintained list. Otherwise
+    refuses `SOURCE_ROOT_UNDECLARABLE`, naming every declarable root and
+    (when `root_name` names some OTHER `FACT_SOURCE_ROOT` value) that
+    root's own kind. `digits < 1` refuses `MALFORMED_SOURCE_MARKER` — the
+    reader's own value-shape code, reused verbatim, since this is a shape
+    error on the marker about to be written. `prefix`/`digits`, composed
+    through the SAME `_revision_pattern` `resolve_lineage` composes, must
+    match at least one `*.md` under the root; zero matches — or the root
+    not existing as a directory at all — fold into ONE refusal,
+    `SOURCE_DECLARATION_UNMATCHED`, naming the prefix, the digit count, and
+    every `*.md` file actually seen (empty when the root is not a
+    directory). Nothing creates the directory. The candidate is
+    round-tripped through `_validate_revisions_obj` before `paper_marker.
+    write` ever runs, so this verb can never produce a marker its own
+    reader would refuse.
+
+    Always writes, regardless of whether a marker already exists at that
+    path or whether its current seal matches (design.md Decision E) — there
+    is no `--reopen`/`--adopt`, and this function never reads the previous
+    marker at all.
+
+    Returns `{"root", "revisions", "matched", "unmatched", "sealed"}`
+    (design.md, Interfaces)."""
+    declarable = declarable_source_roots()
+    if root_name not in declarable:
+        all_roots = {root.name: root for root in set(FACT_SOURCE_ROOT.values())}
+        rejected = all_roots.get(root_name)
+        kind_detail = (
+            f"{root_name!r} is a {rejected.kind.value!r} root, not "
+            f"{SourceRootKind.PROSE.value!r}"
+            if rejected is not None else f"{root_name!r} is not a known source root at all"
+        )
+        raise Refused(
+            "SOURCE_ROOT_UNDECLARABLE",
+            f"--root must name one of the declarable roots {sorted(declarable)}; {kind_detail}",
+        )
+    root_obj = declarable[root_name]
+    marker_dir = base / root_obj.name
+    marker_path = marker_dir / _SOURCE_MARKER_NAME
+    if digits < 1:
+        raise Refused(
+            "MALFORMED_SOURCE_MARKER",
+            f"{marker_path}: 'ordinal_digits' must be >= 1, got {digits}",
+        )
+    all_md = sorted(p.name for p in marker_dir.glob("*.md")) if marker_dir.is_dir() else []
+    pattern = _revision_pattern(prefix, digits)
+    matched = [name for name in all_md if pattern.match(name)]
+    unmatched = [name for name in all_md if not pattern.match(name)]
+    if not matched:
+        not_a_directory = "" if marker_dir.is_dir() else f" ({marker_dir} is not a directory)"
+        raise Refused(
+            "SOURCE_DECLARATION_UNMATCHED",
+            f"{marker_dir}: prefix {prefix!r} ordinal_digits {digits} matches none of "
+            f"{all_md!r}{not_a_directory}",
+        )
+    candidate = {_SOURCE_MARKER_TOP_KEY: {"revision_prefix": prefix, "ordinal_digits": digits}}
+    _validate_revisions_obj(candidate, marker_path)
+    paper_marker.write(marker_path, candidate, sealed=sealed)
+    return {
+        "root": root_name,
+        "revisions": {"revision_prefix": prefix, "ordinal_digits": digits},
+        "matched": matched,
+        "unmatched": unmatched,
+        "sealed": sealed,
+    }
 
 
 def source_root_status(base: Path, root: SourceRoot) -> dict:
@@ -1647,7 +1795,7 @@ def resolve_lineage(root: Path, lineage: str, marker: dict) -> Path:
     exactly one revision" cases under this one code, never a seventh."""
     prefix = marker["revision_prefix"]
     digits = marker["ordinal_digits"]
-    pattern = re.compile(rf"^{re.escape(lineage)}-{re.escape(prefix)}(\d{{{digits},}})\.md$")
+    pattern = _revision_pattern(prefix, digits, lineage=lineage)
     candidates = []
     for entry in sorted(root.glob("*.md")):
         match = pattern.match(entry.name)

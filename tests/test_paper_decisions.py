@@ -34,6 +34,7 @@ import paper_scaffold  # noqa: E402
 import paper_vocabulary  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_declarations  # noqa: E402
+import paper_marker  # noqa: E402
 import paper_provenance  # noqa: E402
 import paper_couplings  # noqa: E402
 import paper_coupling_evidence  # noqa: E402
@@ -3388,9 +3389,8 @@ class SourceRootDeclaresItsKindTests(unittest.TestCase):
 class DeclarationStateTests(unittest.TestCase):
     """`specs/source-declaration-authoring/spec.md`, `Requirement: Absence
     Is A Reported State; A Broken Seal Refuses Where The Marker Is Read`
-    -- this unit's own slice of it (S1): the three-value vocabulary only
-    (`undeclared` | `declared` | `n/a`); the sealed/unsealed split of
-    `declared` is S2's, built once `paper_marker.py` exists."""
+    -- S2's four-value vocabulary (`undeclared` | `declared-unsealed` |
+    `declared-sealed` | `n/a`), now that `paper_marker.py` exists."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -3419,7 +3419,7 @@ class DeclarationStateTests(unittest.TestCase):
 
         self.assertEqual(paper_declarations.declaration_state(status, root), "undeclared")
 
-    def test_a_prose_root_with_a_valid_marker_is_declared(self) -> None:
+    def test_a_prose_root_with_a_valid_unsealed_marker_is_declared_unsealed(self) -> None:
         root = paper_declarations.SourceRoot(
             "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
         )
@@ -3431,7 +3431,44 @@ class DeclarationStateTests(unittest.TestCase):
         )
         status = paper_declarations.source_root_status(self.base, root)
 
-        self.assertEqual(paper_declarations.declaration_state(status, root), "declared")
+        self.assertEqual(paper_declarations.declaration_state(status, root), "declared-unsealed")
+
+    def test_a_prose_root_with_a_valid_sealed_marker_is_declared_sealed(self) -> None:
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {"revisions": {"revision_prefix": "r", "ordinal_digits": 2}}
+        obj[paper_marker.SEAL_KEY] = paper_marker.computed_seal(obj)
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps(obj), encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        self.assertEqual(paper_declarations.declaration_state(status, root), "declared-sealed")
+
+    def test_a_prose_root_with_a_hand_edited_sealed_marker_propagates_the_refusal(self) -> None:
+        """`Requirement: Absence Is A Reported State; A Broken Seal Refuses
+        Where The Marker Is Read` -- never a fifth, silently-swallowed
+        declaration_state value."""
+        root = paper_declarations.SourceRoot(
+            "invented-prose-root", paper_declarations.SourceRootKind.PROSE,
+        )
+        (self.base / root.name).mkdir()
+        (self.base / root.name / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {
+            "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+            paper_marker.SEAL_KEY: "a" * 64,
+        }
+        (self.base / root.name / ".paper-writing.json").write_text(
+            json.dumps(obj), encoding="utf-8",
+        )
+        status = paper_declarations.source_root_status(self.base, root)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declaration_state(status, root)
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_HAND_EDITED")
 
     def test_a_prose_root_that_is_not_a_directory_at_all_is_undeclared(self) -> None:
         """A `PROSE` root whose directory does not exist yet
@@ -3480,6 +3517,171 @@ class DeclarableSourceRootsTests(unittest.TestCase):
 
             self.assertIn(sixth.name, declarable)
             self.assertEqual(declarable[sixth.name], sixth)
+
+
+class DeclareRevisionsTests(unittest.TestCase):
+    """`specs/source-declaration-authoring/spec.md`, `Requirement: A Source
+    Root's Revision Rule Is Recorded And Validated Against Disk By Using
+    The Skill`; design.md Decision F -- `declare_revisions`'s own engine,
+    independent of the CLI wiring (`MarkRevisionsCliWholeLoopTests` in
+    `test_paper_writing.py` proves that end of it)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        self.experiments = self.base / "experiments"
+        self.experiments.mkdir()
+
+    def _marker_path(self) -> Path:
+        return self.experiments / ".paper-writing.json"
+
+    def test_a_matching_declaration_is_recorded(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(result["root"], "experiments")
+        self.assertEqual(
+            result["revisions"], {"revision_prefix": "r", "ordinal_digits": 2},
+        )
+        self.assertEqual(
+            sorted(result["matched"]), ["field-survey-r07.md", "field-survey-r08.md"],
+        )
+        self.assertEqual(result["unmatched"], [])
+        self.assertTrue(result["sealed"])
+        self.assertTrue(self._marker_path().is_file())
+
+    def test_a_declared_width_matching_nothing_refuses_at_write_time(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "v", 3)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_UNMATCHED")
+        self.assertIn("v", ctx.exception.detail)
+        self.assertIn("3", ctx.exception.detail)
+        self.assertIn("field-survey-r07.md", ctx.exception.detail)
+        self.assertIn("field-survey-r08.md", ctx.exception.detail)
+        self.assertFalse(self._marker_path().exists())
+
+    def test_a_non_declarable_root_refuses_by_name(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "implementation", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_ROOT_UNDECLARABLE")
+        self.assertIn("proposals", ctx.exception.detail)
+        self.assertIn("experiments", ctx.exception.detail)
+        self.assertIn("repository", ctx.exception.detail)
+
+    def test_a_name_matching_no_known_root_at_all_also_refuses(self) -> None:
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "invented-nowhere-root", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_ROOT_UNDECLARABLE")
+
+    def test_ordinal_digits_below_one_refuses_malformed(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "r", 0)
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_SOURCE_MARKER")
+        self.assertIn("ordinal_digits", ctx.exception.detail)
+        self.assertFalse(self._marker_path().exists())
+
+    def test_a_root_that_is_not_a_directory_folds_into_unmatched(self) -> None:
+        """design.md Decision F.3: a root that is not a directory at all
+        folds into the SAME `SOURCE_DECLARATION_UNMATCHED` code. Nothing
+        creates the directory."""
+        shutil.rmtree(self.experiments)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(ctx.exception.code, "SOURCE_DECLARATION_UNMATCHED")
+        self.assertFalse(self.experiments.exists())
+
+    def test_declare_revisions_never_produces_a_marker_its_own_reader_refuses(self) -> None:
+        """The round-trip guarantee (tasks.md 2.10): every accepted write
+        is immediately re-readable through `read_revisions_marker`."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        marker = paper_declarations.read_revisions_marker(self.experiments)
+        self.assertEqual(marker["revision_prefix"], "r")
+        self.assertEqual(marker["ordinal_digits"], 2)
+        self.assertTrue(marker["sealed"])
+
+    def test_unsealed_writes_no_seal_key_shape_identical_to_pre_seal_grammar(self) -> None:
+        """tasks.md 2.12: the `--unsealed` marker's shape is IDENTICAL to
+        what the pre-change grammar admits -- round-tripped here through a
+        hand-built pre-seal validator, never through the sealed-aware
+        reader alone."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(
+            self.base, "experiments", "r", 2, sealed=False,
+        )
+
+        self.assertFalse(result["sealed"])
+        on_disk = json.loads(self._marker_path().read_text(encoding="utf-8"))
+        self.assertNotIn(paper_marker.SEAL_KEY, on_disk)
+        # A hand-built pre-seal validator: exactly {"revisions": {...}},
+        # exactly the two required nested keys -- the grammar an
+        # unmodified older reader (one that has never heard of
+        # `seal_sha256`) still accepts.
+        self.assertEqual(set(on_disk), {"revisions"})
+        self.assertEqual(set(on_disk["revisions"]), {"revision_prefix", "ordinal_digits"})
+
+    def test_re_recording_always_succeeds_over_an_existing_sealed_marker(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+        (self.experiments / "field-survey-r08.md").write_text("# 1\n", encoding="utf-8")
+
+        result = paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        self.assertEqual(sorted(result["matched"]), ["field-survey-r07.md", "field-survey-r08.md"])
+
+    def test_re_recording_over_a_hand_edited_marker_clears_the_defect(self) -> None:
+        """No `--reopen`/`--adopt`: re-running the verb is the only exit
+        from a hand-edited sealed marker (spec: "Re-Recording Always
+        Succeeds; There Is No Stuck State")."""
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        obj = {
+            "revisions": {"revision_prefix": "r", "ordinal_digits": 2},
+            paper_marker.SEAL_KEY: "a" * 64,
+        }
+        self._marker_path().write_text(json.dumps(obj), encoding="utf-8")
+
+        paper_declarations.declare_revisions(self.base, "experiments", "r", 2)
+
+        marker = paper_declarations.read_revisions_marker(self.experiments)
+        self.assertTrue(marker["sealed"])
+
+    def test_mutation_the_zero_match_guard_is_reachable(self) -> None:
+        (self.experiments / "field-survey-r07.md").write_text("# 1\n", encoding="utf-8")
+        proc = _run_against_mutant(
+            "    if not matched:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareRevisionsTests"
+            ".test_a_declared_width_matching_nothing_refuses_at_write_time",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
+
+    def test_mutation_the_declarable_membership_check_is_reachable(self) -> None:
+        proc = _run_against_mutant(
+            "    if root_name not in declarable:",
+            "    if False:",
+            "tests.test_paper_decisions.DeclareRevisionsTests"
+            ".test_a_non_declarable_root_refuses_by_name",
+            source_path=SKILL_SCRIPTS / "paper_declarations.py",
+        )
+        _assert_guard_failed_under_mutation(self, proc)
 
 
 class ReconcileObservationReportTests(unittest.TestCase):

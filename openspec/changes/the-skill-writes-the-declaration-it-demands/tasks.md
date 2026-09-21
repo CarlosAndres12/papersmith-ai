@@ -147,12 +147,12 @@ here; the four-surface test lands in S5), K.
 
 **The shared seal module**
 
-- [ ] 2.1 RED: add failing unit tests in `tests/test_paper_writing.py` (new module-level
+- [x] 2.1 RED: add failing unit tests in `tests/test_paper_writing.py` (new module-level
       test class) for `paper_marker.canonical_bytes`/`computed_seal`: identical input
       produces an identical digest across two separate calls (canonicalization stability
       — `sort_keys=True` is load-bearing, mirroring `paper_region.serialize_body`'s own
       documented reason); the digest excludes `seal_sha256` itself from its own input.
-- [ ] 2.2 Create `scripts/paper_marker.py`: `SEAL_KEY`, `SEAL_STRENGTH` (Decision G's exact
+- [x] 2.2 Create `scripts/paper_marker.py`: `SEAL_KEY`, `SEAL_STRENGTH` (Decision G's exact
       sentence — "detects an unaware edit... self-consistency, not tamper-proofing...
       anyone who reproduces it can... recompute a matching seal"), `canonical_bytes`,
       `computed_seal`, `is_sealed`, `seal_shape_error` (returns the shape-error detail
@@ -160,73 +160,73 @@ here; the four-surface test lands in S5), K.
       a consumer's refusal), and `write(path, obj, *, sealed=True)` with its own
       `_atomic_replace` (a fourth copy, docstring says so — mirrors `paper_block.py`'s
       exact same-directory temp-file-then-`os.replace` shape). Confirm 2.1 green.
-- [ ] 2.3 RED: add failing tests for `seal_shape_error`: `None` when `seal_sha256` is
+- [x] 2.3 RED: add failing tests for `seal_shape_error`: `None` when `seal_sha256` is
       absent; `None` when present and a 64-char lowercase hex string; a detail string when
       present but wrong length, wrong charset, or non-string.
-- [ ] 2.4 Confirm 2.3 green against 2.2's implementation.
+- [x] 2.4 Confirm 2.3 green against 2.2's implementation.
 
 **Write-time validation and the write verb**
 
-- [ ] 2.5 RED: add failing tests in `tests/test_paper_decisions.py` for
+- [x] 2.5 RED: add failing tests in `tests/test_paper_decisions.py` for
       `declare_revisions(base, root_name, prefix, digits, *, sealed=True)`: `--root`
       naming a non-`PROSE` root refuses `SOURCE_ROOT_UNDECLARABLE`, naming every
       declarable root and the rejected root's own kind.
-- [ ] 2.6 RED: add a failing test asserting `--ordinal-digits < 1` refuses
+- [x] 2.6 RED: add a failing test asserting `--ordinal-digits < 1` refuses
       `MALFORMED_SOURCE_MARKER` (reused verbatim — a value-shape error on the marker
       being written).
-- [ ] 2.7 RED: add failing tests: a prefix/digit pair matching zero `*.md` under the root
+- [x] 2.7 RED: add failing tests: a prefix/digit pair matching zero `*.md` under the root
       refuses `SOURCE_DECLARATION_UNMATCHED`, naming the prefix, the digit count, and
       every `*.md` file seen; a root that is not a directory at all folds into the same
       code (Decision F.3). Assert **nothing is written to disk** on this refusal.
-- [ ] 2.8 Extract `_revision_pattern(prefix, digits)` out of `resolve_lineage`'s own inline
+- [x] 2.8 Extract `_revision_pattern(prefix, digits)` out of `resolve_lineage`'s own inline
       regex composition (`scripts/paper_declarations.py`), so `resolve_lineage` and
       `declare_revisions` compose the identical pattern from one function — never two
       that can drift. Confirm `resolve_lineage`'s existing tests stay green untouched.
-- [ ] 2.9 Extract `_validate_revisions_obj(obj, label)` out of `read_revisions_marker`'s
+- [x] 2.9 Extract `_validate_revisions_obj(obj, label)` out of `read_revisions_marker`'s
       own shape-checking body; `read_revisions_marker` becomes a thin wrapper: read file,
       parse JSON, call `_validate_revisions_obj`. Confirm every existing
       `read_revisions_marker` test in `tests/test_paper_writing.py` stays green unchanged
       — this is a pure extraction, not a behavior change.
-- [ ] 2.10 Add `declare_revisions`: build the candidate `{"revisions": {...}}` object,
+- [x] 2.10 Add `declare_revisions`: build the candidate `{"revisions": {...}}` object,
       glob-match per 2.7, round-trip the candidate through `_validate_revisions_obj`
       before writing (so `mark` can never produce a marker its own reader would refuse),
       then call `paper_marker.write`. Returns `{"root", "revisions", "matched",
       "unmatched", "sealed"}`. Confirm 2.5-2.7 green.
-- [ ] 2.11 RED-then-GREEN: add a test asserting a matching declaration records the marker,
+- [x] 2.11 RED-then-GREEN: add a test asserting a matching declaration records the marker,
       reporting both matched and unmatched files correctly (the spec's "A matching
       declaration is recorded" scenario).
-- [ ] 2.12 Add `--unsealed` to `declare_revisions` (already threaded via `sealed: bool`);
+- [x] 2.12 Add `--unsealed` to `declare_revisions` (already threaded via `sealed: bool`);
       RED-then-GREEN: add a test asserting `mark revisions --unsealed` writes a marker
       with no `seal_sha256` key, and that this marker's shape is IDENTICAL to what the
       pre-change grammar admits (round-trip it through a hand-built pre-seal validator
       inline in the test — the "an older reader accepts it" proof).
-- [ ] 2.13 RED-then-GREEN: add a test asserting `mark revisions` always writes, with no
+- [x] 2.13 RED-then-GREEN: add a test asserting `mark revisions` always writes, with no
       `--reopen`/`--adopt`, regardless of whether a sealed marker already exists at that
       path or whether its existing seal matches — re-recording a hand-edited marker
       clears the defect (spec: "Re-Recording Always Succeeds; There Is No Stuck State").
-- [ ] 2.14 Document `mark revisions --unsealed`'s docstring per Decision K: its only
+- [x] 2.14 Document `mark revisions --unsealed`'s docstring per Decision K: its only
       purpose is the pre-revert downgrade, and it removes nothing a determined editor
       could not already remove by hand-editing the file (Decision G) — this is the
       rollback boundary named in the Suggested Work Units table above.
 
 **The seal reaches the reader — never the report alone**
 
-- [ ] 2.15 RED: add a failing test asserting `read_revisions_marker` accepts a marker with
+- [x] 2.15 RED: add a failing test asserting `read_revisions_marker` accepts a marker with
       no `seal_sha256` key exactly as before sealing existed (`declared-unsealed`, no
       refusal).
-- [ ] 2.16 RED: add a failing test asserting `read_revisions_marker` refuses
+- [x] 2.16 RED: add a failing test asserting `read_revisions_marker` refuses
       `SOURCE_DECLARATION_HAND_EDITED` when `seal_sha256` is present but does not match
       `paper_marker.computed_seal` of the marker's own remaining bytes — driven through
       `cmd_write` (a gating verb), **not through `plan`**.
-- [ ] 2.17 Add the seal check inside `read_revisions_marker` (six lines, per design's own
+- [x] 2.17 Add the seal check inside `read_revisions_marker` (six lines, per design's own
       count): shape-check via `paper_marker.seal_shape_error` (malformed shape still
       raises `MALFORMED_SOURCE_MARKER`, the reader's own code, never
       `paper_marker`'s), then compare via `computed_seal` when shape-valid. Confirm 2.15
       and 2.16 green.
-- [ ] 2.18 Widen `declaration_state` (S1) to a four-value vocabulary: `declared` splits
+- [x] 2.18 Widen `declaration_state` (S1) to a four-value vocabulary: `declared` splits
       into `declared-sealed`/`declared-unsealed` using `paper_marker.is_sealed` plus the
       seal-match result. RED-then-GREEN in `tests/test_paper_decisions.py`.
-- [ ] 2.19 **Mutation — reachable through `write`, not only through `plan` (the
+- [x] 2.19 **Mutation — reachable through `write`, not only through `plan` (the
       non-negotiable constraint)**: replace the seal-comparison line inside
       `read_revisions_marker` with a constant `True`. The test proving
       `SOURCE_DECLARATION_HAND_EDITED` MUST be driven through `cmd_write`
@@ -234,27 +234,27 @@ here; the four-surface test lands in S5), K.
       test that only drives the mutation through `plan` does not satisfy this task —
       write it through `cmd_write` explicitly, or a cheaper read-only test will pass this
       task's letter while missing invariant 4 entirely.
-- [ ] 2.20 Mutation: replace `declare_revisions`'s zero-match guard condition with
+- [x] 2.20 Mutation: replace `declare_revisions`'s zero-match guard condition with
       `False`; the wrong-prefix test (2.7) must go red.
-- [ ] 2.21 Mutation: replace the declarable-membership test (`root.kind is
+- [x] 2.21 Mutation: replace the declarable-membership test (`root.kind is
       SourceRootKind.PROSE`) with `True`; naming a `REPOSITORY`-kind root at `--root` must
       go red (2.5), and confirm no marker file appears on disk under that mutation.
-- [ ] 2.22 Add `cmd_mark_revisions` and the `mark revisions` argparse subparser (`--root`,
+- [x] 2.22 Add `cmd_mark_revisions` and the `mark revisions` argparse subparser (`--root`,
       `--revision-prefix`, `--ordinal-digits`, `--unsealed`) to `scripts/paper_cli.py`,
       nested under one new `mark` root (the `bib build` two-level nesting precedent — read
       `scripts/paper_cli.py`'s existing `bib`-root subparser wiring as the shape to mirror,
       read-only). Add `SOURCE_ROOT_UNDECLARABLE` and `SOURCE_DECLARATION_UNMATCHED` and
       `SOURCE_DECLARATION_HAND_EDITED` to `REFUSAL_CLASSIFICATION` (`work-state` tier).
-- [ ] 2.23 RED-then-GREEN integration test: `write` refuses `SOURCE_REVISIONS_UNDECLARED`
+- [x] 2.23 RED-then-GREEN integration test: `write` refuses `SOURCE_REVISIONS_UNDECLARED`
       → run `mark revisions` for that root → `write` proceeds, one session, real CLI
       invocation (not calling the Python functions directly) — the "whole loop" proof.
-- [ ] 2.24 Purge `__pycache__`/`.pyc` before running the mutation suite (a same-size
+- [x] 2.24 Purge `__pycache__`/`.pyc` before running the mutation suite (a same-size
       mutation can silently reuse a stale bytecode cache in this repository). Extend
       `tests/paper_mutation.py`'s mutant-sandbox copy list with `paper_marker.py`.
-- [ ] 2.25 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
+- [x] 2.25 Generality sweep: `rg` under `.claude/skills/paper-writing/scripts/` for any
       fixture root/folder name this unit's own tests invent; zero matches outside the test
       module.
-- [ ] 2.26 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.paper_mutation`;
+- [x] 2.26 Run `.venv/bin/python -m unittest tests.test_paper_writing tests.test_paper_decisions tests.paper_mutation`;
       re-run any mutation tests touched by 2.8/2.9's extraction to confirm no anchor moved
       (extraction shifts exact-match anchors elsewhere in the suite — this is the whole
       point of re-running the full mutation suite, not only the new tests); confirm green.

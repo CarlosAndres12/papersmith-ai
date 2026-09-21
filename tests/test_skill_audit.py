@@ -8977,7 +8977,10 @@ class NewlyCoveredSubjectRosterTests(unittest.TestCase):
         ("experimental-deliberation", 9),
         ("experimental-implementation", 21),
         ("kaggle-accounts", 5),
-        ("paper-writing", 26),
+        # 26 -> 27: `the-skill-writes-the-declaration-it-demands`, S2 adds a
+        # new top-level `mark` root (`mark revisions`) -- a real, measured
+        # widening of `paper_cli.py`'s own argparse roster, not a drift.
+        ("paper-writing", 27),
     )
 
     def test_each_new_recipe_derives_a_real_nonempty_roster(self):
