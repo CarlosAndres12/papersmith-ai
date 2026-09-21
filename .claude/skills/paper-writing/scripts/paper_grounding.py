@@ -42,3 +42,131 @@ def subjects_for(bindings: list, source_sections: tuple) -> list:
     entry's own `"fact"` key."""
     bound_facts = {section["fact"] for section in source_sections}
     return [binding for binding in bindings if binding.kind == "fact" and binding.ref in bound_facts]
+
+
+def reconcile_support(subjects: list, account: dict | None, source_sections: tuple, *, block_id: str) -> list:
+    """Reconciles an agent's per-sentence support account against subjects
+    and section bytes re-derived independently, in both directions
+    (`transposition-grounding` spec, `Requirement: The Account Is
+    Reconciled...`; design.md D1/D7).
+
+    `account` is never trusted about its own sentence list or its own copy
+    of a section's text -- every byte compared here comes from
+    `source_sections`' own `"text"` field, the same bytes
+    `resolve_bound_sections` sliced from disk.
+
+    Scoped to subjects' own facts alone (design.md Scope; `transposition-
+    grounding` spec, `Requirement: A Sibling Check, Never An Extension...`):
+    an account entry whose `"fact"` names something no subject cares about
+    (an `evidence:` id, a non-bound fact, an `argument`-mode block's own
+    facts) is simply irrelevant here and never inspected -- ignored, never
+    `GROUNDING_SENTENCE_UNKNOWN`.
+
+    Raises `GROUNDING_ACCOUNT_ABSENT` (subjects exist, `account is None`),
+    `GROUNDING_SENTENCE_UNKNOWN` (a relevant entry's sentence matches no
+    subject), `GROUNDING_VERDICT_MISSING` (a subject has no relevant
+    entry), `SECTION_UNSUPPORTED_CLAIM` (a relevant entry's verdict is
+    `unsupported`). A `supported` verdict whose span is empty, or not byte-
+    present in that fact's own bound section text, downgrades to
+    `undecidable` with the span cleared (D1's inversion of `contract-
+    audit`'s own asymmetry) -- this is the one check this whole change
+    exists to make load-bearing, so it is proven by mutation (tasks.md
+    3.3), never merely asserted.
+    """
+    if not subjects:
+        return []
+    if account is None:
+        raise Refused(
+            "GROUNDING_ACCOUNT_ABSENT",
+            f"{block_id}: {len(subjects)} subject sentence(s) and no grounding account was "
+            "supplied; run `write --grounding <path>` with the section-grounding-auditor "
+            "agent's own account",
+        )
+
+    subject_facts = {subject.ref for subject in subjects}
+    subject_sentences = {subject.sentence for subject in subjects}
+    entries = account.get("support", [])
+    relevant_entries = [entry for entry in entries if entry.get("fact") in subject_facts]
+
+    by_sentence: dict[str, dict] = {}
+    for entry in relevant_entries:
+        if entry["sentence"] not in subject_sentences:
+            raise Refused(
+                "GROUNDING_SENTENCE_UNKNOWN",
+                f"{block_id}: grounding account names a sentence no subject carries: "
+                f"{entry['sentence']!r}",
+            )
+        by_sentence[entry["sentence"]] = entry
+
+    sections_by_fact: dict[str, list] = {}
+    for section in source_sections:
+        sections_by_fact.setdefault(section["fact"], []).append(section)
+
+    reconciled = []
+    for subject in subjects:
+        entry = by_sentence.get(subject.sentence)
+        if entry is None:
+            raise Refused(
+                "GROUNDING_VERDICT_MISSING",
+                f"{block_id}: subject sentence has no grounding-account verdict: "
+                f"{subject.sentence!r}",
+            )
+        own_sections = sections_by_fact[subject.ref]
+        verdict = entry["verdict"]
+        span = entry.get("span") or ""
+        downgraded = False
+
+        if verdict == "unsupported":
+            first = own_sections[0]
+            raise Refused(
+                "SECTION_UNSUPPORTED_CLAIM",
+                f"{block_id}: fact {subject.ref!r} (lineage {first['lineage']!r}, section "
+                f"{first['title']!r}) claims something its bound section never states: "
+                f"{subject.sentence!r}",
+            )
+        if verdict == "supported":
+            byte_present_own = bool(span) and any(span in section["text"] for section in own_sections)
+            if not byte_present_own:
+                verdict = "undecidable"
+                span = ""
+                downgraded = True
+
+        first = own_sections[0]
+        reconciled.append({
+            "sentence": subject.sentence,
+            "fact": subject.ref,
+            "lineage": first["lineage"],
+            "title": first["title"],
+            "verdict": verdict,
+            "span": span,
+            "downgraded": downgraded,
+        })
+    return reconciled
+
+
+def source_grounding_report(subjects: list, reconciled: list) -> dict:
+    """Mirrors `source_fidelity_report`/`style_channel_report`'s shipped
+    shape (design.md D8): `decided` (verdict resolved `supported`),
+    `undecidable` (agent-returned only) and `downgraded` (reconciliation-
+    produced only) as SEPARATE counts -- an honest abstention and a
+    downgraded, unfounded `supported` must stay distinguishable from the
+    envelope alone (`transposition-grounding` spec, `Requirement:
+    Undecidable Never Blocks Alone...`). `status` is `"measured"` only when
+    `decided > 0`, else `"unmeasured"` with the true `subjects` count --
+    the two `unmeasured` cases (no subjects at all vs. subjects with none
+    decided) are distinguished by that count alone, never a third status
+    value."""
+    if not subjects:
+        return {"status": "unmeasured", "subjects": 0}
+    decided = sum(1 for entry in reconciled if entry["verdict"] == "supported")
+    downgraded = sum(1 for entry in reconciled if entry["downgraded"])
+    undecidable = sum(
+        1 for entry in reconciled if entry["verdict"] == "undecidable" and not entry["downgraded"]
+    )
+    return {
+        "status": "measured" if decided > 0 else "unmeasured",
+        "subjects": len(subjects),
+        "decided": decided,
+        "undecidable": undecidable,
+        "downgraded": downgraded,
+    }

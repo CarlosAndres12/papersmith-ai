@@ -154,7 +154,7 @@ A Sibling Check, Never An Extension...", "Requirement: The Guard Fires After
 The Verbatim Check And Before Substitution", and the `decided == 0` half of
 "Requirement: A Block With No Decided Subject Reports Unmeasured...".
 
-- [ ] 1.1 **The load-bearing property — its own task, written RED first.**
+- [x] 1.1 **The load-bearing property — its own task, written RED first.**
       Plant an ungrounded `supported` verdict (empty span) for a subject
       sentence and assert it must NOT let that sentence pass as `supported`.
       Confirm this fails before `reconcile_support` exists (or trusts the
@@ -163,7 +163,7 @@ The Verbatim Check And Before Substitution", and the `decided == 0` half of
       waves everything past (design.md, D1). (`transposition-grounding`,
       "Requirement: The Permissive Verdict Carries The Burden Of Proof",
       Scenario "A supported verdict with an absent span downgrades".)
-- [ ] 1.2 Implement `paper_grounding.reconcile_support(subjects, account,
+- [x] 1.2 Implement `paper_grounding.reconcile_support(subjects, account,
       source_sections, *, block_id)` (design.md, Interfaces), byte-derived
       from `source_sections`' own `"text"` field, never the account's copy:
       `account is None` and `subjects` non-empty → refuse
@@ -178,52 +178,52 @@ The Verbatim Check And Before Substitution", and the `decided == 0` half of
       `SECTION_UNSUPPORTED_CLAIM` naming block, fact, lineage, section
       title, sentence; agent-returned `undecidable` passes through with
       `downgraded: False`. Confirm 1.1 goes green.
-- [ ] 1.3 RED-then-GREEN: the different-fact downgrade — a `supported` span
+- [x] 1.3 RED-then-GREEN: the different-fact downgrade — a `supported` span
       byte-present only in a different fact's bound section downgrades to
       `undecidable`. (`transposition-grounding`, Scenario "A supported
       verdict grounded in a different fact's section downgrades".)
-- [ ] 1.4 RED-then-GREEN: the pass-through case — a `supported` span present
+- [x] 1.4 RED-then-GREEN: the pass-through case — a `supported` span present
       verbatim in its own bound section passes as `supported`, span
       reported unchanged. (Scenario "A supported verdict with a
       byte-present span passes".)
-- [ ] 1.5 RED-then-GREEN: `unsupported` refuses `SECTION_UNSUPPORTED_CLAIM`,
+- [x] 1.5 RED-then-GREEN: `unsupported` refuses `SECTION_UNSUPPORTED_CLAIM`,
       message names block, fact, lineage, section title, sentence verbatim.
       (`transposition-grounding`, "Requirement: An Unsupported Claim
       Refuses".)
-- [ ] 1.6 RED-then-GREEN, both directions independently: an account entry
+- [x] 1.6 RED-then-GREEN, both directions independently: an account entry
       naming an unsegmented sentence refuses `GROUNDING_SENTENCE_UNKNOWN`; a
       subject sentence with no account entry refuses
       `GROUNDING_VERDICT_MISSING`. (`transposition-grounding`, "Requirement:
       The Account Is Reconciled...", both non-mutation scenarios.)
-- [ ] 1.7 RED-then-GREEN: subjects non-empty, `account is None` → refuses
+- [x] 1.7 RED-then-GREEN: subjects non-empty, `account is None` → refuses
       `GROUNDING_ACCOUNT_ABSENT` naming block and subject count, and asserts
       NO `GROUNDING_VERDICT_MISSING` fires instead (the alternative
       design.md explicitly rejects, D7). Also: an empty subject set with
       `account is None` raises no grounding refusal at all.
       (`transposition-grounding`, "Requirement: An Absent Account
       Refuses...", both non-mutation scenarios.)
-- [ ] 1.8 Implement `paper_grounding.source_grounding_report(subjects,
+- [x] 1.8 Implement `paper_grounding.source_grounding_report(subjects,
       reconciled) -> dict` (design.md D8, mirroring `source_fidelity_report`
       /`style_channel_report`'s shipped shape): `subjects: N, decided,
       undecidable` (agent-returned only), `downgraded` (reconciliation-
       produced only) as SEPARATE counts; `status = "measured"` only when
       `decided > 0`, else `"unmeasured"` with the true `subjects` count.
-- [ ] 1.9 **Its own task, per design.md D2** — RED-then-GREEN: `downgraded`
+- [x] 1.9 **Its own task, per design.md D2** — RED-then-GREEN: `downgraded`
       and agent-returned `undecidable` NEVER merge into one count: one
       subject returned `undecidable` directly, a second `supported` with an
       absent span; report counts the first as `undecidable`, exactly the
       second as `downgraded`. (`transposition-grounding`, "Requirement:
       Undecidable Never Blocks Alone...", Scenario "A downgrade is never
       counted as an agent-returned undecidable".)
-- [ ] 1.10 RED-then-GREEN: a block whose subjects are ALL either returned or
+- [x] 1.10 RED-then-GREEN: a block whose subjects are ALL either returned or
       downgraded to `undecidable` (none `unsupported`) is NOT refused for
       grounding, and both counts report non-zero. (Scenario "An
       all-undecidable-or-downgraded account does not block".)
-- [ ] 1.11 RED-then-GREEN: subjects exist, none decided → `{"status":
+- [x] 1.11 RED-then-GREEN: subjects exist, none decided → `{"status":
       "unmeasured", "subjects": N}` with `N > 0`, distinct from Phase 0's
       `subjects == 0` case. (`transposition-grounding`, Scenario "Subjects
       exist but none decided reports unmeasured with a nonzero count".)
-- [ ] 1.12 Wire the full guard into `write_block`, replacing Phase 0's
+- [x] 1.12 Wire the full guard into `write_block`, replacing Phase 0's
       interim unconditional-`unmeasured` report: AFTER
       `check_source_section_verbatim` clears (`:238-241`), BEFORE
       `paper_block.substitute` (`:251`) — a draft failing both always names
@@ -232,7 +232,7 @@ The Verbatim Check And Before Substitution", and the `decided == 0` half of
       block_id=contract.block_id)`, then `source_grounding_report(...)`; add
       `"sourceGrounding": source_grounding` to the returned envelope beside
       `"sourceFidelity"`.
-- [ ] 1.13 **Scope boundary — its own task.** An `evidence:`-bound sentence
+- [x] 1.13 **Scope boundary — its own task.** An `evidence:`-bound sentence
       and an `argument`-mode block NEVER reach reconciliation, even when a
       grounding account names them — proven by a lock (an account entry
       naming a non-subject sentence is ignored, never
@@ -240,15 +240,15 @@ The Verbatim Check And Before Substitution", and the `decided == 0` half of
       (`transposition-grounding`, "Requirement: A Sibling Check, Never An
       Extension...", plus design.md Scope, "what this change does NOT
       check".)
-- [ ] 1.14 RED-then-GREEN: a draft failing BOTH `check_source_section_verbatim`
+- [x] 1.14 RED-then-GREEN: a draft failing BOTH `check_source_section_verbatim`
       and grounding reconciliation refuses `SOURCE_SECTION_VERBATIM`, never
       `SECTION_UNSUPPORTED_CLAIM`. (`transposition-grounding`, "Requirement:
       The Guard Fires After The Verbatim Check...", Scenario "A draft
       failing both checks names the verbatim refusal".)
-- [ ] 1.15 Generality sweep over `paper_grounding.py`'s reconciliation logic
+- [x] 1.15 Generality sweep over `paper_grounding.py`'s reconciliation logic
       and this phase's tests/fixtures. Confirm zero real block id / section
       title / document filename / lineage literal.
-- [ ] 1.16 Run `.venv/bin/python -m unittest tests.test_paper_writing`;
+- [x] 1.16 Run `.venv/bin/python -m unittest tests.test_paper_writing`;
       confirm green, no new failures beyond baseline.
 
 ## Phase 2 — WU3: Agent file, `--grounding`, import row, classification, SKILL.md/references

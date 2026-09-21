@@ -252,23 +252,28 @@ def write_block(
     source_fidelity = source_fidelity_report(contract.source_sections, source_sections_report)
 
     # `transposition-grounding` spec, `Requirement: The Subject Set Is An
-    # Intersection...` + `Requirement: A Block With No Decided Subject
-    # Reports Unmeasured, Never A Silent Pass` (design.md D3/D8; Phase 0's
-    # own interim wiring -- subject derivation and the `unmeasured`
-    # envelope only; reconciliation against an account is Phase 1's). Same
-    # `contract.mode == MODE_TRANSPOSITION` derivation `MODE_ABSENT` and the
-    # verbatim check above both already rest on -- no block id, no list.
-    # Lazily imported, exactly as `paper_leak` above, so `paper_write.py`
-    # stays importable without `paper_grounding.py` present. An
-    # `argument`-mode block, or a block with no `source_sections` at all,
-    # reports the same interim envelope WITHOUT ever importing
-    # `paper_grounding` (transposition-grounding spec, Scenario "An
-    # argument-mode block has no subjects").
+    # Intersection...` + `Requirement: The Account Is Reconciled...` +
+    # `Requirement: The Guard Fires After The Verbatim Check And Before
+    # Substitution` (design.md D1/D3/D6/D8). Same `contract.mode ==
+    # MODE_TRANSPOSITION` derivation `MODE_ABSENT` and the verbatim check
+    # above both already rest on -- no block id, no list. Lazily imported,
+    # exactly as `paper_leak` above, so `paper_write.py` stays importable
+    # without `paper_grounding.py` present. Runs AFTER
+    # `check_source_section_verbatim` clears and BEFORE `substitute`, so a
+    # draft failing both checks always names `SOURCE_SECTION_VERBATIM`
+    # first -- copying is decided before meaning (D6). An `argument`-mode
+    # block, or a block with no `source_sections` at all, reports the
+    # interim `unmeasured`/0 envelope WITHOUT ever importing
+    # `paper_grounding` (`Scenario: An argument-mode block has no
+    # subjects").
     source_grounding = {"status": "unmeasured", "subjects": 0}
     if contract.source_sections and contract.mode == paper_vocabulary.MODE_TRANSPOSITION:
         import paper_grounding  # noqa: PLC0415
         subjects = paper_grounding.subjects_for(bindings, contract.source_sections)
-        source_grounding = {"status": "unmeasured", "subjects": len(subjects)}
+        reconciled = paper_grounding.reconcile_support(
+            subjects, grounding_account, contract.source_sections, block_id=contract.block_id,
+        )
+        source_grounding = paper_grounding.source_grounding_report(subjects, reconciled)
 
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {

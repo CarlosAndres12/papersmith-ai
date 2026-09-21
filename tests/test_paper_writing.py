@@ -13437,5 +13437,494 @@ class InterimSourceGroundingEnvelopeTests(unittest.TestCase):
         self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
 
 
+def _grounding_account(entries: list) -> dict:
+    return {"support": entries}
+
+
+class ReconcileSupportBurdenOfProofTests(unittest.TestCase):
+    """`the-block-asserts-only-what-its-section-carries`, Phase 1, task 1.1
+    -- THE LOAD-BEARING PROPERTY of the whole change, its own task, written
+    RED first (design.md D1): an ungrounded `supported` verdict for a
+    subject sentence must NOT let that sentence pass as `supported`. Copy
+    `contract-audit`'s asymmetry naively and an ungrounded `supported`
+    waves everything past -- the guard becomes ceremonial. (`transposition-
+    grounding` spec, `Requirement: The Permissive Verdict Carries The
+    Burden Of Proof`, Scenario "A supported verdict with an absent span
+    downgrades".)"""
+
+    def test_a_supported_verdict_with_an_empty_span_never_passes_as_supported(self) -> None:
+        section = _bound_section(
+            fact="invented-calibration-fact", text="The calibration constant stays fixed across trials.",
+        )
+        subject = _fact_binding("Calibration is held constant across every trial.", "invented-calibration-fact")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "invented-calibration-fact",
+                "verdict": "supported", "span": "",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(len(reconciled), 1)
+        self.assertNotEqual(reconciled[0]["verdict"], "supported")
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertEqual(reconciled[0]["span"], "")
+        self.assertTrue(reconciled[0]["downgraded"])
+
+
+class ReconcileSupportTests(unittest.TestCase):
+    """`transposition-grounding` spec: `reconcile_support`'s full both-
+    direction reconciliation (design.md D1/D3/D7; tasks.md 1.2-1.11)."""
+
+    def test_a_different_facts_section_also_downgrades(self) -> None:
+        """Scenario "A supported verdict grounded in a different fact's
+        section downgrades" (tasks.md 1.3)."""
+        own_section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="Own Section", text="The own section carries nothing about the midpoint.",
+        )
+        other_section = _bound_section(
+            fact="other-fact", lineage="widget-study-r4",
+            title="Other Section", text="The midpoint constant is fixed across every trial.",
+        )
+        subject = _fact_binding("The constant sits at the midpoint across trials.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "midpoint constant is fixed across every trial",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (own_section, other_section), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "undecidable")
+        self.assertEqual(reconciled[0]["span"], "")
+        self.assertTrue(reconciled[0]["downgraded"])
+
+    def test_a_byte_present_span_in_its_own_section_passes(self) -> None:
+        """Scenario "A supported verdict with a byte-present span passes"
+        (tasks.md 1.4)."""
+        section = _bound_section(
+            fact="calibration-regime", text="The constant is fixed at the interval's midpoint.",
+        )
+        subject = _fact_binding("Calibration fixes that constant at the midpoint.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "fixed at the interval's midpoint",
+            }
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+        self.assertEqual(reconciled[0]["span"], "fixed at the interval's midpoint")
+        self.assertFalse(reconciled[0]["downgraded"])
+
+    def test_unsupported_refuses_naming_all_five_fields(self) -> None:
+        """Scenario "An unsupported claim is refused with full
+        identification" (tasks.md 1.5)."""
+        section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="2. Widget Calibration", text="The constant never changes across trials.",
+        )
+        subject = _fact_binding("Calibration was repeated after every third trial.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "unsupported",
+            }
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], account, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "SECTION_UNSUPPORTED_CLAIM")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("calibration-regime", ctx.exception.detail)
+        self.assertIn("widget-study-r4", ctx.exception.detail)
+        self.assertIn("2. Widget Calibration", ctx.exception.detail)
+        self.assertIn(subject.sentence, ctx.exception.detail)
+
+    def test_an_account_entry_naming_an_unsegmented_sentence_refuses(self) -> None:
+        """Scenario "An account entry naming an unsegmented sentence
+        refuses" (tasks.md 1.6, first direction)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("The real subject sentence.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "Invented section body text.",
+            },
+            {
+                "sentence": "A sentence write never segmented as this fact's subject.",
+                "fact": "calibration-regime", "verdict": "clear",
+            },
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], account, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_SENTENCE_UNKNOWN")
+        self.assertIn("A sentence write never segmented as this fact's subject.", ctx.exception.detail)
+
+    def test_a_subject_with_no_account_entry_refuses_verdict_missing(self) -> None:
+        """Scenario "A subject sentence absent from the account refuses"
+        (tasks.md 1.6, second direction)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("This subject sentence has no verdict at all.", "calibration-regime")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support(
+                [subject], _grounding_account([]), (section,), block_id="mm-proposal",
+            )
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_VERDICT_MISSING")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn(subject.sentence, ctx.exception.detail)
+
+    def test_no_account_with_subjects_refuses_account_absent_never_verdict_missing(self) -> None:
+        """Scenario "No account, subjects exist" (tasks.md 1.7): the
+        absence must never fall through to `GROUNDING_VERDICT_MISSING` on
+        the first subject (design.md D7's own rejected alternative)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("A subject sentence.", "calibration-regime")
+
+        with self.assertRaises(Refused) as ctx:
+            paper_grounding.reconcile_support([subject], None, (section,), block_id="mm-proposal")
+
+        self.assertEqual(ctx.exception.code, "GROUNDING_ACCOUNT_ABSENT")
+        self.assertIn("mm-proposal", ctx.exception.detail)
+        self.assertIn("1", ctx.exception.detail)
+        self.assertNotEqual(ctx.exception.code, "GROUNDING_VERDICT_MISSING")
+
+    def test_no_account_and_no_subjects_raises_nothing(self) -> None:
+        """Scenario "No account, no subjects" (tasks.md 1.7)."""
+        reconciled = paper_grounding.reconcile_support([], None, (), block_id="mm-proposal")
+        self.assertEqual(reconciled, [])
+
+
+class SourceGroundingReportTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: Undecidable Never
+    Blocks Alone...` + `Requirement: A Block With No Decided Subject
+    Reports Unmeasured...` (design.md D8; tasks.md 1.8-1.11)."""
+
+    def test_downgraded_and_agent_returned_undecidable_never_merge(self) -> None:
+        """Task 1.9, its own task per design.md D2: one subject returned
+        `undecidable` directly, a second `supported` with an absent span;
+        the report counts the first as `undecidable` and exactly the
+        second as `downgraded` -- the two counts never merge. (Scenario "A
+        downgrade is never counted as an agent-returned undecidable".)"""
+        section = _bound_section(fact="calibration-regime")
+        honest = _fact_binding("An honestly abstained subject sentence.", "calibration-regime")
+        minted = _fact_binding("A subject sentence with a minted, absent span.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": honest.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+            {
+                "sentence": minted.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [honest, minted], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([honest, minted], reconciled)
+
+        self.assertEqual(report["undecidable"], 1)
+        self.assertEqual(report["downgraded"], 1)
+        self.assertEqual(report["subjects"], 2)
+
+    def test_an_all_undecidable_or_downgraded_account_does_not_block(self) -> None:
+        """Scenario "An all-undecidable-or-downgraded account does not
+        block" (tasks.md 1.10)."""
+        section = _bound_section(fact="calibration-regime")
+        returned = _fact_binding("Returned undecidable directly.", "calibration-regime")
+        downgraded_subject = _fact_binding("Downgraded by an absent span.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": returned.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+            {
+                "sentence": downgraded_subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "not present anywhere",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [returned, downgraded_subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([returned, downgraded_subject], reconciled)
+
+        self.assertGreater(report["undecidable"], 0)
+        self.assertGreater(report["downgraded"], 0)
+        self.assertNotEqual(report["status"], "refused")
+
+    def test_subjects_exist_but_none_decided_reports_unmeasured_nonzero(self) -> None:
+        """Scenario "Subjects exist but none decided reports unmeasured
+        with a nonzero count" (tasks.md 1.11)."""
+        section = _bound_section(fact="calibration-regime")
+        subject = _fact_binding("A subject sentence returned undecidable.", "calibration-regime")
+        account = _grounding_account([
+            {"sentence": subject.sentence, "fact": "calibration-regime", "verdict": "undecidable"},
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([subject], reconciled)
+
+        self.assertEqual(report["status"], "unmeasured")
+        self.assertEqual(report["subjects"], 1)
+        self.assertGreater(report["subjects"], 0)
+
+    def test_a_decided_subject_reports_measured(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        subject = _fact_binding("The constant holds steady across trials.", "calibration-regime")
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "constant holds across trials",
+            },
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+        report = paper_grounding.source_grounding_report([subject], reconciled)
+
+        self.assertEqual(report["status"], "measured")
+        self.assertEqual(report["decided"], 1)
+
+
+class WriteBlockGroundingWiringTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: The Guard Fires After
+    The Verbatim Check And Before Substitution` (tasks.md 1.12/1.14); full
+    guard wired into `write_block`, replacing Phase 0's interim
+    unconditional-`unmeasured` report."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_an_unsupported_claim_refuses_through_a_real_write_call(self) -> None:
+        """Scenario "An unsupported claim is refused by an actual write
+        invocation" -- never a read-only verb; `main.tex` stays unchanged."""
+        section = _bound_section(
+            fact="calibration-regime", text="The constant never changes across trials.",
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft = {
+            "latex": "Calibration was repeated after every third trial.",
+            "bindings": [
+                {
+                    "sentence": "Calibration was repeated after every third trial.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "Calibration was repeated after every third trial.",
+                "fact": "calibration-regime", "verdict": "unsupported",
+            }
+        ])
+        pre = (self.paper_dir / "main.tex").read_bytes()
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(
+                self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+            )
+
+        self.assertEqual(ctx.exception.code, "SECTION_UNSUPPORTED_CLAIM")
+        self.assertEqual((self.paper_dir / "main.tex").read_bytes(), pre)
+
+    def test_a_supported_claim_writes_with_the_span_reported(self) -> None:
+        section = _bound_section(
+            fact="calibration-regime", text="The constant is fixed at the interval's midpoint.",
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft = {
+            "latex": "Calibration fixes that constant at the midpoint.",
+            "bindings": [
+                {
+                    "sentence": "Calibration fixes that constant at the midpoint.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "Calibration fixes that constant at the midpoint.",
+                "fact": "calibration-regime", "verdict": "supported",
+                "span": "fixed at the interval's midpoint",
+            }
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"]["status"], "measured")
+        self.assertEqual(result["sourceGrounding"]["decided"], 1)
+
+    def test_a_draft_failing_both_checks_names_the_verbatim_refusal(self) -> None:
+        """Scenario "A draft failing both checks names the verbatim
+        refusal" (tasks.md 1.14): copying is decided before meaning."""
+        run = _n_token_run(17)
+        section_text = f"Some opening sentence. {run} A closing sentence about something else."
+        section = _bound_section(
+            fact="calibration-regime", lineage="widget-study-r4",
+            title="2. Widget Calibration", text=section_text,
+        )
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), requires_facts=("calibration-regime",),
+            source_sections=(section,),
+        )
+        draft_latex = f"Opening sentence of the draft. {run} Closing sentence of the draft."
+        draft = {
+            "latex": draft_latex,
+            "bindings": [{"sentence": draft_latex, "binding": "fact:calibration-regime"}],
+        }
+        grounding_account = _grounding_account([
+            {"sentence": draft_latex, "fact": "calibration-regime", "verdict": "unsupported"},
+        ])
+
+        with self.assertRaises(Refused) as ctx:
+            paper_write.write_block(
+                self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+            )
+
+        self.assertEqual(ctx.exception.code, "SOURCE_SECTION_VERBATIM")
+
+
+class GroundingScopeBoundaryTests(unittest.TestCase):
+    """`transposition-grounding` spec, `Requirement: A Sibling Check, Never
+    An Extension Of The Verbatim Or Leak Checks` (tasks.md 1.13, its own
+    task). An `evidence:`-bound sentence and an `argument`-mode block NEVER
+    reach reconciliation, even when a grounding account names them --
+    proven by a LOCK, not by the absence of a failure."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        _write_fixture(self.paper_dir, _marker_pair("mm-proposal", b"Old body.\n"))
+
+    def test_an_account_entry_naming_a_non_subject_sentence_is_ignored(self) -> None:
+        """A grounding account naming an `evidence:`-bound sentence (never
+        a subject) must not raise `GROUNDING_SENTENCE_UNKNOWN` -- the entry
+        is simply irrelevant to reconciliation, which is scoped to
+        subjects' own facts alone."""
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        subject = _fact_binding("The constant holds steady across trials.", "calibration-regime")
+        non_subject_entry = {
+            "sentence": "This cites an external record, never a subject.",
+            "fact": "an-unrelated-non-subject-fact", "verdict": "unsupported",
+        }
+        account = _grounding_account([
+            {
+                "sentence": subject.sentence, "fact": "calibration-regime",
+                "verdict": "supported", "span": "constant holds across trials",
+            },
+            non_subject_entry,
+        ])
+
+        reconciled = paper_grounding.reconcile_support(
+            [subject], account, (section,), block_id="mm-proposal",
+        )
+
+        self.assertEqual(len(reconciled), 1)
+        self.assertEqual(reconciled[0]["verdict"], "supported")
+
+    def test_an_evidence_bound_sentence_never_reaches_reconciliation_through_write(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        contract = _write_contract(
+            citations_regime="resolution", evidence_set=({"id": "E1", "regime": "resolution"},),
+            requires_facts=("calibration-regime",), source_sections=(section,),
+        )
+        draft = {
+            "latex": (
+                "The constant holds steady across trials. "
+                "This closes on the recorded evidence."
+            ),
+            "bindings": [
+                {
+                    "sentence": "The constant holds steady across trials.",
+                    "binding": "fact:calibration-regime",
+                },
+                {
+                    "sentence": "This closes on the recorded evidence.",
+                    "binding": "evidence:E1",
+                },
+            ],
+        }
+        grounding_account = _grounding_account([
+            {
+                "sentence": "The constant holds steady across trials.",
+                "fact": "calibration-regime", "verdict": "supported",
+                "span": "constant holds across trials",
+            },
+            {
+                # An over-eager account also judging the evidence-bound
+                # sentence, which is never a subject and must be ignored.
+                "sentence": "This closes on the recorded evidence.",
+                "fact": "E1", "verdict": "unsupported",
+            },
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+
+    def test_an_argument_mode_block_never_reaches_reconciliation_through_write(self) -> None:
+        section = _bound_section(fact="calibration-regime", text="The constant holds across trials.")
+        contract = _write_contract(
+            citations_regime="none", evidence_set=(), mode="argument",
+            requires_facts=("calibration-regime",), source_sections=(section,),
+        )
+        draft = {
+            "latex": "The constant holds steady across trials.",
+            "bindings": [
+                {
+                    "sentence": "The constant holds steady across trials.",
+                    "binding": "fact:calibration-regime",
+                }
+            ],
+        }
+        # An account claiming `unsupported` would refuse `SECTION_
+        # UNSUPPORTED_CLAIM` were this block ever reconciled -- it is not,
+        # even though a caller (mistakenly) supplied one.
+        grounding_account = _grounding_account([
+            {
+                "sentence": "The constant holds steady across trials.",
+                "fact": "calibration-regime", "verdict": "unsupported",
+            }
+        ])
+
+        result = paper_write.write_block(
+            self.paper_dir, contract, draft, _CLEAN_AUDIT, grounding_account=grounding_account,
+        )
+
+        self.assertEqual(result["status"], "written")
+        self.assertEqual(result["sourceGrounding"], {"status": "unmeasured", "subjects": 0})
+
+
 if __name__ == "__main__":
     unittest.main()
