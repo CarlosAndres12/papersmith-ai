@@ -53,8 +53,8 @@ Only when `STATUS` reports zero managed revisions. Both required sources must ex
 
 ```
 guidance/data-paper/<paper-name>/<paper-name>.md    (required)
-proposals/                                          (required — directory presence)
-guidance/area-benchmark/<name>/<name>.md            (optional)
+proposals/                                          (required — at least one document)
+guidance/paper-guide/<name>/<name>.md               (optional)
 ```
 
 Because [v1 is checked, not exempt](../SKILL.md#creating-v1-checked-by-the-same-gate-as-every-successor), the idea text itself must already carry both of this domain's declared labels, `**Dataset:** …` and `**Validation scheme:** …`, and **each on its own line**: both rules match at line start, so folding a declaration into the middle of a sentence does not satisfy them.

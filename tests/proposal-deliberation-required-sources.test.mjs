@@ -144,12 +144,24 @@ const result = await tool.execute('required-sources-fresh', { operation: 'CREATE
 console.log(JSON.stringify(result.details));
 `;
 
-async function runFreshProfile(sourcesFieldSource, { createGuidance = [] } = {}) {
+async function runFreshProfile(sourcesFieldSource, { createGuidance = [], createEmpty = [], createFlat = [] } = {}) {
 	const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'pp-required-sources-fresh-'));
 	await mkdir(path.join(projectRoot, 'proposals'), { recursive: true });
 	for (const relativeDir of createGuidance) {
 		await mkdir(path.join(projectRoot, relativeDir), { recursive: true });
 		await writeFile(path.join(projectRoot, relativeDir, `${path.basename(relativeDir)}.md`), 'Fragment content.', 'utf8');
+	}
+	// A directory and nothing else -- exactly what `mkdir <declared path>` alone produces.
+	// The presence check cannot tell this apart from a populated source; the content check can.
+	for (const relativeDir of createEmpty) {
+		await mkdir(path.join(projectRoot, relativeDir), { recursive: true });
+	}
+	// Flat Markdown sitting DIRECTLY in the source directory -- the other shape the loader
+	// walks, and the one a managed revision actually has. Exercised so the content check is
+	// proven against both shapes rather than only the nested `<folder>/<folder>.md` one.
+	for (const relativeDir of createFlat) {
+		await mkdir(path.join(projectRoot, relativeDir), { recursive: true });
+		await writeFile(path.join(projectRoot, relativeDir, 'flat-document-r01.md'), 'Flat fragment content.', 'utf8');
 	}
 	const profilePath = path.join(projectRoot, 'profile.ts');
 	const harnessPath = path.join(projectRoot, 'harness.mjs');
@@ -160,7 +172,11 @@ async function runFreshProfile(sourcesFieldSource, { createGuidance = [] } = {})
 		DELIBERATION_DOMAIN_PROFILE: profilePath,
 		WORKSPACE_MODULE: path.join(engineDir, 'proposal-workspace.ts'),
 		PROJECT_ROOT: projectRoot,
-		IDEA: 'A required-sources test idea for CREATE_INITIAL_REVISION.',
+		// Two sentences: `INITIAL_IDEA_SINGLE_SENTENCE` refuses one, and until the content
+		// check existed no test in this file ever reached that gate -- every case here
+		// blocked earlier, on a required source. The source checks run first, so the cases
+		// that assert `blocked` are unaffected by this.
+		IDEA: 'A required-sources test idea for CREATE_INITIAL_REVISION. It states what the plan must establish before it runs.',
 	};
 	const { stdout } = await execFileAsync('node', [harnessPath], { env });
 	const result = JSON.parse(stdout.trim().split('\n').pop());
@@ -189,6 +205,73 @@ test('3.2.4 two sources, one required (absent) and one not required (present): C
 		assert.ok(result.blockers?.some((b) => b.code === 'REQUIRED_SOURCE_MISSING'), JSON.stringify(result));
 		const proposalsEntries = await readdir(path.join(projectRoot, 'proposals'));
 		assert.deepEqual(proposalsEntries, [], 'the present-but-optional source must not rescue a missing required one');
+	} finally {
+		await rm(projectRoot, { recursive: true, force: true });
+	}
+});
+
+// ---------------------------------------------------------------------------
+// A required source is required for its CONTENT, not for its name.
+//
+// The presence check above is an `lstat`: `mkdir <declared path>` satisfied it, and v1 then
+// rendered against a source holding nothing. These four tests are the content check, and the
+// last two exist so the first two cannot pass by the gate simply always blocking.
+// ---------------------------------------------------------------------------
+
+test('a required: true source that exists but holds nothing refuses REQUIRED_SOURCE_EMPTY; no v1 is created', async () => {
+	const { projectRoot, result } = await runFreshProfile(
+		'\tsources: [{ path: "required-guide", required: true }],',
+		{ createEmpty: ['required-guide'] },
+	);
+	try {
+		assert.equal(result.status, 'blocked', JSON.stringify(result));
+		assert.ok(result.blockers?.some((b) => b.code === 'REQUIRED_SOURCE_EMPTY'), JSON.stringify(result));
+		assert.ok(!result.blockers?.some((b) => b.code === 'REQUIRED_SOURCE_MISSING'),
+			'the directory IS present -- reporting it missing would send the reader to create what already exists');
+		const empty = result.blockers.find((b) => b.code === 'REQUIRED_SOURCE_EMPTY');
+		assert.match(empty.message, /required-guide/, 'the refusal names the source that is unanswered');
+		assert.match(empty.message, /<name>\.md|directly inside it/,
+			'the refusal names how to answer it, not only that it is unanswered');
+		const proposalsEntries = await readdir(path.join(projectRoot, 'proposals'));
+		assert.deepEqual(proposalsEntries, [], 'no v1 document must be created when a required source holds nothing');
+	} finally {
+		await rm(projectRoot, { recursive: true, force: true });
+	}
+});
+
+test('an optional source that exists but holds nothing stays legal and stays silent', async () => {
+	const { projectRoot, result } = await runFreshProfile(
+		'\tsources: [{ path: "required-guide", required: true }, { path: "optional-guide", required: false }],',
+		{ createGuidance: ['required-guide/fragment'], createEmpty: ['optional-guide'] },
+	);
+	try {
+		assert.equal(result.status, 'created', JSON.stringify(result));
+		assert.ok(!(result.blockers ?? []).some((b) => b.code === 'REQUIRED_SOURCE_EMPTY'),
+			'emptiness only blocks where the declaration says required');
+	} finally {
+		await rm(projectRoot, { recursive: true, force: true });
+	}
+});
+
+test('a required source answered by the nested <folder>/<folder>.md shape proceeds', async () => {
+	const { projectRoot, result } = await runFreshProfile(
+		'\tsources: [{ path: "required-guide", required: true }],',
+		{ createGuidance: ['required-guide/fragment'] },
+	);
+	try {
+		assert.equal(result.status, 'created', JSON.stringify(result));
+	} finally {
+		await rm(projectRoot, { recursive: true, force: true });
+	}
+});
+
+test('a required source answered by flat Markdown directly inside it proceeds', async () => {
+	const { projectRoot, result } = await runFreshProfile(
+		'\tsources: [{ path: "required-guide", required: true }],',
+		{ createFlat: ['required-guide'] },
+	);
+	try {
+		assert.equal(result.status, 'created', JSON.stringify(result));
 	} finally {
 		await rm(projectRoot, { recursive: true, force: true });
 	}

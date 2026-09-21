@@ -114,6 +114,47 @@ FORGE_ROOT = SUITE_ROOT.parent
 SKILLS_ROOT = FORGE_ROOT / ".claude" / "skills"
 
 
+def travelling_guidance_folders(root=None) -> set:
+    """The `guidance/` folder NAMES this repository ships, derived from what git
+    tracks -- `{"data-paper", "paper-guide", ...}`, never their contents.
+
+    These names are the forge's own architecture, not any paper's content. The
+    repository's `.gitignore` draws the line itself (`guidance/*/*` ignored with
+    a `!guidance/*/.gitkeep` escape) and this reads exactly that line back from
+    git: **the structure travels, the content never does.** A folder whose
+    `.gitkeep` git tracks arrives empty in every clone, ready for whatever paper
+    the next person writes into it.
+
+    Two guards need the same answer for opposite reasons and must never derive
+    it twice. `tests/test_forge_scaffolding.py` asks which declared sources
+    reach a clone. Rule B's denylist asks which names it must NOT treat as a
+    target's vocabulary: without this, a shipped slot's own name read as one
+    paper's private word, and the guard reported the forge leaking a folder the
+    forge itself defines -- a false positive, and the expensive kind, because
+    the repair is to replace something correct with something invented.
+
+    Asked of git rather than of a list here, for the reason `repository_ignored`
+    below states at length: a list ages the day someone adds a folder.
+
+    Fails CLOSED, in the direction that guards more rather than less: a root that
+    is not a git repository at all (a scratch fixture, an exported tree) ships
+    nothing as far as this can tell, so it exempts nothing and every folder name
+    there stays on the denylist. The opposite default would let a fixture silence
+    the guard by simply not being a repository.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "ls-files", "guidance/*/.gitkeep"],
+            cwd=str(FORGE_ROOT if root is None else Path(root)),
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return set()
+    if completed.returncode != 0:
+        return set()
+    return {Path(entry).parent.name for entry in completed.stdout.split()}
+
+
 def repository_ignored(paths, root) -> set:
     """Which of `paths` this repository itself declares it does not ship.
 

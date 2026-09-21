@@ -132,7 +132,19 @@ test('the worked CREATE_INITIAL_REVISION example in usage.md, run for real, prod
 			'# Pilot dataset guidance\nThe dataset supports accuracy claims under domain shift.\n',
 			'utf8',
 		);
+		// A published managed proposal, not just the directory. `proposals` is declared
+		// `required: true`, and a required source is required for its CONTENT: an empty
+		// directory now refuses `REQUIRED_SOURCE_EMPTY` instead of letting v1 render
+		// against nothing. This fixture used to create the bare directory and pass --
+		// which meant the worked example in usage.md was certified against an experiments
+		// plan with no proposal behind it at all, exactly what this domain's own doctrine
+		// says is testing nothing.
 		await mkdir(path.join(projectRoot, 'proposals'), { recursive: true });
+		await writeFile(
+			path.join(projectRoot, 'proposals', 'research-plan-lumen-thesis-r01.md'),
+			'# Lumen thesis proposal r01\nThe method is claimed to hold accuracy under domain shift.\n',
+			'utf8',
+		);
 
 		// `package.json`'s own `test` script pins `DELIBERATION_DOMAIN_PROFILE` to the
 		// MATHEMATICAL sibling's profile for the whole run (see
