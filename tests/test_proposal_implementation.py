@@ -53,6 +53,7 @@ import impl_steps  # noqa: E402
 
 # The forge's vocabulary floor, defined in one place beside the suites.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge_vocabulary  # noqa: E402  (path set above)
 from forge_vocabulary import (  # noqa: E402  (path set above)
     FORGE_SERVICE_VOCABULARY, FORGE_TARGET_DOMAIN_WORDS,
     FORGE_TARGET_PROPER_NOUNS, FORGE_VOCABULARY_FLOOR, DEFINITION_MODULE,
@@ -14564,7 +14565,22 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
                 continue
             seen_root = True
             evidence_dir = status["path"]
-            if len(evidence_dir.name) >= self.MINIMUM_WORD:
+            # The FOLDER NAME is the forge's own architecture, never a paper's
+            # vocabulary, whenever this repository ships that folder: a slot whose
+            # `.gitkeep` git tracks arrives empty in every clone and is where the
+            # NEXT paper's evidence goes. Adding it here read a shipped slot as one
+            # paper's private word and reported the forge leaking a folder the forge
+            # itself defines -- and the repair a reader takes from that report is to
+            # replace a correct name with an invented one, which is what happened.
+            # `travelling_guidance_folders` reads the `.gitignore` line back from git
+            # (structure travels, content never does), shared with
+            # `tests/test_forge_scaffolding.py` so the two can never disagree.
+            #
+            # What goes INSIDE the folder stays guarded below: the ingested paper ids
+            # are the paper's own and are exactly what must not be borrowed.
+            shipped = forge_vocabulary.travelling_guidance_folders(base)
+            if (evidence_dir.name not in shipped
+                    and len(evidence_dir.name) >= self.MINIMUM_WORD):
                 words.add(evidence_dir.name.lower())
             guidance_dir = evidence_dir.parent
             for paper in paper_guidance.ingested_papers(guidance_dir).get(
@@ -14839,6 +14855,69 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
             self.leaks(denylist, forge), {"scripts/leaky.py": ["paddock"]},
             "rule B has to name the file and the word, because a guard that "
             "reports only that something is wrong repairs nothing")
+
+    def scratch_guidance_evidence(self, folder_name):
+        """A scratch forge root holding one `guidance/<folder_name>` classed
+        `evidence` with one ingested paper inside it. No git repository, so
+        nothing there travels and nothing there is exempt.
+        """
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        folder = root / "guidance" / folder_name
+        (folder / "quokka-atlas-2031").mkdir(parents=True)
+        (folder / ".paper-writing.json").write_text(
+            '{"class": "evidence"}\n', encoding="utf-8")
+        (folder / "quokka-atlas-2031" / "quokka-atlas-2031.md").write_text(
+            "# An ingested paper\n", encoding="utf-8")
+        return root
+
+    def test_a_shipped_guidance_slot_name_is_the_forge_s_own_and_is_not_on_the_denylist(self):
+        """The forge's architecture is not a paper's vocabulary.
+
+        Rule B once added the evidence folder's own NAME to the denylist, which
+        reported the forge leaking a folder the forge itself defines and ships
+        empty to every clone. That is the expensive kind of false positive: the
+        repair a reader takes from the report is to replace a correct name with
+        an invented one, and that is exactly what happened -- a shipped SKILL.md
+        ended up naming a `guidance/` folder that exists nowhere in the repo.
+
+        Both directions are asserted, because the exemption must not be blanket.
+        The slot this repository SHIPS is exempt; a folder it does not ship is
+        not, and neither is anything INSIDE either of them.
+        """
+        shipped = forge_vocabulary.travelling_guidance_folders()
+        self.assertGreaterEqual(
+            len(shipped), 2,
+            "no travelling guidance folder derived -- every assertion below "
+            "would then be passing over an empty exemption set")
+
+        live_words, live_seen = self.paper_product_root_words()
+        if live_seen:
+            for name in shipped:
+                self.assertNotIn(
+                    name.lower(), live_words,
+                    f"{name!r} is a slot this repository ships empty to every "
+                    "clone, so it is the forge's own structure, never one "
+                    "paper's word")
+
+        # A guidance folder this repository does NOT ship: nothing exempts it,
+        # so its name stays guarded exactly as before.
+        scratch = self.scratch_guidance_evidence("unshipped-private-corpus")
+        self.assertEqual(
+            forge_vocabulary.travelling_guidance_folders(scratch), set(),
+            "a root that is not a git repository ships nothing, so it must "
+            "exempt nothing -- failing open here would let any fixture "
+            "silence this guard by not being a repository")
+        words, seen = self.paper_product_root_words(scratch)
+        self.assertTrue(seen, "the scratch evidence root must have resolved")
+        self.assertIn(
+            "unshipped-private-corpus", words,
+            "the exemption is the shipped slots only, never every folder "
+            "under guidance/")
+        self.assertIn(
+            "quokka-atlas-2031", words,
+            "what goes INSIDE a guidance folder is the paper's own and stays "
+            "guarded whether or not the folder around it is shipped")
 
     def scratch_compound_target(self, *names):
         """A target root whose directories are named from words already

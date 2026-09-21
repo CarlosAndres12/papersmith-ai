@@ -126,9 +126,8 @@ Surya, ~1.5 GB, cacheados a partir de ahí.)
 | `guidance/paper-guide/` | **Papers guía** — las referencias metodológicas / de estilo. `proposal-deliberation` las carga como contexto al inicio de cada deliberación. |
 | `guidance/reference-papers/` | **Corpus de referencia** — papers de apoyo, ingeridos a Markdown para consulta. No se cargan automáticamente en la deliberación. |
 | `guidance/data-paper/` | **Paper de datos — obligatorio para `experimental-deliberation`.** Describe la base de datos de la investigación y es el **techo**: acota qué se puede afirmar. Una afirmación que los datos no sostienen no es un experimento. Sin esta carpeta poblada, `CREATE_INITIAL_REVISION` no puede arrancar. |
-| `guidance/area-benchmark/` | **Benchmark del área — opcional.** Cuando está, es la fuente de verdad de métricas, splits, protocolo y baselines. Cuando falta, el documento declara los suyos: más débil, pero legal. |
 
-**Las cuatro carpetas viajan vacías.** Cada una llega a un clon con su `.gitkeep` y nada más: `guidance/*/*` está ignorado, con `!guidance/*/.gitkeep` como única escapatoria. El andamiaje se versiona, los PDFs y su Markdown no. `tests/test_forge_scaffolding.py` deriva las dos mitades —lo que los `profile.ts` declaran como fuente contra lo que git realmente rastrea— y se pone rojo si una carpeta declarada deja de viajar.
+**Las tres carpetas viajan vacías.** Cada una llega a un clon con su `.gitkeep` y nada más: `guidance/*/*` está ignorado, con `!guidance/*/.gitkeep` como única escapatoria. El andamiaje se versiona, los PDFs y su Markdown no. `tests/test_forge_scaffolding.py` deriva las dos mitades —lo que los `profile.ts` declaran como fuente contra lo que git realmente rastrea— y se pone rojo si una carpeta declarada deja de viajar.
 
 ### Paso 2 — Ingerir los PDFs (PDF → Markdown)
 
@@ -248,7 +247,7 @@ flowchart TD
 
     PI -- "guidance/paper-guide (opcional)" --> PD["2. proposal-deliberation"]
     PI -- "guidance/data-paper (obligatoria)" --> ED["6. experimental-deliberation"]
-    PI -- "guidance/area-benchmark (opcional)" --> ED
+    PI -- "guidance/paper-guide (opcional)" --> ED
 
     PD -- "proposals/ — la revisión publicada" --> ED
     PD -- "STATUS + el texto de la revisión" --> IMP["3. proposal-implementation"]
@@ -1693,9 +1692,6 @@ tiene equivalente en absoluto.
   entra por el motor, porque los revisiones gestionadas son archivos `.md` sueltos y el cargador
   sólo desciende un nivel dentro de cada fuente. Las afirmaciones de la propuesta llegan al
   documento porque **vos** las llevás, en la idea que escribís y en la deliberación que sigue.
-- **`guidance/area-benchmark`** (opcional) — cuando existe, es la fuente de verdad de métricas,
-  splits, protocolo y baselines; cuando no está, el documento declara los suyos, lo cual es más
-  débil pero legal.
 
 *Le entrega a `experimental-implementation`:* el archivo publicado
 (`experiments/experiments-<slug>-vNN.md`) es, medido, el documento 0 que esa skill lee como su

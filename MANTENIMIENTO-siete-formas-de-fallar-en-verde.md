@@ -1,6 +1,6 @@
-# Seis formas de fallar en verde
+# Siete formas de fallar en verde
 
-Documento de mantenimiento. Los seis patrones que hicieron daño en este
+Documento de mantenimiento. Los siete patrones que hicieron daño en este
 repositorio y que **volvieron a aparecer dentro de una misma jornada de
 trabajo**. No son bugs: son formas de construir que se leen bien, pasan los
 tests, y no sostienen lo que aparentan.
@@ -173,9 +173,49 @@ barrido que introspecciona todos los módulos, no.
 
 ---
 
+## 7. Un test que ratifica una decisión en vez de verificar una propiedad
+
+Un test cuenta cuántos elementos hay en una lista, o transcribe cuáles son.
+Pasa. Y desde ese momento la lista **no se puede cambiar sin ponerlo rojo** —
+aunque nadie haya decidido nunca que fuera esa lista.
+
+El test deja de proteger un comportamiento y pasa a **custodiar una elección**.
+Peor: el nombre del test la enuncia como si fuera un requisito.
+
+**El caso:** una skill declaraba tres carpetas de origen. Un test se llamaba
+*"tres fuentes están declaradas: el paper de datos y la propuesta son
+obligatorias, el benchmark del área no"* y afirmaba `sources.length === 3`.
+Cuando el dueño dijo *"ese benchmark nunca lo autoricé"*, sacarlo puso el test
+en rojo. El test no estaba defendiendo una propiedad de la skill: estaba
+defendiendo que alguien, una vez, había escrito tres.
+
+> Es la aguja pegada otra vez, pero al revés: acá no se falsea el dato para que
+> el testigo pase — se atornilla el testigo para que el dato no se pueda mover.
+
+**Cómo distinguirlos.** Preguntale al test *"¿qué se rompería en producción si
+esto fuera distinto?"*
+
+- *"Nada, sería otra decisión igual de válida"* → está ratificando.
+- *"El motor leería una fuente que no existe"* → está verificando.
+
+**El arreglo no es borrar el test, es cambiar qué afirma.** En vez de contar
+elementos, afirmá la propiedad que la lista tiene que cumplir pase lo que pase:
+que toda fuente declarada exista, que la fuente que acota las afirmaciones sea
+una de las declaradas y sea obligatoria, que ninguna ruta se escape del
+repositorio. Esas siguen siendo ciertas con dos fuentes, con tres o con siete —
+y siguen poniéndose rojas cuando algo se rompe de verdad.
+
+**Y el corolario, que es el que más cuesta:** un conteo en un test es el lugar
+donde una decisión no tomada se vuelve indistinguible de un requisito. Si el
+número tiene que estar, que el test diga **por qué es ese número**, y que el
+comentario nombre a quién lo decidió y cuándo. Un conteo sin esa línea es una
+decisión anónima con fuerza de ley.
+
+---
+
 ## Cómo se ven juntos
 
-Los seis comparten una raíz: **algo se lee como una garantía sin serlo.**
+Los siete comparten una raíz: **algo se lee como una garantía sin serlo.**
 
 ```
 1  una exigencia se lee como una regla        y obliga a inventar
@@ -184,6 +224,7 @@ Los seis comparten una raíz: **algo se lee como una garantía sin serlo.**
 4  un valor se lee como una decisión          y lo puso una máquina
 5  un número se lee como medido               y fue elegido
 6  un arreglo se lee como cerrado             y la clase sigue abierta
+7  un test se lee como un requisito           y custodia una elección
 ```
 
 Por eso ninguno se detecta leyendo. Los seis se detectan **corriendo**: el verbo
@@ -203,3 +244,6 @@ contra lo que hay para contestarla.
 - ¿Algún número nuevo se presenta como medido sin serlo?
 - El defecto que arreglé, ¿tiene hermanos con la misma forma? ¿Y lo que los
   encuentra es derivado o es una lista?
+- Cada test nuevo que cuenta o enumera, ¿qué se rompería en producción si el
+  número fuera otro? Si la respuesta es "nada", está ratificando una decisión,
+  no verificando una propiedad.

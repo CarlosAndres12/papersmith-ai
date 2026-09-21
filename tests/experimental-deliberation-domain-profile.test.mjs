@@ -199,14 +199,25 @@ test('the rendered header occupies exactly the structural span the core will rep
         'the replaced header span must keep blank-line separation from the block that follows it');
 });
 
-test('three sources are declared: the data paper and the proposal are required, the area benchmark is not', async () => {
+// Asserts PROPERTIES, never a count. A count here once read as a requirement and was only
+// a transcription: it froze an optional source nobody had authorized, and removing that
+// source turned this test red for defending a choice rather than a behaviour. What follows
+// must stay true whichever optional sources this domain later gains or drops.
+test('every declared source is well formed, and the two the domain cannot draft without are required', async () => {
     const result = await loaded();
-    assert.equal(result.sources.length, 3);
+    assert.ok(result.sources.length > 0, 'a domain with no declared source loads nothing');
+    for (const source of result.sources) {
+        assert.equal(typeof source.path, 'string');
+        assert.ok(source.path.length > 0, 'an empty path names no directory');
+        assert.equal(typeof source.required, 'boolean', 'required is a decision, never absent');
+        assert.ok(!source.path.startsWith('/') && !source.path.split('/').includes('..'),
+            `${source.path} must stay a repository-relative path`);
+    }
     const required = result.sources.filter((source) => source.required).map((source) => source.path);
-    const optional = result.sources.filter((source) => !source.required).map((source) => source.path);
-    assert.equal(required.length, 2, 'the data paper and the latest managed proposal are both required');
-    assert.equal(optional.length, 1, 'the area benchmark is the source of truth when present, and absent is legal');
-    assert.ok(required.every((value) => typeof value === 'string' && value.length > 0));
+    assert.ok(required.some((path) => path.endsWith('data-paper')),
+        'the data paper bounds what may be claimed, so drafting without it is not allowed');
+    assert.ok(required.includes('proposals'),
+        'the claims come from the managed proposal, so drafting without it is not allowed');
 });
 
 test('the data-paper source is the declared bound on claims, at advisory severity', async () => {

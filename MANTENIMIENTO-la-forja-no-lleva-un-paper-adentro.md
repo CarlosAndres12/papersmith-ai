@@ -93,27 +93,52 @@ las otras cinco               0
 `paper-writing` se limpió durante esta sesión. Las tres hermanas no pasaron
 nunca por esto.
 
-**Y no son solo nombres de archivo en ejemplos.** Los dos peores:
+**Y no son solo nombres de archivo en ejemplos.** El peor:
 
 ```
 proposal-deliberation/profile.ts:44        stem: "research-concept"
-experimental-deliberation/profile.ts:35    const DATA_PAPER = "guidance/data-paper"
 ```
 
-El segundo está además **exigido en código**, no es decorativo:
+---
 
-```typescript
-sources: [
-    { path: DATA_PAPER, required: true },
-    { path: "proposals", required: true },
-    { path: "guidance/area-benchmark", required: false },
-],
+## La distinción que esta auditoría necesita antes que nada
+
+**No todo nombre propio dentro de la forja es una fuga.** La forja tiene su
+propia arquitectura —carpetas que ella define, versiona y exige— y apuntar a
+esas carpetas por su nombre es correcto. Es la arquitectura, no el producto.
+
+```
+estructura de la forja          contenido de un paper
+────────────────────────        ──────────────────────
+guidance/data-paper             CREDA
+guidance/paper-guide            research-concept
+guidance/reference-papers       s41597-026-06758-7
+proposals/  experiments/        "fixed CREDA base"
+implementations/
 ```
 
-Si esa carpeta no existe, la operación de crear una revisión inicial rehúsa.
-O sea que la doctrina escrita en `SKILL.md` que exige `guidance/data-paper`
-**es cierta** — describe lo que hace el motor. Por eso no se puede arreglar la
-prosa sin arreglar el código: cambiarla sola la vuelve mentira.
+La de la izquierda viaja con `.gitkeep` a cualquier clon y está vacía de
+contenido. La de la derecha es el paper de alguien. Una skill que nombra la
+izquierda describe su propio andamio; una que nombra la derecha lleva un paper
+adentro.
+
+**La prueba:** *"si otra persona clona la forja para escribir un paper
+completamente distinto, ¿este nombre le sirve o le estorba?"*
+
+- `guidance/data-paper` → le sirve. Es donde va **su** paper de datos.
+- `research-concept` → le estorba. Es el linaje del paper de otro.
+
+**Esto ya produjo un falso positivo, y del caro.** Sin esta distinción,
+`guidance/data-paper` se leyó como fuga y se reemplazó en
+`paper-writing/SKILL.md` por `evidence-source` — una carpeta **que no existe en
+ningún lado del repositorio**. Y una prosa que decía con precisión *"`guidance/
+data-paper/` existía en este disco y no tenía `.gitkeep`"* se volvió *"la
+carpeta clasificada evidence de este repositorio"*. Se hizo la documentación
+**menos exacta** para esquivar un nombre que no era una fuga.
+
+> Una auditoría que no separa la arquitectura del producto no da falsos
+> negativos: da **falsos positivos**, y cada uno cambia algo que estaba bien
+> por algo inventado.
 
 ### En los tests
 
@@ -315,7 +340,6 @@ proposals        declared-unsealed
 experiments      undeclared          ← visible antes de chocarse
 implementation   n/a                 ← es repositorio, no lleva declaración
 data-paper       declared-unsealed
-area-benchmark   undeclared
 ```
 
 `n/a` y `undeclared` no son lo mismo: uno no corresponde, el otro falta. Si se

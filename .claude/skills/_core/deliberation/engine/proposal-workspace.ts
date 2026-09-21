@@ -5413,73 +5413,92 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
  let bytes = 0;
  for (const source of DOMAIN.sources) {
   if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
-  let directory: string;
-  try {
-   directory = await canonicalDirectory(root, source.path);
-  } catch {
-   continue;
-  }
-  let entries;
-  try {
-   entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-   continue;
-  }
-  const folders = entries
-   .filter((entry) => entry.isDirectory())
-   .map((entry) => entry.name)
-   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const folder of folders) {
+  for (const file of await sourceMarkdownFiles(root, source.path)) {
    if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
-   const markdownName = `${folder}.md`;
-   if (!GUIDE_MARKDOWN.test(markdownName)) continue;
-   let canonicalPath: string;
-   try {
-    const paperDir = await canonicalDirectory(root, `${source.path}/${folder}`);
-    canonicalPath = await canonicalRegularFile(paperDir, markdownName, "guide Markdown");
-   } catch {
-    continue;
-   }
-   const buffer = await readFile(canonicalPath);
+   const buffer = await readFile(file.canonical);
    const text = buffer.subarray(0, MAX_CHAT_GUIDE_CONTEXT_BYTES - bytes).toString("utf8");
    if (!text) continue;
    bytes += Buffer.byteLength(text);
-   fragments.push({ path: `${source.path}/${folder}/${markdownName}`, content: text });
-  }
-  // Flat Markdown sitting DIRECTLY in the declared source directory, after the nested
-  // `<folder>/<folder>.md` shape above and never instead of it.
-  //
-  // The nested shape is what the legacy single guide was -- one directory per ingested
-  // paper -- and `proposal-deliberation` still depends on it. It is NOT what a managed
-  // revision is: a managed revision is a flat file named `<stem>-<lineage>-<label>.md`
-  // sitting directly in its own directory. So a domain that declares another skill's
-  // managed directory as a source (a downstream document whose claims trace back to
-  // an upstream managed revision) used to get the WORST of both: `missingRequiredSources`
-  // enforced the directory's presence, and this loader then descended one level, found
-  // no sub-directories, and delivered nothing. The source was required, present, and
-  // silent.
-  //
-  // Same budget, same silence for an absent directory, same read-only path checks.
-  const files = entries
-   .filter((entry) => entry.isFile() && GUIDE_MARKDOWN.test(entry.name))
-   .map((entry) => entry.name)
-   .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const name of files) {
-   if (bytes >= MAX_CHAT_GUIDE_CONTEXT_BYTES) break;
-   let canonicalPath: string;
-   try {
-    canonicalPath = await canonicalRegularFile(directory, name, "source Markdown");
-   } catch {
-    continue;
-   }
-   const buffer = await readFile(canonicalPath);
-   const text = buffer.subarray(0, MAX_CHAT_GUIDE_CONTEXT_BYTES - bytes).toString("utf8");
-   if (!text) continue;
-   bytes += Buffer.byteLength(text);
-   fragments.push({ path: `${source.path}/${name}`, content: text });
+   fragments.push({ path: file.relative, content: text });
   }
  }
  return fragments;
+}
+
+/**
+ * Every Markdown file one declared source directory offers, in the loader's own order:
+ * the nested `<folder>/<folder>.md` shape first, then flat `*.md` sitting directly
+ * inside the directory. `relative` is what a fragment reports as its path; `canonical`
+ * is the resolved regular file to read.
+ *
+ * TWO shapes, nested first and flat second. The nested shape is what the legacy single
+ * guide was -- one directory per ingested paper -- and `proposal-deliberation` still
+ * depends on it. It is NOT what a managed revision is: a managed revision is a flat file
+ * named `<stem>-<lineage>-<label>.md` sitting directly in its own directory. So a domain
+ * that declares another skill's managed directory as a source (a downstream document
+ * whose claims trace back to an upstream managed revision) used to get the WORST of both:
+ * the required-source gate enforced the directory's presence, and the loader then
+ * descended one level, found no sub-directories, and delivered nothing. The source was
+ * required, present, and silent.
+ *
+ * ONE derivation, shared by `loadGuideDirectoryFragments` (which reads these bytes) and
+ * `missingRequiredSources` (which only needs to know whether there is at least one). A
+ * second enumeration would drift the first time a shape changes, and the gate would then
+ * swear a source holds a document the loader cannot find.
+ *
+ * Never throws: an absent or unreadable directory, and any entry that fails a path check,
+ * are silently skipped -- the same read-only try/catch shape the loader already used.
+ */
+async function sourceMarkdownFiles(
+ root: string,
+ sourcePath: string,
+): Promise<readonly { readonly relative: string; readonly canonical: string }[]> {
+ let directory: string;
+ try {
+  directory = await canonicalDirectory(root, sourcePath);
+ } catch {
+  return [];
+ }
+ let entries;
+ try {
+  entries = await readdir(directory, { withFileTypes: true });
+ } catch {
+  return [];
+ }
+ const byName = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+ const found: { relative: string; canonical: string }[] = [];
+ const folders = entries
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+  .sort(byName);
+ for (const folder of folders) {
+  const markdownName = `${folder}.md`;
+  if (!GUIDE_MARKDOWN.test(markdownName)) continue;
+  try {
+   const paperDir = await canonicalDirectory(root, `${sourcePath}/${folder}`);
+   found.push({
+    relative: `${sourcePath}/${folder}/${markdownName}`,
+    canonical: await canonicalRegularFile(paperDir, markdownName, "guide Markdown"),
+   });
+  } catch {
+   continue;
+  }
+ }
+ const files = entries
+  .filter((entry) => entry.isFile() && GUIDE_MARKDOWN.test(entry.name))
+  .map((entry) => entry.name)
+  .sort(byName);
+ for (const name of files) {
+  try {
+   found.push({
+    relative: `${sourcePath}/${name}`,
+    canonical: await canonicalRegularFile(directory, name, "source Markdown"),
+   });
+  } catch {
+   continue;
+  }
+ }
+ return found;
 }
 
 /**
@@ -5487,24 +5506,45 @@ async function loadGuideDirectoryFragments(projectRoot: string): Promise<ChatGui
  * read-only presence check, never a fragment load -- mirrors the same try/catch shape
  * `loadGuideDirectoryFragments` already uses per source. Empty when every required source is
  * present, or when the profile declares none.
+ *
+ * Widened to report WHY, in two kinds. `'absent'` is the original check: the directory is
+ * not on disk. `'empty'` is new, and exists because the original was checking the wrong
+ * thing -- presence was an `lstat`, so `mkdir <declared path>` satisfied a source the domain
+ * cannot draft without, and v1 then rendered against nothing. A required source is required
+ * for its CONTENT; an empty directory answers the letter of the declaration and none of it.
+ *
+ * Emptiness is derived from `sourceMarkdownFiles`, the SAME enumeration the loader itself
+ * walks -- never a second scan of its own. Were it a second scan, this gate could swear a
+ * source holds a document the loader would not find, which is the failure the two shapes
+ * (nested and flat) already caused once.
+ *
+ * Optional sources are untouched: an absent or empty one stays legal and stays silent here.
  */
-async function missingRequiredSources(projectRoot: string): Promise<readonly { path: string }[]> {
+async function missingRequiredSources(
+ projectRoot: string,
+): Promise<readonly { readonly path: string; readonly reason: "absent" | "empty" }[]> {
  let root: string;
  try {
   root = await canonicalProjectRoot(projectRoot);
  } catch {
-  return DOMAIN.sources.filter((source) => source.required).map((source) => ({ path: source.path }));
+  return DOMAIN.sources
+   .filter((source) => source.required)
+   .map((source) => ({ path: source.path, reason: "absent" as const }));
  }
- const missing: { path: string }[] = [];
+ const unanswered: { path: string; reason: "absent" | "empty" }[] = [];
  for (const source of DOMAIN.sources) {
   if (!source.required) continue;
   try {
    await canonicalDirectory(root, source.path);
   } catch {
-   missing.push({ path: source.path });
+   unanswered.push({ path: source.path, reason: "absent" });
+   continue;
+  }
+  if ((await sourceMarkdownFiles(root, source.path)).length === 0) {
+   unanswered.push({ path: source.path, reason: "empty" });
   }
  }
- return missing;
+ return unanswered;
 }
 
 /** Wraps `resolveLatestManagedRevision` for the base-confirmation gate: a project with no managed
@@ -5777,11 +5817,15 @@ export function createProposalDeliberationExtension(options: ProposalDeliberatio
    }
    if(route.stage==='CREATE_INITIAL_REVISION'){
     const authority=resolveV2ExecutionAuthority(route.stage);
-    // Required sources (change 7): a `required: true` source that is absent blocks here,
-    // before any fragment is loaded and before any v1 is rendered -- never a silent `[]`.
+    // Required sources (change 7): a `required: true` source that is absent -- or present
+    // and holding no document at all -- blocks here, before any fragment is loaded and
+    // before any v1 is rendered. Never a silent `[]`, and never a bare directory passing
+    // for content it does not hold.
     const missingSources=await missingRequiredSources(projectRoot);
     if(missingSources.length){
-     const publicResult={status:'blocked' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:null,mutations:0 as const,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:'supply_required_source',blockers:missingSources.map((source)=>({code:'REQUIRED_SOURCE_MISSING',message:`Required source "${source.path}" is missing; CREATE_INITIAL_REVISION cannot proceed without it.`}))};
+     const publicResult={status:'blocked' as const,operation:CREATE_INITIAL_REVISION_OPERATION,routeStage:'CREATE_INITIAL_REVISION',authority,targetFilename:null,mutations:0 as const,receiptId:null,manifestStatus:'NOT_PUBLISHED',auditStatus:'NOT_RUN',selfAuditStatus:'NOT_RUN',recoveryStatus:'not_required',nextAction:'supply_required_source',blockers:missingSources.map((source)=>source.reason==='absent'
+      ?{code:'REQUIRED_SOURCE_MISSING',message:`Required source "${source.path}" is missing; CREATE_INITIAL_REVISION cannot proceed without it.`}
+      :{code:'REQUIRED_SOURCE_EMPTY',message:`Required source "${source.path}" exists but holds no Markdown document; CREATE_INITIAL_REVISION cannot proceed without its content. Ingest at least one document into it, as "${source.path}/<name>/<name>.md" or as a Markdown file directly inside it.`})};
      return {content:[{type:'text',text:JSON.stringify(publicResult)}],details:publicResult};
     }
     const guideFragments=await loadGuideDirectoryFragments(projectRoot);
