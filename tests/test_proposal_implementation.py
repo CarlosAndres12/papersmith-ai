@@ -14631,13 +14631,20 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         return words, seen_root
 
     def derived_denylist(self, root=None, forge_root=None):
-        """Rule B's denylist, or a skip when nobody has a target.
+        """Rule B's denylist, or a skip when there is no vocabulary to
+        derive.
 
         Silence is the right answer for a clone with no `implementations/`
         repository AND no live paper-writing product root, but it has to
         be an announced silence: a guard that passes because it had
         nothing to look at reads exactly like a guard that looked and
-        found nothing. `forge_root` scopes `paper_product_root_words`
+        found nothing. It is also the right answer when the roots present
+        derive no words at all -- a `document-rooted` prose root with no
+        revisions marker, or an evidence folder containing no ingested
+        papers yet, announce nothing but the empty set -- so the skip
+        fires whenever the union of derived words is empty, not only when
+        neither `implementations/` nor a live root is present. `forge_root`
+        scopes `paper_product_root_words`
         independently of `root` (which scopes `implementations/` alone),
         so a scratch `implementations/`-shaped fixture can still be
         proven in isolation from this checkout's own real `proposals/`/
@@ -14646,11 +14653,12 @@ class ForgeVocabularyDerivedGuardTests(unittest.TestCase):
         words, targets = self.target_words(root)
         paper_words, paper_root_seen = self.paper_product_root_words(forge_root)
         words = words | paper_words
-        if not targets and not paper_root_seen:
+        if (not targets and not paper_root_seen) or not words:
             self.skipTest(
-                "no repository under implementations/ and no live root "
-                "under proposals/, experiments/ or guidance/, so rule B "
-                "has no vocabulary to derive and this is silence rather "
+                "no repository under implementations/, no live root "
+                "under proposals/, experiments/ or guidance/, or the "
+                "roots present derived no words at all, so rule B has "
+                "no vocabulary to derive and this is silence rather "
                 "than a pass")
         # The floor comes out here, and this is the one place the two rules
         # are told apart. Rule C scans `FORGE_VOCABULARY_FLOOR` over the same
