@@ -151,7 +151,7 @@ instructions, along with the permitted keyword count.
 
 | Block | Depends on |
 |---|---|
-| `title-and-keywords.title` — The contributions, already defined — the title selects among them | `introduction.block-4b` — the enumerated contributions the title selects among |
+| `title-and-keywords.title` — The contributions, already defined — the title selects among them | `materials-and-methods.mm-proposal` — the enumerated contributions the title selects among |
 | `title-and-keywords.keywords` — the property in its searchable form, the noun form of what the title carries as an adjective | `title-and-keywords.title` — the property adjective the title opens on |
 
 ### Structural decisions

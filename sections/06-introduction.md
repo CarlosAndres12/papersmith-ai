@@ -48,7 +48,7 @@
       ],
       "after": [
         {
-          "target": "introduction.block-4b",
+          "target": "materials-and-methods.mm-proposal",
           "source": {
             "file": "sections/06-introduction.md",
             "quote": "this block is derived from the contributions, read backwards"
@@ -141,16 +141,23 @@
             "file": "sections/06-introduction.md",
             "quote": "The results"
           }
-        }
-      ],
-      "requires_declarations": [],
-      "citations": "none",
-      "produces_facts": [
+        },
         {
           "value": "contributions",
           "source": {
             "file": "sections/06-introduction.md",
-            "quote": "The number of items is the number of contributions the proposal has."
+            "quote": "It is inherited, never a drafting target."
+          }
+        }
+      ],
+      "requires_declarations": [],
+      "citations": "none",
+      "after": [
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "It is inherited, never a drafting target."
           }
         }
       ]
@@ -247,10 +254,11 @@ the design and completed from the measurement.
 
 | Block | Depends on |
 |---|---|
-| `introduction.block-2` — the general problem and the specific ones | `introduction.block-4b` — each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
+| `introduction.block-2` — the general problem and the specific ones | `materials-and-methods.mm-proposal` — each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
 | `introduction.block-3` — state of the art and gap, depending on the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
 | `introduction.block-4a` — the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
 | `introduction.block-4a` — the presenting prose | `introduction.block-4b` — the announcement of the count, stated before the list enumerates it |
+| `introduction.block-4b` — the list of contributions, inherited rather than drafted | `materials-and-methods.mm-proposal` — the section that defines and names each contribution |
 
 ### Structural decisions
 
@@ -264,10 +272,13 @@ the design and completed from the measurement.
 - **`introduction.block-4a` / `block-4b` are two blocks, not one.** The
   contract's own extent line says so — "Two physical paragraphs, 120-180
   words in total" — and names them `Paragraph 4a - the prose` and
-  `Paragraph 4b - the list`. They are separate ids because their parts fall
-  on opposite sides of block 2: block 2 depends on 4b, and 4a depends on
-  block 2. Collapsing them into one node manufactures an `ORDER_CYCLE` that
-  the writing order does not have.
+  `Paragraph 4b - the list`. They are separate ids because they are drafted
+  from different inputs: 4a's purpose clause depends on block 2, while 4b's
+  contribution list is inherited directly from
+  `materials-and-methods.mm-proposal`, never from block 2. 4a itself also
+  depends on 4b, for the announced count. Collapsing them into one node
+  would conflate a block that needs the problem statement with one that
+  does not.
 - **Composite parts within `introduction.block-4b`** (settled decision 5):
   4b's complete form — the effect each contribution achieves — is drafted
   after its partial form, once the results arrive. A drafting-sequence note
@@ -463,8 +474,8 @@ order, and naming with the components of the methods section.
 
 Open each item with **the name of the component followed by a colon**, and continue
 with a single sentence stating what it does and which previously stated problem it
-resolves. Those names are the contract with the methods section, which uses the same
-ones in the same order.
+resolves. Those names are the methods section's own contract — this list uses the
+same ones, in the same order.
 
 Do not open items with a first-person verb instead of a component name: without a
 name, the component cannot be referred to again later.

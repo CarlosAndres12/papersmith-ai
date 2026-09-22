@@ -55,7 +55,7 @@
           }
         },
         {
-          "target": "introduction.block-4b",
+          "target": "materials-and-methods.mm-proposal",
           "source": {
             "file": "sections/06-introduction.md",
             "quote": "this block is derived from the contributions, read backwards"
@@ -216,7 +216,7 @@ introduction. Four of the seven are draftable before anything is measured.
 | Block | Depends on |
 |---|---|
 | `abstract.slot-2` — Problem | `abstract.slot-4` — each component read backwards as the deficiency it resolves |
-| `abstract.slot-2` — Problem | `introduction.block-4b` — this block is derived from the contributions, read backwards |
+| `abstract.slot-2` — Problem | `materials-and-methods.mm-proposal` — this block is derived from the contributions, read backwards |
 | `abstract.slot-3` — Proposal | `abstract.slot-2` — for the purpose clause |
 
 The abstract is more blocked by measurement than the introduction: slots 6 and 7 need

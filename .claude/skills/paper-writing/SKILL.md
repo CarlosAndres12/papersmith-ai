@@ -222,11 +222,14 @@ answer never change after a `declare`, because it never opened `main.tex`
 at all. `phases` is the read-only report that actually answers "what can I
 write now": it resolves readiness from disk itself, orders it into waves,
 and gates a requested `--phase N` on every earlier wave being complete.
-Over the shipped corpus (47 blocks) `phases` reports **eight** waves shaped
-**22 / 7 / 11 / 2 / 2 / 1 / 1 / 1** — measured directly (`paper_cli.py
-phases`), not copied from an earlier count: the shape moved from five
-waves as `a-fact-is-declared-or-it-is-produced` added the ordering edges a
-fact's producer needs to reach every one of its consumers.
+Over the shipped corpus (47 blocks) `phases` reports **nine** waves shaped
+**21 / 3 / 6 / 10 / 2 / 2 / 1 / 1 / 1** — measured directly (`paper_cli.py
+phases`, dated 2026-09-21), not copied from an earlier count: the shape
+moved from **eight** waves, **22 / 7 / 11 / 2 / 2 / 1 / 1 / 1**, when
+`the-methods-section-produces-the-contributions` moved `contributions`'
+sole producer from `introduction.block-4b` to
+`materials-and-methods.mm-proposal`, pulling the methods section's
+`mm-proposal` block (and everything after it in the graph) earlier.
 
 **The three closed vocabularies** a header may draw from: ten
 `requires_facts` ids (`formulation`, `contributions`, `problem-statement`,

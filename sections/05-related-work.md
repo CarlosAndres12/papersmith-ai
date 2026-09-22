@@ -123,7 +123,7 @@
       "optional": true,
       "after": [
         {
-          "target": "introduction.block-4b",
+          "target": "materials-and-methods.mm-proposal",
           "source": {
             "file": "sections/05-related-work.md",
             "quote": "The properties (contributions) the proposal declares"
@@ -340,7 +340,11 @@ this section is the formulation.
 | `related-work.rw-panorama` — The general problem of the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
 | `related-work.rw-problem-blocks` — The specific problems, one block each | `introduction.block-2` — the problem statement, general and specific, decomposed there |
 | `related-work.rw-closing` — names the fronts left open, as many as there are blocks | `related-work.rw-problem-blocks` — the specific-problem blocks whose unresolved limitation each becomes a named front |
-| `related-work.rw-synthesis-artefact` — The properties (contributions) the proposal declares | `introduction.block-4b` — the enumerated contributions the synthesis artefact tabulates |
+| `related-work.rw-synthesis-artefact` — The properties (contributions) the proposal declares | `materials-and-methods.mm-proposal` — the enumerated contributions the synthesis artefact tabulates |
+
+**The referent moved.** This block's `components_from` resolves against the methods
+section now, not the introduction — a real cross-section check still, only its
+source changed.
 
 **Cross-obligation.** The gap is stated in two places — the closing of this section
 and the closing of the introduction's state-of-the-art block — and they must say the

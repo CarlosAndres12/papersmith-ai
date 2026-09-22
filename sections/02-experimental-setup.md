@@ -67,7 +67,7 @@
           }
         },
         {
-          "target": "introduction.block-4b",
+          "target": "materials-and-methods.mm-proposal",
           "source": {
             "file": "sections/02-experimental-setup.md",
             "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
@@ -279,7 +279,7 @@ box appearing in both means one of them is wrong.
 | Block | Depends on |
 |---|---|
 | `experimental-setup.es-assessment` — the closing diagram's "which data enter" panel | `experimental-setup.es-dataset` — the dataset block, when this section owns it |
-| `experimental-setup.es-assessment` — Which property each contribution claims — if it was promised, this is where its instrument is named | `introduction.block-4b` — the enumerated contributions the instrument is named for |
+| `experimental-setup.es-assessment` — Which property each contribution claims — if it was promised, this is where its instrument is named | `materials-and-methods.mm-proposal` — the enumerated contributions the instrument is named for |
 | `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `introduction.block-3` — the joint gap, condensed there |
 | `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `related-work.rw-closing` — the joint gap, developed there |
 

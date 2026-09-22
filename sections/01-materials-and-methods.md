@@ -67,6 +67,15 @@
       ],
       "requires_declarations": [],
       "citations": "resolution",
+      "produces_facts": [
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/01-materials-and-methods.md",
+            "quote": "This section defines the contributions."
+          }
+        }
+      ],
       "after": [
         {
           "target": "materials-and-methods.mm-borrowed-machinery",
@@ -101,8 +110,9 @@
 **Carries** the borrowed machinery, the proposal, and one summary diagram
 **Does not carry** any result, measured number, or comparison
 
-This section defines the contributions. The introduction names them; here each one
-receives its formal definition, in the notation everything downstream reuses.
+This section defines the contributions. It names each one here and gives it its
+formal definition, in the notation everything downstream reuses; the introduction
+receives that list and drafts from it.
 
 ## Nothing is decided here
 
@@ -179,14 +189,15 @@ what was just read.
 **2. Its own notation**, if the proposal introduces symbols the machinery did not
 have.
 
-**3. The contributions, defined, in the same order the introduction named them.**
-Each one: what it introduces, its equation, and the symbol it leaves available to the
-next. Each contribution is defined here and nowhere else.
+**3. The contributions, defined, in the order this section establishes.** The
+introduction's list follows this order, never the reverse. Each one: what it
+introduces, its equation, and the symbol it leaves available to the next. Each
+contribution is defined here and nowhere else.
 
 **Each contribution is defined under the property it delivers**, named in the same
-words the problem statement and the introduction's contribution list used for that
-property. That shared name is what makes the chain from the problem to the evidence
-traceable rather than merely plausible.
+words the problem statement uses for that property. The introduction's contribution
+list then reuses that exact name. That shared name is what makes the chain from the
+problem to the evidence traceable rather than merely plausible.
 
 **4. The general combination.** The single expression that brings every contribution
 together — the sum, the composite objective, or whatever applies to the case. Two
@@ -202,6 +213,11 @@ When the contribution is a system rather than a formulation, the combination is
 carried by the enumeration of stages and by the diagram. There the diagram is not a
 summary — it is the combination itself.
 
+**Immediately before the closing pointer, an ordered roster.** One LaTeX `\item` per
+contribution, naming it exactly as defined above, in the diagram's own order —
+nothing more per item. This is the structural mandate the section's own Components
+Check reads back against the diagram that follows it.
+
 **5. The closing: pointer and summary diagram.** Mandatory. The last prose sentence
 points to the figure by number and says what it summarizes; the figure follows
 immediately.
@@ -215,12 +231,16 @@ about the formulation.
 ### The summary diagram
 
 - **It is the visual form of the contribution list**: it contains exactly the same
-  components, in the same order, under the same names the introduction gave them.
+  components, in the same order, under the same names this section's own roster
+  gives them.
 - **The caption enumerates them in that order** and decodes anything the figure
   encodes — if there are colours, the caption says what each one means.
 - **It shows the method, not the experiment.** No dataset and no baseline appears in
   it; those belong to the experimental setup's own diagram. A box appearing in both
   means one of the two is wrong.
+- **The Components Check this diagram undergoes compares it against this same
+  block's own roster.** That is intra-block drift, never cross-section
+  corroboration — nothing outside this block is consulted.
 
 ## Every artefact is referenced before it appears
 
@@ -355,6 +375,8 @@ Nothing here waits for an experiment. But it does wait for the code to exist.
   not defined here.
 - Contributions in a different order than the introduction named them.
 - The summary diagram missing.
+- The ordered roster of contributions missing, or not placed immediately before the
+  closing pointer.
 - A dataset or a baseline appearing in the summary diagram.
 - A contribution defined under a different name than the property it delivers carries
   in the problem statement and the introduction.

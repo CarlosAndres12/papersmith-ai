@@ -935,16 +935,39 @@ class ProducesFactsSchemaTests(unittest.TestCase):
 #: `after` edge it names) was added — a genuine, ruling-sanctioned PROSE
 #: change, never a meaning change to any quote an existing `after`/
 #: `requires_facts`/`produces_facts` entry depends on.
+#:
+#: `01`, `02`, `03`, `05`, `06`, `07`, `08`, `09` were re-captured a further
+#: time in `the-methods-section-produces-the-contributions`:
+#: `materials-and-methods.mm-proposal` became `contributions`' sole
+#: producer (`01` gains the fact's `produces_facts` entry, an ordered
+#: `\item` roster mandate before the closing pointer, and inverted
+#: naming-authority prose; `06`'s `block-4b` drops the fact and gains
+#: `requires_facts` + an `after` edge + an eighth `### Internal chain` row,
+#: with its own naming-authority prose inverted); `02`, `03`, `05`, `07`,
+#: `08` each retarget one existing `after` edge and row from
+#: `introduction.block-4b` to `materials-and-methods.mm-proposal`, reusing
+#: every `source.quote` verbatim (`05` also states its `components_from`
+#: referent moved). `09`'s digest also moves: its row-only retarget (no
+#: `after` edge, since `_position_derived_edges` already orders M&M before
+#: title) still changes one body byte span, the row's own dependency cell.
+#: `06`'s digest moves a further time within this same change: its
+#: `### Structural decisions` bullet arguing `block-4a`/`block-4b` must
+#: stay separate ids cited a cycle rationale ("block 2 depends on 4b, and
+#: 4a depends on block 2") the move itself falsifies -- block 2 now
+#: depends on `mm-proposal`, never on `block-4b` -- so the stale claim was
+#: corrected in place (MANTENIMIENTO pattern 3), never a meaning change to
+#: any quote an entry depends on. `04` and `10` are untouched and keep
+#: their prior digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
-    "01-materials-and-methods.md": "960aa095b0ec2cac2c665d5835b50e70a8e030ee926feb025d1408d53139e387"[:64],
-    "02-experimental-setup.md": "3efae2a8c6b7e537c3022a3d6e987b2c7103325aa26bd3e08c2e9e624bbe50de"[:64],
-    "03-results-and-discussion.md": "6d14d073151e633ce9eb95ca85b0dbe852d7792fcb7af13562df871d0bc4ac37"[:64],
+    "01-materials-and-methods.md": "f8ac80bce7a17abb57f99b7be10345beebe1435763f7c5ac9158dda23261aca4"[:64],
+    "02-experimental-setup.md": "bfd655f577c8f61802fc4c3d5280f5ada15b9342e11c6b941e75455c0d381960"[:64],
+    "03-results-and-discussion.md": "5d32f19e4636fa5be6773fadee31d19019c02d06f312ebcfc8a0058a841795df"[:64],
     "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
-    "05-related-work.md": "0651548457eecb4ee6278ec77e9ab58dcc2e435eeb5a6d46968ae52c1f5f7739"[:64],
-    "06-introduction.md": "c9ba4cd596f0ce015844950d883a8e92f6ca401a230b598378f2a0b022414095"[:64],
-    "07-conclusions.md": "bfd0c4131473cf2e9781660d6481608d0ffd486cb03bb29feff659186a0dcb83"[:64],
-    "08-abstract.md": "bf715972413369a52c04911e86b67201fdfbaf151adfb80e5497a60dca00a8b5"[:64],
-    "09-title-and-keywords.md": "e6dfc40199df511f56a031833f3e3bc1da05df746f9f0b82503b7aea22d72a3d"[:64],
+    "05-related-work.md": "7d2f87474f7c357bdb99971e49784f0f6415887f988f00d2a7b3b0b4679098a6"[:64],
+    "06-introduction.md": "704bbc8c238d7e7a06746c9ac06dd8006a3d69679e7b32b9a9edec593a1fb35d"[:64],
+    "07-conclusions.md": "27defb96c3dcd6e136b90c2ce614f8eb2b51376afdb69b4f0345426d847ec1d5"[:64],
+    "08-abstract.md": "fc454229068a7bef3c91a5645a195c0f385bdfcc280d8562e42464684c7d6acc"[:64],
+    "09-title-and-keywords.md": "c1f8f8401d08f5e2832cfc17cc9eeabb9b27d1f269ef2d6ad2e4d2b34583687c"[:64],
     "10-back-matter.md": "b1cd44fe7c00d8eca92d979be5780a97a6cd815faba9ab3890442f2286316cbb"[:64],
 }
 
@@ -1690,19 +1713,26 @@ class InputPartitionTests(unittest.TestCase):
         # presenting paragraph hostage to a measurement it never needed.
         self.assertEqual(corpus.blocks["introduction.block-4a"].requires_facts, ("formulation",))
         self.assertEqual(
-            corpus.blocks["introduction.block-4b"].requires_facts, ("formulation", "results"))
+            corpus.blocks["introduction.block-4b"].requires_facts,
+            ("formulation", "results", "contributions"),
+        )
 
     def test_the_internal_chain_of_the_introduction_is_acyclic(self) -> None:
-        """The four normalized chain rows form 4b -> 2 -> 4a (plus 4b -> 4a
-        for the announced count, and 2 -> 3 for the problem statement
-        `a-fact-is-declared-or-it-is-produced` unit 2 adds), a DAG. This is
-        the regression for the cycle the collapsed `block-4` produced."""
+        """`the-methods-section-produces-the-contributions` re-measured this
+        test: `block-2` now depends on `materials-and-methods.mm-proposal`
+        (`contributions`' sole producer, moved from `introduction.block-4b`)
+        and `block-4b` gained its own fifth row depending on that same
+        producer (`_verify_producer_chain_rows`'s own row-presence
+        requirement). Five normalized chain rows whose SUBJECT starts with
+        `introduction.` now form 4b -> mm-proposal, 4b -> 2 -> mm-proposal,
+        4a -> 2, 4a -> 4b, and 3 -> 2 -- still a DAG, still the regression
+        for the cycle the collapsed `block-4` produced."""
         _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
         text = body.decode("utf-8")
         chain = text.split("### Internal chain", 1)[1].split("###", 1)[0]
 
         rows = [line for line in chain.splitlines() if line.startswith("| `introduction.")]
-        self.assertEqual(len(rows), 4, chain)
+        self.assertEqual(len(rows), 5, chain)
 
         def ends(row: str) -> tuple:
             subject, dependency = row.split("|")[1], row.split("|")[2]
@@ -1712,10 +1742,11 @@ class InputPartitionTests(unittest.TestCase):
         self.assertEqual(
             edges,
             {
-                ("introduction.block-2", "introduction.block-4b"),
+                ("introduction.block-2", "materials-and-methods.mm-proposal"),
                 ("introduction.block-3", "introduction.block-2"),
                 ("introduction.block-4a", "introduction.block-2"),
                 ("introduction.block-4a", "introduction.block-4b"),
+                ("introduction.block-4b", "materials-and-methods.mm-proposal"),
             },
         )
         # No pair appears in both directions -- that is what the collapsed
@@ -1891,20 +1922,25 @@ class InternalChainTests(unittest.TestCase):
         self.assertEqual(len(corpus.sections), 10)
 
     def test_the_introductions_three_chain_rows_become_three_after_edges(self) -> None:
-        """The acid test: `06`'s three rows produce exactly `block-2` <-
-        `block-4b`, `block-4a` <- `block-2`, `block-4a` <- `block-4b`, and
-        must not cycle."""
+        """`the-methods-section-produces-the-contributions` re-measured this
+        acid test: `block-2` <- `block-4b` retargets to `block-2` <-
+        `materials-and-methods.mm-proposal` (`contributions`' sole producer
+        moved there), `block-4b` gains its own new edge to that same
+        producer, and `block-4a` <- `block-2` / `block-4a` <- `block-4b`
+        stay exactly as before. Must not cycle."""
         corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
         edge_set = paper_graph.collect_edges(corpus)
         pairs = {(before, after) for before, after, _source in edge_set.edges}
 
-        self.assertIn(("introduction.block-4b", "introduction.block-2"), pairs)
+        self.assertIn(("materials-and-methods.mm-proposal", "introduction.block-2"), pairs)
+        self.assertIn(("materials-and-methods.mm-proposal", "introduction.block-4b"), pairs)
         self.assertIn(("introduction.block-2", "introduction.block-4a"), pairs)
         self.assertIn(("introduction.block-4b", "introduction.block-4a"), pairs)
 
         order = paper_graph.derive_order(corpus, edge_set)  # must not raise ORDER_CYCLE
         index = {qid: i for i, qid in enumerate(order)}
-        self.assertLess(index["introduction.block-4b"], index["introduction.block-2"])
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-2"])
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-4b"])
         self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
         self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
 
@@ -2299,11 +2335,15 @@ class OrderCliFrontDoorTests(unittest.TestCase):
         self.assertEqual(set(result.keys()), {"order", "danglingEdges"})
         self.assertEqual(result["danglingEdges"], [])
         index = {qid: i for i, qid in enumerate(result["order"])}
-        # The same three acid-test assertions `OrderTests.test_the_
+        # The same acid-test assertions `InternalChainTests.test_the_
         # introductions_three_chain_rows_become_three_after_edges` makes
         # against `derive_order`'s own return value -- made here against
         # `cmd_order`'s envelope instead, never against `derive_order`'s.
-        self.assertLess(index["introduction.block-4b"], index["introduction.block-2"])
+        # Re-measured by `the-methods-section-produces-the-contributions`:
+        # `materials-and-methods.mm-proposal` (`contributions`' sole
+        # producer) now precedes both `block-2` and `block-4b` directly.
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-2"])
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-4b"])
         self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
         self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
 

@@ -45,6 +45,7 @@ import paper_coupling_evidence  # noqa: E402
 import paper_verify  # noqa: E402
 import paper_objective  # noqa: E402
 import paper_graph  # noqa: E402
+import paper_obligation  # noqa: E402
 import paper_readiness  # noqa: E402
 import paper_declarations  # noqa: E402
 import paper_region  # noqa: E402
@@ -4184,13 +4185,236 @@ class ProducerChainRowsTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0, output)
 
 
+class MethodsProducesContributionsMutationTests(unittest.TestCase):
+    """`the-methods-section-produces-the-contributions`, tasks.md Phase 4
+    (4.1-4.3): mutation proofs against a COPY of the real, shipped
+    `sections/` tree (`SECTIONS_DIR` itself is never written to — copied
+    fresh per test, then mutated). Each test proves the specific guard this
+    change relies on can actually FIRE (MANTENIMIENTO pattern 2: a guard
+    that merely exists is not the same as one that is reachable), then
+    confirms the real, unmutated shipped corpus still assembles clean —
+    proving the shipped edit, not the mutation, is what ships."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        shutil.copytree(SECTIONS_DIR, self.sections_dir)
+
+    def _mutate(self, filename: str, old: str, new: str) -> None:
+        path = self.sections_dir / filename
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text, f"{filename}: anchor text not found -- fixture drifted")
+        self.assertEqual(text.count(old), 1, f"{filename}: anchor text is not unique in this file")
+        path.write_text(text.replace(old, new), encoding="utf-8")
+
+    def test_deleting_block_4b_new_row_refuses_producer_chain_absent(self) -> None:
+        """Task 4.1: `introduction.block-4b`'s own new `### Internal chain`
+        row is the only prose evidence that `mm-proposal` must precede it.
+        Deleting the row while its `after` edge and `requires_facts` entry
+        stay intact refuses `PRODUCER_CHAIN_ABSENT` -- the edge alone still
+        makes `block-4b` reachable from `mm-proposal`, so only the row
+        check (the documentation-direction mirror `_verify_producer_
+        chain_rows` adds) catches this."""
+        self._mutate(
+            "06-introduction.md",
+            "| `introduction.block-4b` — the list of contributions, inherited rather than "
+            "drafted | `materials-and-methods.mm-proposal` — the section that defines and "
+            "names each contribution |\n",
+            "",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+        self.assertEqual(ctx.exception.code, "PRODUCER_CHAIN_ABSENT")
+        self.assertIn("introduction.block-4b", ctx.exception.detail)
+        self.assertIn("materials-and-methods.mm-proposal", ctx.exception.detail)
+
+        paper_graph.assemble_corpus(SECTIONS_DIR)  # the real, unmutated corpus: raises nothing
+
+    def test_deleting_a_retargeted_after_edge_refuses_chain_row_unbacked(self) -> None:
+        """Task 4.2: one of the six retargeted consumers
+        (`experimental-setup.es-assessment`) still carries its `### Internal
+        chain` row naming `mm-proposal`, but its backing `after` edge is
+        deleted -- refuses `CHAIN_ROW_UNBACKED`, the row -> edge mirror of
+        4.1's edge -> row check."""
+        self._mutate(
+            "02-experimental-setup.md",
+            '        {\n'
+            '          "target": "materials-and-methods.mm-proposal",\n'
+            '          "source": {\n'
+            '            "file": "sections/02-experimental-setup.md",\n'
+            '            "quote": "Which property each contribution claims — if it was '
+            'promised, this is where its instrument is named"\n'
+            '          }\n'
+            '        },\n',
+            "",
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+        self.assertIn("experimental-setup.es-assessment", ctx.exception.detail)
+        self.assertIn("materials-and-methods.mm-proposal", ctx.exception.detail)
+
+        paper_graph.assemble_corpus(SECTIONS_DIR)  # the real, unmutated corpus: raises nothing
+
+    def test_reviving_block_4b_as_a_second_producer_refuses_duplicate(self) -> None:
+        """Task 4.3 (`fact-production` spec, 'Reviving the old producer
+        duplicates it'): restoring `block-4b`'s dropped `produces_facts:
+        contributions` entry alongside `mm-proposal`'s own (which stays)
+        refuses `FACT_PRODUCER_DUPLICATE` -- `_verify_producer_duplication`
+        runs before `_verify_self_reference` in `assemble_corpus`, so this
+        is reached even though `block-4b` also still requires the fact it
+        would now also produce."""
+        self._mutate(
+            "06-introduction.md",
+            '"requires_declarations": [],\n'
+            '      "citations": "none",\n'
+            '      "after": [\n'
+            '        {\n'
+            '          "target": "materials-and-methods.mm-proposal",',
+            '"requires_declarations": [],\n'
+            '      "citations": "none",\n'
+            '      "produces_facts": [\n'
+            '        {\n'
+            '          "value": "contributions",\n'
+            '          "source": {\n'
+            '            "file": "sections/06-introduction.md",\n'
+            '            "quote": "It is inherited, never a drafting target."\n'
+            '          }\n'
+            '        }\n'
+            '      ],\n'
+            '      "after": [\n'
+            '        {\n'
+            '          "target": "materials-and-methods.mm-proposal",',
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+        self.assertEqual(ctx.exception.code, "FACT_PRODUCER_DUPLICATE")
+        self.assertIn("contributions", ctx.exception.detail)
+
+        paper_graph.assemble_corpus(SECTIONS_DIR)  # the real, unmutated corpus: raises nothing
+
+
+class ComponentsCheckSelfReferenceFalsifierTests(unittest.TestCase):
+    """`design.md` D2, falsifier (1) (tasks.md 4.4): after the move,
+    `materials-and-methods.mm-proposal` is `contributions`' sole producer
+    AND the one block whose own diagram checks against it -- an intra-block
+    check, never cross-section corroboration. Calls `paper_cli._resolve_
+    expected_components` directly against the REAL shipped `sections/`
+    (never mutated) with a synthetic rendered `main.tex` standing in for
+    `mm-proposal`'s own body (the real `paper/main.tex` carries it empty
+    today -- design.md's own measured note), proving the resolved roster is
+    read from THIS block's own rendered text, and that altering one item
+    changes what `paper_obligation.check_components` accepts."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+
+    def _write_roster(self, *items: str) -> None:
+        body = b"Prose stating the proposal.\n\n\\begin{itemize}\n"
+        for item in items:
+            body += f"\\item {item}\n".encode("utf-8")
+        body += b"\\end{itemize}\n\nClosing prose.\n"
+        main_tex = _marker_pair("materials-and-methods.mm-proposal", body)
+        _write_fixture(self.paper_dir, main_tex)
+
+    def test_the_resolved_roster_is_read_from_mm_proposals_own_body(self) -> None:
+        self._write_roster("Adaptive Caching", "Robust Fallback")
+
+        items = paper_cli._resolve_expected_components(self.paper_dir, SECTIONS_DIR, "contributions")
+
+        self.assertEqual(items, ["Adaptive Caching", "Robust Fallback"])
+
+    def test_mutating_one_roster_item_turns_a_passing_diagram_into_a_mismatch(self) -> None:
+        figure = {"ordered": True}
+        manifest = ["Adaptive Caching", "Robust Fallback"]  # the diagram's own declared labels
+
+        self._write_roster("Adaptive Caching", "Robust Fallback")
+        matching = paper_cli._resolve_expected_components(self.paper_dir, SECTIONS_DIR, "contributions")
+        paper_obligation.check_components(figure, manifest, matching)  # raises nothing
+
+        self._write_roster("Adaptive Caching", "Mutated Fallback")
+        mutated = paper_cli._resolve_expected_components(self.paper_dir, SECTIONS_DIR, "contributions")
+
+        self.assertNotEqual(matching, mutated)
+        with self.assertRaises(Refused) as ctx:
+            paper_obligation.check_components(figure, manifest, mutated)
+        self.assertEqual(ctx.exception.code, "COMPONENT_MISMATCH")
+
+
+class WaveOrderingPropertyTests(unittest.TestCase):
+    """`design.md` Testing Strategy, Property row (tasks.md 4.5): every
+    block's `after` dependency lands in a strictly earlier wave than the
+    block itself, checked as a PROPERTY over the real shipped corpus's full
+    edge set -- no wave count or shape is asserted here (pattern 7 of
+    `MANTENIMIENTO-siete-formas-de-fallar-en-verde.md`; the exact,
+    re-measured shape is asserted, dated, only in `SKILL.md`)."""
+
+    def test_every_after_dependency_resolves_to_a_strictly_earlier_wave(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        waves = paper_graph.derive_waves(corpus, edge_set)
+
+        wave_of = {}
+        for wave_index, qualified_ids in enumerate(waves):
+            for qualified_id in qualified_ids:
+                wave_of[qualified_id] = wave_index
+
+        self.assertEqual(
+            set(wave_of), set(corpus.blocks), "every block must land in exactly one wave",
+        )
+
+        checked = 0
+        for before, after, _source in edge_set.edges:
+            self.assertLess(
+                wave_of[before], wave_of[after],
+                f"{before} must resolve to a strictly earlier wave than {after}",
+            )
+            checked += 1
+        self.assertGreater(checked, 0, "no `after` edges were checked -- the corpus carries none")
+
+
+class ProducerMoveIntegrationTests(unittest.TestCase):
+    """tasks.md 4.6: `assemble_corpus` + `derive_order` succeed against the
+    real shipped corpus, acyclic, with `materials-and-methods.mm-proposal`
+    as `contributions`' sole producer."""
+
+    def test_the_shipped_corpus_assembles_acyclic_with_mm_proposal_the_sole_producer(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # raises nothing
+
+        producers = paper_graph.producers_by_fact(corpus)
+        self.assertEqual(producers["contributions"], ("materials-and-methods.mm-proposal",))
+
+        edge_set = paper_graph.collect_edges(corpus)
+        order = paper_graph.derive_order(corpus, edge_set)  # raises ORDER_CYCLE if cyclic
+
+        self.assertEqual(set(order), set(corpus.blocks))
+        self.assertLess(
+            order.index("materials-and-methods.mm-proposal"),
+            order.index("introduction.block-4b"),
+            "the producer must be written before its consumer",
+        )
+
+
 class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
     """`design.md`, Testing Strategy, 'Corpus — equality': `{qid:
     record.requires_facts}` / `.requires_declarations` over the shipped
     corpus, snapshotted as a frozen golden literal — U3's operator ruling
     (`unanchored-requirements.md`) appears here as an explicit, itemized
     diff against the pre-ruling (post-U2) derived value set, and nowhere
-    else."""
+    else.
+
+    `the-methods-section-produces-the-contributions` re-measured and
+    re-recorded exactly one entry: `introduction.block-4b` gained
+    `contributions` (`materials-and-methods.mm-proposal` is now its sole
+    producer, and `block-4b` requires the fact it used to produce),
+    appended last so the tuple order matches the header's own
+    `requires_facts` declaration order."""
 
     #: `experimental-setup.es-assessment`'s pre-ruling `requires_facts`
     #: value set, and `title-and-keywords.keywords`'s — the exact two
@@ -4232,7 +4456,7 @@ class RequirementCorpusEqualityGoldenTests(unittest.TestCase):
         "introduction.block-2": ("contributions",),
         "introduction.block-3": ("problem-statement",),
         "introduction.block-4a": ("formulation",),
-        "introduction.block-4b": ("formulation", "results"),
+        "introduction.block-4b": ("formulation", "results", "contributions"),
         "introduction.block-5": ("experimental-design", "results"),
         "introduction.block-6": ("skeleton",),
         "limitations.lim-closing": (),
