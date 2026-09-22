@@ -259,9 +259,19 @@ def _figure_prose(sections_dir: Path) -> str:
 
 def _figure_semantics(paper_dir: Path, sections_dir: Path) -> dict | None:
     """Run `paper_figure_audit.audit_semantics` over every figure with a
-    manifest, and aggregate. `None` when the paper has no figure at all —
-    a fact the eighth check reports as `NO_FIGURE_DECLARED` rather than as a
-    vacuous pass."""
+    manifest, and aggregate. Two structurally distinct "no report" cases:
+
+    - `None` — no `Figures/` directory, or no `*.diagram.json` inside it:
+      the paper declares no figure at all, a fact the eighth check reports
+      as `NO_FIGURE_DECLARED` rather than as a vacuous pass.
+    - an unmeasured aggregate (`verdict: "unmeasured"`, empty `figures`) —
+      manifests DO exist but every one was skipped by the guards below (its
+      `<id>.tex` is missing, its JSON is malformed/undecodable/unreadable,
+      or it is not a dict): a figure is declared and the audit could not
+      reach a verdict, which the eighth check reports as
+      `FIGURE_SEMANTICS_UNMEASURED`. The two facts stay distinct
+      (`paper_verify.UNMEASURED_REASONS` documents why).
+    """
     figures_dir = paper_dir / "Figures"
     if not figures_dir.is_dir():
         return None
@@ -289,7 +299,10 @@ def _figure_semantics(paper_dir: Path, sections_dir: Path) -> dict | None:
             contract_figure=None,
         )
     if not reports:
-        return None
+        # Manifests existed but the guards skipped every one: this is
+        # `FIGURE_SEMANTICS_UNMEASURED` (a figure exists, no verdict was
+        # reached), never `NO_FIGURE_DECLARED` (no figure at all).
+        return {"verdict": "unmeasured", "figures": reports}
 
     verdicts = {report["verdict"] for report in reports.values()}
     if "fail" in verdicts:

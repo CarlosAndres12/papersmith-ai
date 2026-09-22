@@ -344,6 +344,19 @@ class VerifyWiringTests(unittest.TestCase):
         self.assertEqual(entry["verdict"], "unmeasured")
         self.assertEqual(entry["unmeasured_reason"], "NO_FIGURE_DECLARED")
 
+    def test_a_figure_manifest_that_cannot_be_audited_reports_unmeasured(self) -> None:
+        # The manifest's `<id>.tex` is removed, so `gather()`'s guard skips
+        # it: a figure IS declared on disk, and the eighth check must say the
+        # audit could not reach a verdict — never "no figure declared".
+        (self.paper_dir / "Figures" / "methods-figure.tex").unlink()
+
+        evidence = self._evidence()
+
+        self.assertEqual(evidence.figure_semantics["verdict"], "unmeasured")
+        entry = self._figure_entry(paper_verify.run(evidence))
+        self.assertEqual(entry["verdict"], "unmeasured")
+        self.assertEqual(entry["unmeasured_reason"], "FIGURE_SEMANTICS_UNMEASURED")
+
     def test_an_aligned_figure_passes_the_eighth_check(self) -> None:
         evidence = self._evidence()
 
