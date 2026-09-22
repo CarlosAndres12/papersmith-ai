@@ -2904,6 +2904,7 @@ def _cmd_figure_audit(args: argparse.Namespace) -> dict:
             try:
                 expected_components = _resolve_expected_components(
                     paper_dir or paper_scaffold.resolve_paper_dir(args.paper),
+                    sections_dir,
                     contract_figure["components_from"],
                 )
             except Refused:

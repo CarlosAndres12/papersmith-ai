@@ -986,6 +986,53 @@ class FigureVerbFrontDoorTests(unittest.TestCase):
         self.assertEqual(payload["unmeasured_reason"], "NO_COMPONENTS_DECLARED")
         self.assertEqual(payload["evidence"]["section"], "introduction.md")
 
+    def test_figure_audit_with_block_whose_contract_declares_components_from_returns_the_envelope(self) -> None:
+        """`figure audit --block` against the shipped `rw-synthesis-artefact`
+        block (whose `figure.components_from` names `contributions`) must
+        return the documented pass/fail/unmeasured envelope, never raise --
+        the merge added `sections_dir` to `_resolve_expected_components` but
+        this fork call site still passed two positional arguments, so the
+        verb tracebacked with `TypeError: ... missing 1 required positional
+        argument: 'fact_id'` and exit 1 whenever a block's contract declared
+        `components_from` (except Refused does not catch TypeError). A
+        content finding stays a verdict: on a clean checkout `contributions`
+        has no declared/written producer, so the resolution refuses
+        `COMPONENTS_FACT_UNRESOLVED` and the envelope reports `unmeasured`;
+        if a real `paper/` ever carries the producer, the same call still
+        returns a verdict, which is what this regression locks."""
+        tex = self.tmp / "audited-components-from.tex"
+        tex.write_text(
+            "\\documentclass[tikz,border=2pt]{standalone}\n"
+            "\\begin{document}\n"
+            "\\begin{tikzpicture}\n"
+            "\\node (a) {A};\n"
+            "\\end{tikzpicture}\n"
+            "\\end{document}\n",
+            encoding="utf-8",
+        )
+        manifest = self.tmp / "audited-components-from.diagram.json"
+        manifest.write_text(json.dumps({"components": ["A"]}), encoding="utf-8")
+
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            exit_code = paper_cli.main([
+                "figure", "audit", "--file", str(tex), "--manifest", str(manifest),
+                "--section", "related-work", "--block", "rw-synthesis-artefact",
+            ])
+        payload = json.loads(buf.getvalue())
+
+        self.assertEqual(exit_code, 0, "the components_from branch never raises through the front door")
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["command"], "figure")
+        self.assertEqual(payload["figureId"], "audited-components-from")
+        self.assertIn(payload["verdict"], ("pass", "fail", "unmeasured"))
+        self.assertEqual(payload["evidence"]["section"], "related-work.md")
+        if payload["verdict"] == "unmeasured":
+            self.assertEqual(
+                payload["unmeasured_reason"], "COMPONENTS_FACT_UNRESOLVED",
+                "the components_from branch ran: only 'contributions' having no written "
+                "producer excuses the check, never the contract declining the comparison",
+            )
+
 
 class MutationProofTests(unittest.TestCase):
     """Independent byte-identity verification, executed rather than
