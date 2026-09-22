@@ -15,7 +15,9 @@ verdict lives there and is not repeated here.
 
 You begin **once the figure's source, its manifest, and the section that
 describes it are all readable** — a `<id>.tex`, a `<id>.diagram.json`, and a
-`sections/<stem>.md` whose contract names the block this figure answers. You
+`sections/NN-<section-id>.md` whose header contract names the block this
+figure answers — address it by the `<section-id>` its own header declares,
+never the `NN-` filename stem. You
 end **before a human resolves an `unmeasured` verdict or repairs a finding**:
 a `pass`/`fail` verdict delivered with its evidence, or an `unmeasured` verdict
 handed back with the reason it could not be reached, whichever comes first. You
@@ -34,7 +36,7 @@ Run the audit; do not re-derive it.
 
 ```bash
 .venv/bin/python skills/paper-writing/scripts/paper_cli.py figure audit \
-    --figure-id <id> --section <stem> --block <block-id>
+    --figure-id <id> --section <section-id> --block <block-id>
 ```
 
 Pass `--block` whenever the contract declares one: without it the audit cannot

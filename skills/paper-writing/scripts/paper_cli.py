@@ -2886,7 +2886,20 @@ def _cmd_figure_audit(args: argparse.Namespace) -> dict:
             "DIAGRAM_SOURCE_ABSENT",
             f"{tex_path} and {manifest_path} must both exist to audit a figure",
         )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+        # A manifest that cannot be read or parsed is the same refusal the
+        # absent-pair check above already makes: DIAGRAM_SOURCE_ABSENT is
+        # the code the repo already names for "this call cannot audit from
+        # these sources", never a new code for a condition it already
+        # names. The parallel gather in
+        # `paper_coupling_evidence._figure_semantics` guards these same
+        # reads with the same exception set.
+        raise Refused(
+            "DIAGRAM_SOURCE_ABSENT",
+            f"{manifest_path} is not a readable diagram manifest",
+        )
 
     contract_figure = None
     expected_components = None
@@ -2910,8 +2923,19 @@ def _cmd_figure_audit(args: argparse.Namespace) -> dict:
             except Refused:
                 expected_components = None
 
+    try:
+        tex_text = tex_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        # Same reuse as the manifest read above: an undecodable figure source
+        # refuses with the code the repo already names for "this call cannot
+        # audit from these sources".
+        raise Refused(
+            "DIAGRAM_SOURCE_ABSENT",
+            f"{tex_path} is not a readable figure source",
+        )
+
     report = paper_figure_audit.audit_semantics(
-        tex=tex_path.read_text(encoding="utf-8"),
+        tex=tex_text,
         manifest=manifest,
         section_text=body.decode("utf-8", errors="replace"),
         contract_figure=contract_figure,

@@ -1033,6 +1033,55 @@ class FigureVerbFrontDoorTests(unittest.TestCase):
                 "producer excuses the check, never the contract declining the comparison",
             )
 
+    def test_figure_audit_unreadable_source_refuses_with_diagram_source_absent(self) -> None:
+        """`figure audit` with a source it cannot read refuses through the
+        front door instead of tracebacking: a manifest that is not valid
+        JSON and a tex that does not decode as UTF-8 both refuse with the
+        same `DIAGRAM_SOURCE_ABSENT` the absent-pair guard already uses
+        (`status: refused`, exit 2) -- never a `JSONDecodeError` /
+        `UnicodeDecodeError` crash with exit 1, because an unreadable
+        invocation reuses the code the repo already names for it."""
+        tex = self.tmp / "audited.tex"
+        tex.write_text(
+            "\\documentclass[tikz,border=2pt]{standalone}\n"
+            "\\begin{document}\n"
+            "\\begin{tikzpicture}\n"
+            "\\node (a) {A};\n"
+            "\\end{tikzpicture}\n"
+            "\\end{document}\n",
+            encoding="utf-8",
+        )
+        malformed_manifest = self.tmp / "malformed.diagram.json"
+        malformed_manifest.write_text("not json{", encoding="utf-8")
+        valid_manifest = self.tmp / "valid.diagram.json"
+        valid_manifest.write_text(json.dumps({"components": []}), encoding="utf-8")
+        undecodable_tex = self.tmp / "undecodable.tex"
+        undecodable_tex.write_bytes(
+            b"\\documentclass[tikz,border=2pt]{standalone}\n"
+            b"\\begin{document}\n"
+            b"\\begin{tikzpicture}\n"
+            b"\\node (a) {\xff};\n"
+            b"\\end{tikzpicture}\n"
+            b"\\end{document}\n"
+        )
+
+        for label, tex_path, manifest_path in [
+            ("malformed manifest", tex, malformed_manifest),
+            ("undecodable tex", undecodable_tex, valid_manifest),
+        ]:
+            with self.subTest(label=label):
+                with contextlib.redirect_stdout(io.StringIO()) as buf:
+                    exit_code = paper_cli.main([
+                        "figure", "audit", "--file", str(tex_path),
+                        "--manifest", str(manifest_path),
+                        "--section", "introduction",
+                    ])
+                payload = json.loads(buf.getvalue())
+
+                self.assertEqual(exit_code, 2)
+                self.assertEqual(payload["status"], "refused")
+                self.assertEqual(payload["code"], "DIAGRAM_SOURCE_ABSENT")
+
 
 class MutationProofTests(unittest.TestCase):
     """Independent byte-identity verification, executed rather than
