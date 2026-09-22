@@ -78,3 +78,7 @@ tmp-reference/
 paper/*
 !paper/.gitkeep
 .claude/worktrees/
+
+# Deuda tecnica local: notas del operador, nunca se versionan.
+# La regla sube, el contenido se queda en la maquina.
+DEUDA-*.md
