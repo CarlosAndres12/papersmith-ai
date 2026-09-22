@@ -22,7 +22,13 @@
     {
       "id": "slot-1",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The dataset — the condition, population, or process it contains"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -30,24 +36,73 @@
     {
       "id": "slot-2",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "abstract.slot-4",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        },
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
+      ]
     },
     {
       "id": "slot-3",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The mathematical formulation"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "abstract.slot-2",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The purpose clause mirrors the deficiencies of slot 2, in the same order."
+          }
+        }
+      ]
     },
     {
       "id": "slot-4",
       "requires_facts": [
-        "formulation",
-        "results"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The mathematical formulation"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -55,7 +110,13 @@
     {
       "id": "slot-5",
       "requires_facts": [
-        "experimental-design"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The experimental design"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -63,7 +124,13 @@
     {
       "id": "slot-6",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -71,7 +138,13 @@
     {
       "id": "slot-7",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/08-abstract.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -129,15 +202,22 @@ The abstract carries the same argument as the introduction, minus two of its blo
 There is no order among the slots — there is a graph, the same one that governs the
 introduction. Four of the seven are draftable before anything is measured.
 
-| Slot | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| 1 Context | the dataset — the condition, population, or process it contains |
-| 2 Problem | slot 4: each component read backwards as the deficiency it resolves |
-| 3 Proposal | the mathematical formulation, plus slot 2 for the purpose clause |
-| 4 Components | the mathematical formulation; the achieved-effect clause waits for the results |
-| 5 Validation | the experimental design |
-| 6 Result | the results |
-| 7 Verdict | the results |
+| The **dataset** — the condition, population, or process it contains | `slot-1` |
+| The **mathematical formulation** | `slot-3`, `slot-4` |
+| The **experimental design** | `slot-5` |
+| The **results** | `slot-4` (the achieved-effect clause), `slot-6`, `slot-7` |
+
+### Internal chain
+
+| Block | Depends on |
+|---|---|
+| `abstract.slot-2` — Problem | `abstract.slot-4` — each component read backwards as the deficiency it resolves |
+| `abstract.slot-2` — Problem | `materials-and-methods.mm-proposal` — this block is derived from the contributions, read backwards |
+| `abstract.slot-3` — Proposal | `abstract.slot-2` — for the purpose clause |
 
 The abstract is more blocked by measurement than the introduction: slots 6 and 7 need
 the results in full, slot 4 needs them for half of each item, and there is no

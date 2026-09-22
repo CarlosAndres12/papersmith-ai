@@ -17,7 +17,14 @@ from typing import Any
 
 from .bridge import ChildPlan, INGEST_TIMEOUT
 
-#: The paper-writing CLI's own verb roster (``paper_cli.COMMANDS``).
+#: `full_text` downloads a multi-MB PDF with a 10 s per-op socket timeout and
+#: one retry; the default child cap (``bridge.DEFAULT_TIMEOUT``, 120 s) is
+#: comfortably under that worst case, so the download gets its own long cap
+#: like the other network path (`ingest`, ``INGEST_TIMEOUT``).
+FULL_TEXT_TIMEOUT = 1800.0
+
+#: The paper-writing CLI's own verb roster (``paper_cli.COMMANDS``), in
+#: ``paper_cli.COMMANDS`` order.
 PAPER_VERBS: tuple[str, ...] = (
     "scaffold",
     "status",
@@ -25,18 +32,28 @@ PAPER_VERBS: tuple[str, ...] = (
     "substitute",
     "contract",
     "readiness",
+    "phases",
+    "skeleton",
     "order",
     "declare",
+    "bind",
+    "mark",
+    "separate",
     "observe",
     "plan",
     "resolve",
+    "full_text",
     "bib",
     "validate",
     "write",
     "render",
     "place",
+    "couplings",
     "verify",
     "figure",
+    "packet",
+    "reuse",
+    "exhaustion",
 )
 
 #: The orchestrator CLI's own command roster (``cli._REGISTRY``).
@@ -279,6 +296,43 @@ def _no_args() -> dict[str, Any]:
     return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
+_READINESS_FLAGS = (
+    Flag("paper", "--paper", path=True),
+    Flag("sections", "--sections", path=True),
+    Flag("fact", "--fact", kind="list"),
+    Flag("declaration", "--declaration", kind="list"),
+)
+
+
+def _build_readiness(arguments: dict[str, Any], workspace: Path) -> ChildPlan:
+    """`readiness` needs a basis: upstream's post-merge call refuses
+    `READINESS_BASIS_REQUIRED` unless `--paper` or `--fact`/`--declaration`
+    is given, so a bare MCP call defaults `--paper` to the workspace's own
+    `paper/` (basis "declaration-backed") instead of guessing an answer.
+    """
+    args = dict(arguments)
+    args.setdefault("paper", "paper")
+    return _paper_child(("readiness",), _READINESS_FLAGS, args, workspace)
+
+
+_FULL_TEXT_FLAGS = (
+    Flag("paper", "--paper", path=True),
+    Flag("guidance", "--guidance", path=True),
+    Flag("section", "--section", required=True),
+    Flag("metadata_digest", "--metadata-digest", required=True),
+    Flag("cite_key", "--cite-key", required=True),
+)
+
+
+def _build_full_text(arguments: dict[str, Any], workspace: Path) -> ChildPlan:
+    """`full_text` reaches the network (``openWorldHint``), so it gets its
+    own explicit child cap rather than the default 120 s.
+    """
+    return _paper_child(
+        ("full_text",), _FULL_TEXT_FLAGS, arguments, workspace, timeout=FULL_TEXT_TIMEOUT
+    )
+
+
 _PAPER_READONLY = (
     ToolSpec(
         name="papersmith.paper_status",
@@ -314,27 +368,17 @@ _PAPER_READONLY = (
     ToolSpec(
         name="papersmith.paper_readiness",
         title="Per-block readiness",
-        description="Per-block writable/blocked given satisfied facts and declarations.",
+        description=(
+            "Per-block writable/blocked given satisfied facts and declarations. A bare call "
+            "defaults --paper to the workspace's own paper/ (basis declaration-backed)."
+        ),
         verb="readiness",
         surface="paper",
         annotations=tool_annotations(
             "Per-block readiness", read_only=True, destructive=False, open_world=False, idempotent=True
         ),
-        input_schema=_schema(
-            (
-                Flag("sections", "--sections", path=True),
-                Flag("fact", "--fact", kind="list"),
-                Flag("declaration", "--declaration", kind="list"),
-            )
-        ),
-        build=_paper_builder(
-            ("readiness",),
-            (
-                Flag("sections", "--sections", path=True),
-                Flag("fact", "--fact", kind="list"),
-                Flag("declaration", "--declaration", kind="list"),
-            ),
-        ),
+        input_schema=_schema(_READINESS_FLAGS),
+        build=_build_readiness,
         result_json=True,
     ),
     ToolSpec(
@@ -412,6 +456,129 @@ _PAPER_READONLY = (
         build=_paper_builder(
             ("verify",),
             (Flag("paper", "--paper", path=True), Flag("sections", "--sections", path=True)),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_phases",
+        title="Writing phases",
+        description=(
+            "Read-only: what can I write now — waves with per-block readiness, opened, provenance."
+        ),
+        verb="phases",
+        surface="paper",
+        annotations=tool_annotations(
+            "Writing phases", read_only=True, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("phase", "--phase", kind="int"),
+            )
+        ),
+        build=_paper_builder(
+            ("phases",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("phase", "--phase", kind="int"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_packet",
+        title="Redactor packet",
+        description=(
+            "Read-only: one block's own contract prose plus reference heading outlines, plus its "
+            "bound source sections for a transposition-mode block."
+        ),
+        verb="packet",
+        surface="paper",
+        annotations=tool_annotations(
+            "Redactor packet", read_only=True, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(
+            (
+                Flag("section", "--section", required=True),
+                Flag("block", "--block", required=True),
+                Flag("sections", "--sections", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("paper", "--paper", path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("packet",),
+            (
+                Flag("section", "--section", required=True),
+                Flag("block", "--block", required=True),
+                Flag("sections", "--sections", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("paper", "--paper", path=True),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_reuse",
+        title="Open-claim reuse report",
+        description=(
+            "Read-only: for one block's open claims, which already-ingested, evidence-classed "
+            "papers carry no verdict yet."
+        ),
+        verb="reuse",
+        surface="paper",
+        annotations=tool_annotations(
+            "Open-claim reuse report", read_only=True, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("block", "--block", required=True),
+                Flag("min_sources", "--min-sources", kind="int"),
+            )
+        ),
+        build=_paper_builder(
+            ("reuse",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("block", "--block", required=True),
+                Flag("min_sources", "--min-sources", kind="int"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_exhaustion",
+        title="Corpus-wide exhaustion report",
+        description=(
+            "Read-only, corpus-wide: every evidence-classed ingested paper's exhaustion state — "
+            "lists only, never deletes."
+        ),
+        verb="exhaustion",
+        surface="paper",
+        annotations=tool_annotations(
+            "Corpus-wide exhaustion report", read_only=True, destructive=False, open_world=False, idempotent=True
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("min_sources", "--min-sources", kind="int"),
+            )
+        ),
+        build=_paper_builder(
+            ("exhaustion",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("min_sources", "--min-sources", kind="int"),
+            ),
         ),
         result_json=True,
     ),
@@ -597,6 +764,15 @@ def _refuse_stdin_body(arguments: dict[str, Any], workspace: Path) -> None:
         raise ToolRefusal(
             "STDIN_NOT_AVAILABLE_OVER_MCP",
             "the bound body must be a file path; '-' would read the JSON-RPC wire",
+        )
+
+
+def _refuse_stdin_file(arguments: dict[str, Any], workspace: Path) -> None:
+    """`--file -` would read the server's own stdin: the JSON-RPC wire."""
+    if arguments.get("file") == "-":
+        raise ToolRefusal(
+            "STDIN_NOT_AVAILABLE_OVER_MCP",
+            "the couplings record must be a file path; '-' would read the JSON-RPC wire",
         )
 
 
@@ -876,6 +1052,217 @@ _PAPER_MUTATING = (
             ),
         ),
         precondition=_refuse_stdin_body,
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_skeleton",
+        title="Open the section skeleton",
+        description=(
+            "Open every section/block id the two structural answers imply, empty, via open_block only."
+        ),
+        verb="skeleton",
+        surface="paper",
+        annotations=tool_annotations(
+            "Open the section skeleton", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("related_work", "--related-work", kind="enum", choices=("yes", "no")),
+                Flag(
+                    "dataset_in", "--dataset-in", kind="enum",
+                    choices=("materials", "experimental-setup"),
+                ),
+            )
+        ),
+        build=_paper_builder(
+            ("skeleton",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("related_work", "--related-work", kind="enum", choices=("yes", "no")),
+                Flag(
+                    "dataset_in", "--dataset-in", kind="enum",
+                    choices=("materials", "experimental-setup"),
+                ),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_bind",
+        title="Bind a block to source sections",
+        description=(
+            "Record which section(s) of a source document feed one block's own bindable "
+            "requirement, or reopen a previously recorded binding."
+        ),
+        verb="bind",
+        surface="paper",
+        annotations=tool_annotations(
+            "Bind a block to source sections", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("block", "--block", required=True),
+                Flag("fact", "--fact", required=True),
+                Flag("lineage", "--lineage"),
+                Flag("section", "--section", kind="list"),
+                Flag("reopen", "--reopen", kind="bool"),
+            )
+        ),
+        build=_paper_builder(
+            ("bind",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("block", "--block", required=True),
+                Flag("fact", "--fact", required=True),
+                Flag("lineage", "--lineage"),
+                Flag("section", "--section", kind="list"),
+                Flag("reopen", "--reopen", kind="bool"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_mark_revisions",
+        title="Record a source root's revision rule",
+        description=(
+            "Record <root>/.paper-writing.json's own revisions grammar, validated against the "
+            "*.md files actually there right now."
+        ),
+        verb="mark",
+        surface="paper",
+        annotations=tool_annotations(
+            "Record a source root's revision rule", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("root", "--root", required=True),
+                Flag("revision_prefix", "--revision-prefix", required=True),
+                Flag("ordinal_digits", "--ordinal-digits", kind="int", required=True),
+                Flag("unsealed", "--unsealed", kind="bool"),
+            )
+        ),
+        build=_paper_builder(
+            ("mark", "revisions"),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("root", "--root", required=True),
+                Flag("revision_prefix", "--revision-prefix", required=True),
+                Flag("ordinal_digits", "--ordinal-digits", kind="int", required=True),
+                Flag("unsealed", "--unsealed", kind="bool"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_mark_class",
+        title="Record a guidance folder's class",
+        description=(
+            "Record guidance/<folder>/.paper-writing.json's own class grammar, validated against "
+            "the folders actually there right now."
+        ),
+        verb="mark",
+        surface="paper",
+        annotations=tool_annotations(
+            "Record a guidance folder's class", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("folder", "--folder", required=True),
+                Flag("class_value", "--class", required=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("unsealed", "--unsealed", kind="bool"),
+            )
+        ),
+        build=_paper_builder(
+            ("mark", "class"),
+            (
+                Flag("folder", "--folder", required=True),
+                Flag("class_value", "--class", required=True),
+                Flag("guidance", "--guidance", path=True),
+                Flag("unsealed", "--unsealed", kind="bool"),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_separate",
+        title="Score a source-section cut",
+        description=(
+            "Score a proposed whole-cut assignment of source sections to blocks and refuse on any "
+            "defect; records the separation round on success."
+        ),
+        verb="separate",
+        surface="paper",
+        annotations=tool_annotations(
+            "Score a source-section cut", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("proposal", "--proposal", required=True, path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("separate",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("sections", "--sections", path=True),
+                Flag("proposal", "--proposal", required=True, path=True),
+            ),
+        ),
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_full_text",
+        title="Fetch a reference's PDF",
+        description=(
+            "Fetch one already-resolved identifier's own PDF, keyless, from its cached metadata's "
+            "measured full-text URL, and place it loose under guidance/<section>/. Open-world: "
+            "reaches the network."
+        ),
+        verb="full_text",
+        surface="paper",
+        annotations=tool_annotations(
+            "Fetch a reference's PDF", read_only=False, destructive=False, open_world=True
+        ),
+        input_schema=_schema(_FULL_TEXT_FLAGS),
+        build=_build_full_text,
+        result_json=True,
+    ),
+    ToolSpec(
+        name="papersmith.paper_couplings",
+        title="Validate and write the couplings record",
+        description=(
+            "Validate a JSON couplings record and write paper/couplings.json whole. The record is "
+            "a file path; '-' is refused because the child's stdin is closed."
+        ),
+        verb="couplings",
+        surface="paper",
+        annotations=tool_annotations(
+            "Validate and write the couplings record", read_only=False, destructive=False, open_world=False
+        ),
+        input_schema=_schema(
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("file", "--file", required=True, path=True),
+            )
+        ),
+        build=_paper_builder(
+            ("couplings",),
+            (
+                Flag("paper", "--paper", path=True),
+                Flag("file", "--file", required=True, path=True),
+            ),
+        ),
+        precondition=_refuse_stdin_file,
         result_json=True,
     ),
 )

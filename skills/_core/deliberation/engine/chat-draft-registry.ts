@@ -12,7 +12,7 @@ const CHAT_CONVERSATION_ID = /^chat-[a-z0-9][a-z0-9-]{0,250}$/;
 // value by pure namespace-convention accident, which the core-only artifact-namespace lock
 // (`artifact-naming.ts`) would flag. The registry key is opaque and never read back as a
 // path, so a colon-joined form is behaviorally identical and spells no artifact value.
-const SHARED_REGISTRY_SYMBOL = Symbol.for('papersmith-ai:proposal-deliberation:pi-session-draft-registry/v1');
+const SHARED_REGISTRY_SYMBOL = Symbol.for('papersmith-ai:deliberation:pi-session-draft-registry/v1');
 
 type SessionIdentityContext = Pick<ExtensionContext, 'sessionManager'>;
 type SessionDrafts = Map<string, DraftMaterializationPayload>;

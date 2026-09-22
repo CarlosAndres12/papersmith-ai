@@ -1724,8 +1724,8 @@ class PositionStateAbsentBranchKeyParityTests(unittest.TestCase):
         # `returned_keys`'s own stated dict-literal-only limitation, wherever
         # it currently sits -- proven against the real file rather than a
         # number carried in this test.
-        self.assertIn("dict literal", "\n".join(lines[229:232]))
-        self.assertIn("test_proposal_implementation.py:230-232", doc)
+        self.assertIn("dict literal", "\n".join(lines[239:242]))
+        self.assertIn("test_proposal_implementation.py:240-242", doc)
 
 
 class IntrospectBenchmarkConfigFallbackTests(unittest.TestCase):
@@ -1870,7 +1870,7 @@ class DeadImportAndStaleCallerCitationTests(unittest.TestCase):
     reported here, never edited."""
 
     #: Five, not six. `LFS_POINTER_PREFIX` was removed with them and put back:
-    #: `tests/test_proposal_implementation.py:691` reads it as
+    #: `tests/test_proposal_implementation.py:701` reads it as
     #: `impl.LFS_POINTER_PREFIX`, so the engine re-exports it on purpose.
     #: Reaching a name through this module's namespace is a consumer, and a
     #: search for uses INSIDE the engine cannot see one -- which is exactly how

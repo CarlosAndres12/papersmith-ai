@@ -34,6 +34,9 @@ const ACHIEVED_RESULT = /\b(?:outperform(?:s|ed)|beats|beat|surpass(?:es|ed)|ach
 /** Where the data paper and dataset guidance live, and the one source that bounds every claim in this document. */
 const DATA_PAPER = "guidance/data-paper";
 
+/** Where the methodological / style references live -- the same slot `proposal-deliberation` reads. */
+const PAPER_GUIDE = "guidance/paper-guide";
+
 export const profile: DeliberationDomainProfile = {
 	deriveBase: "experimental_plan_base.md",
 	baseLabel: "fixed experimental base",
@@ -153,18 +156,26 @@ export const profile: DeliberationDomainProfile = {
 	//
 	//   1. The data paper / dataset guidance -- REQUIRED. It bounds what may be claimed;
 	//      drafting without it produces a plan nothing can hold to account, which is why
-	//      an absent one refuses `CREATE_INITIAL_REVISION` with `REQUIRED_SOURCE_MISSING`
-	//      rather than rendering v1 silently.
+	//      an absent one refuses `CREATE_INITIAL_REVISION` with `REQUIRED_SOURCE_MISSING`,
+	//      and one that exists holding no document at all refuses `REQUIRED_SOURCE_EMPTY`,
+	//      rather than rendering v1 silently in either case.
 	//   2. The latest managed proposal -- REQUIRED. The claims come from it; an
 	//      experiments document with no proposal behind it is testing nothing. This is
 	//      `proposal-deliberation`'s own managed directory, read here and never written.
-	//   3. The area benchmark -- OPTIONAL. When present it is the source of truth for
-	//      metrics, splits, protocol and baselines; when absent the document states its
-	//      own, which is weaker but legal.
+	//   3. The paper guide -- OPTIONAL. The same methodological / style references the
+	//      mathematical sibling already loads. An experiments document is written to be
+	//      read by the same audience as the proposal it tests, so it is written under the
+	//      same references; when the folder is absent or empty the document states its own
+	//      shape, which is weaker but legal. Shared with `proposal-deliberation`, read
+	//      here and never written.
+	//
+	// Every path names a folder the forge itself defines and ships -- a slot that travels
+	// to any clone with its `.gitkeep` and arrives empty. What goes INSIDE is a paper's
+	// own content and is never named here.
 	sources: [
 		{ path: DATA_PAPER, required: true },
 		{ path: "proposals", required: true },
-		{ path: "guidance/area-benchmark", required: false },
+		{ path: PAPER_GUIDE, required: false },
 	],
 	// The north (change 11, "a north a second domain can hold"): why this session
 	// exists and where it has to arrive. Structure is the engine's; this text is

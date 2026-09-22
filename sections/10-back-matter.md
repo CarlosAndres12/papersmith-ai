@@ -14,7 +14,13 @@
       "id": "bm-author-contributions",
       "requires_facts": [],
       "requires_declarations": [
-        "author-roles"
+        {
+          "value": "author-roles",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The author-roles — the author list, and each author's confirmed roles"
+          }
+        }
       ],
       "citations": "none"
     },
@@ -22,8 +28,20 @@
       "id": "bm-funding",
       "requires_facts": [],
       "requires_declarations": [
-        "grant-title",
-        "grant-code"
+        {
+          "value": "grant-title",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The grant-title and grant-code — the funding project's registered title, funder, and code"
+          }
+        },
+        {
+          "value": "grant-code",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The grant-title and grant-code — the funding project's registered title, funder, and code"
+          }
+        }
       ],
       "citations": "none"
     },
@@ -31,7 +49,13 @@
       "id": "bm-data-availability",
       "requires_facts": [],
       "requires_declarations": [
-        "repository-url"
+        {
+          "value": "repository-url",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "The repository-url — the project repository URL, and the date it was checked"
+          }
+        }
       ],
       "citations": "none"
     },
@@ -46,7 +70,16 @@
       "requires_facts": [],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "back-matter.bm-funding",
+          "source": {
+            "file": "sections/10-back-matter.md",
+            "quote": "Present only when there is a project or institution to thank that is not already named under funding."
+          }
+        }
+      ]
     },
     {
       "id": "bm-appendices",
@@ -137,14 +170,22 @@ Whether the paper has appendices at all is decided per paper.
 Every block here is an external fact, not a decision. None of it is derived from the
 paper.
 
-| Block | Input |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| Author Contributions | the author list, and each author's confirmed roles |
-| Funding | the funding project's registered title, funder, and code |
-| Data Availability | the project repository URL, and the date it was checked |
-| Conflicts of Interest | any author affiliation with an interested organization |
-| Acknowledgments | the project or institution to thank |
-| Appendices | whichever body sections need one |
+| The **author-roles** — the author list, and each author's confirmed roles | `bm-author-contributions` |
+| The **grant-title** and **grant-code** — the funding project's registered title, funder, and code | `bm-funding` |
+| The **repository-url** — the project repository URL, and the date it was checked | `bm-data-availability` |
+| Any author affiliation with an interested organization | `bm-conflicts-of-interest` |
+| The project or institution to thank | `bm-acknowledgments` |
+| Whichever body sections need one | `bm-appendices` |
+
+### Internal chain
+
+| Block | Depends on |
+|---|---|
+| `back-matter.bm-acknowledgments` — present only when there is a project or institution to thank that is not already named under funding | `back-matter.bm-funding` — the funding entries already naming any project or institution credited there |
 
 ## Disqualifiers
 

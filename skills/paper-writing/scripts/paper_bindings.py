@@ -11,7 +11,7 @@ facts and mode — never against what the redactor merely claims.
 
 Public surface:
 
-    RedactorInput                              -> the four-input contract shape
+    RedactorInput                              -> the five-input contract shape
     parse_binding(raw)                         -> (kind, ref)
     segment_sentences(latex)                   -> list[str]
     reconcile(latex, binding_entries)          -> list[dict]  (raises UNBOUND_SENTENCE, BINDING_ORPHANED)
@@ -33,15 +33,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_core" / "implemen
 from impl_refusals import Refused  # noqa: E402
 
 #: `evidence-bound-drafting` spec, `Requirement: Redactor Input Contract`:
-#: exactly four inputs, `style_set` empty is a valid value. This is a shape
-#: contract, not a validator with its own refusal — a caller building a
-#: fixture for the redactor simply cannot omit a field.
+#: exactly five inputs, `style_set`/`source_sections` empty are both valid
+#: values. This is a shape contract, not a validator with its own refusal
+#: — a caller building a fixture for the redactor simply cannot omit a
+#: field. `RedactorInput` has no production constructor anywhere in this
+#: skill (`the-redactor-receives-the-section-it-must-transpose`, design.md
+#: D3, measured by `rg 'RedactorInput' --type py`) — the field-count
+#: assertion `RedactorInputContractTests` carries is this shape's ONLY
+#: enforcement.
 @dataclass(frozen=True)
 class RedactorInput:
     contract_prose: str
     evidence_set: tuple = ()
     mode: str = ""
     style_set: tuple = ()
+    #: `the-redactor-receives-the-section-it-must-transpose`, design.md D3/D4:
+    #: appended fifth, exact `BlockContract.source_sections`/packet
+    #: `source_sections` shape (`{fact, lineage, title, path, byte_start,
+    #: byte_end, text}`), empty for a non-`transposition` block, an unbound
+    #: block, or a block whose paper root could not be measured.
+    source_sections: tuple = ()
 
 
 #: The three binding kinds a sentence may be classified under
@@ -139,7 +150,8 @@ def resolve_bindings(bindings: list[Binding], evidence_ids: set, licensed_facts:
 
 _MATH_INLINE_RE = re.compile(r"\$[^$]*\$")
 _MATH_DISPLAY_RE = re.compile(
-    r"\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}", re.DOTALL
+    r"\$\$.*?\$\$|\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}",
+    re.DOTALL,
 )
 _LATEX_CMD_RE = re.compile(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?")
 _CITE_RE = re.compile(r"\\cite\w*")

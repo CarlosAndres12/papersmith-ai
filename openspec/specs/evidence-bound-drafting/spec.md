@@ -18,19 +18,54 @@ and never re-implemented. Neither capability covers the other's failure mode.
 
 ### Requirement: Redactor Input Contract
 
-The redactor MUST receive exactly four inputs for one block: the contract's
-prose (verbatim, uninterpreted), the block's evidence set, the block's `mode`,
-and its style set (empty is a valid value). It MUST output LaTeX for that one
-block plus a binding map, and MUST assert nothing the evidence set does not
-license.
+The redactor MUST receive exactly five inputs for one block: the contract's
+prose (verbatim, uninterpreted), the block's evidence set, the block's
+`mode`, its style set (empty is a valid value), and its own bound source
+sections (empty is a valid value for a non-`transposition` block, for an
+unbound block, or when the paper root could not be measured). It MUST output
+LaTeX for that one block plus a binding map, and MUST assert nothing the
+evidence set does not license. It MUST NOT open any file itself to find a
+sixth input — a bound source section reaches it only through this declared
+fifth input, never through a direct read.
+
+(Previously: "The redactor MUST receive exactly four inputs..." — no
+bound-section input; `RedactorInput` carried four fields.)
 
 #### Scenario: A block drafts with an empty style set
 
 - GIVEN a block's contract prose, evidence set, and mode, and an empty style
   set
 - WHEN the redactor drafts the block
-- THEN it returns LaTeX and a binding map with no style-channel input consumed
+- THEN it returns LaTeX and a binding map with no style-channel input
+  consumed
 
+#### Scenario: The redactor receives five declared inputs and opens no file for a sixth
+
+- GIVEN a block about to be drafted, with contract prose, evidence set,
+  mode, style set, and bound source sections all supplied as declared
+  inputs
+- WHEN the redactor drafts the block
+- THEN it uses only those five inputs, and reads no file itself to locate a
+  bound section, a style extract, or any other content
+
+#### Scenario: A non-transposition block drafts with empty source sections
+
+- GIVEN an `argument`-mode block whose other four inputs are supplied
+  normally
+- WHEN the redactor drafts the block
+- THEN its fifth input, source sections, is empty, and drafting proceeds
+  exactly as it did before this capability existed
+
+#### Scenario: The fifth input widens visibility, never the verbatim guard
+
+- GIVEN a `transposition`-mode block whose fifth input carries its own
+  bound section's resolved text
+- WHEN a draft pastes a run from that text exceeding
+  `transposition-fidelity`'s own self-calibrated threshold
+- THEN `write` still refuses `SOURCE_SECTION_VERBATIM` — this input widens
+  what the redactor can see, never what `write` accepts; the guard itself is
+  the sibling capability `transposition-fidelity`, unchanged by this input's
+  addition
 ### Requirement: Binding Map Production
 
 The redactor MUST emit, beside the LaTeX, a binding map: every sentence of the
@@ -84,10 +119,27 @@ block's `requires_facts` MUST refuse `FACT_NOT_LICENSED`.
 
 ### Requirement: Structural Sentences Are Typed
 
-A `structural` sentence carrying a numeral, a `\cite` command, a comparative,
-or a named external object MUST refuse `STRUCTURAL_CARRIES_CLAIM`. This is
-the attack surface of the `structural` classification, closed by detection
-rather than by instruction.
+A `structural` sentence carrying a numeral, a `\cite` command, a
+comparative, or a named external object MUST refuse
+`STRUCTURAL_CARRIES_CLAIM`. This is the attack surface of the `structural`
+classification, closed by detection rather than by instruction. A numeral,
+comparative, or named external object appearing ONLY inside a math
+environment excluded from prose — inline `$...$`, DISPLAY `$$...$$`,
+`\[...\]`, or `\begin{equation|align|gather|math}...\end{...}` — MUST NOT
+by itself trigger this refusal: a display equation is legitimate structural
+apparatus, not an assertion the `structural` classification is hiding, and
+the same math-exclusion normalization this skill uses elsewhere governs what
+counts as "inside" math here.
+
+(Previously: `paper_bindings._strip_math`'s own display-math pattern carried
+no `$$...$$` alternative, so a display-fenced equation body survived typing
+as ordinary prose; a structural sentence carrying a display equation with a
+numeral — for example an equation number or a displayed constant — could
+wrongly refuse `STRUCTURAL_CARRIES_CLAIM` for content that was never an
+assertion in prose at all. Corrected by the same alternative and the same
+derived cross-module sweep `style-leak-detection` requires of every
+`strip_math`/`_strip_math` callable under `scripts/`, since the two
+implementations carry the identical pattern and must not drift apart.)
 
 #### Scenario: A numeral inside a structural sentence refuses
 
@@ -103,6 +155,22 @@ rather than by instruction.
 - WHEN structural typing runs
 - THEN no refusal is raised
 
+#### Scenario: A numeral inside a display-math fence does not refuse
+
+- GIVEN a structural sentence whose only numeral appears inside a `$$...$$`
+  display fence, with no numeral anywhere else in the sentence
+- WHEN structural typing runs
+- THEN no `STRUCTURAL_CARRIES_CLAIM` refusal is raised
+
+#### Scenario: Mutation — dropping the display-fence alternative wrongly refuses
+
+- GIVEN `paper_bindings._strip_math`'s display-math pattern with its
+  `$$...$$` alternative removed
+- WHEN the display-math scenario above is run against the mutant
+- THEN that test goes red — the fenced numeral now survives as prose and
+  wrongly triggers `STRUCTURAL_CARRIES_CLAIM`, proving the exclusion is
+  load-bearing here as well as in the style tripwire, and that the derived
+  cross-module sweep (`style-leak-detection`) must cover this file too
 ### Requirement: Mode-Admissible Bindings
 
 A block whose `mode` is `transposition` MUST admit only `fact`, `structural`,

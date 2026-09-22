@@ -13,21 +13,46 @@
     {
       "id": "title",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The contributions, already defined — the title selects among them"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
     },
     {
       "id": "keywords",
-      "requires_facts": [
-        "contributions"
-      ],
+      "requires_facts": [],
       "requires_declarations": [
-        "keyword-bounds",
-        "classification-line"
+        {
+          "value": "keyword-bounds",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The keyword-bounds and classification-line — the target journal's requirements"
+          }
+        },
+        {
+          "value": "classification-line",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The keyword-bounds and classification-line — the target journal's requirements"
+          }
+        }
       ],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "title-and-keywords.title",
+          "source": {
+            "file": "sections/09-title-and-keywords.md",
+            "quote": "The title carries the adjective; the keyword carries the noun."
+          }
+        }
+      ]
     }
   ]
 }
@@ -116,11 +141,24 @@ instructions, along with the permitted keyword count.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The three required slots | the proposal, with its contributions already defined — the title selects among them |
-| Whether the acronym appears | whether it is meant to become the method's public name |
-| Keyword count bounds and the classification line | the target journal's requirements |
+| The **keyword-bounds** and **classification-line** — the target journal's requirements | `keywords` |
+
+### Internal chain
+
+| Block | Depends on |
+|---|---|
+| `title-and-keywords.title` — The contributions, already defined — the title selects among them | `materials-and-methods.mm-proposal` — the enumerated contributions the title selects among |
+| `title-and-keywords.keywords` — the property in its searchable form, the noun form of what the title carries as an adjective | `title-and-keywords.title` — the property adjective the title opens on |
+
+### Structural decisions
+
+- **Whether the acronym appears** is decided by whether it is meant to
+  become the method's public name — a structural decision, not a dependency
+  on a block.
 
 ## Disqualifiers
 

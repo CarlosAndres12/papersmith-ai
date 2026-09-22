@@ -13,42 +13,123 @@
     {
       "id": "rw-preamble",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The list of specific problems — to announce the blocks and their order"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The list of specific problems — to announce the blocks and their order"
+          }
+        }
+      ]
     },
     {
       "id": "rw-panorama",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The general problem of the problem statement"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The general problem of the problem statement"
+          }
+        }
+      ]
     },
     {
       "id": "rw-problem-blocks",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The specific problems, one block each"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "optional": true,
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The specific problems, one block each"
+          }
+        }
+      ]
     },
     {
       "id": "rw-closing",
-      "requires_facts": [
-        "gap"
-      ],
+      "requires_facts": [],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "optional": true,
+      "produces_facts": [
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The gap is stated in two places — the closing of this section and the closing of the introduction's state-of-the-art block — and they must say the same thing at different depths."
+          }
+        }
+      ],
+      "after": [
+        {
+          "target": "related-work.rw-problem-blocks",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "Name the fronts left open — as many as there are blocks."
+          }
+        }
+      ]
     },
     {
       "id": "rw-synthesis-artefact",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The properties (contributions) the proposal declares"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
+      "optional": true,
+      "after": [
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/05-related-work.md",
+            "quote": "The properties (contributions) the proposal declares"
+          }
+        }
+      ],
       "figure": {
         "components_from": "contributions",
         "ordered": false,
@@ -70,6 +151,12 @@
 Every claim here belongs to someone else's work, and the section argues what those works together leave unsolved.
 
 ## Whether the section exists
+
+<!-- Open Question 1 (design.md, `the-phases-are-derived-not-remembered`):
+resolved block-level — every `rw-*` block carries `optional: true` in the
+front matter. No schema change, no `_TOP_LEVEL_ALLOWED` widening. This is
+what "the whole section is conditional" means at the block granularity the
+contract already speaks. -->
 
 This is one decision with two criteria, and either one is enough to create the
 section:
@@ -240,13 +327,24 @@ single experiment runs. Every block traces back to the problem statement, which 
 from the contributions, which come from the mathematical formulation — the root of
 this section is the formulation.
 
+### External inputs
+
+| Input | Unblocks |
+|---|---|
+
+### Internal chain
+
 | Block | Depends on |
 |---|---|
-| 1 Preamble | the list of specific problems, to announce the blocks and their order |
-| 2 Panorama | the general problem of the problem statement |
-| 3 Blocks | the specific problems, one block each |
-| 4 Closing | the gap, which is also stated in the introduction and must agree |
-| 5 Artefact | the properties the proposal declares |
+| `related-work.rw-preamble` — The list of specific problems — to announce the blocks and their order | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `related-work.rw-panorama` — The general problem of the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `related-work.rw-problem-blocks` — The specific problems, one block each | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `related-work.rw-closing` — names the fronts left open, as many as there are blocks | `related-work.rw-problem-blocks` — the specific-problem blocks whose unresolved limitation each becomes a named front |
+| `related-work.rw-synthesis-artefact` — The properties (contributions) the proposal declares | `materials-and-methods.mm-proposal` — the enumerated contributions the synthesis artefact tabulates |
+
+**The referent moved.** This block's `components_from` resolves against the methods
+section now, not the introduction — a real cross-section check still, only its
+source changed.
 
 **Cross-obligation.** The gap is stated in two places — the closing of this section
 and the closing of the introduction's state-of-the-art block — and they must say the

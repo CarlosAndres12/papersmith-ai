@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -44,7 +44,11 @@ _TOP_LEVEL_REQUIRED = ("section", "position", "blocks")
 #: `mode` widened in `the-writer-may-assert-only-what-it-was-given`
 #: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
 #: the section-level drafting-mode default, optional, overridden per block.
-_TOP_LEVEL_OPTIONAL = ("after", "mode")
+#: `produces_facts` added in `a-fact-is-declared-or-it-is-produced`
+#: (`fact-production` spec, `Requirement: produces_facts Field Grammar`):
+#: the section-level half of the same field `_BLOCK_OPTIONAL` gains below,
+#: parsed the identical way `after` already is at this level.
+_TOP_LEVEL_OPTIONAL = ("after", "mode", "produces_facts")
 _TOP_LEVEL_ALLOWED = _TOP_LEVEL_REQUIRED + _TOP_LEVEL_OPTIONAL
 
 _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
@@ -54,7 +58,12 @@ _BLOCK_REQUIRED = ("id", "requires_facts", "requires_declarations", "citations")
 #: (`section-contract` spec, `Requirement: Front Matter Schema`, MODIFIED):
 #: a per-block diagram obligation, read by `paper_obligation.py` and never
 #: hardcoded against a section or block id.
-_BLOCK_OPTIONAL = ("optional", "after", "mode", "figure")
+#: `produces_facts` added in `a-fact-is-declared-or-it-is-produced`
+#: (`fact-production` spec, `Requirement: produces_facts Field Grammar`): a
+#: block MAY declare the facts it writes rather than observes, entry shape
+#: byte-identical to `requires_facts` (design.md, Decision B) and parsed
+#: through the same `_normalize_requirement_entry`.
+_BLOCK_OPTIONAL = ("optional", "after", "mode", "figure", "produces_facts")
 _BLOCK_ALLOWED = _BLOCK_REQUIRED + _BLOCK_OPTIONAL
 
 #: A `figure` object's own six subkeys. Five are required, nothing else
@@ -92,6 +101,24 @@ _SOURCE_REQUIRED = ("file", "quote")
 #: Closed Mode Vocabulary And Transcription`). Reuses `_validate_source`
 #: below rather than a second copy of the same three checks.
 _MODE_REQUIRED = ("value", "source")
+#: `requires_facts` / `requires_declarations` entry shape
+#: (`requirement-transcription` spec, `Requirement: Transcribed Requirement
+#: Entries Only`; `section-contract` spec, `Requirement: Front Matter
+#: Schema`). U3 (design.md D3): bare-string acceptance is removed; every
+#: entry MUST be an object carrying both keys, with a non-null `source` —
+#: see `_normalize_requirement_entry`.
+_REQUIREMENT_REQUIRED = ("value", "source")
+#: `requires_facts`-only optional half (`source-section-binding` spec,
+#: `Requirement: Bindable Facts Are Derived, Never Listed`; `section-
+#: contract` spec, `Requirement: Front Matter Schema`, MODIFIED by
+#: `the-requirement-names-the-section-that-feeds-it`): the source
+#: document's lineage and the exact title of the section within it that
+#: feeds this entry. Never admitted on `requires_declarations` or
+#: `produces_facts` — only a caller that opts in via
+#: `_normalize_requirement_entry`'s `allow_document` parameter ever widens
+#: its allowed key set to include this.
+_REQUIREMENT_OPTIONAL = ("document",)
+_DOCUMENT_REQUIRED = ("lineage", "section")
 
 #: The transcription lock's own emphasis strip — a closed, enumerated pair
 #: of markdown constructs, never a bare-character removal (corrective:
@@ -112,16 +139,21 @@ _ITALIC_EMPHASIS_RE = re.compile(r"\*([^\s*][^*]*)\*")
 class ContractHeader:
     """One parsed header. `blocks` is a list of validated dicts, each
     carrying exactly `id`, `requires_facts`, `requires_declarations`,
-    `citations`, `optional`, `after`, `mode` — defaults filled in, nothing
-    extra. `mode` is the section-level default (`None` when the header
-    declares none); a block's own `mode` entry, also `None` when absent,
-    wins over it (`resolve_mode` below)."""
+    `citations`, `optional`, `after`, `mode`, `figure`, `produces_facts` —
+    defaults filled in, nothing extra. `mode` is the section-level default
+    (`None` when the header declares none); a block's own `mode` entry, also
+    `None` when absent, wins over it (`resolve_mode` below). `produces_facts`
+    is this dataclass's OWN section-level list, the same shape `after`
+    already has at this level (`fact-production` spec, `Requirement:
+    produces_facts Field Grammar`; design.md, Decision B) — defaulted to an
+    empty list so every existing construction site and fixture stays green."""
 
     section: str
     position: int
     after: list
     blocks: list
     mode: dict | None = None
+    produces_facts: list = field(default_factory=list)
 
 
 def _split_front_matter(data: bytes) -> tuple[str, bytes]:
@@ -246,6 +278,172 @@ def _validate_mode_object(raw, owner: str) -> dict:
     return {"value": value, "source": dict(source)}
 
 
+def _validate_document_object(raw, owner: str) -> dict:
+    """`document: {lineage, section}` — the source document's lineage and
+    the title(s) of the section(s) within it that feed one `requires_facts`
+    entry (`source-section-binding` spec; `section-contract` spec,
+    `Requirement: Front Matter Schema`, MODIFIED). Both keys are required
+    together: an absent key or an explicit `null` for either is treated as
+    missing (named the same way `_validate_source` names a missing key),
+    and any key outside `{lineage, section}` refuses naming the unknown key
+    — the identical missing-then-unknown ordering `_validate_source` and
+    `_normalize_requirement_entry` already use, so a `guidance/`-shaped
+    marker's own precedent (name the ABSENT key first) is followed here too.
+
+    `section` (U2d, `the-requirement-names-the-section-that-feeds-it`):
+    ONE title (a non-empty string, the original shape) OR MORE THAN ONE (a
+    non-empty list of unique non-empty-string titles) — a block may borrow
+    from several sections of the same lineage (a contract's own prose may
+    promise "one to three subsections" feeding one block), and the block
+    count must never move just because a source document's own section
+    count does. An empty list, a list carrying a repeated title, or a list
+    entry that is not a non-empty string all refuse the same way a
+    malformed single title would — shape errors, never silently tolerated.
+    A single string stays valid; this never forces every binding to widen
+    into a list.
+    """
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'document' must be an object")
+    unknown = [key for key in raw if key not in _DOCUMENT_REQUIRED]
+    if unknown:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'document' carries unknown key {unknown[0]!r}"
+        )
+    missing = [key for key in _DOCUMENT_REQUIRED if raw.get(key) is None]
+    if missing:
+        raise Refused("MALFORMED_HEADER", f"{owner}: 'document' missing {missing[0]!r}")
+    lineage = raw["lineage"]
+    if not isinstance(lineage, str) or not lineage:
+        raise Refused(
+            "MALFORMED_HEADER", f"{owner}: 'document.lineage' must be a non-empty string"
+        )
+    section = raw["section"]
+    if isinstance(section, str):
+        if not section:
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' must be a non-empty string"
+            )
+    elif isinstance(section, list):
+        if not section:
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' list must not be empty"
+            )
+        if not all(isinstance(title, str) and title for title in section):
+            raise Refused(
+                "MALFORMED_HEADER",
+                f"{owner}: 'document.section' list entries must all be non-empty strings",
+            )
+        if len(set(section)) != len(section):
+            raise Refused(
+                "MALFORMED_HEADER", f"{owner}: 'document.section' list carries a duplicate title"
+            )
+    else:
+        raise Refused(
+            "MALFORMED_HEADER",
+            f"{owner}: 'document.section' must be a non-empty string or a "
+            "non-empty list of unique non-empty-string titles",
+        )
+    return {"lineage": lineage, "section": section if isinstance(section, str) else list(section)}
+
+
+def _normalize_requirement_entry(
+    raw, validate, owner: str, *, allow_document: bool = False,
+) -> dict:
+    """The single normalization point for one `requires_facts` /
+    `requires_declarations` / `produces_facts` entry (`requirement-
+    transcription` spec, `Requirement: Transcribed Requirement Entries
+    Only`; design.md D1: "the plain id list is never stored, only derived at
+    read time through one accessor"). `validate` is the caller's own
+    closed-vocabulary check (`paper_vocabulary.validate_fact` or
+    `validate_declaration`), applied to `value`.
+
+    U3 (design.md D3): bare-string acceptance is removed. An entry MUST be
+    an object carrying `value` (a string, validated against the closed
+    vocabulary) and a non-null `source` — an absent `source` key or an
+    explicit `source: null` both refuse `MALFORMED_HEADER` naming `source`,
+    exactly as an `after` entry's own `source` is required. A non-null
+    `source` goes through `_validate_source`, the same `{file, quote}` shape
+    enforced for `after` and `mode`. An unknown key or a non-string `value`
+    refuses `MALFORMED_HEADER` naming it, mirroring `_validate_mode_object`.
+    This makes the half-migrated bare-string state structurally
+    unrepresentable rather than merely detected: a fixture or a contract
+    rebuilt with a bare string now refuses at parse.
+
+    `allow_document` (`the-requirement-names-the-section-that-feeds-it`):
+    only `requires_facts` entries pass this `True`; `requires_declarations`
+    and `produces_facts` entries never do, so a `document` key on either
+    refuses `MALFORMED_HEADER` as an unknown key — a declaration is
+    operator-supplied, never document-rooted (`section-contract` spec), and
+    a produced fact has no document-rooted source of its own either. The
+    returned dict carries a `"document"` key only when the raw entry
+    declared one — an entry with no `document` half round-trips through
+    this function with exactly the two keys it came in with, unchanged.
+    """
+    if not isinstance(raw, dict):
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry must be an object")
+    allowed = _REQUIREMENT_REQUIRED + (_REQUIREMENT_OPTIONAL if allow_document else ())
+    missing = [key for key in _REQUIREMENT_REQUIRED if key not in raw]
+    if missing:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry missing {missing[0]!r}")
+    unknown = [key for key in raw if key not in allowed]
+    if unknown:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry carries unknown key {unknown[0]!r}")
+    value = raw["value"]
+    if not isinstance(value, str):
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry 'value' must be a string")
+    validate(value)
+    source = raw["source"]
+    if source is None:
+        raise Refused("MALFORMED_HEADER", f"{owner}: entry missing 'source'")
+    source = dict(_validate_source(source, owner))
+    result = {"value": value, "source": source}
+    if allow_document and raw.get("document") is not None:
+        result["document"] = _validate_document_object(raw["document"], owner)
+    return result
+
+
+def requirement_values(entries) -> tuple:
+    """The ONLY way a caller turns `requires_facts` / `requires_declarations`
+    entries into a plain tuple of ids, in declaration order (design.md D1:
+    "the plain tuple exists only as a transient at two construction
+    sites"). Nothing stores the result; every caller — `paper_graph`'s
+    `BlockRecord` construction and `paper_cli.py`'s `BlockContract`
+    construction — derives it fresh at the point of use, so two
+    representations can never drift. An AST scan over `scripts/*.py`
+    (`tests/test_paper_writing.py`) asserts no other module subscripts a
+    parsed block's `["requires_facts"]` / `["requires_declarations"]`."""
+    return tuple(entry["value"] for entry in entries)
+
+
+def requirement_documents(entries) -> tuple:
+    """Mirrors `requirement_values`: derives the `(fact_id, lineage,
+    section_title)` triples from `requires_facts` entries that carry a
+    `document` half, in declaration order (`source-section-binding` spec,
+    worked example). Entries with no `document` half contribute nothing —
+    `document` is optional, and an unbound bindable fact is a corpus-level
+    concern (`SECTION_BINDING_ABSENT`, U3), never this accessor's own.
+    `paper_graph.BlockRecord.source_bindings` is built from this, the sole
+    source of that tuple.
+
+    `document.section` (U2d) may be one title or a list of several — this
+    accessor is where that shape is flattened: a list contributes ONE
+    triple per title, in the list's own declaration order, so every
+    downstream consumer (`paper_graph._verify_source_section_bindings`)
+    keeps working against a single `section_title` per triple, unchanged.
+    A single-string `section` still contributes exactly one triple, same
+    as before U2d."""
+    triples = []
+    for entry in entries:
+        document = entry.get("document")
+        if document is None:
+            continue
+        section = document["section"]
+        titles = section if isinstance(section, list) else (section,)
+        for title in titles:
+            triples.append((entry["value"], document["lineage"], title))
+    return tuple(triples)
+
+
 def _parse_figure(raw, owner: str) -> dict:
     """`diagram-obligation` spec, `Requirement: Obligations Read From
     Contract Front Matter`; `section-contract` spec, `Requirement: Front
@@ -313,19 +511,28 @@ def _parse_block(raw, section: str) -> dict:
     if not isinstance(block_id, str) or not block_id:
         raise Refused("MALFORMED_HEADER", f"{section}: block 'id' must be a non-empty string")
 
-    facts = raw["requires_facts"]
-    if not isinstance(facts, list):
+    facts_raw = raw["requires_facts"]
+    if not isinstance(facts_raw, list):
         raise Refused("MALFORMED_HEADER", f"{section}.{block_id}: 'requires_facts' must be a list")
-    for fact in facts:
-        paper_vocabulary.validate_fact(fact)
+    facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.requires_facts",
+            allow_document=True,
+        )
+        for entry in facts_raw
+    ]
 
-    declarations = raw["requires_declarations"]
-    if not isinstance(declarations, list):
+    declarations_raw = raw["requires_declarations"]
+    if not isinstance(declarations_raw, list):
         raise Refused(
             "MALFORMED_HEADER", f"{section}.{block_id}: 'requires_declarations' must be a list"
         )
-    for declaration in declarations:
-        paper_vocabulary.validate_declaration(declaration)
+    declarations = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_declaration, f"{section}.{block_id}.requires_declarations"
+        )
+        for entry in declarations_raw
+    ]
 
     citations = raw["citations"]
     if not isinstance(citations, str):
@@ -337,6 +544,18 @@ def _parse_block(raw, section: str) -> dict:
         raise Refused("MALFORMED_HEADER", f"{section}.{block_id}: 'optional' must be a boolean")
 
     block_after = _validate_after_list(raw.get("after", []), f"{section}.{block_id}")
+
+    produces_facts_raw = raw.get("produces_facts", [])
+    if not isinstance(produces_facts_raw, list):
+        raise Refused(
+            "MALFORMED_HEADER", f"{section}.{block_id}: 'produces_facts' must be a list"
+        )
+    produces_facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.{block_id}.produces_facts"
+        )
+        for entry in produces_facts_raw
+    ]
 
     # `raw.get("mode") is not None` rather than `"mode" in raw`: this
     # function's own OWN output round-trips through re-serialization in
@@ -367,6 +586,7 @@ def _parse_block(raw, section: str) -> dict:
         "after": block_after,
         "mode": block_mode,
         "figure": block_figure,
+        "produces_facts": list(produces_facts),
     }
 
 
@@ -405,8 +625,23 @@ def parse_header(header) -> ContractHeader:
     if header.get("mode") is not None:
         section_mode = _validate_mode_object(header["mode"], section)
 
+    produces_facts_raw = header.get("produces_facts", [])
+    if not isinstance(produces_facts_raw, list):
+        raise Refused("MALFORMED_HEADER", f"{section}: 'produces_facts' must be a list")
+    produces_facts = [
+        _normalize_requirement_entry(
+            entry, paper_vocabulary.validate_fact, f"{section}.produces_facts"
+        )
+        for entry in produces_facts_raw
+    ]
+
     return ContractHeader(
-        section=section, position=position, after=after, blocks=blocks, mode=section_mode
+        section=section,
+        position=position,
+        after=after,
+        blocks=blocks,
+        mode=section_mode,
+        produces_facts=produces_facts,
     )
 
 
@@ -528,3 +763,65 @@ def resolve_sections_dir(sections_arg: str | None, *, forge_root: Path = paper_s
             f"{target} does not exist as a directory; the section corpus cannot be read",
         )
     return target
+
+
+def resolve_section_path(sections_dir: Path, section: str) -> Path:
+    """The contract file declaring `section`, found by reading each header's
+    own `section` field -- NEVER by composing a filename from `section`.
+
+    The filename is not authoritative anywhere else in this skill and must
+    not become authoritative here: `order` derives the writing order from
+    the block graph and states it takes "`position`, declared block order,
+    and every transcribed `after` edge; never the filename", and
+    `paper_graph.assemble_corpus` keys every section off `header.section`
+    after globbing `*.md`. This applies the identical rule for the one
+    lookup that needs a single file rather than the whole corpus.
+
+    Composing `sections_dir / f"{section}.md"` instead is what `assemble_
+    packet` did, and it could not open a single one of the shipped
+    contracts -- every one of them is named `NN-<section>.md`, so `packet`
+    died with a `FileNotFoundError` traceback and exit 1 for every real
+    block, rather than returning this skill's own refusal envelope.
+
+    Refuses `SECTION_UNKNOWN` (invocation-defect), naming the sections the
+    corpus does declare, so a typo is answerable from the refusal itself.
+    Two files declaring the same section is a corpus defect rather than an
+    invocation one and belongs to the corpus reader
+    (`paper_graph.assemble_corpus`'s own `ID_COLLISION` surface); this
+    returns the first in sorted order and never silently prefers one.
+    """
+    declared = []
+    unreadable_files: list = []
+    for path in sorted(sections_dir.glob("*.md")):
+        try:
+            header, _ = parse(path.read_bytes())
+        except Refused as unreadable:
+            # A sibling this lookup was not asked about cannot decide it. This
+            # scan reads every file to find one, so without this an unrelated
+            # corrupted contract that sorts alphabetically FIRST refused every
+            # lookup behind it -- including a section whose own file is
+            # perfectly well formed. Reproduced with a minimal fixture by the
+            # verify phase of `the-redactor-receives-the-section-it-must-
+            # transpose`, whose own corpus-contamination test had to order its
+            # fixture filenames around this to stay meaningful.
+            #
+            # The defect is not swallowed, only deferred: if the requested
+            # section IS found, the corrupt sibling genuinely did not matter
+            # and `contract`/`plan` still refuse on it through the corpus
+            # reader, which is the verb whose job that is. If it is NOT found,
+            # the refusal below names the unreadable files beside the declared
+            # sections, so "it is not there" and "one file could not be read"
+            # never look the same.
+            unreadable_files.append((path.name, unreadable.code))
+            continue
+        if header.section == section:
+            return path
+        declared.append(header.section)
+    detail = (
+        f"no contract under {sections_dir} declares section {section!r}; "
+        f"declared sections are {sorted(declared)}"
+    )
+    if unreadable_files:
+        listed = ", ".join(f"{name} ({code})" for name, code in sorted(unreadable_files))
+        detail += f"; unreadable contracts, any of which could hold it: {listed}"
+    raise Refused("SECTION_UNKNOWN", detail)

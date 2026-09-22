@@ -12,6 +12,8 @@ One class per concern, no class name reused — `design.md`, `Testing Strategy`.
 """
 from __future__ import annotations
 
+import argparse
+import ast
 import hashlib
 import json
 import os
@@ -31,6 +33,7 @@ import paper_vocabulary  # noqa: E402
 import paper_contract  # noqa: E402
 import paper_graph  # noqa: E402
 import paper_readiness  # noqa: E402
+import paper_cli  # noqa: E402
 
 sys.path.insert(0, str(FORGE_ROOT / "skills" / "_core" / "implementation"))
 from impl_refusals import Refused  # noqa: E402
@@ -40,6 +43,20 @@ from impl_refusals import Refused  # noqa: E402
 # `tests/test_proposal_implementation.py` already use.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import forge_vocabulary  # noqa: E402
+from paper_mutation import _run_against_mutant  # noqa: E402
+
+
+def _assert_mutant_test_failed(case: unittest.TestCase, proc) -> None:
+    """Shared two-part assertion every `_run_against_mutant` proof in this
+    suite uses: `MUTANT_IMPORTED_OK` proves the mutant module actually
+    loaded and `unittest` actually ran the named test against it, and a
+    non-zero exit proves the guard genuinely failed rather than the
+    process crashing on import before the test ever ran. A local copy --
+    `tests/test_paper_decisions.py` keeps its own -- since these are two
+    independent suites on purpose (design.md, `File Changes`)."""
+    output = proc.stdout + proc.stderr
+    case.assertIn("MUTANT_IMPORTED_OK", output, output)
+    case.assertNotEqual(proc.returncode, 0, output)
 
 
 def _header_bytes(header: dict) -> bytes:
@@ -130,11 +147,15 @@ class SchemaTests(unittest.TestCase):
     and the `--sections` repository boundary."""
 
     def test_valid_header_parses_with_no_refusal(self) -> None:
+        rich_entry = {
+            "value": "results",
+            "source": {"file": "results.md", "quote": "The results themselves."},
+        }
         header = _minimal_header(
             blocks=[
                 {
                     "id": "results-block",
-                    "requires_facts": ["results"],
+                    "requires_facts": [rich_entry],
                     "requires_declarations": [],
                     "citations": "discovery",
                 }
@@ -146,7 +167,13 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(parsed.position, 1)
         self.assertEqual(len(parsed.blocks), 1)
         self.assertEqual(parsed.blocks[0]["id"], "results-block")
-        self.assertEqual(parsed.blocks[0]["requires_facts"], ["results"])
+        self.assertEqual(
+            parsed.blocks[0]["requires_facts"],
+            [rich_entry],
+            "U3: bare-string acceptance is gone; a rich entry parses to its own "
+            "shape unchanged -- this is a shape-only check, the corpus-wide quote "
+            "gate lives in paper_graph.assemble_corpus",
+        )
         self.assertEqual(body, b"Prose.\n")
 
     def test_header_missing_position_refuses_naming_position(self) -> None:
@@ -223,7 +250,12 @@ class SchemaTests(unittest.TestCase):
             blocks=[
                 {
                     "id": "b",
-                    "requires_facts": ["discussion"],
+                    "requires_facts": [
+                        {
+                            "value": "discussion",
+                            "source": {"file": "b.md", "quote": "The discussion."},
+                        }
+                    ],
                     "requires_declarations": [],
                     "citations": "none",
                 }
@@ -242,7 +274,12 @@ class SchemaTests(unittest.TestCase):
                 {
                     "id": "b",
                     "requires_facts": [],
-                    "requires_declarations": ["reviewer-name"],
+                    "requires_declarations": [
+                        {
+                            "value": "reviewer-name",
+                            "source": {"file": "b.md", "quote": "The reviewer name."},
+                        }
+                    ],
                     "citations": "none",
                 }
             ]
@@ -362,6 +399,461 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, "SECTION_CONTRACTS_UNREADABLE")
 
 
+class DocumentBindingSchemaTests(unittest.TestCase):
+    """`section-contract` spec, `Requirement: Front Matter Schema` (MODIFIED
+    by `the-requirement-names-the-section-that-feeds-it`): a `requires_facts`
+    entry MAY additionally carry `document: {lineage, section}` -- the
+    source document's lineage and the exact title of the section within it
+    that feeds this entry (`source-section-binding` capability). Shape-only
+    here -- resolution against real disk (marker, lineage, section
+    existence/ambiguity) is `paper_graph._verify_source_section_bindings`'s
+    concern, tested in `test_paper_writing.py`, the same split
+    `ProducesFactsSchemaTests` already draws for `produces_facts`."""
+
+    def test_a_document_binding_parses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "lumen-thesis",
+                "section": "3. Formulación del método y su fundamento teórico",
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+
+    def test_a_requirement_entry_with_no_document_half_parses_unchanged(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+        self.assertNotIn("document", parsed.blocks[0]["requires_facts"][0])
+
+    def test_a_document_binding_missing_section_refuses_naming_section(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "lumen-thesis"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_missing_lineage_refuses_naming_lineage(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("lineage", ctx.exception.detail)
+
+    def test_a_document_binding_with_null_lineage_refuses_naming_lineage(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": None, "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("lineage", ctx.exception.detail)
+
+    def test_a_document_binding_with_unknown_key_refuses_naming_it(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "lumen-thesis", "section": "3. Something", "revision": "r21",
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("revision", ctx.exception.detail)
+
+    def test_a_document_binding_on_a_declaration_entry_refuses_naming_document(self) -> None:
+        entry = {
+            "value": "author-roles",
+            "source": {"file": "b.md", "quote": "Author roles."},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [], "requires_declarations": [entry],
+                "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("document", ctx.exception.detail)
+
+    def test_a_document_binding_on_a_produces_facts_entry_refuses_naming_document(self) -> None:
+        """`document` is scoped to `requires_facts` only (design.md, File
+        Changes): `produces_facts` shares `_normalize_requirement_entry`'s
+        machinery but is never called with `allow_document=True`."""
+        entry = {
+            "value": "gap",
+            "source": {"file": "b.md", "quote": "The gap."},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [], "requires_declarations": [],
+                "citations": "none", "produces_facts": [entry],
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("document", ctx.exception.detail)
+
+    def test_requirement_documents_derives_bindable_triples_in_order(self) -> None:
+        bound = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "x"},
+            "document": {"lineage": "lumen-thesis", "section": "3. Something"},
+        }
+        unbound = {"value": "dataset", "source": {"file": "b.md", "quote": "y"}}
+
+        self.assertEqual(
+            paper_contract.requirement_documents([bound, unbound]),
+            (("formulation", "lumen-thesis", "3. Something"),),
+        )
+
+    def test_requirement_documents_is_empty_when_no_entry_carries_one(self) -> None:
+        unbound = {"value": "dataset", "source": {"file": "b.md", "quote": "y"}}
+
+        self.assertEqual(paper_contract.requirement_documents([unbound]), ())
+
+    def test_a_document_binding_with_a_list_of_sections_parses(self) -> None:
+        """`the-requirement-names-the-section-that-feeds-it` (U2d): a block
+        may borrow from more than one section of the same lineage --
+        `document.section` MAY be a non-empty list of unique titles, never
+        forcing every binding into a list."""
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "lumen-thesis",
+                "section": ["1. Fundamentos", "2. Estimación de la entropía"],
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["requires_facts"], [entry])
+
+    def test_a_document_binding_with_an_empty_section_list_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "lumen-thesis", "section": []},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_repeated_section_title_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {
+                "lineage": "lumen-thesis",
+                "section": ["3. Something", "3. Something"],
+            },
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_non_string_section_list_entry_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "lumen-thesis", "section": ["3. Something", 7]},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_a_document_binding_with_a_non_list_non_string_section_refuses(self) -> None:
+        entry = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "The formulation."},
+            "document": {"lineage": "lumen-thesis", "section": {"nested": True}},
+        }
+        header = _minimal_header(
+            blocks=[{
+                "id": "b", "requires_facts": [entry],
+                "requires_declarations": [], "citations": "none",
+            }]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("section", ctx.exception.detail)
+
+    def test_requirement_documents_derives_one_triple_per_section_title_in_order(self) -> None:
+        bound = {
+            "value": "formulation",
+            "source": {"file": "b.md", "quote": "x"},
+            "document": {
+                "lineage": "lumen-thesis",
+                "section": ["1. First", "2. Second", "3. Third"],
+            },
+        }
+
+        self.assertEqual(
+            paper_contract.requirement_documents([bound]),
+            (
+                ("formulation", "lumen-thesis", "1. First"),
+                ("formulation", "lumen-thesis", "2. Second"),
+                ("formulation", "lumen-thesis", "3. Third"),
+            ),
+        )
+
+    def test_mutation_collapsing_the_section_list_to_its_first_title_is_caught(self) -> None:
+        """A weaker `requirement_documents` that only expands the FIRST
+        title of a list would silently drop every other section a binding
+        names -- this mutation proves the multi-title expansion is real,
+        not merely a shape that happens to round-trip a single-entry list."""
+        proc = _run_against_mutant(
+            "        titles = section if isinstance(section, list) else (section,)\n",
+            "        titles = (section[0],) if isinstance(section, list) else (section,)\n",
+            "tests.test_paper_contract.DocumentBindingSchemaTests"
+            ".test_requirement_documents_derives_one_triple_per_section_title_in_order",
+            source_path=SKILL_SCRIPTS / "paper_contract.py",
+        )
+        _assert_mutant_test_failed(self, proc)
+
+
+class ProducesFactsSchemaTests(unittest.TestCase):
+    """`fact-production` spec, `Requirement: produces_facts Field Grammar`:
+    a block (and, symmetrically, a section) MAY declare `produces_facts`,
+    parsed through the identical `_normalize_requirement_entry` shape
+    `requires_facts` already uses (design.md, Decision B). Shape-only here —
+    the corpus-wide quote-transcription gate lives in
+    `paper_graph.assemble_corpus` (`tests/test_paper_writing.py`), the same
+    split `SchemaTests.test_valid_header_parses_with_no_refusal` already
+    documents for `requires_facts`."""
+
+    def test_a_valid_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "gap",
+            "source": {"file": "related-work.md", "quote": "The gap itself."},
+        }
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "rw-closing",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [rich_entry],
+                }
+            ]
+        )
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [rich_entry])
+
+    def test_produces_facts_defaults_to_an_empty_list_when_absent(self) -> None:
+        header = _minimal_header()
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.blocks[0]["produces_facts"], [])
+        self.assertEqual(
+            parsed.produces_facts, [],
+            "the section-level field must default the same way `after` does, "
+            "so every existing fixture and construction site stays green",
+        )
+
+    def test_a_valid_section_level_produces_facts_entry_parses(self) -> None:
+        rich_entry = {
+            "value": "limitations",
+            "source": {"file": "limitations.md", "quote": "The limits themselves."},
+        }
+        header = _minimal_header(produces_facts=[rich_entry])
+        parsed, _body = paper_contract.parse(_header_bytes(header) + b"Prose.\n")
+
+        self.assertEqual(parsed.produces_facts, [rich_entry])
+
+    def test_produces_facts_entry_missing_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap"}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_produces_facts_entry_with_null_source_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [{"value": "gap", "source": None}],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("source", ctx.exception.detail)
+
+    def test_block_declaring_produces_facts_with_an_unknown_fact_refuses_unknown_fact(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": [
+                        {
+                            "value": "discussion",
+                            "source": {"file": "b.md", "quote": "The discussion."},
+                        }
+                    ],
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "UNKNOWN_FACT")
+        self.assertIn("discussion", ctx.exception.detail)
+
+    def test_produces_facts_that_is_not_a_list_refuses_malformed_header(self) -> None:
+        header = _minimal_header(
+            blocks=[
+                {
+                    "id": "b",
+                    "requires_facts": [],
+                    "requires_declarations": [],
+                    "citations": "none",
+                    "produces_facts": "gap",
+                }
+            ]
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_contract.parse(_header_bytes(header))
+
+        self.assertEqual(ctx.exception.code, "MALFORMED_HEADER")
+        self.assertIn("produces_facts", ctx.exception.detail)
+
+
 #: The ten shipped contracts' body digests as committed at HEAD **before**
 #: this change (578d117f9008062c08bc3a4bd93f2e7245b4ce9b), when every file
 #: was headerless prose end to end. Captured once, by running
@@ -383,19 +875,100 @@ class SchemaTests(unittest.TestCase):
 #: `mode.source.quote` unambiguous to a human reader, repointing `mode`
 #: away from the pre-existing "whole argument at one-fiftieth scale"
 #: sentence, which stays in the body as ordinary prose) -- its digest below
-#: was re-captured after that edit too. The other six are untouched since
-#: the original migration and keep their original digest.
+#: was re-captured after that edit too.
+#:
+#: All ten digests below were re-captured again for `the-phases-are-derived-
+#: not-remembered`, unit 1: every contract's flat `## Inputs` table was
+#: restructured into `### External inputs` / `### Internal chain` /
+#: `### Structural decisions` (`contract-input-partition` spec) -- a
+#: legitimate, intentional prose restructuring, never a meaning change. No
+#: sentence any `after`/`mode` quote depends on was touched; `GraphTests`
+#: and `ModeTranscriptionTests` above hold that lock independently.
+#:
+#: Eight of the ten digests below were re-captured a second time for unit
+#: 1b: unit 1 wrote a positive "None -- nothing here is derived from a
+#: sibling block's own prose" assertion into every `### Internal chain`
+#: heading, and six of those eight assertions were false, each contradicted
+#: by prose already sitting in the same file. Unit 1b replaces the false
+#: "None" with real, quote-backed rows in `01`, `02`, `03`, `05`, `09`,
+#: `10`, and rewrites the two genuinely-empty "None" assertions in `04` and
+#: `07` into a checkable measurement statement. `06` and `08` are untouched
+#: by unit 1b and keep their unit-1 digest.
+#:
+#: `06-introduction.md`'s digest was re-captured a further time for unit 4
+#: (`internal-chain-edges`): task 4.8g rewrites the `## Block 4` heading
+#: itself, from `## Block 4 -- Proposal and contributions` to
+#: `` ## Block 4 -- Proposal and contributions (`block-4a`, `block-4b`) ``,
+#: an explicit-grouping fix for the residue `BLOCK_SUBUNIT_UNDECLARED`'s
+#: own extended check (`_verify_block_subunits`, `UNIT_HEADING_AMBIGUOUS`
+#: branch) would otherwise flag -- a genuine PROSE change, unlike every
+#: other unit-4 edit (all fourteen `after` entries live in the HEADER,
+#: below the closing fence's own JSON, and move no body digest). No other
+#: file's digest moves in unit 4.
+#:
+#: `02-experimental-setup.md`'s digest was re-captured a further time for
+#: `the-requirement-names-the-sentence-that-demands-it`, Work Unit U3: the
+#: operator's ruling on `es-assessment`'s `experimental-design` and `gap`
+#: requirements was "B — the contract never wrote it down" for both
+#: (`unanchored-requirements.md`), and U3's own launch prompt explicitly
+#: authorizes adding two `### External inputs` rows naming those facts so
+#: the requirement entries have something real to anchor to — a genuine,
+#: ruling-sanctioned PROSE change, the only one this file has had since
+#: header insertion.
+#:
+#: `02`, `03`, `05`, `06`, `07`, `09` were re-captured a further time in
+#: `a-fact-is-declared-or-it-is-produced` unit 2: `gap`, `contributions`,
+#: `problem-statement` and `limitations` became produced-class facts, so
+#: every consumer row naming one of them moved from `### External inputs`
+#: to `### Internal chain`, pointing at its producer — a genuine,
+#: task-2.5-sanctioned PROSE change (row moves and one `after`-edge note in
+#: `06`'s own `### Structural decisions`), never a meaning change to any
+#: quote an `after`/`requires_facts`/`produces_facts` entry depends on.
+#: `04` and `10` and `01` are untouched by unit 2 and keep their prior
+#: digest. `08` was re-captured a further time in
+#: `a-fact-is-declared-or-it-is-produced` UNIT 4 (`sdd-verify` FAIL,
+#: CRITICAL): `abstract.slot-2` requires `contributions` but carried no
+#: `### Internal chain` row naming its producer, `introduction.block-4b` —
+#: `paper_graph._verify_producer_chain_rows`'s own new check (the
+#: `contract-input-partition` spec's added row-presence requirement) refused
+#: `PRODUCER_CHAIN_ABSENT` against the real corpus until one row (and the
+#: `after` edge it names) was added — a genuine, ruling-sanctioned PROSE
+#: change, never a meaning change to any quote an existing `after`/
+#: `requires_facts`/`produces_facts` entry depends on.
+#:
+#: `01`, `02`, `03`, `05`, `06`, `07`, `08`, `09` were re-captured a further
+#: time in `the-methods-section-produces-the-contributions`:
+#: `materials-and-methods.mm-proposal` became `contributions`' sole
+#: producer (`01` gains the fact's `produces_facts` entry, an ordered
+#: `\item` roster mandate before the closing pointer, and inverted
+#: naming-authority prose; `06`'s `block-4b` drops the fact and gains
+#: `requires_facts` + an `after` edge + an eighth `### Internal chain` row,
+#: with its own naming-authority prose inverted); `02`, `03`, `05`, `07`,
+#: `08` each retarget one existing `after` edge and row from
+#: `introduction.block-4b` to `materials-and-methods.mm-proposal`, reusing
+#: every `source.quote` verbatim (`05` also states its `components_from`
+#: referent moved). `09`'s digest also moves: its row-only retarget (no
+#: `after` edge, since `_position_derived_edges` already orders M&M before
+#: title) still changes one body byte span, the row's own dependency cell.
+#: `06`'s digest moves a further time within this same change: its
+#: `### Structural decisions` bullet arguing `block-4a`/`block-4b` must
+#: stay separate ids cited a cycle rationale ("block 2 depends on 4b, and
+#: 4a depends on block 2") the move itself falsifies -- block 2 now
+#: depends on `mm-proposal`, never on `block-4b` -- so the stale claim was
+#: corrected in place (MANTENIMIENTO pattern 3), never a meaning change to
+#: any quote an entry depends on. `04` and `10` are untouched and keep
+#: their prior digest.
 PRE_MIGRATION_BODY_DIGESTS: dict[str, str] = {
-    "01-materials-and-methods.md": "ca424309f46389e79155d58d36245e4160db77aaf837b48a2b585d1e0e628a89"[:64],
-    "02-experimental-setup.md": "c4465b7f1a371e1b8ee2315e4032cff0a6e8bf76ac4c0a8903a90635c8f7888f"[:64],
-    "03-results-and-discussion.md": "e48277cdcc415b5641a72d7a473bc7900dc1bd882a84afc1f7b6c89e1b5b39f0"[:64],
-    "04-limitations.md": "1e78bf579fcc41399b7bf47981197afe419ce2c657f5d0a3fdad79ac1404931b"[:64],
-    "05-related-work.md": "d4d10c2da38e6c576c6305bd0c37879c81bfb5806670f3c2dc9bc851a19483b4"[:64],
-    "06-introduction.md": "0f6c3b6bfe13206470ed22d88a953f96e86b81bd56445b0c2e40d1ee1354cbff"[:64],
-    "07-conclusions.md": "a855ee2a68b66328562317274049d9f78108457644089b3125ea6b51a76ae84b"[:64],
-    "08-abstract.md": "2e5ef7501bccafc785be3aa7fa640dbcf62add3e7e5bc345fa1be21f34a20b66"[:64],
-    "09-title-and-keywords.md": "7f44428e530a0209152366e83a7c7e23c52cfc41efe1bc9689eb813c3c44b297"[:64],
-    "10-back-matter.md": "8965bd1e429556163077e4350c1a57d4d4d06f3852fa7b6b117236bdc61be2ff"[:64],
+    "01-materials-and-methods.md": "f8ac80bce7a17abb57f99b7be10345beebe1435763f7c5ac9158dda23261aca4"[:64],
+    "02-experimental-setup.md": "bfd655f577c8f61802fc4c3d5280f5ada15b9342e11c6b941e75455c0d381960"[:64],
+    "03-results-and-discussion.md": "5d32f19e4636fa5be6773fadee31d19019c02d06f312ebcfc8a0058a841795df"[:64],
+    "04-limitations.md": "78f18ca0dd137e5377c423210566555bd20bfd9eb20eb9bf5a38f1aa195bbe76"[:64],
+    "05-related-work.md": "7d2f87474f7c357bdb99971e49784f0f6415887f988f00d2a7b3b0b4679098a6"[:64],
+    "06-introduction.md": "704bbc8c238d7e7a06746c9ac06dd8006a3d69679e7b32b9a9edec593a1fb35d"[:64],
+    "07-conclusions.md": "27defb96c3dcd6e136b90c2ce614f8eb2b51376afdb69b4f0345426d847ec1d5"[:64],
+    "08-abstract.md": "fc454229068a7bef3c91a5645a195c0f385bdfcc280d8562e42464684c7d6acc"[:64],
+    "09-title-and-keywords.md": "c1f8f8401d08f5e2832cfc17cc9eeabb9b27d1f269ef2d6ad2e4d2b34583687c"[:64],
+    "10-back-matter.md": "b1cd44fe7c00d8eca92d979be5780a97a6cd815faba9ab3890442f2286316cbb"[:64],
 }
 
 
@@ -426,7 +999,21 @@ class ShippedHeaderDigestTests(unittest.TestCase):
             self.assertEqual(header.section, name[3:-3])
 
 
-def _write_section(directory: Path, filename: str, header: dict, body: bytes = b"Prose.\n") -> None:
+#: `contract-input-partition` spec, `Requirement: Two-Heading Partition`:
+#: EVERY assembled contract, including a synthetic fixture, must carry both
+#: headings or `paper_graph.assemble_corpus` refuses `INPUT_PARTITION_ABSENT`
+#: -- this is the shared default body every `_write_section` caller below
+#: gets unless it passes its own `body=`, so a fixture built only to
+#: exercise an unrelated concern (id collisions, `after` resolution, order,
+#: readiness) does not also have to spell out an empty partition by hand.
+_DEFAULT_PARTITIONED_BODY = (
+    b"Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+)
+
+
+def _write_section(
+    directory: Path, filename: str, header: dict, body: bytes = _DEFAULT_PARTITIONED_BODY,
+) -> None:
     (directory / filename).write_bytes(_header_bytes(header) + body)
 
 
@@ -444,6 +1031,18 @@ def _block(block_id: str, *, facts=(), declarations=(), citations="none", after=
 
 def _quote_source(file: str, quote: str) -> dict:
     return {"file": file, "quote": quote}
+
+
+def _fact_entry(value: str, file: str, *, quote: str | None = None) -> dict:
+    """A rich `requires_facts`/`requires_declarations` entry, self-sourced
+    at `file` by default with the same `This block requires the <value>.`
+    sentence `_write_section`'s caller is expected to append to that file's
+    own body -- U3 (design.md D3) removed bare-string acceptance, so every
+    `_block(facts=[...])` caller below now builds this shape instead."""
+    return {
+        "value": value,
+        "source": _quote_source(file, quote or f"This block requires the {value}."),
+    }
 
 
 def _quote_in_body(file_path: Path, quote: str) -> bool:
@@ -821,11 +1420,14 @@ class ModeTranscriptionTests(unittest.TestCase):
                     "citations": "none",
                 }],
             }
+            partition = b"\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
             (sections_dir / "with-mode.md").write_bytes(
-                b"---\n" + json.dumps(declared_header).encode("utf-8") + b"\n---\nThis section argues.\n"
+                b"---\n" + json.dumps(declared_header).encode("utf-8")
+                + b"\n---\nThis section argues." + partition
             )
             (sections_dir / "without-mode.md").write_bytes(
-                b"---\n" + json.dumps(undeclared_header).encode("utf-8") + b"\n---\nNo mode sentence here.\n"
+                b"---\n" + json.dumps(undeclared_header).encode("utf-8")
+                + b"\n---\nNo mode sentence here." + partition
             )
 
             corpus = paper_graph.assemble_corpus(sections_dir)
@@ -949,6 +1551,599 @@ class EmphasisStripTests(unittest.TestCase):
         self.assertFalse(paper_contract.quote_in_body(body, "functions"))
 
 
+class InputPartitionTests(unittest.TestCase):
+    """`contract-input-partition` spec, `Requirement: Two-Heading
+    Partition`: every contract's prose MUST carry `### External inputs` and
+    `### Internal chain`, or `_verify_input_partition` (called from
+    `paper_graph.assemble_corpus`) refuses `INPUT_PARTITION_ABSENT` naming
+    whichever is missing."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    _PARTITIONED_BODY = (
+        b"# Example\n\n"
+        b"### External inputs\n\n"
+        b"| Input | Unblocks |\n|---|---|\n"
+        b"| The **dataset** | `example.only` |\n\n"
+        b"### Internal chain\n\n"
+        b"None -- `example.only` depends only on external facts.\n"
+    )
+
+    def test_a_partitioned_contract_parses_with_no_refusal(self) -> None:
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=self._PARTITIONED_BODY,
+        )
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+
+        self.assertIn("example.only", corpus.blocks)
+
+    def test_a_flat_unpartitioned_contract_refuses_naming_internal_chain(self) -> None:
+        """`contract-input-partition` spec's own scenario: a flat `## Inputs`
+        table missing BOTH headings refuses naming `### Internal chain`
+        specifically -- the more actionable half, since that is the
+        dependency data this change exists to make explicit."""
+        body = (
+            b"# Example\n\n"
+            b"## Inputs\n\n"
+            b"| What | Depends on |\n|---|---|\n| Everything | the dataset |\n"
+        )
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_missing_only_internal_chain_refuses_naming_it(self) -> None:
+        body = (
+            b"### External inputs\n\n"
+            b"| Input | Unblocks |\n|---|---|\n| The **dataset** | `example.only` |\n"
+        )
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_missing_only_external_inputs_refuses_naming_it(self) -> None:
+        body = b"### Internal chain\n\nNone -- `example.only` depends only on external facts.\n"
+        _write_section(
+            self.sections_dir, "01-example.md",
+            {"section": "example", "position": 1, "blocks": [_block("only")]},
+            body=body,
+        )
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### External inputs", ctx.exception.detail)
+
+    def test_the_real_corpus_partitions_cleanly(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertEqual(len(corpus.sections), 10)
+
+    def test_mutation_deleting_internal_chain_from_a_normalized_fixture_fires_live(self) -> None:
+        """Task 1.4: the guard must fire against a LIVE re-parse of the
+        mutated file, never a cached result from the first, passing parse --
+        proven by re-parsing the SAME directory twice, the second time after
+        the heading has been deleted underneath it."""
+        header = {"section": "example", "position": 1, "blocks": [_block("only")]}
+        _write_section(self.sections_dir, "01-example.md", header, body=self._PARTITIONED_BODY)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        mutated_body = (
+            b"### External inputs\n\n"
+            b"| Input | Unblocks |\n|---|---|\n| The **dataset** | `example.only` |\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=mutated_body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "INPUT_PARTITION_ABSENT")
+        self.assertIn("### Internal chain", ctx.exception.detail)
+
+    def test_corpus_wide_content_smoke_check_via_the_cli(self) -> None:
+        """Task 1.21: `paper_cli.py contract` over the whole shipped corpus
+        reports zero `INPUT_PARTITION_ABSENT` refusals now that all ten
+        contracts carry the two-heading partition -- chain-row backing
+        itself (`CHAIN_ROW_UNRESOLVED`/`CHAIN_ROW_UNBACKED`) is unit 4's own
+        concern, not this unit's."""
+        proc = subprocess.run(
+            [sys.executable, str(SKILL_SCRIPTS / "paper_cli.py"), "contract"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(len(payload["sections"]), 10)
+
+    def test_introduction_block_4_is_two_blocks_not_one_composite(self) -> None:
+        """`introduction.block-4` is TWO blocks, not one node with glosses.
+        The contract's own extent line says so -- "Two physical paragraphs,
+        120-180 words in total" -- and it names them `Paragraph 4a - the
+        prose` and `Paragraph 4b - the list`.
+
+        Collapsing them manufactures a cycle the writing order does not
+        have: block 2 depends on 4b (each contribution read backwards as
+        the deficiency it resolves) while 4a depends on block 2 (the
+        purpose clause mirrors its specific problems). Those parts fall on
+        OPPOSITE sides of block 2, so one node cannot express them --
+        settled decision 5's union rule has no answer here, and the split
+        is at the contract's block inventory, never at the graph."""
+        _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
+        text = body.decode("utf-8")
+
+        self.assertIn("Two physical paragraphs", text)
+        self.assertIn("Paragraph 4a", text)
+        self.assertIn("Paragraph 4b", text)
+
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        self.assertIn("introduction.block-4a", corpus.blocks)
+        self.assertIn("introduction.block-4b", corpus.blocks)
+        self.assertNotIn(
+            "introduction.block-4", corpus.blocks,
+            "the collapsed id must be gone -- leaving it would let a chain row "
+            "resolve to a node whose parts straddle block 2",
+        )
+
+        # 4a carries only the formulation; the results complete 4b's list,
+        # never 4a's prose. Getting this backwards would hold the whole
+        # presenting paragraph hostage to a measurement it never needed.
+        self.assertEqual(corpus.blocks["introduction.block-4a"].requires_facts, ("formulation",))
+        self.assertEqual(
+            corpus.blocks["introduction.block-4b"].requires_facts,
+            ("formulation", "results", "contributions"),
+        )
+
+    def test_the_internal_chain_of_the_introduction_is_acyclic(self) -> None:
+        """`the-methods-section-produces-the-contributions` re-measured this
+        test: `block-2` now depends on `materials-and-methods.mm-proposal`
+        (`contributions`' sole producer, moved from `introduction.block-4b`)
+        and `block-4b` gained its own fifth row depending on that same
+        producer (`_verify_producer_chain_rows`'s own row-presence
+        requirement). Five normalized chain rows whose SUBJECT starts with
+        `introduction.` now form 4b -> mm-proposal, 4b -> 2 -> mm-proposal,
+        4a -> 2, 4a -> 4b, and 3 -> 2 -- still a DAG, still the regression
+        for the cycle the collapsed `block-4` produced."""
+        _header, body = paper_contract.parse((SECTIONS_DIR / "06-introduction.md").read_bytes())
+        text = body.decode("utf-8")
+        chain = text.split("### Internal chain", 1)[1].split("###", 1)[0]
+
+        rows = [line for line in chain.splitlines() if line.startswith("| `introduction.")]
+        self.assertEqual(len(rows), 5, chain)
+
+        def ends(row: str) -> tuple:
+            subject, dependency = row.split("|")[1], row.split("|")[2]
+            return (subject.split("`")[1], dependency.split("`")[1])
+
+        edges = {ends(row) for row in rows}
+        self.assertEqual(
+            edges,
+            {
+                ("introduction.block-2", "materials-and-methods.mm-proposal"),
+                ("introduction.block-3", "introduction.block-2"),
+                ("introduction.block-4a", "introduction.block-2"),
+                ("introduction.block-4a", "introduction.block-4b"),
+                ("introduction.block-4b", "materials-and-methods.mm-proposal"),
+            },
+        )
+        # No pair appears in both directions -- that is what the collapsed
+        # id produced and what this split exists to remove.
+        for subject, dependency in edges:
+            self.assertNotIn((dependency, subject), edges, f"{subject} <-> {dependency}")
+
+
+class InternalChainTests(unittest.TestCase):
+    """`internal-chain-edges` spec, both Requirements; `contract-input-
+    partition` spec, `Requirement: Internal-Chain Rows Name Qualified Block
+    Ids`. `_verify_internal_chain` (called from `paper_graph.assemble_corpus`,
+    right after `_verify_after_transcription`) refuses `CHAIN_ROW_UNRESOLVED`
+    when a row's leading token is not a key of `corpus.blocks`, and
+    `CHAIN_ROW_UNBACKED` when it is a key but no `after` edge backs the
+    pair."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def _body(self, chain_table: bytes) -> bytes:
+        return (
+            b"# Example\n\nProse.\n\n### External inputs\n\nNone.\n\n"
+            b"### Internal chain\n\n| Block | Depends on |\n|---|---|\n"
+            + chain_table
+        )
+
+    def test_a_row_naming_a_qualified_id_maps_and_a_backed_row_is_accepted(self) -> None:
+        """`internal-chain-edges` spec's own "A backed row is accepted"
+        scenario, and `contract-input-partition`'s "A row naming a
+        qualified id maps"."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [
+                _block("first"),
+                _block("second", after=[
+                    {"target": "example.first",
+                     "source": _quote_source("sections/01-example.md", "Prose.")},
+                ]),
+            ],
+        }
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+
+        self.assertIn("example.second", corpus.blocks)
+
+    def test_a_row_naming_only_a_paraphrase_refuses_chain_row_unresolved(self) -> None:
+        """`contract-input-partition` spec's own scenario: a row naming no
+        qualified block id anywhere refuses `CHAIN_ROW_UNRESOLVED` naming
+        that row's text."""
+        header = {"section": "example", "position": 1, "blocks": [_block("only")]}
+        body = self._body(
+            b"| depends on: the announcement of the count | plain prose, no id |\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNRESOLVED")
+        self.assertIn("the announcement of the count", ctx.exception.detail)
+
+    def test_mutation_editing_a_mapping_row_to_drop_its_qualified_id_refuses_live(self) -> None:
+        """Task 4.3: a previously-mapping row edited to drop its qualified
+        id must refuse on a LIVE re-parse, never reuse a stale mapping."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [
+                _block("first"),
+                _block("second", after=[
+                    {"target": "example.first",
+                     "source": _quote_source("sections/01-example.md", "Prose.")},
+                ]),
+            ],
+        }
+        good_body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=good_body)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        mutated_body = self._body(b"| `example.second` | the first block, dropped id |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=mutated_body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNRESOLVED")
+
+    def test_a_row_naming_a_real_block_with_no_backing_edge_refuses_chain_row_unbacked(self) -> None:
+        """`internal-chain-edges` spec's own "An unbacked row refuses"
+        scenario: both cells resolve to real ids, but the header carries no
+        matching `after` edge -- refuses `CHAIN_ROW_UNBACKED` naming the
+        holder and the missing dependency."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("first"), _block("second")],  # no `after` at all
+        }
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+        self.assertIn("example.second", ctx.exception.detail)
+        self.assertIn("example.first", ctx.exception.detail)
+
+    def test_mutation_deleting_the_backing_after_entry_refuses_live(self) -> None:
+        """`internal-chain-edges` spec's own "Mutation -- deleting a backing
+        edge is caught" scenario: the check reads the LIVE edge set, never
+        a cached result from the row's earlier presence."""
+        first_backed = _block("second", after=[
+            {"target": "example.first",
+             "source": _quote_source("sections/01-example.md", "Prose.")},
+        ])
+        header = {"section": "example", "position": 1, "blocks": [_block("first"), first_backed]}
+        body = self._body(b"| `example.second` | `example.first` |\n")
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        paper_graph.assemble_corpus(self.sections_dir)  # first, live parse: no refusal
+
+        unbacked_header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("first"), _block("second")],  # `after` entry removed
+        }
+        _write_section(self.sections_dir, "01-example.md", unbacked_header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)  # second, live parse: refuses
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+
+    def test_corpus_wide_one_missing_edge_among_many_stops_the_run(self) -> None:
+        """`internal-chain-edges` spec's own "One missing edge among many
+        stops the run" scenario: nine of ten named dependencies backed,
+        one not -- the run refuses on the one gap, and no order/readiness
+        report is produced from the incomplete graph."""
+        blocks = [_block("root")]
+        for index in range(1, 10):
+            backed = index != 9  # the 9th dependency (index 9) is left unbacked
+            after = None
+            if backed:
+                after = [{
+                    "target": f"example.b{index - 1}" if index > 1 else "example.root",
+                    "source": _quote_source("sections/01-example.md", "Prose."),
+                }]
+            blocks.append(_block(f"b{index}", after=after))
+        header = {"section": "example", "position": 1, "blocks": blocks}
+
+        rows = []
+        for index in range(1, 10):
+            dependency = f"example.b{index - 1}" if index > 1 else "example.root"
+            rows.append(f"| `example.b{index}` | `{dependency}` |\n".encode("utf-8"))
+        body = self._body(b"".join(rows))
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "CHAIN_ROW_UNBACKED")
+        self.assertIn("example.b9", ctx.exception.detail)
+
+    def test_the_real_corpus_transcribes_every_internal_chain_row_with_no_refusal(self) -> None:
+        """Task 4.11: `specs/section-contract/spec.md`'s shipped scenarios
+        ("every edge quote-backed", "no row left unmapped") hold against
+        the real corpus."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertEqual(len(corpus.sections), 10)
+
+    def test_the_introductions_three_chain_rows_become_three_after_edges(self) -> None:
+        """`the-methods-section-produces-the-contributions` re-measured this
+        acid test: `block-2` <- `block-4b` retargets to `block-2` <-
+        `materials-and-methods.mm-proposal` (`contributions`' sole producer
+        moved there), `block-4b` gains its own new edge to that same
+        producer, and `block-4a` <- `block-2` / `block-4a` <- `block-4b`
+        stay exactly as before. Must not cycle."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(("materials-and-methods.mm-proposal", "introduction.block-2"), pairs)
+        self.assertIn(("materials-and-methods.mm-proposal", "introduction.block-4b"), pairs)
+        self.assertIn(("introduction.block-2", "introduction.block-4a"), pairs)
+        self.assertIn(("introduction.block-4b", "introduction.block-4a"), pairs)
+
+        order = paper_graph.derive_order(corpus, edge_set)  # must not raise ORDER_CYCLE
+        index = {qid: i for i, qid in enumerate(order)}
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-2"])
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-4b"])
+        self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
+
+    def test_related_works_closing_depends_on_problem_blocks_intra_node(self) -> None:
+        """The acid test: `05`'s single row is `rw-closing` after
+        `rw-problem-blocks` -- never a self-edge on the shared
+        `rw-problem-blocks` id, which would be an `ORDER_CYCLE`."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(("related-work.rw-problem-blocks", "related-work.rw-closing"), pairs)
+        self.assertNotIn(
+            ("related-work.rw-problem-blocks", "related-work.rw-problem-blocks"), pairs,
+        )
+
+    def test_mm_preambles_internal_chain_becomes_a_real_edge(self) -> None:
+        """Task 4.9: `mm-preamble`'s internal chain becomes a real edge --
+        only edge existence is asserted here, never placement (unit 5's
+        own concern)."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        edge_set = paper_graph.collect_edges(corpus)
+        pairs = {(before, after) for before, after, _source in edge_set.edges}
+
+        self.assertIn(
+            ("materials-and-methods.mm-proposal", "materials-and-methods.mm-preamble"), pairs,
+        )
+
+
+class BlockSubunitTests(unittest.TestCase):
+    """tasks.md 4.8b-4.8i: `_verify_block_subunits` (called from
+    `paper_graph.assemble_corpus`) is the PROSE -> HEADER direction no
+    existing check covers -- a numbered heading naming a sub-unit the
+    front matter never declared."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.sections_dir = Path(self._tmp.name) / "sections"
+        self.sections_dir.mkdir()
+
+    def test_the_real_corpus_reports_zero_false_positives(self) -> None:
+        """Task 4.8d, measured direction 1: the real corpus -- six
+        unit-headings carry `###` children, five of them prose notes with
+        no unit word, and only `06`'s `### Paragraph 4a`/`4b` match, both
+        resolving to declared ids -- assembles with no refusal."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        self.assertIn("introduction.block-4a", corpus.blocks)
+        self.assertIn("introduction.block-4b", corpus.blocks)
+
+    def test_a_reintroduced_unit_word_child_with_no_matching_id_refuses(self) -> None:
+        """Task 4.8d, measured direction 2: a fixture reintroducing
+        `### Paragraph 5a` under `## Block 5` with no matching id refuses
+        `BLOCK_SUBUNIT_UNDECLARED`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-5")],
+        }
+        body = (
+            b"# Example\n\n## Block 5 -- Evaluation\n\n"
+            b"### Paragraph 5a -- the setup.\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+        self.assertIn("Paragraph 5a", ctx.exception.detail)
+
+    def test_mutation_collapsing_block_4a_4b_back_to_block_4_fires_the_guard(self) -> None:
+        """Task 4.8e: RED-first mutation -- collapse `block-4a`/`block-4b`
+        back to one `block-4` id in a fixture reproducing the real corpus's
+        own heading shape, and confirm `BLOCK_SUBUNIT_UNDECLARED` fires --
+        the guard must catch the EXACT anomaly that shipped unnoticed, not
+        merely pass alongside it."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4")],  # collapsed: 4a/4b's split undone
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions\n\n"
+            b"### Paragraph 4a -- the prose.\n\nProse.\n\n"
+            b"### Paragraph 4b -- the list.\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+
+    def test_a_parent_heading_resolving_to_zero_ids_refuses(self) -> None:
+        """A `## Block N` PARENT heading naming a number no declared id
+        carries at all (not even a composite `Na`/`Nb` split -- that shape
+        is `test_a_parent_heading_resolving_to_several_ids_...` below)
+        refuses `BLOCK_SUBUNIT_UNDECLARED`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-1")],  # no id anywhere numbered "7"
+        }
+        body = (
+            b"# Example\n\n## Block 7 -- Nothing declares this\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "BLOCK_SUBUNIT_UNDECLARED")
+
+    def test_a_parent_heading_resolving_to_a_composite_split_with_no_children_refuses(self) -> None:
+        """Task 4.8g's own residue, reproduced directly: `## Block 4` with
+        NO `###` children maps, under loose suffix matching, to BOTH
+        `block-4a` and `block-4b` -- two ids, no explicit grouping in the
+        heading text -- which this guard classifies `UNIT_HEADING_
+        AMBIGUOUS`, the exact shape `06` carried before task 4.8g's fix
+        named both ids in the heading itself."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "UNIT_HEADING_AMBIGUOUS")
+
+    def test_the_fixed_block_4_heading_names_both_ids_and_refuses_nothing(self) -> None:
+        """Task 4.8g's own fix, reproduced directly: naming BOTH resolved
+        ids in the parent heading itself is an explicit grouping, not
+        ambiguous -- the real `06-introduction.md` heading shape today."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions "
+            b"(`block-4a`, `block-4b`)\n\nProse.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        corpus = paper_graph.assemble_corpus(self.sections_dir)  # must not raise
+        self.assertIn("example.block-4a", corpus.blocks)
+
+    def test_a_parent_heading_resolving_to_several_ids_with_no_grouping_refuses_ambiguous(self) -> None:
+        """Task 4.8h: a `##` PARENT heading resolving to more than one
+        declared id, without naming every one of them in the heading text
+        itself, refuses the new `UNIT_HEADING_AMBIGUOUS`."""
+        header = {
+            "section": "example", "position": 1,
+            "blocks": [_block("block-4a"), _block("block-4b")],
+        }
+        body = (
+            b"# Example\n\n## Block 4 -- Proposal and contributions, split in two\n\n"
+            b"Prose.\n\n### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n"
+        )
+        _write_section(self.sections_dir, "01-example.md", header, body=body)
+
+        with self.assertRaises(Refused) as ctx:
+            paper_graph.assemble_corpus(self.sections_dir)
+
+        self.assertEqual(ctx.exception.code, "UNIT_HEADING_AMBIGUOUS")
+
+    def test_content_named_contracts_never_enter_either_branch(self) -> None:
+        """Task 4.8i, measured direction: the check stays SILENT on the four
+        content-named contracts (`03`, `04`, `09`, `10`) -- asserted
+        against the real corpus, not merely a fixture, since those files'
+        own numbered-LOOKING content (none, in fact) must never misfire."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        for section_id in ("results-and-discussion", "limitations",
+                            "title-and-keywords", "back-matter"):
+            self.assertFalse(
+                paper_graph._section_uses_numbered_ids(corpus, section_id),
+                f"{section_id}: expected content-named ids, no numbered convention",
+            )
+
+    def test_semantically_named_numbered_headings_never_misfire(self) -> None:
+        """Correction to 4.8i's own stated gate (heading-pattern-based): `01`
+        and `02` (and `05`) use `## Slot|Subsection|Block N` HEADINGS with
+        semantically-named ids (`mm-dataset`, `es-assessment`) that carry no
+        numeric suffix at all -- a naive heading-pattern gate would misfire
+        `BLOCK_SUBUNIT_UNDECLARED` on `01`'s own `## Slot 1 -- The dataset`.
+        Measured directly: the real corpus assembles cleanly, and `01`,
+        `02`, `05` are confirmed NOT to use the numbered-id convention this
+        check actually requires."""
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)  # must not raise
+        for section_id in ("materials-and-methods", "experimental-setup", "related-work"):
+            self.assertFalse(
+                paper_graph._section_uses_numbered_ids(corpus, section_id),
+                f"{section_id}: uses numbered HEADINGS but content-named ids",
+            )
+
+
 class OrderTests(unittest.TestCase):
     """`writing-readiness` spec: the derived writing order, and its
     distinctness from both filename order and rendering (`position`)
@@ -985,7 +2180,8 @@ class OrderTests(unittest.TestCase):
         for rw_block in corpus.order_by_section["related-work"]:
             self.assertLess(index["introduction.block-1"], index[rw_block])
             self.assertLess(index["introduction.block-2"], index[rw_block])
-            self.assertLess(index["introduction.block-4"], index[rw_block])
+            self.assertLess(index["introduction.block-4a"], index[rw_block])
+            self.assertLess(index["introduction.block-4b"], index[rw_block])
             self.assertLess(index[rw_block], index["introduction.block-3"])
 
     def test_back_matter_renders_last_while_its_writing_order_place_is_graph_derived_not_fact_derived(self) -> None:
@@ -1001,8 +2197,14 @@ class OrderTests(unittest.TestCase):
         (rendering order), and the derived order does not place a
         zero-missing-facts block ahead of fact-blocked ones (writing order is
         graph-derived, not readiness-derived) -- back matter carries no
-        `after` edge of its own, transcribed or position-derived, so nothing
-        in the graph names it either."""
+        CROSS-SECTION `after` edge, transcribed or position-derived, so
+        nothing in another section's graph names it either. Unit 4
+        (`internal-chain-edges`) transcribes back matter's own INTRA-section
+        row (`bm-acknowledgments` after `bm-funding`), which constrains only
+        the write order WITHIN back matter, never its render position
+        relative to any other section -- measured below rather than
+        re-asserting the pre-unit-4 "no edge at all" claim, which this row
+        makes false."""
         corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
 
         # Rendering order: back matter's own `position` is the maximum among
@@ -1013,15 +2215,23 @@ class OrderTests(unittest.TestCase):
             max(header.position for header in corpus.sections.values()),
         )
 
-        # Back matter carries no `after` edge anywhere -- section-level or
-        # block-level -- so nothing transcribed constrains its place, and it
-        # is not `title-and-keywords` (the one section that receives a
-        # position-derived edge). Its place in the writing order is decided
-        # only by the (absent) `after` edges naming it, never by `position`.
+        # Back matter carries no CROSS-SECTION `after` edge anywhere --
+        # section-level or block-level -- so nothing transcribed constrains
+        # its place relative to another section, and it is not
+        # `title-and-keywords` (the one section that receives a
+        # position-derived edge). Its OWN intra-section row
+        # (`bm-acknowledgments` after `bm-funding`) is permitted: it
+        # reorders nothing across section boundaries.
         bm_header = corpus.sections["back-matter"]
         self.assertEqual(bm_header.after, [])
         for raw_block in bm_header.blocks:
-            self.assertEqual(raw_block["after"], [])
+            for entry in raw_block["after"]:
+                self.assertTrue(
+                    entry["target"].startswith("back-matter."),
+                    f"{raw_block['id']}: after-edge target {entry['target']!r} "
+                    "crosses out of back-matter -- only an intra-section edge "
+                    "is expected here",
+                )
 
         # Readiness: every back-matter block requires zero facts, so a
         # (wrong) fact-only ordering signal would rank every one of them
@@ -1104,6 +2314,325 @@ class OrderTests(unittest.TestCase):
             self.assertLess(order.index("a.only"), order.index("b.only"))
 
 
+class OrderCliFrontDoorTests(unittest.TestCase):
+    """`order`: `paper_cli.cmd_order`, the CLI front door a real caller
+    actually dispatches through -- never `paper_graph.derive_order` called
+    directly, which is all `OrderTests` above (and `test_paper_writing.py`)
+    do, 21 times combined. That coverage proves `derive_order`'s ALGORITHM
+    holds; it never once proves `cmd_order`'s own WIRING holds -- reading
+    `args.sections`, resolving it, assembling the corpus, collecting
+    edges, and shaping the `{"order", "danglingEdges"}` envelope `main()`
+    prints. This is the exact shape `cmd_write` shipped with zero direct
+    coverage until a missing phase gate survived an entire unit undetected
+    (`the-writer-may-assert-only-what-it-was-given`, item 1) -- the FUNCTION
+    was covered, the VERB was not."""
+
+    def test_cmd_order_returns_the_order_and_dangling_edges_envelope_over_the_real_corpus(
+        self,
+    ) -> None:
+        result = paper_cli.cmd_order(argparse.Namespace(sections=None))
+
+        self.assertEqual(set(result.keys()), {"order", "danglingEdges"})
+        self.assertEqual(result["danglingEdges"], [])
+        index = {qid: i for i, qid in enumerate(result["order"])}
+        # The same acid-test assertions `InternalChainTests.test_the_
+        # introductions_three_chain_rows_become_three_after_edges` makes
+        # against `derive_order`'s own return value -- made here against
+        # `cmd_order`'s envelope instead, never against `derive_order`'s.
+        # Re-measured by `the-methods-section-produces-the-contributions`:
+        # `materials-and-methods.mm-proposal` (`contributions`' sole
+        # producer) now precedes both `block-2` and `block-4b` directly.
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-2"])
+        self.assertLess(index["materials-and-methods.mm-proposal"], index["introduction.block-4b"])
+        self.assertLess(index["introduction.block-2"], index["introduction.block-4a"])
+        self.assertLess(index["introduction.block-4b"], index["introduction.block-4a"])
+
+    def test_cmd_order_propagates_a_cycle_refusal_from_a_fixture_corpus(self) -> None:
+        """`cmd_order` must not swallow or reshape `derive_order`'s own
+        refusal -- proven against a real `--sections` override, the
+        argument name `cmd_order` actually reads off `args`. Lives under
+        `implementations/` (gitignored scratch, containment-eligible),
+        never a bare system tempdir: `resolve_sections_dir` refuses an
+        out-of-repository `--sections` with `SECTIONS_OUTSIDE_REPOSITORY`
+        before `assemble_corpus` ever runs, which would hide the very
+        `ORDER_CYCLE` propagation this test exists to prove."""
+        test_root = (
+            FORGE_ROOT / "implementations"
+            / f".paper-writing-order-cli-cycle-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        )
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        sections_dir = test_root / "sections"
+        sections_dir.mkdir(parents=True)
+        _write_section(sections_dir, "01-a.md", {
+            "section": "a", "position": 1,
+            "blocks": [_block(
+                "x", after=[{"target": "b.y", "source": _quote_source("sections/01-a.md", "Prose.")}]
+            )],
+        })
+        _write_section(sections_dir, "02-b.md", {
+            "section": "b", "position": 2,
+            "blocks": [_block(
+                "y", after=[{"target": "a.x", "source": _quote_source("sections/02-b.md", "Prose.")}]
+            )],
+        })
+
+        with self.assertRaises(Refused) as ctx:
+            paper_cli.cmd_order(argparse.Namespace(sections=str(sections_dir)))
+
+        self.assertEqual(ctx.exception.code, "ORDER_CYCLE")
+
+    def test_mutation_swapping_cmd_orders_own_attribute_name_fails_its_front_door_test(
+        self,
+    ) -> None:
+        """RED-first, deliberate mutation: `derive_order`'s 21 existing
+        tests call it directly with a `corpus`/`edge_set` pair they built
+        themselves -- none of them would ever notice `cmd_order` reading
+        the wrong argparse attribute off `args`, because none of them go
+        through `cmd_order` at all. Mutating `args.sections` to
+        `args.section` inside `cmd_order` itself proves THIS test's own
+        `Namespace(sections=...)` call is what catches it: `AttributeError`,
+        surfaced through `_run_against_mutant` as a failing dotted test,
+        never a clean run -- the exact defect shape a direct front-door
+        test exists to make impossible."""
+        proc = _run_against_mutant(
+            'def cmd_order(args: argparse.Namespace) -> dict:\n'
+            '    sections_dir = paper_contract.resolve_sections_dir(args.sections)',
+            'def cmd_order(args: argparse.Namespace) -> dict:\n'
+            '    sections_dir = paper_contract.resolve_sections_dir(args.section)',
+            "tests.test_paper_contract.OrderCliFrontDoorTests."
+            "test_cmd_order_returns_the_order_and_dangling_edges_envelope_over_the_real_corpus",
+            source_path=SKILL_SCRIPTS / "paper_cli.py",
+        )
+        _assert_mutant_test_failed(self, proc)
+
+
+def _shipped_paper_cli_verbs() -> set[str]:
+    """The verb roster `paper_cli.py`'s own `build_parser()` accepts --
+    read from the live parser, never grepped or hand-listed, the same
+    derivation `test_paper_writing.ObjectiveNorthTests.shipped_verbs`
+    already uses for the identical reason: a renamed, removed, or freshly
+    -added verb changes this set with zero edits here. This branch's own
+    working tree is shared with other concurrent agent sessions on other
+    branches; this function reads whatever `paper_cli.py` actually
+    contains at call time on THIS branch's checkout, never a cached or
+    hand-counted figure, which is exactly what let a mid-session sighting
+    of an unrelated branch's own in-flight verbs (`reuse`, `exhaustion` --
+    never part of this branch's history) get caught and corrected rather
+    than silently pinned as if they were this branch's own gap."""
+    parser = paper_cli.build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices.keys())
+    raise AssertionError(
+        "paper_cli.py's parser declares no subcommands -- build_parser()'s shape moved"
+    )
+
+
+#: The six `paper-writing` suites this task's own Verification section
+#: names and counts (695 tests, six `python -m unittest` targets) -- the
+#: scan scope for "does a verb have a front-door test", fixed to exactly
+#: that roster rather than globbed, because a 7th `test_paper_*.py` file
+#: can appear mid-session from unrelated concurrent work (`tests/
+#: test_paper_lifecycle.py` did, while this item was in flight) without
+#: that work's suite being part of what this task's baseline counts.
+_PAPER_CLI_SUITE_FILES = (
+    "test_paper_writing.py",
+    "test_paper_citation.py",
+    "test_paper_evidence.py",
+    "test_paper_figure.py",
+    "test_paper_contract.py",
+    "test_paper_decisions.py",
+)
+
+
+def _string_constant(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _cli_shelling_run_helper_names(tree: ast.Module) -> set[str]:
+    """Every `_run` helper anywhere in this ONE module CONFIRMED, by
+    walking its own body, to shell out to `paper_cli.py` as `subprocess.
+    run([sys.executable, ...])` -- never assumed from the name alone, so a
+    future `_run` meaning something unrelated is never read as front-door
+    evidence. All four `_run` helpers across the six suites match this
+    shape today (`test_paper_figure.CLIWiringTests._run`, `test_paper_
+    writing.CLIWiringTests._run`, `test_paper_writing.<E2E>._run`, `test_
+    paper_decisions.<E2E>._run`)."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_run":
+            dumped = ast.dump(node)
+            if "subprocess" in dumped and "executable" in dumped:
+                names.add(node.name)
+    return names
+
+
+def _front_door_verbs_in_file(path: Path) -> set[str]:
+    """Every verb ONE test file exercises through a front door this
+    repository's own tests already recognize as one: `paper_cli.cmd_<verb>
+    (...)` (`test_paper_decisions.CouplingsCliTests`'s own docstring calls
+    this exactly "the ... front door"), `paper_cli.main([<verb>, ...])`
+    (the real argparse dispatch), a confirmed CLI-shelling `self._run(
+    <verb>, ...)` helper, or a raw `subprocess.run([..., <a path ending in
+    paper_cli.py>, <verb>, ...])` call with no `_run` wrapper.
+
+    AST-based, never a flat-text grep: this repository's own calls wrap
+    across lines (`subprocess.run(\\n    [sys.executable, str(CLI), *args]`
+    is the shipped shape in every `_run` helper), and a flat-text search
+    for `subprocess.run([sys.executable` reads a real call as an absence
+    that is not there -- the same SEARCH TRAP this change's own brief
+    warns about for contract prose, equally real for source text.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    run_like = _cli_shelling_run_helper_names(tree)
+    verbs: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr.startswith("cmd_"):
+            verbs.add(func.attr[len("cmd_"):])
+            continue
+        if (isinstance(func, ast.Attribute) and func.attr == "main") or (
+            isinstance(func, ast.Name) and func.id == "main"
+        ):
+            if node.args and isinstance(node.args[0], (ast.List, ast.Tuple)) and node.args[0].elts:
+                verb = _string_constant(node.args[0].elts[0])
+                if verb:
+                    verbs.add(verb)
+            continue
+        if isinstance(func, ast.Attribute) and func.attr in run_like:
+            if node.args:
+                verb = _string_constant(node.args[0])
+                if verb:
+                    verbs.add(verb)
+            continue
+        if (
+            isinstance(func, ast.Attribute) and func.attr == "run"
+            and isinstance(func.value, ast.Name) and func.value.id == "subprocess"
+        ):
+            if node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+                elts = node.args[0].elts
+                cli_index = None
+                for i, elt in enumerate(elts):
+                    try:
+                        rendered = ast.unparse(elt)
+                    except Exception:
+                        continue
+                    if "paper_cli.py" in rendered:
+                        cli_index = i
+                        break
+                if cli_index is not None and cli_index + 1 < len(elts):
+                    verb = _string_constant(elts[cli_index + 1])
+                    if verb:
+                        verbs.add(verb)
+    return verbs
+
+
+#: Verbs `_front_door_verbs_in_file` measures as uncovered across the six
+#: `paper-writing` suites, pinned explicitly and dated -- the way `paper_
+#: cli.REFUSAL_CLASSIFICATION` pins every reachable code by name rather
+#: than leaving an unclassified one to read as covered by omission. A verb
+#: leaves this set only by gaining a real front-door test in one of the
+#: six suites; a verb enters it only by a deliberate, measured edit here.
+#:
+#: - `bib` (2026-09-19, measured on this branch, base `7b91bc5`, 22 shipped
+#:   verbs): `paper_bib.build_refs_bib` and `cmd_bib`'s own `reciprocal`
+#:   check are exercised directly (`test_paper_evidence.py`, `test_paper_
+#:   writing.py`), but nothing calls `paper_cli.cmd_bib`, `paper_cli.main(
+#:   ["bib", "build", ...])`, or shells out to `paper_cli.py bib build` in
+#:   any of the six suites -- out of this item's scope (tests only;
+#:   `scripts/*.py` belongs to another agent).
+_KNOWN_UNCOVERED_PAPER_CLI_VERBS = frozenset({"bib"})
+
+
+class VerbFrontDoorCoverageTests(unittest.TestCase):
+    """Item 1's general guard: `cmd_order` shipped with zero direct tests
+    while `derive_order` carried 21 across two suites -- the FUNCTION was
+    covered, the VERB was not, the exact shape `cmd_write` shipped with
+    until a missing phase gate survived an entire unit undetected. This
+    class holds every CURRENT and FUTURE `paper_cli.py` verb to the same
+    bar, derived from `build_parser()` itself, never a hand-listed tuple:
+    `COMMANDS` already drifted from this module's own docstring once (the
+    docstring's own prose enumeration never mentions `couplings`, though
+    `build_parser()` and `COMMANDS` both ship it) -- a second hand-kept
+    roster here would be exactly that failure mode again."""
+
+    def _tested_verbs(self) -> set[str]:
+        tested: set[str] = set()
+        for name in _PAPER_CLI_SUITE_FILES:
+            tested |= _front_door_verbs_in_file(FORGE_ROOT / "tests" / name)
+        return tested
+
+    def test_every_shipped_verb_has_a_front_door_test_or_a_pinned_gap(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        unpinned = sorted(uncovered - _KNOWN_UNCOVERED_PAPER_CLI_VERBS)
+        self.assertEqual(
+            unpinned, [],
+            f"{unpinned} ship in paper_cli.py's own parser roster with no front-door "
+            "test in any of the six suites and no pinned, dated entry in "
+            "_KNOWN_UNCOVERED_PAPER_CLI_VERBS explaining why -- either add a direct "
+            "test or pin the gap deliberately, the way REFUSAL_CLASSIFICATION pins "
+            "its own")
+
+    def test_the_pinned_gap_list_carries_nothing_already_covered(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        stale = sorted(_KNOWN_UNCOVERED_PAPER_CLI_VERBS - uncovered)
+        self.assertEqual(
+            stale, [],
+            f"{stale} are pinned as uncovered gaps but a front-door test for them "
+            "exists in the six suites now -- shrink the backlog instead of leaving "
+            "a stale pin standing")
+
+    def test_the_pinned_gap_list_names_only_verbs_paper_cli_still_ships(self) -> None:
+        shipped = _shipped_paper_cli_verbs()
+        stray = sorted(_KNOWN_UNCOVERED_PAPER_CLI_VERBS - shipped)
+        self.assertEqual(
+            stray, [],
+            f"{stray} are pinned as uncovered verbs but paper_cli.py ships no such "
+            "verb -- a removed verb's pin must be removed with it")
+
+    def test_the_ast_scanner_recognizes_a_synthetic_front_door_call_and_nothing_else(
+        self,
+    ) -> None:
+        """Prove the scanner is not a rubber stamp: a synthetic file
+        calling `paper_cli.cmd_scaffold(...)` is read as covering
+        `scaffold` and nothing else; one calling nothing paper_cli-shaped
+        covers nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            covering = Path(tmp) / "covering.py"
+            covering.write_text(
+                "import paper_cli\n\n\ndef test_x():\n    paper_cli.cmd_scaffold(object())\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_front_door_verbs_in_file(covering), {"scaffold"})
+
+            empty = Path(tmp) / "empty.py"
+            empty.write_text("def test_y():\n    pass\n", encoding="utf-8")
+            self.assertEqual(_front_door_verbs_in_file(empty), set())
+
+    def test_the_guard_itself_goes_red_when_a_real_gap_is_unpinned(self) -> None:
+        """RED-first proof for this guard's OWN logic (never `_run_
+        against_mutant`, which mutates `scripts/*.py` -- this guard's own
+        defect surface is the pin list and the AST scanner, both living in
+        this test file, not in any mutable script). Reproduce the exact
+        completeness check with `bib` deliberately dropped from the pinned
+        set and confirm it reports `bib` as an unpinned gap -- proof this
+        guard genuinely distinguishes a pinned gap from an unpinned one,
+        rather than always reporting `[]` regardless of input."""
+        shipped = _shipped_paper_cli_verbs()
+        uncovered = shipped - self._tested_verbs()
+        self.assertIn("bib", uncovered, "bib is expected to still be a real, measured gap")
+
+        reduced_pins = _KNOWN_UNCOVERED_PAPER_CLI_VERBS - {"bib"}
+        unpinned = sorted(uncovered - reduced_pins)
+        self.assertIn("bib", unpinned)
+
+
 class ReadinessTests(unittest.TestCase):
     """`writing-readiness` spec: per-block `writable`/`blocked`, and the
     case a facts-only check gets wrong."""
@@ -1117,8 +2646,9 @@ class ReadinessTests(unittest.TestCase):
     def test_a_block_with_every_requirement_satisfied_is_writable(self) -> None:
         _write_section(self.sections_dir, "01-a.md", {
             "section": "a", "position": 1,
-            "blocks": [_block("only", facts=["dataset"])],
-        })
+            "blocks": [_block("only", facts=[_fact_entry("dataset", "sections/01-a.md")])],
+        }, body=b"Prose. This block requires the dataset.\n\n"
+                b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n")
         corpus = paper_graph.assemble_corpus(self.sections_dir)
 
         report = paper_readiness.compute_readiness(corpus, satisfied_facts={"dataset"}, satisfied_declarations=set())
@@ -1131,8 +2661,14 @@ class ReadinessTests(unittest.TestCase):
     def test_a_block_blocked_only_by_a_declaration_is_not_writable(self) -> None:
         _write_section(self.sections_dir, "01-a.md", {
             "section": "a", "position": 1,
-            "blocks": [_block("only", facts=["dataset"], declarations=["repository-url"])],
-        })
+            "blocks": [_block(
+                "only",
+                facts=[_fact_entry("dataset", "sections/01-a.md")],
+                declarations=[_fact_entry("repository-url", "sections/01-a.md")],
+            )],
+        }, body=b"Prose. This block requires the dataset. "
+                b"This block requires the repository-url.\n\n"
+                b"### External inputs\n\nNone.\n\n### Internal chain\n\nNone.\n")
         corpus = paper_graph.assemble_corpus(self.sections_dir)
 
         report = paper_readiness.compute_readiness(
@@ -1213,7 +2749,11 @@ class MutationTests(unittest.TestCase):
         used_graph_shapes = {_section_graph_shape(corpus, sid) for sid in corpus.sections}
 
         eleventh_facts = frozenset({"skeleton", "gap"})
-        eleventh_graph_shape = (False, True)  # a block whose `after` targets an EARLIER section
+        # Both a section-level and a block-level `after`, at least one
+        # targeting an EARLIER section -- `(False, True)` alone stopped
+        # being novel once `a-fact-is-declared-or-it-is-produced` unit 2
+        # gave several real sections a backward producer-reachability edge.
+        eleventh_graph_shape = (True, True)
 
         self.assertNotIn(
             eleventh_facts, used_fact_shapes,
@@ -1231,20 +2771,72 @@ class MutationTests(unittest.TestCase):
         for path in SECTIONS_DIR.glob("*.md"):
             (temp_sections / path.name).write_bytes(path.read_bytes())
 
-        eleventh_body = b"This appendix is written after the title is fixed, because its examples quote it.\n"
+        eleventh_body = (
+            b"This appendix is written after the title is fixed, because its examples quote it. "
+            b"This appendix also follows the abstract, because it elaborates a claim made there. "
+            b"This block requires the skeleton. This block requires the gap.\n\n"
+            b"### External inputs\n\nNone.\n\n### Internal chain\n\n"
+            b"| Block | Depends on |\n|---|---|\n"
+            b"| `supplementary-notes.only` \xe2\x80\x94 requires the gap | "
+            b"`related-work.rw-closing` \xe2\x80\x94 the joint gap, one of its two corroborated producers |\n"
+            b"| `supplementary-notes.only` \xe2\x80\x94 requires the gap | "
+            b"`introduction.block-3` \xe2\x80\x94 the joint gap, its other corroborated producer |\n"
+        )
         _write_section(
             temp_sections, "11-supplementary-notes.md",
             {
                 "section": "supplementary-notes", "position": 11,
+                # Section-level AND block-level `after`, both targeting an
+                # earlier section -- `_section_graph_shape`'s (True, True)
+                # shape, novel against the shipped corpus even after
+                # `a-fact-is-declared-or-it-is-produced` unit 2 introduced
+                # several (False, True) sections (a producer-reachability
+                # edge to an earlier-positioned section, e.g.
+                # `experimental-setup` -> `introduction.block-3`).
+                "after": [{
+                    "target": "abstract",
+                    "source": {
+                        "file": "sections/11-supplementary-notes.md",
+                        "quote": "This appendix also follows the abstract, because it elaborates a claim made there.",
+                    },
+                }],
                 "blocks": [_block(
-                    "only", facts=["skeleton", "gap"],
-                    after=[{
-                        "target": "title-and-keywords",
-                        "source": {
-                            "file": "sections/11-supplementary-notes.md",
-                            "quote": "This appendix is written after the title is fixed, because its examples quote it.",
+                    "only", facts=[
+                        _fact_entry("skeleton", "sections/11-supplementary-notes.md"),
+                        _fact_entry("gap", "sections/11-supplementary-notes.md"),
+                    ],
+                    after=[
+                        {
+                            "target": "title-and-keywords",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This appendix is written after the title is fixed, because its examples quote it.",
+                            },
                         },
-                    }],
+                        # `contract-input-partition` spec, `Requirement: A
+                        # Produced-Fact Dependency Is An Internal-Chain
+                        # Row`: `gap`'s two corroborated producers
+                        # (`related-work.rw-closing`, `introduction.block-3`)
+                        # both need a direct edge here, backing the two
+                        # rows this fixture's own `### Internal chain` adds
+                        # below -- reusing the same requires_facts quote,
+                        # the same pattern the real corpus's own added
+                        # edges (tasks.md 2.4) use.
+                        {
+                            "target": "related-work.rw-closing",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This block requires the gap.",
+                            },
+                        },
+                        {
+                            "target": "introduction.block-3",
+                            "source": {
+                                "file": "sections/11-supplementary-notes.md",
+                                "quote": "This block requires the gap.",
+                            },
+                        },
+                    ],
                 )],
             },
             body=eleventh_body,
@@ -1271,7 +2863,7 @@ class MutationTests(unittest.TestCase):
         sections_dir.mkdir(parents=True)
         _write_section(sections_dir, "01-bad.md", {
             "section": "bad", "position": 1,
-            "blocks": [_block("only", facts=["discussion"])],
+            "blocks": [_block("only", facts=[{"value": "discussion", "source": None}])],
         })
 
         proc = subprocess.run(
@@ -1310,6 +2902,38 @@ class VocabularyLeakTests(unittest.TestCase):
                 leaking[str(document.relative_to(FORGE_ROOT))] = hits
 
         self.assertEqual(leaking, {})
+
+
+class DatasetForkAndProposalFactsTests(unittest.TestCase):
+    """`the-phases-are-derived-not-remembered`, Phase 2: `es-dataset` is the
+    missing branch of the dataset-placement fork (mirroring `mm-dataset`),
+    every `rw-*` block is `optional: true` (Open Question 1, block-level,
+    no schema change), and `mm-proposal` depends only on `formulation` --
+    `implementation` was an over-demand `01-materials-and-methods.md`'s own
+    Inputs table never made (it names `implementation` only for the narrow
+    "correct reading of an ambiguous equation" role)."""
+
+    def test_es_dataset_mirrors_mm_dataset(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        es_dataset = corpus.blocks["experimental-setup.es-dataset"]
+        mm_dataset = corpus.blocks["materials-and-methods.mm-dataset"]
+        self.assertTrue(es_dataset.optional)
+        self.assertEqual(es_dataset.requires_facts, ("dataset",))
+        self.assertEqual(es_dataset.optional, mm_dataset.optional)
+        self.assertEqual(es_dataset.requires_facts, mm_dataset.requires_facts)
+
+    def test_every_related_work_block_is_optional(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        rw_blocks = corpus.order_by_section["related-work"]
+        self.assertEqual(len(rw_blocks), 5)
+        for qualified_id in rw_blocks:
+            self.assertTrue(corpus.blocks[qualified_id].optional, qualified_id)
+
+    def test_mm_proposal_depends_only_on_the_formulation(self) -> None:
+        corpus = paper_graph.assemble_corpus(SECTIONS_DIR)
+        mm_proposal = corpus.blocks["materials-and-methods.mm-proposal"]
+        self.assertEqual(mm_proposal.requires_facts, ("formulation",))
+        self.assertNotIn("implementation", mm_proposal.requires_facts)
 
 
 if __name__ == "__main__":

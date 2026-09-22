@@ -60,19 +60,53 @@ SKILL_MD = REPOSITORY_ROOT / "skills/remote-execution/SKILL.md"
 # installed -- a pin nothing checks is prose, not a guarantee.
 REQUIREMENTS_TXT = REPOSITORY_ROOT / "requirements.txt"
 
+def _load_or_reuse(module_name: str, script):
+    """One sibling script, under one fixed `sys.modules` name -- REUSED when
+    that name is already taken, never exec'd a second time over it.
+
+    Every sibling loader in this chain already works this way: `packer.py`'s
+    and `remote_cli.py`'s own `_load_sibling` check `sys.modules` first, the
+    runtime-written backend fixtures below open with the identical
+    `if module_name in sys.modules: return sys.modules[module_name]`, and
+    `JOBFOLDER` below is read straight out of `sys.modules` rather than
+    loaded. This module's own loads were the one place that overwrote
+    instead, and the comments beside them already argued why that is wrong:
+    "two separately exec'd copies of adapter.py would otherwise define two
+    distinct `Adapter` classes with the same name."
+
+    That is exactly the failure it produced, across a boundary those comments
+    did not anticipate. `tests/` carries no `__init__.py`, so this file's
+    module identity depends on how it was invoked: `tests.test_remote_
+    execution` under a repository-root run, bare `test_remote_execution` under
+    `tests/test_forge_gate.py`'s own inner `discover(top_level_dir=tests/)`.
+    Two names are two module objects, so the body ran twice and the second run
+    replaced `sys.modules["remote_execution_adapter"]` underneath the first.
+    A backend fixture then registered itself into the replacement's registry
+    while its test asked the original's -- `KeyError`, naming a backend that
+    had just been registered.
+
+    It never fired under `unittest discover -s tests`, where every module is
+    imported under its bare name and no second exec happens. It fired under a
+    manually chunked `unittest tests.test_forge_gate tests.test_remote_
+    execution`, which is how it was originally found and recorded rather than
+    repaired.
+    """
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/ledger.py"
-SPEC = importlib.util.spec_from_file_location("remote_execution_ledger", SCRIPT)
-assert SPEC and SPEC.loader
-LEDGER = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = LEDGER
-SPEC.loader.exec_module(LEDGER)
+LEDGER = _load_or_reuse("remote_execution_ledger", SCRIPT)
 
 ADAPTER_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapter.py"
-ADAPTER_SPEC = importlib.util.spec_from_file_location("remote_execution_adapter", ADAPTER_SCRIPT)
-assert ADAPTER_SPEC and ADAPTER_SPEC.loader
-ADAPTER = importlib.util.module_from_spec(ADAPTER_SPEC)
-sys.modules[ADAPTER_SPEC.name] = ADAPTER
-ADAPTER_SPEC.loader.exec_module(ADAPTER)
+ADAPTER = _load_or_reuse("remote_execution_adapter", ADAPTER_SCRIPT)
 
 # Loaded AFTER ledger.py and adapter.py above, and under the exact module
 # names packer.py's own sibling-loader looks for first: packer.py's
@@ -84,35 +118,21 @@ ADAPTER_SPEC.loader.exec_module(ADAPTER)
 # separately exec'd copies of adapter.py would otherwise define two distinct
 # `Adapter` classes with the same name.
 PACKER_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/packer.py"
-PACKER_SPEC = importlib.util.spec_from_file_location("remote_execution_packer", PACKER_SCRIPT)
-assert PACKER_SPEC and PACKER_SPEC.loader
-PACKER = importlib.util.module_from_spec(PACKER_SPEC)
-sys.modules[PACKER_SPEC.name] = PACKER
-PACKER_SPEC.loader.exec_module(PACKER)
+PACKER = _load_or_reuse("remote_execution_packer", PACKER_SCRIPT)
 
 # Loaded AFTER ledger.py, adapter.py and packer.py above, for the same
 # sys.modules-reuse reason documented next to PACKER's own load above:
 # remote_cli.py's `_load_sibling` reuses these exact LEDGER/ADAPTER/PACKER
 # module objects rather than exec'ing any of the three a second time.
 REMOTE_CLI_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/remote_cli.py"
-REMOTE_CLI_SPEC = importlib.util.spec_from_file_location("remote_execution_cli", REMOTE_CLI_SCRIPT)
-assert REMOTE_CLI_SPEC and REMOTE_CLI_SPEC.loader
-REMOTE_CLI = importlib.util.module_from_spec(REMOTE_CLI_SPEC)
-sys.modules[REMOTE_CLI_SPEC.name] = REMOTE_CLI
-REMOTE_CLI_SPEC.loader.exec_module(REMOTE_CLI)
+REMOTE_CLI = _load_or_reuse("remote_execution_cli", REMOTE_CLI_SCRIPT)
 
 # Loaded AFTER adapter.py above, for the same sys.modules-reuse reason: this
 # module's own `isinstance(kaggle_adapter, ADAPTER.Adapter)` checks below
 # have to agree with the exact `Adapter` class every other module in this
 # chain already loaded.
 KAGGLE_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapters/kaggle.py"
-KAGGLE_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_kaggle_adapter", KAGGLE_SCRIPT
-)
-assert KAGGLE_SPEC and KAGGLE_SPEC.loader
-KAGGLE = importlib.util.module_from_spec(KAGGLE_SPEC)
-sys.modules[KAGGLE_SPEC.name] = KAGGLE
-KAGGLE_SPEC.loader.exec_module(KAGGLE)
+KAGGLE = _load_or_reuse("remote_execution_kaggle_adapter", KAGGLE_SCRIPT)
 
 # Loaded the same path-import way as `kaggle.py` above, and for the same
 # `sys.modules`-reuse reason: this module's own `_load_adapter_seam()`
@@ -120,13 +140,7 @@ KAGGLE_SPEC.loader.exec_module(KAGGLE)
 # `ADAPTER.register("colab", ...)` its exec performs lands in the exact
 # registry every `ADAPTER.resolve("colab")` assertion below reads.
 COLAB_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/adapters/colab.py"
-COLAB_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_colab_adapter", COLAB_SCRIPT
-)
-assert COLAB_SPEC and COLAB_SPEC.loader
-COLAB = importlib.util.module_from_spec(COLAB_SPEC)
-sys.modules[COLAB_SPEC.name] = COLAB
-COLAB_SPEC.loader.exec_module(COLAB)
+COLAB = _load_or_reuse("remote_execution_colab_adapter", COLAB_SCRIPT)
 
 # Slice S2's three session assets. `launch.py` and `read_state.py` are
 # RENDERED templates — kept here only for their paths and for the
@@ -141,13 +155,7 @@ COLAB_ASSETS_DIR = REPOSITORY_ROOT / "skills/remote-execution/assets/colab"
 COLAB_LAUNCH_SCRIPT = COLAB_ASSETS_DIR / "launch.py"
 COLAB_EXECUTOR_SCRIPT = COLAB_ASSETS_DIR / "executor.py"
 COLAB_READ_STATE_SCRIPT = COLAB_ASSETS_DIR / "read_state.py"
-COLAB_EXECUTOR_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_colab_executor", COLAB_EXECUTOR_SCRIPT
-)
-assert COLAB_EXECUTOR_SPEC and COLAB_EXECUTOR_SPEC.loader
-COLAB_EXECUTOR = importlib.util.module_from_spec(COLAB_EXECUTOR_SPEC)
-sys.modules[COLAB_EXECUTOR_SPEC.name] = COLAB_EXECUTOR
-COLAB_EXECUTOR_SPEC.loader.exec_module(COLAB_EXECUTOR)
+COLAB_EXECUTOR = _load_or_reuse("remote_execution_colab_executor", COLAB_EXECUTOR_SCRIPT)
 
 # Deliberately NOT loaded here, unlike every module above: this one imports
 # `kagglesdk`, so eagerly exec'ing it at collection time would make the
@@ -174,22 +182,10 @@ JOBFOLDER = sys.modules["remote_execution_jobfolder"]
 # import fires nothing and lets the suite drive `RUNNER_BOOTSTRAP.bootstrap()`
 # / `RUNNER_INVOKE.invoke()` directly against fake configs.
 RUNNER_BOOTSTRAP_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/assets/runner_bootstrap.py"
-RUNNER_BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_runner_bootstrap", RUNNER_BOOTSTRAP_SCRIPT
-)
-assert RUNNER_BOOTSTRAP_SPEC and RUNNER_BOOTSTRAP_SPEC.loader
-RUNNER_BOOTSTRAP = importlib.util.module_from_spec(RUNNER_BOOTSTRAP_SPEC)
-sys.modules[RUNNER_BOOTSTRAP_SPEC.name] = RUNNER_BOOTSTRAP
-RUNNER_BOOTSTRAP_SPEC.loader.exec_module(RUNNER_BOOTSTRAP)
+RUNNER_BOOTSTRAP = _load_or_reuse("remote_execution_runner_bootstrap", RUNNER_BOOTSTRAP_SCRIPT)
 
 RUNNER_INVOKE_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/assets/runner_invoke.py"
-RUNNER_INVOKE_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_runner_invoke", RUNNER_INVOKE_SCRIPT
-)
-assert RUNNER_INVOKE_SPEC and RUNNER_INVOKE_SPEC.loader
-RUNNER_INVOKE = importlib.util.module_from_spec(RUNNER_INVOKE_SPEC)
-sys.modules[RUNNER_INVOKE_SPEC.name] = RUNNER_INVOKE
-RUNNER_INVOKE_SPEC.loader.exec_module(RUNNER_INVOKE)
+RUNNER_INVOKE = _load_or_reuse("remote_execution_runner_invoke", RUNNER_INVOKE_SCRIPT)
 
 # The third asset: the cell on the READING side of the handoff cell 1
 # makes. Deliberately NOT exec'd here at module scope the way the two
@@ -204,13 +200,7 @@ NOTEBOOK_REPO_ROOT_SCRIPT = (
 )
 
 SHARD_IO_SCRIPT = REPOSITORY_ROOT / "skills/remote-execution/scripts/shard_io.py"
-SHARD_IO_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_shard_io", SHARD_IO_SCRIPT
-)
-assert SHARD_IO_SPEC and SHARD_IO_SPEC.loader
-SHARD_IO = importlib.util.module_from_spec(SHARD_IO_SPEC)
-sys.modules[SHARD_IO_SPEC.name] = SHARD_IO
-SHARD_IO_SPEC.loader.exec_module(SHARD_IO)
+SHARD_IO = _load_or_reuse("remote_execution_shard_io", SHARD_IO_SCRIPT)
 
 # The tripwire hook (design §5, `the-position-nobody-holds`) -- an inert,
 # committed script and its tests, deliberately never wired into
@@ -219,13 +209,7 @@ SHARD_IO_SPEC.loader.exec_module(SHARD_IO)
 PUSH_SURFACE_HOOK_SCRIPT = (
     REPOSITORY_ROOT / "skills/remote-execution/scripts/hooks/refuse_offpath_push.py"
 )
-PUSH_SURFACE_HOOK_SPEC = importlib.util.spec_from_file_location(
-    "remote_execution_refuse_offpath_push", PUSH_SURFACE_HOOK_SCRIPT
-)
-assert PUSH_SURFACE_HOOK_SPEC and PUSH_SURFACE_HOOK_SPEC.loader
-PUSH_SURFACE_HOOK = importlib.util.module_from_spec(PUSH_SURFACE_HOOK_SPEC)
-sys.modules[PUSH_SURFACE_HOOK_SPEC.name] = PUSH_SURFACE_HOOK
-PUSH_SURFACE_HOOK_SPEC.loader.exec_module(PUSH_SURFACE_HOOK)
+PUSH_SURFACE_HOOK = _load_or_reuse("remote_execution_refuse_offpath_push", PUSH_SURFACE_HOOK_SCRIPT)
 
 
 def _sample_submitted_event(**overrides: object) -> dict:

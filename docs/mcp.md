@@ -79,6 +79,10 @@ and auto-approve sensibly.
 | `papersmith.paper_observe` | validate an insumos-observer report; never writes | ✅ | — | — |
 | `papersmith.paper_plan` | guidance classes, declaration/fact fill state, provenance | ✅ | — | — |
 | `papersmith.paper_verify` | couplings, citation integrity, contract currency | ✅ | — | — |
+| `papersmith.paper_phases` | what can I write now — waves with per-block readiness, opened, provenance | ✅ | — | — |
+| `papersmith.paper_packet` | one block's own contract prose plus reference heading outlines, plus its bound source sections | ✅ | — | — |
+| `papersmith.paper_reuse` | which already-ingested, evidence-classed papers carry no verdict for one block's open claims | ✅ | — | — |
+| `papersmith.paper_exhaustion` | corpus-wide exhaustion state — lists only, never deletes | ✅ | — | — |
 
 ### Mutating
 
@@ -96,6 +100,13 @@ and auto-approve sensibly.
 | `papersmith.paper_write` | judge an already-drafted, already-audited block | — | ✅ | — |
 | `papersmith.paper_place` | place an already-measured figure's PDF | — | — | — |
 | `papersmith.paper_validate` | the citation gate: submit one verdict, write on success | — | ✅ | — |
+| `papersmith.paper_skeleton` | open the empty section/block structure from two structural decisions | — | — | — |
+| `papersmith.paper_bind` | record which source sections feed one block's bindable requirement, or reopen a binding | — | — | — |
+| `papersmith.paper_mark_revisions` | record a source root's revision rule | — | — | — |
+| `papersmith.paper_mark_class` | record a `guidance/` folder's class | — | — | — |
+| `papersmith.paper_separate` | score a proposed source-section cut; records the separation round on success | — | — | — |
+| `papersmith.paper_full_text` | fetch one already-resolved identifier's PDF into `guidance/<section>/` | — | — | ✅ |
+| `papersmith.paper_couplings` | validate and write `paper/couplings.json` whole; `--file -` is refused over MCP | — | — | — |
 | `papersmith.deliberate` | the deterministic proposal-deliberation engine | — | — | — |
 | `papersmith.implement` | the proposal-implementation harness | — | ✅ | — |
 | `papersmith.run` | an execution profile — planning only unless consented | — | — | ✅ |
@@ -105,7 +116,9 @@ and auto-approve sensibly.
 when a claim is given and substitutes the block body once every claim is
 satisfied. `papersmith.paper_resolve` and `papersmith.paper_render` are
 deliberately not exposed — `resolve` reaches the network and `render` shells out
-to `latexmk`.
+to `latexmk`. `papersmith.paper_full_text` is the one exposed paper tool that
+reaches the network: it fetches one already-resolved identifier's PDF into
+`guidance/<section>/`, so its `openWorld` hint is set.
 
 ## Resources
 

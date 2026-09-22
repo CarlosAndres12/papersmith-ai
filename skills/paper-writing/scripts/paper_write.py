@@ -48,6 +48,15 @@ class BlockContract:
     requires_facts: tuple
     evidence_set: tuple = ()
     style_set: tuple = ()
+    #: `transposition-fidelity` spec's own prerequisite plumbing (design.md
+    #: Decision E). One entry per bound source section
+    #: (`paper_source_span.resolve_bound_sections`'s own return shape:
+    #: `{"fact", "lineage", "title", "path", "byte_start", "byte_end",
+    #: "text"}`), already resolved from disk by the CLI -- this dataclass
+    #: never touches disk itself. Defaulted, the same `produces_facts`/
+    #: `source_bindings` precedent, so every construction site that
+    #: predates this field stays green unchanged.
+    source_sections: tuple = ()
 
 
 def _attempt_key(contract: BlockContract) -> str:
@@ -127,7 +136,10 @@ def _stage_contract_audit(contract: BlockContract, draft: dict, audit_account: d
     )
 
 
-def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_account: dict) -> dict:
+def write_block(
+    paper_dir: Path, contract: BlockContract, draft: dict, audit_account: dict,
+    *, grounding_account: dict | None = None,
+) -> dict:
     """One `write` invocation for one block (`writing-orchestration` spec,
     `Requirement: Pipeline Stage Order`). Stages run in order: readiness,
     gate (both `_stage_readiness` above), draft (`draft`/`audit_account`
@@ -147,7 +159,7 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
     pre-`write` state.
     """
     _stage_readiness(contract)
-    _stage_evidence_audit(contract, draft)
+    bindings = _stage_evidence_audit(contract, draft)
 
     key = _attempt_key(contract)
     ledger = _read_ledger(paper_dir, contract.block_id)
@@ -205,14 +217,94 @@ def write_block(paper_dir: Path, contract: BlockContract, draft: dict, audit_acc
     # makes "unmeasured" a real reported status rather than an omitted key.
     style_report = style_channel_report(contract.style_set, None, None)
 
+    # `transposition-fidelity` spec, `Requirement: The Guard Fires Inside
+    # write, Before Substitution, Never Only From A Read-Only Verb` +
+    # `Requirement: Only A Transposition-Mode Block Is Checked, Mode
+    # Derived From The Contract On Disk, Never Listed` (design.md, Decisions
+    # C/D; WU2). Runs AFTER the style tripwire above and BEFORE
+    # `substitute`, so a draft failing both checks always names
+    # `STYLE_OVERLAP` deterministically (design.md, Data Flow). Guarded on
+    # `contract.mode == MODE_TRANSPOSITION`, the SAME derivation
+    # `MODE_ABSENT` rests on -- no block id, no section title, no list.
+    # Lazily imported, exactly as the style tripwire above, so
+    # `paper_write.py` stays importable without `paper_leak.py` present.
+    # `block_id` is passed straight through rather than caught and
+    # re-raised here: a caller-side `except Refused as exc: raise
+    # Refused(exc.code, ...)` would replace the refusal's own literal CODE
+    # argument with a runtime value, which is exactly the shape this
+    # repository's roster derivation (`reachable_paper_refusal_codes`) reads
+    # statically and refuses to silently widen past -- measured directly
+    # against this stage during apply.
+    source_sections_report = None
+    if contract.mode == paper_vocabulary.MODE_TRANSPOSITION and contract.source_sections:
+        import paper_leak  # noqa: PLC0415
+        source_sections_report = paper_leak.check_source_section_verbatim(
+            draft["latex"], contract.contract_prose, contract.source_sections,
+            block_id=contract.block_id,
+        )
+
+    # `transposition-fidelity` spec, `Requirement: A Block With No Measured
+    # Bound Section Reports Unmeasured, Never Refused` (design.md Decision
+    # E). `source_fidelity_report` adds no comparison and no refusal of its
+    # own -- that is `check_source_section_verbatim`'s job, above -- this
+    # call only shapes the envelope, mirroring `style_channel_report`'s
+    # shipped shape rather than inventing a second reporting convention.
+    source_fidelity = source_fidelity_report(contract.source_sections, source_sections_report)
+
+    # `transposition-grounding` spec, `Requirement: The Subject Set Is An
+    # Intersection...` + `Requirement: The Account Is Reconciled...` +
+    # `Requirement: The Guard Fires After The Verbatim Check And Before
+    # Substitution` (design.md D1/D3/D6/D8). Same `contract.mode ==
+    # MODE_TRANSPOSITION` derivation `MODE_ABSENT` and the verbatim check
+    # above both already rest on -- no block id, no list. Lazily imported,
+    # exactly as `paper_leak` above, so `paper_write.py` stays importable
+    # without `paper_grounding.py` present. Runs AFTER
+    # `check_source_section_verbatim` clears and BEFORE `substitute`, so a
+    # draft failing both checks always names `SOURCE_SECTION_VERBATIM`
+    # first -- copying is decided before meaning (D6). An `argument`-mode
+    # block, or a block with no `source_sections` at all, reports the
+    # interim `unmeasured`/0 envelope WITHOUT ever importing
+    # `paper_grounding` (`Scenario: An argument-mode block has no
+    # subjects").
+    source_grounding = {"status": "unmeasured", "subjects": 0}
+    if contract.source_sections and contract.mode == paper_vocabulary.MODE_TRANSPOSITION:
+        import paper_grounding  # noqa: PLC0415
+        subjects = paper_grounding.subjects_for(bindings, contract.source_sections)
+        reconciled = paper_grounding.reconcile_support(
+            subjects, grounding_account, contract.source_sections, block_id=contract.block_id,
+        )
+        source_grounding = paper_grounding.source_grounding_report(subjects, reconciled)
+
     result = paper_block.substitute(paper_dir, contract.block_id, new_body=draft["latex"].encode("utf-8"))
     return {
         "status": "written",
         "block": contract.block_id,
         "verdicts": audit_result["verdicts"],
         "styleChannel": style_report,
+        "sourceFidelity": source_fidelity,
+        "sourceGrounding": source_grounding,
         **result,
     }
+
+
+def source_fidelity_report(source_sections: tuple, measured: dict | None = None) -> dict:
+    """`transposition-fidelity` spec, `Requirement: A Block With No
+    Measured Bound Section Reports Unmeasured, Never Refused` (design.md
+    Decision E) + `Requirement: The Floor And Threshold Are Reported, Never
+    Inferred Silently` (Decision C). Mirrors `style_channel_report`'s own
+    shape: no bound section resolved for this block -> `unmeasured`, never
+    a silent pass and never inferred only from the absence of a refusal.
+
+    `measured` is `check_source_section_verbatim`'s own return value
+    (`{"sections": [...]}`) when the caller ran that check -- `None` when
+    `source_sections` is empty (nothing to check) or when the caller never
+    ran the check at all (WU1's own rollback boundary: a caller construct
+    predating WU2 that still passes only `source_sections`). This function
+    adds no comparison and no refusal of its own, only the envelope shape.
+    """
+    if not source_sections:
+        return {"status": "unmeasured"}
+    return {"status": "measured", "sections": measured["sections"] if measured is not None else []}
 
 
 def style_channel_report(recorded_samples: list, register_result: dict | None, overlap_result: dict | None) -> dict:

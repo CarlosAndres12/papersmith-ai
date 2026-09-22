@@ -31,6 +31,12 @@ Public surface:
 
     CHECKS               -> the seven check ids, in report order
     UNMEASURED_REASONS   -> every reason a check can report `unmeasured` for
+    item_lines(body: bytes) -> list[str]  -- every `\\item ...` line's text,
+                             stripped, in document order (`a-fact-is-
+                             declared-or-it-is-produced`: shared by
+                             `check_gap`'s own front extraction and
+                             `paper_cli._resolve_expected_components`'s
+                             produced-fact route)
     run(evidence) -> dict  {"checks": [...], "clean": bool,
                              "holds": int, "fails": int, "unmeasured": int}
 """
@@ -52,6 +58,14 @@ CHECKS: tuple[str, ...] = (
 #: Every reason a check's `unmeasured_reason` may carry. Closed: a check
 #: returning a reason outside this tuple is a programming error in this
 #: module, caught by `_entry`'s own assertion rather than shipped silently.
+#:
+#: `OPTIONAL_BLOCK_ABSENT` (`optional-block-semantics` spec, `Requirement:
+#: Verify Excuses An Unopened Optional Block`) needs no `paper_cli.
+#: REFUSAL_CLASSIFICATION` entry and moves no roster count: it is an
+#: `UNMEASURED_REASONS` member, not a `Refused` exception -- the two
+#: rosters are independent (this module's own docstring), and only the
+#: `Refused` one is bidirectionally derived by `reachable_paper_refusal_
+#: codes()` (tasks.md, Work Unit 3, 3.8).
 UNMEASURED_REASONS: tuple[str, ...] = (
     "SECTION_CONTRACTS_UNREADABLE",
     "NO_BLOCK_REQUIRES_FACT",
@@ -65,6 +79,7 @@ UNMEASURED_REASONS: tuple[str, ...] = (
     # about the paper, and folding either into the other would hide which.
     "NO_FIGURE_DECLARED",
     "FIGURE_SEMANTICS_UNMEASURED",
+    "OPTIONAL_BLOCK_ABSENT",
 )
 
 _VERDICTS = ("pass", "fail", "unmeasured")
@@ -112,6 +127,40 @@ def _unmeasured(check: str, classification: str, reason: str, *, evidence: dict 
     )
 
 
+def _optional_block_absence_reason(evidence, block_ids, optional_block_ids) -> str | None:
+    """`OPTIONAL_BLOCK_ABSENT` fires only when `block_ids` is non-empty and
+    EVERY one of them is both a member of `optional_block_ids` (declared
+    `optional: true` in its section contract) AND absent from `main.tex`
+    (not a key of `evidence.block_bodies` -- `paper_coupling_evidence.
+    gather`'s own docstring: that dict is sliced only for ids `paper_block.
+    parse` actually found opened). Membership, never a falsy-body check --
+    an opened block substituted with genuinely empty content is still
+    opened, and must be checked exactly like any other opened block
+    (`optional-block-semantics` spec, `Requirement: Verify Excuses An
+    Unopened Optional Block`: "excuses non-existence, never abandonment
+    once opened").
+
+    `optional_block_ids` is a caller-supplied set of RAW (unqualified)
+    block ids -- the same vocabulary `block_ids` and `evidence.block_bodies`
+    already speak. Every check function below defaults it to an empty
+    `frozenset()`, so calling a check with no knowledge of which blocks are
+    optional (today's only real caller, `run()`'s own default) never
+    triggers this branch -- behaviour is unchanged until a caller resolves
+    the corpus's own `BlockRecord.optional` flags and passes them in. That
+    resolution needs `paper_graph.assemble_corpus`, which this checked-
+    disk-never module cannot call itself (`_PAPER_VERIFY_ALLOWED_IMPORTS`);
+    threading it from the corpus into a real caller is deferred work this
+    unit's own notes name explicitly (tasks.md, Work Unit 3)."""
+    if not block_ids:
+        return None
+    if all(
+        block_id in optional_block_ids and block_id not in evidence.block_bodies
+        for block_id in block_ids
+    ):
+        return "OPTIONAL_BLOCK_ABSENT"
+    return None
+
+
 def _cite_keys(body: bytes) -> set:
     keys = set()
     for match in _CITE_RE.finditer(body):
@@ -145,16 +194,28 @@ def _parse_chain_roles(body: bytes) -> dict:
     return roles
 
 
+def item_lines(body: bytes) -> list[str]:
+    """Public promotion of the `\\item` extraction `_gap_shape` used
+    privately before this — `a-fact-is-declared-or-it-is-produced`,
+    design.md Decision A: `paper_cli._resolve_expected_components`'s
+    produced-fact route and `check_gap`'s own front extraction share this
+    ONE definition, never a second parser. Every `\\item ...` line's text,
+    stripped, in document order. Allowlist stays `{"re"}`; this reads only
+    the bytes it is given, never disk (`ReadOnlyTests`)."""
+    text = body.decode("utf-8", errors="replace")
+    return [match.group(1).strip() for match in _ITEM_RE.finditer(text)]
+
+
 def _gap_shape(body: bytes) -> dict:
     text = body.decode("utf-8", errors="replace")
-    items = [match.group(1).strip() for match in _ITEM_RE.finditer(text)]
+    items = item_lines(body)
     closing_match = _CLOSING_RE.search(text)
     closing = closing_match.group(1).strip() if closing_match else None
     offset = closing_match.start(1) if closing_match else None
     return {"front": items, "closing": closing, "closing_offset": offset}
 
 
-def check_contribution_list(evidence) -> dict:
+def check_contribution_list(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Coupling 1 (`coupling-verification` spec, `Requirement: Coupling 1
     — Contribution List Identity`). Declared: `record["facts"]
     ["contributions"]`, ordered. Derived, per block requiring the
@@ -163,10 +224,18 @@ def check_contribution_list(evidence) -> dict:
     declared-name literal-presence limit distinctly from an order mismatch
     (`Requirement: Declared-Name Literal Presence Limit`) — both are
     reported, either alone flips the verdict to `fail`.
+
+    `optional_block_ids`: see `_optional_block_absence_reason`. Checked
+    before `BLOCK_NOT_DECLARED` — a block absent because the paper never
+    took that optional branch is a more precise explanation than "not
+    declared", not a competing one.
     """
     block_ids, reason = evidence.blocks_by_fact.get("contributions", ((), "SECTION_CONTRACTS_UNREADABLE"))
     if reason is not None:
         return _unmeasured("contribution-list", "mechanical", reason)
+    optional_reason = _optional_block_absence_reason(evidence, block_ids, optional_block_ids)
+    if optional_reason is not None:
+        return _unmeasured("contribution-list", "mechanical", optional_reason)
 
     declared_blocks = evidence.record.get("blocks", {})
     undeclared = [bid for bid in block_ids if bid not in declared_blocks]
@@ -204,7 +273,7 @@ def check_contribution_list(evidence) -> dict:
     )
 
 
-def check_chain(evidence) -> dict:
+def check_chain(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Coupling 2 (`Requirement: Coupling 2 — Chain Word Identity`).
     Declared: one word per link (`record["chain"]["links"][i]["word"]`).
     Derived, per block requiring the `problem-statement` fact: the literal
@@ -214,10 +283,15 @@ def check_chain(evidence) -> dict:
     (identity, never synonymy — M2), or when it is not itself a member of
     the declared contribution set (set closure against coupling 1's own
     declared list).
+
+    `optional_block_ids`: see `_optional_block_absence_reason`.
     """
     block_ids, reason = evidence.blocks_by_fact.get("problem-statement", ((), "SECTION_CONTRACTS_UNREADABLE"))
     if reason is not None:
         return _unmeasured("chain", "mechanical", reason)
+    optional_reason = _optional_block_absence_reason(evidence, block_ids, optional_block_ids)
+    if optional_reason is not None:
+        return _unmeasured("chain", "mechanical", optional_reason)
 
     declared_blocks = evidence.record.get("blocks", {})
     undeclared = [bid for bid in block_ids if bid not in declared_blocks]
@@ -251,7 +325,7 @@ def check_chain(evidence) -> dict:
     )
 
 
-def check_gap(evidence) -> dict:
+def check_gap(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Coupling 3 (`Requirement: Coupling 3 — The Gap Is Assisted`). Both
     sides are derived, sliced from the two `gap`-fact blocks' own bytes;
     nothing is declared. Mechanical sub-checks (both closings present,
@@ -262,10 +336,29 @@ def check_gap(evidence) -> dict:
     this check's own vocabulary (design.md, `the assisted payload publishes
     evidence, and its only verdict is unmeasured`): no mechanical
     sub-result, however clean, ever promotes it.
+
+    `optional_block_ids`: see `_optional_block_absence_reason`. Checked
+    ahead of the `len(block_ids) != 2` gate — even the "wrong number of gap
+    blocks" reading is less precise than "the gap's optional half was never
+    opened" when that is what actually happened.
+
+    `a-fact-is-declared-or-it-is-produced` (design.md, Decision F): the pair
+    is derived from `evidence.producers_by_fact` — the two blocks that
+    PRODUCE `gap` (`related-work.rw-closing`, `introduction.block-3`) —
+    never from the sibling consumer-scan mapping every OTHER check in this
+    module still reads (every block that merely `requires_facts: [gap]`,
+    which today also includes `experimental-setup.es-assessment` for an
+    unrelated reason). Widening that sibling mapping instead of adding this
+    separate one would silently misalign `check_chain`'s own
+    `zip(block_ids, links)` (design.md: "a separate mapping was the only
+    non-corrupting route").
     """
-    block_ids, reason = evidence.blocks_by_fact.get("gap", ((), "SECTION_CONTRACTS_UNREADABLE"))
+    block_ids, reason = evidence.producers_by_fact.get("gap", ((), "SECTION_CONTRACTS_UNREADABLE"))
     if reason is not None:
         return _unmeasured("gap", "assisted", reason)
+    optional_reason = _optional_block_absence_reason(evidence, block_ids, optional_block_ids)
+    if optional_reason is not None:
+        return _unmeasured("gap", "assisted", optional_reason)
     if len(block_ids) != 2:
         return _unmeasured(
             "gap", "assisted", "BLOCK_NOT_DECLARED", evidence={"block_ids": list(block_ids)},
@@ -304,7 +397,7 @@ def check_gap(evidence) -> dict:
     )
 
 
-def check_artefacts(evidence) -> dict:
+def check_artefacts(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Coupling 4 (`Requirement: Coupling 4 — Diagram Cell Disjointness`).
     Declared: `record["artefacts"]["setup_cells"]` / `["results_
     artefacts"]`. The methods-diagram side is never separately declared —
@@ -313,8 +406,13 @@ def check_artefacts(evidence) -> dict:
     declared twice"). Fails on a results cell absent from the declared
     setup cells (M4a), or a non-empty intersection between the setup cells
     and the contribution set (M4b).
+
+    `optional_block_ids`: threaded through to `check_contribution_list`,
+    whose own `OPTIONAL_BLOCK_ABSENT` reason (if any) is what this check
+    reports too, via the same "unmeasured passes through" path
+    `BLOCK_NOT_DECLARED` already used before this change.
     """
-    contribution_check = check_contribution_list(evidence)
+    contribution_check = check_contribution_list(evidence, optional_block_ids=optional_block_ids)
     if contribution_check["verdict"] == "unmeasured":
         return _unmeasured("artefacts", "mechanical", contribution_check["unmeasured_reason"])
 
@@ -348,7 +446,7 @@ def check_artefacts(evidence) -> dict:
     )
 
 
-def check_future_work(evidence) -> dict:
+def check_future_work(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Coupling 5 (`Requirement: Coupling 5 — Future Work ⊆ Limitations`).
     Declared, both sides: `record["facts"]["limitations"]` and
     `record["future_work"]["directions"]`. Totality fails on a direction
@@ -357,10 +455,15 @@ def check_future_work(evidence) -> dict:
     the `limitations` fact, and against `refs.bib` — both derived.
     "Relevant subset" and "specific enough to be a paper" are published as
     `out-of-reach`, never attempted (`Requirement: Classification`).
+
+    `optional_block_ids`: see `_optional_block_absence_reason`.
     """
     block_ids, reason = evidence.blocks_by_fact.get("limitations", ((), "SECTION_CONTRACTS_UNREADABLE"))
     if reason is not None:
         return _unmeasured("future-work", "mechanical", reason)
+    optional_reason = _optional_block_absence_reason(evidence, block_ids, optional_block_ids)
+    if optional_reason is not None:
+        return _unmeasured("future-work", "mechanical", optional_reason)
 
     declared_blocks = evidence.record.get("blocks", {})
     undeclared = [bid for bid in block_ids if bid not in declared_blocks]
@@ -399,12 +502,17 @@ def check_future_work(evidence) -> dict:
     )
 
 
-def check_citations(evidence) -> dict:
+def check_citations(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Check A (`citation-integrity` spec). Both sides derived from the
     document itself — no declaration anywhere. A dangling `\\cite` fails
     (M3a); an orphan `refs.bib` entry is reported, never failed (M3b) —
     exercised as two independent mutations, neither reading as proof of the
     other.
+
+    `optional_block_ids` is accepted, unused, only for call-uniformity with
+    the other six checks `run()` dispatches identically — this check's
+    required evidence is never derived from `blocks_by_fact`, so no block's
+    `optional` declaration can ever be relevant to it.
     """
     cite_keys = sorted(_cite_keys(evidence.main_tex_bytes))
     bib_keys = sorted(_bib_keys(evidence.refs_bib_bytes))
@@ -424,7 +532,7 @@ def check_citations(evidence) -> dict:
     )
 
 
-def check_contract_currency(evidence) -> dict:
+def check_contract_currency(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Check B (`contract-currency` spec). `classification` is the literal
     two-word value the spec's own scenario states — `"out-of-reach today"`,
     distinct from the plain `"out-of-reach"` `coupling-verification`'s own
@@ -437,6 +545,10 @@ def check_contract_currency(evidence) -> dict:
     block staleness is `evidence.contract_drift`, already computed by
     `paper_coupling_evidence.gather` via `paper_provenance.drift` — this
     function never re-derives it, and never opens the contract file itself.
+
+    `optional_block_ids` is accepted, unused, only for call-uniformity —
+    this check reads `evidence.provenance`/`contract_drift`, never
+    `blocks_by_fact`.
     """
     if evidence.provenance is None or not evidence.provenance["body"]["records"]:
         return _unmeasured("contract-currency", "out-of-reach today", "CONTRACT_RECORD_ABSENT")
@@ -461,7 +573,7 @@ def check_contract_currency(evidence) -> dict:
     )
 
 
-def check_figure_semantics(evidence) -> dict:
+def check_figure_semantics(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Check C (`a-diagram-that-compiles-or-says-why`'s semantic half).
 
     Reads ONLY the already-computed `evidence.figure_semantics` dict that
@@ -476,6 +588,12 @@ def check_figure_semantics(evidence) -> dict:
     audit that could not compare anything is `unmeasured`, never `pass` —
     the third value exists exactly so "could not check" is not reported as
     agreement.
+
+    `optional_block_ids` is accepted, unused, only for call-uniformity with
+    the other seven checks `run()` dispatches identically — this check's
+    required evidence is `evidence.figure_semantics`, never
+    `blocks_by_fact`, so no block's `optional` declaration can ever be
+    relevant to it.
     """
     semantics = evidence.figure_semantics
     if semantics is None:
@@ -515,13 +633,23 @@ _CHECK_FUNCTIONS = {
 assert set(_CHECK_FUNCTIONS) == set(CHECKS), "every CHECKS member needs exactly one function, and the reverse"
 
 
-def run(evidence) -> dict:
+def run(evidence, *, optional_block_ids: frozenset = frozenset()) -> dict:
     """Assemble the full report: one object per `CHECKS` member, in both
     directions (`ReportShapeTests`). `holds + fails + unmeasured ==
     len(CHECKS)` always; `unmeasured` is never counted in `holds` — held by
     the arithmetic below, not by prose.
+
+    `optional_block_ids`: raw (unqualified) block ids declared
+    `optional: true` in their section contract, threaded unchanged into
+    every check (`optional-block-semantics` spec). Defaults to an empty
+    `frozenset()` — today's only real caller resolves no such set (deriving
+    it needs `paper_graph.assemble_corpus` over the same `sections_dir`
+    `gather()` already read, wiring left to whichever caller owns that
+    corpus read; this module touches disk never, by its own AST lock), so
+    behaviour is byte-identical to before this parameter existed until a
+    caller passes real values.
     """
-    entries = [_CHECK_FUNCTIONS[check](evidence) for check in CHECKS]
+    entries = [_CHECK_FUNCTIONS[check](evidence, optional_block_ids=optional_block_ids) for check in CHECKS]
     holds = sum(1 for entry in entries if entry["verdict"] == "pass")
     fails = sum(1 for entry in entries if entry["verdict"] == "fail")
     unmeasured = sum(1 for entry in entries if entry["verdict"] == "unmeasured")

@@ -77,6 +77,14 @@ def _run_against_mutant(
         core_dst = tmp_root / "_core" / "implementation"
         core_dst.mkdir(parents=True)
         shutil.copy2(CORE_IMPLEMENTATION / "impl_refusals.py", core_dst / "impl_refusals.py")
+        # `paper_declarations.py` also imports `impl_layout` (U2b,
+        # `the-requirement-names-the-section-that-feeds-it`: the forge's own
+        # canonical target-repository workspace, never re-spelled) from this
+        # same directory -- copied alongside `impl_refusals.py` for the same
+        # reason, or any mutation reaching `paper_declarations.py` (directly
+        # or via `paper_graph.py` importing it) crashes on import before the
+        # mutation is ever exercised.
+        shutil.copy2(CORE_IMPLEMENTATION / "impl_layout.py", core_dst / "impl_layout.py")
 
         scripts_dst = tmp_root / "paper-writing" / "scripts"
         scripts_dst.mkdir(parents=True)

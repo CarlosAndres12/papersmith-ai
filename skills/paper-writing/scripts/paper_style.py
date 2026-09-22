@@ -32,7 +32,8 @@ import paper_guidance  # noqa: E402
 
 _MATH_INLINE_RE = re.compile(r"\$[^$]*\$|\\\(.*?\\\)")
 _MATH_DISPLAY_RE = re.compile(
-    r"\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}", re.DOTALL
+    r"\$\$.*?\$\$|\\\[.*?\\\]|\\begin\{(equation|align|gather|math)\*?\}.*?\\end\{\1\*?\}",
+    re.DOTALL,
 )
 _LATEX_CMD_RE = re.compile(r"\\[a-zA-Z]+\*?(\[[^\]]*\])?(\{[^}]*\})?")
 _TOKEN_RE = re.compile(r"[a-z0-9']+")

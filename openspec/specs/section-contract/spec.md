@@ -19,12 +19,33 @@ section ids), an optional `mode` (the section-level default drafting mode),
 and a mandatory `blocks` list in order. Each block MUST declare `id`,
 `requires_facts`, `requires_declarations`, and `citations`; each block MAY
 declare `optional`, its own `after`, its own `mode` (overriding the
-section-level default when present), and a `figure` object. A `figure`
-object, when present, MUST declare `ordered`, `excludes`,
-`caption_enumerates`, `caption_decodes`, and `mandatory`; it MAY additionally
-declare `components_from`, naming the one fact whose value IS the diagram's
-full expected component list — declared only when that equality genuinely
-holds (the diagram is that one fact's own list by contract), and omitted (or
+section-level default when present), and a `figure` object. Each
+`requires_facts` / `requires_declarations` entry MUST be a rich `{value,
+source: {file, quote}}` object mirroring `after`'s list-of-objects shape,
+where `value` is the fact or declaration id; a bare id string no longer
+parses, and an entry missing `value` or `source`, carrying a `null`
+`source`, or carrying an unknown key, MUST refuse `MALFORMED_HEADER` naming
+the missing or unknown key. A `requires_facts` entry MAY additionally carry
+`document: {lineage, section}` — the source document's lineage and the exact
+title text of the section (or sections) within that document that feed this
+entry. `section` MUST be either a non-empty string (one title) or a
+non-empty list of unique non-empty-string titles (more than one section
+feeding the same entry); an empty list, a list carrying a repeated title, or
+a list entry that is not a non-empty string all refuse `MALFORMED_HEADER`
+the same way a malformed single title does. A single string remains valid on
+its own — the list shape is never forced onto every binding. Both `lineage`
+and `section` are required together whenever `document` is present: an
+entry's `document` object missing `lineage` or `section`, carrying a `null`
+value for either, or carrying a key outside `{lineage, section}` MUST refuse
+`MALFORMED_HEADER` naming the missing or unknown key. `document` is never
+accepted on a `requires_declarations` entry — a declaration is
+operator-supplied, never document-rooted — and one carrying `document` MUST
+refuse `MALFORMED_HEADER` naming `document` as unknown. A `figure` object,
+when present, MUST declare `ordered`, `excludes`, `caption_enumerates`,
+`caption_decodes`, and `mandatory`; it MAY additionally declare
+`components_from`, naming the one fact whose value IS the diagram's full
+expected component list — declared only when that equality genuinely holds
+(the diagram is that one fact's own list by contract), and omitted (or
 explicit `null`) for a block whose diagram is a composite crossing over
 several categories of content that no single fact's value can equal. A
 header missing any mandatory field, carrying a key outside this widened
@@ -32,6 +53,15 @@ schema, or a `figure` object missing any of its five required subkeys, MUST
 refuse `MALFORMED_HEADER` (or `MALFORMED_FIGURE_OBLIGATION` for the `figure`
 case) naming the missing or unknown key. Everything below the header MUST be
 passed through unread.
+
+(Previously: `requires_facts` / `requires_declarations` entries carried only
+`{value, source: {file, quote}}`, with no way to name a different source
+document or a section within it — `source.file` was, in every shipped
+contract, the contract file itself, so byte-identical entries could feed
+distinct blocks with nothing to distinguish them. This change adds the
+optional `document` half to `requires_facts` entries only; which entries
+MUST carry one is a corpus-level obligation, not a schema-level one —
+`SECTION_BINDING_ABSENT` in `source-section-binding`.)
 
 #### Scenario: Valid header parses
 
@@ -81,6 +111,68 @@ passed through unread.
 - WHEN the reader parses it
 - THEN it accepts the block with no refusal, and `components_from` resolves to `None`
 
+#### Scenario: A bare-id requirement entry now refuses
+
+- GIVEN a block declaring `requires_facts: [results]` (bare id, no `source`)
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER`; U3 (design.md D3) removed bare-string
+  acceptance, so this is a schema-layer refusal, never something left for
+  `requirement-transcription`'s corpus-wide gate to decide
+
+#### Scenario: A rich requirement entry parses
+
+- GIVEN a block declaring `requires_facts: [{value: results, source: {file:
+  "results-and-discussion.md", quote: "<verbatim sentence>"}}]`
+- WHEN the reader parses it
+- THEN it accepts `results` with no refusal
+
+#### Scenario: A malformed rich requirement entry refuses
+
+- GIVEN a block declaring a `requires_facts` entry that is an object missing
+  `source`
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `source`
+
+#### Scenario: A document binding parses
+
+- GIVEN a `requires_facts` entry declaring `document: {lineage:
+  research-concept, section: "3. Formulación MIL-CREDA y kernel de bolsas
+  ponderado por relevancia"}`
+- WHEN the reader parses it
+- THEN it accepts the entry with no refusal
+
+#### Scenario: A malformed document binding refuses
+
+- GIVEN a `requires_facts` entry's `document` object with no `section` key
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `section`
+
+#### Scenario: A document binding naming more than one section parses
+
+- GIVEN a `requires_facts` entry declaring `document: {lineage:
+  research-concept, section: ["1. Fundamentos de métodos de kernel", "2.
+  Estimación de la entropía de Rényi basada en kernels"]}`
+- WHEN the reader parses it
+- THEN it accepts the entry with no refusal
+
+#### Scenario: An empty section list refuses
+
+- GIVEN a `requires_facts` entry's `document.section` is `[]`
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `section`
+
+#### Scenario: A section list carrying a repeated title refuses
+
+- GIVEN a `requires_facts` entry's `document.section` is a list naming the
+  same title twice
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `section`
+
+#### Scenario: A document binding on a declaration entry refuses
+
+- GIVEN a `requires_declarations` entry declaring a `document` key
+- WHEN the reader parses it
+- THEN it refuses `MALFORMED_HEADER` naming `document`
 ### Requirement: Closed Fact Vocabulary
 
 `requires_facts` entries MUST be drawn only from the ten ids: `formulation`,
@@ -158,52 +250,53 @@ A visual review is not evidence.
 
 ### Requirement: Transcribed `after` Edges Only
 
-An `after` edge MUST be admitted only when the contract's own prose states it.
-Across the ten shipped contracts exactly three edges exist: section `abstract`
-after section `conclusions` (conclusions' own prose: "The abstract is written
-after this section, because it compresses it"); the introduction's block 3
-after section `related-work` (introduction's own prose: "When a Related Work
-section exists, this block is written after it"); and section
-`title-and-keywords` after every section the `skeleton` fact declares as body
-(title-and-keywords' own prose: "Every keyword appears in the body" resolved
-against the skeleton's body-section list). A test MUST assert the shipped edge
-set is exactly these three; a fourth or different edge on any shipped contract
-fails that test.
+An `after` edge MUST be admitted only when the contract's own prose states
+it, verified as a literal (whitespace-collapsed, markdown-emphasis-stripped)
+substring of the named `source.file`'s prose body — unchanged from before.
+The edge count is no longer a fixed number: normalizing all ten contracts'
+`### Internal chain` tables into transcribed edges (`internal-chain-edges`)
+raises the shipped edge set well past three. What remains invariant instead:
+every `after` edge, wherever declared, carries a verified, prose-backed
+quote; no edge exists that is not backed by a quote (`SPAN_NOT_IN_SOURCE`
+on failure); and no `### Internal chain` row is left unmapped to a backing
+edge (`CHAIN_ROW_UNBACKED` on failure, per `internal-chain-edges`). A test
+MUST assert both properties hold across the full shipped corpus — never a
+fixed cardinality.
 
-#### Scenario: The shipped edge set is exactly three
+(Previously: asserted the shipped edge set is exactly three named edges,
+which this change invalidates by construction.)
 
-- GIVEN the ten contracts' parsed headers
+#### Scenario: Every shipped edge is quote-backed
+
+- GIVEN the ten contracts' parsed headers, normalized under
+  `contract-input-partition`
 - WHEN every `after` edge, section- and block-level, is collected
-- THEN the collected set contains exactly the three transcribed edges above and
-  no other
+- THEN each one's `source.quote` is a verified literal substring of its
+  `source.file`'s prose body, with no exceptions
 
 #### Scenario: An invented edge on a shipped contract fails
 
-- GIVEN a shipped contract's header edited to add a fourth `after` edge not
+- GIVEN a shipped contract's header edited to add an `after` edge not
   backed by that contract's own prose
 - WHEN the edge-set test runs
 - THEN it fails, naming the untranscribed edge
 
+#### Scenario: No internal-chain row is left unmapped
+
+- GIVEN the ten contracts' normalized `### Internal chain` tables
+- WHEN every row is checked against the collected edge set
+- THEN every row maps to exactly one backing `after` edge; a row with none
+  fails the test naming that row
+
 #### Implementation note (recorded at apply, not re-opening the decision)
 
-The third edge above — `title-and-keywords` after every section the
-`skeleton` fact declares as body — is implemented as **position-derived**,
-not enumerated in `title-and-keywords`'s header and not resolved against the
-`skeleton` fact. Measured at design time: `skeleton` occurs exactly once
-across all ten contracts (`sections/06-introduction.md`, unblocking
-introduction block 6) and names no body-section list anywhere, so the literal
-resolution this scenario's parenthetical describes has nothing to read. The
-reader instead computes "the body" as every section whose `position` is
-strictly between `abstract`'s and `back-matter`'s (positions 3–9), looked up
-by section id and never by a hardcoded integer or a filename — the same
-seven targets design.md's rejected "enumerate seven targets" option would
-have named. `tests/test_paper_contract.py::GraphTests` therefore holds two
-separate assertions rather than one three-element set: exactly two literal,
-header-declared cross-section `after` edges (`abstract`→`conclusions`,
-`introduction.block-3`→`related-work`), and the third edge proven separately
-as a property of the derived writing order. This document's scenario above
-is left as written, historically accurate about the intended data-vs-code
-split; this note is the correction for a reader implementing it today.
+The `title-and-keywords` after every body-section edge remains
+**position-derived**, not enumerated in `title-and-keywords`'s header and
+not resolved against the `skeleton` fact — unchanged from the prior note.
+This change adds no new special-cased edge of that kind; every additional
+edge this change introduces is a literal, header-declared transcription
+from an `### Internal chain` row, following the same discipline as the two
+pre-existing literal edges.
 
 ### Requirement: Headers Written Before `mode` Existed
 
@@ -247,3 +340,33 @@ mirroring the transcription discipline already required of `after` edges.
   quote: "..."}}`
 - WHEN the reader parses it
 - THEN it refuses `UNKNOWN_MODE` naming `exposition`
+### Requirement: Symmetric Optional Fork For Dataset Placement
+
+The dataset-placement fork — whether the dataset is described in Materials
+and Methods or in Experimental Setup — MUST be structurally represented on
+both sides: `01-materials-and-methods.md` declares `mm-dataset`
+(`optional: true`, `requires_facts: [dataset]`), and
+`02-experimental-setup.md` declares a mirroring `es-dataset`
+(`optional: true`, `requires_facts: [dataset]`), so `skeleton-startup`'s
+disk inference has a branch to read on either side.
+
+#### Scenario: Both sides of the fork exist in the corpus
+
+- GIVEN the shipped corpus after this change
+- WHEN `01-materials-and-methods.md` and `02-experimental-setup.md` are
+  parsed
+- THEN both declare an `optional: true` dataset block requiring `dataset`,
+  under ids `mm-dataset` and `es-dataset` respectively
+
+### Requirement: `mm-proposal`'s Facts Match What It Genuinely Needs
+
+`01-materials-and-methods.md`'s `mm-proposal` block MUST declare
+`requires_facts: [formulation]` only — `implementation` is dropped, since
+the proposal's own formal definition needs no run-time implementation
+detail to be drafted.
+
+#### Scenario: mm-proposal no longer requires implementation
+
+- GIVEN `01-materials-and-methods.md` as parsed after this change
+- WHEN `mm-proposal`'s `requires_facts` is read
+- THEN it contains `formulation` and does not contain `implementation`

@@ -13,7 +13,13 @@
     {
       "id": "rd-general-task",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The results — the main runs, against the baselines"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -21,21 +27,70 @@
     {
       "id": "rd-contribution-blocks",
       "requires_facts": [
-        "contributions",
-        "results"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The property a contribution promised, and the instrument the setup named for it"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "Input the results of the experiments"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "after": [
+        {
+          "target": "results-and-discussion.rd-general-task",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "A mechanism block opens by naming the previous block's result as the question it comes to answer."
+          }
+        },
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The property a contribution promised, and the instrument the setup named for it"
+          }
+        }
+      ]
     },
     {
       "id": "rd-cost",
       "requires_facts": [
-        "results",
-        "implementation"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "Input the results of the experiments"
+          }
+        },
+        {
+          "value": "implementation",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "The implementation — the most demanding configuration, and the hardware declared in the setup"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
-      "optional": true
+      "optional": true,
+      "after": [
+        {
+          "target": "results-and-discussion.rd-contribution-blocks",
+          "source": {
+            "file": "sections/03-results-and-discussion.md",
+            "quote": "A mechanism block opens by naming the previous block's result as the question it comes to answer."
+          }
+        }
+      ]
     }
   ]
 }
@@ -198,14 +253,31 @@ to read the data, or a **behaviour already established** that the result agrees 
 
 ## Inputs
 
+### External inputs
+
+| Input | Unblocks |
+|---|---|
+| The **results** — the main runs, against the baselines | `rd-general-task` |
+| The **implementation** — the most demanding configuration, and the hardware declared in the setup | `rd-cost` |
+
+### Internal chain
+
 | Block | Depends on |
 |---|---|
-| The general task | the main runs, against the baselines |
-| Each contribution block | the property that contribution promised, and the instrument the setup named for it |
-| Each artefact | the runs — and the setup's closing diagram must be able to locate it |
-| The third beat | the mechanism: the formulation, or a property of the data |
-| The cost block | the most demanding configuration, and the hardware declared in the setup |
-| Limitations | its own contract |
+| `results-and-discussion.rd-contribution-blocks` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-general-task` — the general task's evidence, the block immediately before it |
+| `results-and-discussion.rd-contribution-blocks` — The property a contribution promised, and the instrument the setup named for it | `materials-and-methods.mm-proposal` — the enumerated contributions each property traces to |
+| `results-and-discussion.rd-cost` — a mechanism block opens by naming the previous block's result as the question it comes to answer | `results-and-discussion.rd-contribution-blocks` — the per-contribution validation, the block immediately before cost |
+
+### Structural decisions
+
+- **Each artefact** depends on the runs, and the experimental setup's closing
+  diagram must be able to locate it — a rule cutting across every block here,
+  not a dependency on one specific block.
+- **The third beat** (the mechanistic explanation) draws on the formulation,
+  or on a property of the data — again cutting across every block, not
+  naming one.
+- **Limitations** lives in its own section, under its own contract — it is
+  not a block of this section and carries no dependency on it.
 
 ## Disqualifiers
 

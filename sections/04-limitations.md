@@ -13,7 +13,13 @@
     {
       "id": "lim-opening-concession",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The results — the concrete achievement they do support"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -21,15 +27,36 @@
     {
       "id": "lim-proposal-items",
       "requires_facts": [
-        "formulation"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The mathematical section — its design decisions, one by one"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "resolution"
+      "citations": "resolution",
+      "produces_facts": [
+        {
+          "value": "limitations",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "Sweep the mathematical section for gaps in the proposal:"
+          }
+        }
+      ]
     },
     {
       "id": "lim-validation-items",
       "requires_facts": [
-        "experimental-design"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The experimental design — what was fixed instead of searched, what was tested at a single point"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution"
@@ -37,7 +64,13 @@
     {
       "id": "lim-failure-mode",
       "requires_facts": [
-        "results"
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/04-limitations.md",
+            "quote": "The results — the worst reported cell, and the baseline's performance there"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none",
@@ -171,13 +204,29 @@ corresponding future-work direction carries.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| The proposal items | the mathematical section — its design decisions, one by one |
-| The validation items | the experimental design — what was fixed instead of searched, what was tested at a single point |
-| The quantitative failure mode | the results: the worst reported cell, and the baseline's performance there |
-| The opening concession | the concrete achievement the results do support |
-| Each item's citation | the alternative that would fix it, or the literature that already knows the problem |
+| The **mathematical section** — its design decisions, one by one | `lim-proposal-items` |
+| The **experimental design** — what was fixed instead of searched, what was tested at a single point | `lim-validation-items` |
+| The **results** — the worst reported cell, and the baseline's performance there | `lim-failure-mode` |
+| The **results** — the concrete achievement they do support | `lim-opening-concession` |
+
+### Internal chain
+
+None — checked every block's `requires_facts` (`results`, `formulation`,
+`experimental-design`) and this file's own prose body for a reference to a
+sibling block's own text: each of the five ids (`lim-opening-concession`,
+`lim-proposal-items`, `lim-validation-items`, `lim-failure-mode`,
+`lim-closing`) draws only on the external facts named above; no sibling-block
+prose reference was found.
+
+### Structural decisions
+
+- **Each item's citation** lands on the alternative that would fix it, or on
+  the literature that already knows the problem — a rule governing every
+  item's citation placement, not a dependency naming one block.
 
 ## Disqualifiers
 

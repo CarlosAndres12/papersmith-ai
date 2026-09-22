@@ -17,15 +17,77 @@
       "citations": "none"
     },
     {
-      "id": "es-assessment",
+      "id": "es-dataset",
       "requires_facts": [
-        "dataset",
-        "contributions",
-        "experimental-design",
-        "gap"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The dataset — when this section owns it"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "resolution",
+      "optional": true
+    },
+    {
+      "id": "es-assessment",
+      "requires_facts": [
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
+          }
+        },
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The experimental design — the competing methods, the axes, and the purpose-built corpus criteria settled as one comparison protocol"
+          }
+        },
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
+        }
+      ],
+      "requires_declarations": [],
+      "citations": "resolution",
+      "after": [
+        {
+          "target": "experimental-setup.es-dataset",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Its one dependency that is NOT internal is the data it must show entering, which live in `es-dataset` when the dataset belongs to this section"
+          }
+        },
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "Which property each contribution claims — if it was promised, this is where its instrument is named"
+          }
+        },
+        {
+          "target": "introduction.block-3",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
+        },
+        {
+          "target": "related-work.rw-closing",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists"
+          }
+        }
+      ],
       "figure": {
         "ordered": false,
         "excludes": ["internal component of the proposal"],
@@ -37,7 +99,13 @@
     {
       "id": "es-training-details",
       "requires_facts": [
-        "implementation"
+        {
+          "value": "implementation",
+          "source": {
+            "file": "sections/02-experimental-setup.md",
+            "quote": "The implementation of the experiments and its configuration — what actually ran"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -195,15 +263,37 @@ box appearing in both means one of them is wrong.
 
 ## Inputs
 
-| What | Depends on |
+### External inputs
+
+| Input | Unblocks |
 |---|---|
-| How many blocks Assessment has | the dataset placement decided in the methods section |
-| The metrics | which property each contribution claims — if it was promised, this is where its instrument is named |
-| The competing methods | the baseline list settled in the state of the art |
-| The axes | what the comparison is swept over |
-| The purpose-built corpus | that no standard reference measures what is claimed |
-| The closing diagram | the crossing declared by the blocks above, plus the repetition unit |
-| **Training Details** | **only the implementation of the experiments and its configuration — what actually ran** |
+| The **dataset** — when this section owns it | `es-dataset` |
+| The **competing methods** — the baseline list settled in the state of the art | `es-assessment` |
+| The **axes** — what the comparison is swept over | `es-assessment` |
+| The **purpose-built corpus** — that no standard reference measures what is claimed | `es-assessment` |
+| The **experimental design** — the competing methods, the axes, and the purpose-built corpus criteria settled as one comparison protocol | `es-assessment` |
+| The **implementation** of the experiments and its configuration — what actually ran | `es-training-details` |
+
+### Internal chain
+
+| Block | Depends on |
+|---|---|
+| `experimental-setup.es-assessment` — the closing diagram's "which data enter" panel | `experimental-setup.es-dataset` — the dataset block, when this section owns it |
+| `experimental-setup.es-assessment` — Which property each contribution claims — if it was promised, this is where its instrument is named | `materials-and-methods.mm-proposal` — the enumerated contributions the instrument is named for |
+| `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `introduction.block-3` — the joint gap, condensed there |
+| `experimental-setup.es-assessment` — The gap — that no standard reference measures what is claimed, which is why the purpose-built corpus exists | `related-work.rw-closing` — the joint gap, developed there |
+
+### Structural decisions
+
+- **How many blocks Assessment has** is decided by the dataset placement
+  already decided in the methods section — a structural decision, not a
+  dependency on a specific block.
+- **The closing diagram** is the crossing declared by everything Assessment
+  already carries, plus the repetition unit — an internal composition rule
+  within `es-assessment` itself. Its one dependency that is NOT internal is
+  the data it must show entering, which live in `es-dataset` when the
+  dataset belongs to this section; that one is a chain row above, not a
+  structural decision.
 
 ## Disqualifiers
 

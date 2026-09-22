@@ -8,7 +8,7 @@ was broken: `guidance/data-paper/` existed on this disk, is declared
 `required: true` by `experimental-deliberation`'s profile, and had no
 `.gitkeep` -- so a fresh clone arrived without the one source that domain
 cannot draft without, while the *optional* `guidance/paper-guide/` shipped
-fine. `guidance/area-benchmark/` did not exist at all.
+fine.
 
 Both sides are derived, neither is listed here:
 
@@ -27,8 +27,13 @@ a PDF, so illustrations must not become shipped scaffolding.
 
 import re
 import subprocess
+import sys
 import unittest
 from pathlib import Path
+
+# The shared derivations live beside the suites, importable without being one.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import forge_vocabulary  # noqa: E402  (path set above)
 
 FORGE_ROOT = Path(__file__).resolve().parent.parent
 SKILLS = FORGE_ROOT / "skills"
@@ -54,12 +59,14 @@ def declared_guidance_sources() -> dict[str, list[str]]:
 
 
 def travelling_guidance_folders() -> set[str]:
-    """Folders whose `.gitkeep` git tracks -- what a clone actually receives."""
-    listed = subprocess.run(
-        ["git", "ls-files", "guidance/*/.gitkeep"],
-        cwd=FORGE_ROOT, capture_output=True, text=True, check=True,
-    ).stdout.split()
-    return {str(Path(entry).parent) for entry in listed}
+    """Folders whose `.gitkeep` git tracks -- what a clone actually receives.
+
+    The derivation itself lives in `forge_vocabulary`, because rule B's denylist
+    needs the identical answer to know which names are the forge's own structure
+    rather than a paper's vocabulary. Two derivations would drift, and the half
+    that drifted would report the forge leaking a folder the forge ships.
+    """
+    return {f"guidance/{name}" for name in forge_vocabulary.travelling_guidance_folders(FORGE_ROOT)}
 
 
 class DeclaredGuidanceSourcesTravelTests(unittest.TestCase):

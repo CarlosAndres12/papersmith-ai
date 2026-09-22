@@ -38,12 +38,17 @@ class SatisfiedClaimsTests(unittest.TestCase):
     accounting, proven by excluding both from the same record set."""
 
     def test_satisfied_excludes_does_not_hold_and_insufficient(self) -> None:
+        # `min_sources=1` here is deliberate: this test proves ONLY the
+        # leniency exclusion (does-not-hold/insufficient never satisfy),
+        # orthogonal to `the-pdf-arrives-or-the-operator-is-told`'s own
+        # distinct-source-count feature -- `DistinctSourceCoverageTests`
+        # below owns that.
         records = [
-            {"claim": "true-claim", "verdict": "holds", "round": 1},
-            {"claim": "false-claim", "verdict": "does-not-hold", "round": 1},
+            {"claim": "true-claim", "verdict": "holds", "round": 1, "source_md": "a.md"},
+            {"claim": "false-claim", "verdict": "does-not-hold", "round": 1, "source_md": "b.md"},
             {"claim": "unproven-claim", "verdict": "insufficient", "round": 1},
         ]
-        satisfied = paper_validate.satisfied_claims(records)
+        satisfied = paper_validate.satisfied_claims(records, min_sources=1)
         self.assertEqual(satisfied, {"true-claim"})
 
 
@@ -89,7 +94,12 @@ class PlantedCitationTests(unittest.TestCase):
         self.assertEqual(true_record.verdict, "holds")
         self.assertEqual(false_record.verdict, "does-not-hold")
 
-        satisfied = paper_validate.satisfied_claims([true_record.to_json(), false_record.to_json()])
+        # `min_sources=1`: this test's own proof is planted-vs-true
+        # classification, not distinct-source counting (owned separately by
+        # `DistinctSourceCoverageTests` below).
+        satisfied = paper_validate.satisfied_claims(
+            [true_record.to_json(), false_record.to_json()], min_sources=1,
+        )
         self.assertIn("the method achieves 91.2% accuracy", satisfied)
         self.assertNotIn("an ablation of the regularization term was performed", satisfied)
 
@@ -126,11 +136,17 @@ class BoundedLoopTests(unittest.TestCase):
         paper_block.open_block(self.paper_dir, "target-block", after=None, at_end=True)
 
     def test_a_block_within_budget_is_written(self) -> None:
+        # `min_sources=1`: this test's own proof is the ROUND-BUDGET
+        # mechanic (one holds record inside the round budget is enough to
+        # stop being "pending"), orthogonal to the distinct-source-count
+        # minimum `DistinctSourceCoverageTests` below owns.
         records = [
             {"claim": "c1", "verdict": "does-not-hold", "round": 1},
-            {"claim": "c1", "verdict": "holds", "round": 2},
+            {"claim": "c1", "verdict": "holds", "round": 2, "source_md": "a.md"},
         ]
-        result = paper_validate.finalize_block(self.paper_dir, "target-block", ["c1"], records, b"new body\n")
+        result = paper_validate.finalize_block(
+            self.paper_dir, "target-block", ["c1"], records, b"new body\n", min_sources=1,
+        )
         self.assertEqual(result["status"], "written")
         status = paper_block.read_status(self.paper_dir)
         block = next(b for b in status["blocks"] if b["id"] == "target-block")
@@ -146,6 +162,12 @@ class BoundedLoopTests(unittest.TestCase):
         self.assertEqual(tex_path.read_bytes(), pre)
 
     def test_exhaustion_at_round_three_refuses_and_never_calls_substitute(self) -> None:
+        # `min_sources=1`: this test's own proof is the leniency exclusion
+        # (`insufficient`/`does-not-hold` never satisfy, however many
+        # rounds pass), orthogonal to the distinct-source-count minimum
+        # `DistinctSourceCoverageTests` owns -- pinned so the widened-
+        # membership mutation below cannot hide behind an unrelated
+        # distinct-count shortfall.
         records = [
             {"claim": "c1", "verdict": "insufficient", "round": 1},
             {"claim": "c1", "verdict": "does-not-hold", "round": 2},
@@ -159,7 +181,9 @@ class BoundedLoopTests(unittest.TestCase):
         paper_block.substitute = _spy
         try:
             with self.assertRaises(Refused) as ctx:
-                paper_validate.finalize_block(self.paper_dir, "target-block", ["c1"], records, b"body\n")
+                paper_validate.finalize_block(
+                    self.paper_dir, "target-block", ["c1"], records, b"body\n", min_sources=1,
+                )
         finally:
             paper_block.substitute = original_substitute
         self.assertEqual(ctx.exception.code, "EVIDENCE_EXHAUSTED")
@@ -171,6 +195,82 @@ class BoundedLoopTests(unittest.TestCase):
             'record["verdict"] in (HOLDS, "insufficient")',
             "tests.test_paper_citation.BoundedLoopTests"
             ".test_exhaustion_at_round_three_refuses_and_never_calls_substitute",
+            source_path=SKILL_SCRIPTS / "paper_validate.py",
+        )
+        output = proc.stdout + proc.stderr
+        self.assertIn("MUTANT_IMPORTED_OK", output, output)
+        self.assertNotEqual(proc.returncode, 0, output)
+
+
+class DistinctSourceCoverageTests(unittest.TestCase):
+    """`the-pdf-arrives-or-the-operator-is-told`, item 2: a claim is
+    covered by N sources when N DISTINCT source papers carry a `holds`
+    record for it -- never bare record count. Two quotes from the same
+    paper must count as ONE source, not two."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.paper_dir = Path(self._tmp.name) / "paper"
+        paper_scaffold.scaffold(self.paper_dir)
+        paper_block.open_block(self.paper_dir, "target-block", after=None, at_end=True)
+
+    def test_two_quotes_from_one_paper_do_not_satisfy_a_minimum_of_two(self) -> None:
+        records = [
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"},
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"},
+        ]
+        satisfied = paper_validate.satisfied_claims(records, min_sources=2)
+        self.assertEqual(satisfied, set())
+
+    def test_two_distinct_papers_satisfy_the_default_minimum(self) -> None:
+        records = [
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"},
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "b.md"},
+        ]
+        satisfied = paper_validate.satisfied_claims(records)  # default min = 2
+        self.assertEqual(satisfied, {"c1"})
+
+    def test_claim_coverage_reports_required_and_satisfied_per_claim(self) -> None:
+        records = [
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"},
+            {"claim": "c2", "verdict": "insufficient", "round": 1},
+        ]
+        coverage = paper_validate.claim_coverage(["c1", "c2"], records)
+        self.assertEqual(coverage, [
+            {"claim": "c1", "required": 2, "satisfied": 1},
+            {"claim": "c2", "required": 2, "satisfied": 0},
+        ])
+
+    def test_a_claim_with_one_of_two_sources_refuses_naming_claim_and_shortfall(self) -> None:
+        """The decisive test: three `holds` records that all share the
+        SAME `source_md` still count as only 1 distinct source against the
+        default minimum of 2 -- proven all the way through `finalize_
+        block`'s own exhaustion refusal, which must name both the claim
+        and its shortfall."""
+        records = [
+            {"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"},
+            {"claim": "c1", "verdict": "holds", "round": 2, "source_md": "a.md"},
+            {"claim": "c1", "verdict": "holds", "round": 3, "source_md": "a.md"},
+        ]
+        with self.assertRaises(Refused) as ctx:
+            paper_validate.finalize_block(self.paper_dir, "target-block", ["c1"], records, b"body\n")
+        self.assertEqual(ctx.exception.code, "EVIDENCE_EXHAUSTED")
+        self.assertIn("c1", ctx.exception.detail)
+        self.assertIn("1/2", ctx.exception.detail)
+
+    def test_a_pending_block_also_reports_coverage(self) -> None:
+        records = [{"claim": "c1", "verdict": "holds", "round": 1, "source_md": "a.md"}]
+        result = paper_validate.finalize_block(self.paper_dir, "target-block", ["c1"], records, b"body\n")
+        self.assertEqual(result["status"], "pending")
+        self.assertEqual(result["coverage"], [{"claim": "c1", "required": 2, "satisfied": 1}])
+
+    def test_m_counting_rows_instead_of_distinct_sources_fails_the_decisive_test(self) -> None:
+        proc = _run_against_mutant(
+            'sources.setdefault(record["claim"], set()).add(record.get("source_md", ""))',
+            'sources.setdefault(record["claim"], []).append(record.get("source_md", ""))',
+            "tests.test_paper_citation.DistinctSourceCoverageTests"
+            ".test_a_claim_with_one_of_two_sources_refuses_naming_claim_and_shortfall",
             source_path=SKILL_SCRIPTS / "paper_validate.py",
         )
         output = proc.stdout + proc.stderr

@@ -33,6 +33,19 @@ fabricating one or padding with something adjacent. A reference you
 cannot resolve simply contributes nothing; it does not need to contribute
 something.
 
+**What locates the candidate heading, and what does not.** `packet`
+(`the-phases-are-derived-not-remembered`) may hand you a per-reference
+heading OUTLINE — `{title, level, byte_start, byte_end}` — to help you find
+which heading in a `style-reference` folder is this block's equivalent.
+That outline never carries inlined span text by construction (`packet`'s
+own leak-proof, `tests/test_paper_writing.py`), so it can only ever tell
+you WHERE to look, never what is written there. The verbatim `span` you
+return always comes from your own `Read` of the `.md` file the outline
+names — never from text handed to you already, inline, by anything
+upstream. Your `tools:` grant (`Read`, `Glob`, `Grep`, no `Write`) is
+exactly what that requires: enough to locate and read the file yourself,
+nothing that could shuttle a result anywhere on its own.
+
 ## What you produce
 
 Per reference: `{"reference": <folder>, "source_md": <path to the

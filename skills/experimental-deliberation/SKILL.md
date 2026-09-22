@@ -106,7 +106,14 @@ The profile declares three sources (`profile.ts`, `sources`). Two are required; 
 | --- | --- | --- | --- |
 | Data paper / dataset guidance | `guidance/data-paper` | yes | The **upper limit** on what may be claimed. A claim the data cannot support is not an experiment. |
 | The managed proposal | `proposals` | yes | Where the claims come from. `proposal-deliberation`'s own managed directory, read here and never written. |
-| The area benchmark | `guidance/area-benchmark` | no | When present, the source of truth for metrics, splits, protocol and baselines. When absent the document states its own, which is weaker but legal. |
+| The paper guide | `guidance/paper-guide` | no | The methodological / style references, shared with `proposal-deliberation`. When absent or empty the document states its own shape, which is weaker but legal. |
+
+**A required source is required for its CONTENT, not for its name.** A declared
+`required: true` directory that is absent refuses `REQUIRED_SOURCE_MISSING`; one
+that exists and holds no Markdown document at all refuses `REQUIRED_SOURCE_EMPTY`
+and names both shapes that would answer it. Creating the empty directory does not
+satisfy the declaration — that was the older behaviour, and it let `v1` render
+against nothing.
 
 Two facts about how the engine actually reads these, both worth knowing before you rely on it:
 

@@ -13,7 +13,13 @@
     {
       "id": "block-1",
       "requires_facts": [
-        "dataset"
+        {
+          "value": "dataset",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The dataset — the condition, population, or process it contains"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery"
@@ -21,19 +27,65 @@
     {
       "id": "block-2",
       "requires_facts": [
-        "contributions"
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "discovery"
+      "citations": "discovery",
+      "produces_facts": [
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Turn the general need into a concrete technical problem, and decompose it into the specific problems the proposal resolves."
+          }
+        }
+      ],
+      "after": [
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "this block is derived from the contributions, read backwards"
+          }
+        }
+      ]
     },
     {
       "id": "block-3",
       "requires_facts": [
-        "problem-statement"
+        {
+          "value": "problem-statement",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Block 3 — state of the art and gap depends on the problem statement when there is no Related Work section"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "discovery",
+      "produces_facts": [
+        {
+          "value": "gap",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The closing is the joint gap, and the conjunction is what makes it a gap."
+          }
+        }
+      ],
       "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "Block 3 — state of the art and gap depends on the problem statement when there is no Related Work section"
+          }
+        },
         {
           "target": "related-work",
           "source": {
@@ -44,19 +96,89 @@
       ]
     },
     {
-      "id": "block-4",
+      "id": "block-4a",
       "requires_facts": [
-        "formulation",
-        "results"
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the core idea comes from the mathematical formulation"
+          }
+        }
       ],
       "requires_declarations": [],
-      "citations": "none"
+      "citations": "none",
+      "after": [
+        {
+          "target": "introduction.block-2",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the presentation and the purpose clause come from block 2 — the clause mirrors its specific problems, in the same order"
+          }
+        },
+        {
+          "target": "introduction.block-4b",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "the announcement of the count comes from `introduction.block-4b`, in its partial form."
+          }
+        }
+      ]
+    },
+    {
+      "id": "block-4b",
+      "requires_facts": [
+        {
+          "value": "formulation",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The mathematical formulation of the proposal"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The results"
+          }
+        },
+        {
+          "value": "contributions",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "It is inherited, never a drafting target."
+          }
+        }
+      ],
+      "requires_declarations": [],
+      "citations": "none",
+      "after": [
+        {
+          "target": "materials-and-methods.mm-proposal",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "It is inherited, never a drafting target."
+          }
+        }
+      ]
     },
     {
       "id": "block-5",
       "requires_facts": [
-        "experimental-design",
-        "results"
+        {
+          "value": "experimental-design",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The experimental design — scenarios, comparisons, criteria, complementary analyses"
+          }
+        },
+        {
+          "value": "results",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The results"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -64,7 +186,13 @@
     {
       "id": "block-6",
       "requires_facts": [
-        "skeleton"
+        {
+          "value": "skeleton",
+          "source": {
+            "file": "sections/06-introduction.md",
+            "quote": "The section skeleton of the manuscript"
+          }
+        }
       ],
       "requires_declarations": [],
       "citations": "none"
@@ -126,19 +254,46 @@ the design and completed from the measurement.
 
 | Block | Depends on |
 |---|---|
-| **4b partial** — what each contribution introduces and what function it performs | the mathematical formulation |
-| **2** — the general problem and the specific ones | 4b partial: each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
-| **3** — state of the art and gap | the problem statement when there is no Related Work section; the problem statement **and the written Related Work section** when there is one |
-| **4a** — the presenting prose | three distinct sources, one per movement |
-| **4b complete** — the effect each contribution achieves | 4b partial + the results |
-| **5 complete** — the evidence sentence | 5 partial + the results |
+| `introduction.block-2` — the general problem and the specific ones | `materials-and-methods.mm-proposal` — each contribution is read backwards as the deficiency it resolves, named in the accepted vocabulary of the field |
+| `introduction.block-3` — state of the art and gap, depending on the problem statement | `introduction.block-2` — the problem statement, general and specific, decomposed there |
+| `introduction.block-4a` — the presenting prose | `introduction.block-2` — the presentation and the purpose clause, mirroring its specific problems in the same order |
+| `introduction.block-4a` — the presenting prose | `introduction.block-4b` — the announcement of the count, stated before the list enumerates it |
+| `introduction.block-4b` — the list of contributions, inherited rather than drafted | `materials-and-methods.mm-proposal` — the section that defines and names each contribution |
+
+### Structural decisions
+
+- **Block 3 — state of the art and gap** depends on the problem statement
+  when there is no Related Work section — its own `after` edge to
+  `introduction.block-2` carries this now that `problem-statement` is a
+  produced-class fact — **and** the problem statement **and the written
+  Related Work section** when a Related Work section exists — the
+  conditional cross-section case this block's own second `after` edge to
+  `related-work` carries.
+- **`introduction.block-4a` / `block-4b` are two blocks, not one.** The
+  contract's own extent line says so — "Two physical paragraphs, 120-180
+  words in total" — and names them `Paragraph 4a - the prose` and
+  `Paragraph 4b - the list`. They are separate ids because they are drafted
+  from different inputs: 4a's purpose clause depends on block 2, while 4b's
+  contribution list is inherited directly from
+  `materials-and-methods.mm-proposal`, never from block 2. 4a itself also
+  depends on 4b, for the announced count. Collapsing them into one node
+  would conflate a block that needs the problem statement with one that
+  does not.
+- **Composite parts within `introduction.block-4b`** (settled decision 5):
+  4b's complete form — the effect each contribution achieves — is drafted
+  after its partial form, once the results arrive. A drafting-sequence note
+  inside one node, never a dependency on a sibling block.
+- **Composite parts within `introduction.block-5`**: 5's complete form — the
+  evidence sentence — is drafted after 5's partial form, once the results
+  arrive. The same intra-node sequencing as block 4, never a dependency on a
+  sibling block.
 
 **Block 4a draws on three sources, one per sentence:**
 
 - the **presentation and the purpose clause** come from block 2 — the clause mirrors
   its specific problems, in the same order;
 - the **core idea** comes from the mathematical formulation;
-- the **announcement of the count** comes from 4b partial.
+- the **announcement of the count** comes from `introduction.block-4b`, in its partial form.
 
 ### What is writable before measuring
 
@@ -289,7 +444,7 @@ agree.
 when the problem cannot be stated without first presenting the enabling technology.
 In that case the order is: enabler → problem → families.
 
-## Block 4 — Proposal and contributions
+## Block 4 — Proposal and contributions (`block-4a`, `block-4b`)
 
 **Function.** Present the method by name and purpose, the core idea articulating its
 components, and enumerate the contributions.
@@ -319,8 +474,8 @@ order, and naming with the components of the methods section.
 
 Open each item with **the name of the component followed by a colon**, and continue
 with a single sentence stating what it does and which previously stated problem it
-resolves. Those names are the contract with the methods section, which uses the same
-ones in the same order.
+resolves. Those names are the methods section's own contract — this list uses the
+same ones, in the same order.
 
 Do not open items with a first-person verb instead of a component name: without a
 name, the component cannot be referred to again later.
