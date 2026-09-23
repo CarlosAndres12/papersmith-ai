@@ -64,7 +64,7 @@ from forge_vocabulary import (  # noqa: E402  (path set above)
 # `FACT_SOURCE_ROOT`/`guidance/` registry already name every root a paper
 # in progress is read from -- reused here rather than re-spelled, so this
 # guard never carries a second, independent copy of that mapping.
-sys.path.insert(0, str(FORGE / ".claude" / "skills" / "paper-writing" / "scripts"))
+sys.path.insert(0, str(FORGE / "skills" / "paper-writing" / "scripts"))
 import paper_declarations  # noqa: E402  (path set above)
 import paper_guidance  # noqa: E402  (path set above)
 
